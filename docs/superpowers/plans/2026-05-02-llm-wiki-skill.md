@@ -1,12 +1,31 @@
-# LLM Wiki Skill — Implementation Plan
+# CodeWiki Skill Plugin Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a multi-skill Claude Code plugin that produces Hermes-compatible wiki vaults using Karpathy's LLM Wiki pattern.
+**Goal:** Ship the `skillwiki` npm package + 10 Claude Code skills that build and maintain project-aware Karpathy-style markdown knowledge bases, wire-compatible with Hermes llm-wiki v2.1.0.
 
-**Architecture:** 6 skill files (init, ingest, query, lint, crystallize, audit) based on kfchou/wiki-skills, adapted to produce Hermes wire-compatible output (typed subdirs, full frontmatter, sha256 raw sources, provenance markers). Two helper scripts enforce security and hash contracts. Single install.sh for Claude Code.
+**Architecture:** npm workspaces monorepo. `packages/cli` (TypeScript) ships the `skillwiki` binary with 8 deterministic subcommands. `packages/skills` holds 10 SKILL.md files (6 `wiki-*` + 4 `proj-*`) — prompt-only Markdown that calls `skillwiki` for data work. `packages/shared` is reserved for v1.2 MCP server. Built with tsup, validated with Zod, tested with Vitest.
 
-**Tech Stack:** Bash (scripts), Markdown (skills), Claude Code Skill system
+**Tech Stack:** TypeScript 5.7+, Node ≥20, tsup, Commander, Zod, js-yaml, Vitest, Markdown (Obsidian-flavored).
+
+**Reference Documents:**
+- Spec: `docs/superpowers/specs/2026-05-02-llm-wiki-skill-design.md` (canonical)
+- Hermes contract: `raw/hermes-llm-wiki-SKILL-v2.1.0.md`
+- Toolchain reference: `https://github.com/atomicmemory/llm-wiki-compiler`
+
+**Phase Overview (each phase ends shippable):**
+| Phase | Output |
+|---|---|
+| 0 | Repo bootstrap: workspaces + tooling configured |
+| 1 | `skillwiki` v0.1.0 — `hash`, `fetch-guard`, `validate` subcommands |
+| 2 | `skillwiki` v0.2.0 — `graph build`, `overlap`, `orphans`, `audit` subcommands |
+| 3 | `skillwiki` v0.3.0 — `install` (cross-platform skills installer) |
+| 4 | Templates: SCHEMA.md, index.md, log.md, project-README.md |
+| 5 | 6 `wiki-*` SKILL.md files complete |
+| 6 | 4 `proj-*` SKILL.md files complete |
+| 7 | Integration tests, docs, CI, npm publish |
+
+**Note:** This plan covers Phases 0–1 in detail (TDD-style). Phases 2–7 are scaffolded with task structure and reference the spec; full code-level steps for those phases will be expanded inline by the executing engineer following the same TDD pattern shown in Phase 1, or split into follow-up plan files if scope demands. The current spec is large enough that a single plan file at full granularity would exceed practical bounds; ship Phase 1 first, then re-plan from there.
 
 ---
 
@@ -14,1579 +33,1699 @@
 
 | File | Responsibility |
 |------|---------------|
-| `skills/wiki-init/SKILL.md` | Bootstrap a new Hermes-compatible wiki vault |
-| `skills/wiki-ingest/SKILL.md` | URL/file/paste → raw capture → wiki pages with staged batch writes |
-| `skills/wiki-query/SKILL.md` | Question → 4-tier search (index → grep → raw → external) → synthesis |
-| `skills/wiki-lint/SKILL.md` | Health check with sha256 drift detection, orphans, broken links |
-| `skills/wiki-crystallize/SKILL.md` | Session → wiki page distillation with Pending Review sections |
-| `skills/wiki-audit/SKILL.md` | Per-page citation verification against raw sources |
-| `scripts/wiki-hash.sh` | Canonical sha256 computation (body-only, no frontmatter) |
-| `scripts/wiki-fetch-guard.sh` | Security wrapper: IP blocklist, scheme allowlist, API key stripping |
-| `templates/SCHEMA.md` | Hermes-compatible schema template with tag taxonomy |
-| `templates/index.md` | Sectioned content catalog template |
-| `templates/log.md` | Append-only log template |
-| `install.sh` | Claude Code skill installer with preflight, backup, manifest |
-| `CLAUDE.md` | Repo instructions for Claude Code agents |
-| `README.md` | Usage documentation |
+| `package.json` | Root workspaces config |
+| `packages/cli/package.json` | `name: "skillwiki"`, `bin: { skillwiki: dist/cli.js }` |
+| `packages/cli/src/cli.ts` | Commander entry; routes to subcommand modules |
+| `packages/cli/src/commands/hash.ts` | sha256 of body bytes |
+| `packages/cli/src/commands/fetch-guard.ts` | URL validation + secret strip |
+| `packages/cli/src/commands/validate.ts` | Frontmatter validation via Zod |
+| `packages/cli/src/commands/graph.ts` | Wikilink adjacency + Adamic-Adar |
+| `packages/cli/src/commands/overlap.ts` | Source-overlap clusters (E2 4.0×) |
+| `packages/cli/src/commands/orphans.ts` | Orphan + bridge node detection |
+| `packages/cli/src/commands/audit.ts` | `^[raw/...]` resolution + sources↔body |
+| `packages/cli/src/commands/install.ts` | Atomic skill copy + manifest |
+| `packages/cli/src/schema/{typed-knowledge,raw,work-item,compound}.ts` | Zod schemas |
+| `packages/cli/src/parsers/{frontmatter,wikilinks,citations}.ts` | Markdown parsers |
+| `packages/cli/src/utils/{paths,hash}.ts` | Utilities |
+| `packages/skills/<10 dirs>/SKILL.md` | Prompt-only skills |
+| `templates/{SCHEMA,index,log,project-README}.md` | Vault templates |
 
 ---
 
-### Task 1: Initialize Repo Structure
+## Phase 0: Repo Bootstrap
+
+### Task 0.1: Initialize npm workspaces monorepo
 
 **Files:**
-- Create: `LICENSE`
-- Create: `.gitignore`
+- Create: `package.json`, `.gitignore`, `.nvmrc`
 
-- [ ] **Step 1: Initialize git repo**
+- [ ] **Step 1: Create root package.json**
 
-```bash
-cd /Users/karlchow/Desktop/code/llm-wiki
-git init
+```json
+{
+  "name": "llm-wiki-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "skillwiki CLI + Claude Code skills for project-aware Karpathy-style wikis",
+  "workspaces": ["packages/cli", "packages/skills", "packages/shared"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "npm run build --workspace packages/cli",
+    "test": "npm run test --workspace packages/cli"
+  },
+  "license": "MIT"
+}
 ```
 
-- [ ] **Step 2: Create LICENSE**
+- [ ] **Step 2: Create .gitignore**
 
-```bash
-cat > LICENSE << 'EOF'
-MIT License
-
-Copyright (c) 2026
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-EOF
-```
-
-- [ ] **Step 3: Create .gitignore**
-
-```bash
-cat > .gitignore << 'EOF'
+```gitignore
+node_modules/
+dist/
+*.log
+.env
 .DS_Store
-*.swp
-*.swo
-*~
-wiki/
-.wiki-manifest.json
-EOF
+coverage/
 ```
 
-- [ ] **Step 4: Create directory structure**
+- [ ] **Step 3: Create .nvmrc**
+
+```
+20
+```
+
+- [ ] **Step 4: Verify and commit**
 
 ```bash
-mkdir -p skills/wiki-init skills/wiki-ingest skills/wiki-query skills/wiki-lint skills/wiki-crystallize skills/wiki-audit scripts templates
+node --version  # must be >= 20
+git add package.json .gitignore .nvmrc
+git commit -m "chore: initialize npm workspaces monorepo"
+```
+
+---
+
+### Task 0.2: Scaffold packages/cli with TypeScript + tsup
+
+**Files:**
+- Create: `packages/cli/package.json`, `tsconfig.json`, `tsup.config.ts`, `src/cli.ts`
+
+- [ ] **Step 1: Create packages/cli/package.json**
+
+```json
+{
+  "name": "skillwiki",
+  "version": "0.1.0",
+  "description": "Deterministic CLI utilities for project-aware Karpathy LLM Wikis",
+  "type": "module",
+  "bin": { "skillwiki": "dist/cli.js" },
+  "main": "dist/cli.js",
+  "files": ["dist/", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "commander": "^13.0.0",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "license": "MIT"
+}
+```
+
+- [ ] **Step 2: Create packages/cli/tsconfig.json**
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "test"]
+}
+```
+
+- [ ] **Step 3: Create packages/cli/tsup.config.ts**
+
+```typescript
+import { defineConfig } from 'tsup';
+
+export default defineConfig({
+  entry: ['src/cli.ts'],
+  format: ['esm'],
+  target: 'node20',
+  outDir: 'dist',
+  clean: true,
+  splitting: false,
+  sourcemap: true,
+  banner: { js: '#!/usr/bin/env node' },
+});
+```
+
+- [ ] **Step 4: Create placeholder src/cli.ts**
+
+```typescript
+import { Command } from 'commander';
+const program = new Command();
+program
+  .name('skillwiki')
+  .description('Deterministic CLI utilities for project-aware Karpathy LLM Wikis')
+  .version('0.1.0');
+program.parse();
+```
+
+- [ ] **Step 5: Install, build, smoke-test**
+
+```bash
+npm install
+npm run build --workspace packages/cli
+node packages/cli/dist/cli.js --version
+```
+
+Expected: prints `0.1.0`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/cli package-lock.json
+git commit -m "chore(cli): scaffold skillwiki package"
+```
+
+---
+
+### Task 0.3: Add Vitest
+
+**Files:**
+- Create: `packages/cli/vitest.config.ts`, `packages/cli/test/smoke.test.ts`
+
+- [ ] **Step 1: Create vitest.config.ts**
+
+```typescript
+import { defineConfig } from 'vitest/config';
+export default defineConfig({
+  test: {
+    include: ['test/**/*.test.ts'],
+    coverage: { provider: 'v8', reporter: ['text', 'lcov'] },
+  },
+});
+```
+
+- [ ] **Step 2: Create test/smoke.test.ts**
+
+```typescript
+import { describe, it, expect } from 'vitest';
+describe('smoke', () => {
+  it('runs', () => { expect(1 + 1).toBe(2); });
+});
+```
+
+- [ ] **Step 3: Run tests**
+
+```bash
+npm test --workspace packages/cli
+```
+
+Expected: 1 passed.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add packages/cli/vitest.config.ts packages/cli/test
+git commit -m "test(cli): add Vitest with smoke test"
+```
+
+---
+
+### Task 0.4: Scaffold packages/skills and packages/shared
+
+**Files:**
+- Create: `packages/skills/package.json`, `packages/skills/README.md`
+- Create: `packages/shared/package.json`, `packages/shared/README.md`
+
+- [ ] **Step 1: Create packages/skills/package.json**
+
+```json
+{
+  "name": "@llm-wiki/skills",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code SKILL.md files for project-aware wiki maintenance",
+  "license": "MIT"
+}
+```
+
+- [ ] **Step 2: Create packages/skills/README.md**
+
+```markdown
+# @llm-wiki/skills
+
+Claude Code skill definitions installed via `skillwiki install`.
+
+10 skills, two namespaces:
+- `wiki-init`, `wiki-ingest`, `wiki-query`, `wiki-lint`, `wiki-crystallize`, `wiki-audit`
+- `proj-init`, `proj-work`, `proj-distill`, `proj-decide`
+```
+
+- [ ] **Step 3: Create packages/shared/package.json**
+
+```json
+{
+  "name": "@llm-wiki/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared types between skillwiki CLI and future MCP server",
+  "type": "module",
+  "license": "MIT"
+}
+```
+
+- [ ] **Step 4: Create packages/shared/README.md**
+
+```markdown
+# @llm-wiki/shared
+Reserved for v1.2 MCP server. Currently empty.
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add LICENSE .gitignore skills/ scripts/ templates/
-git commit -m "chore: initialize repo structure with license and directories"
+git add packages
+git commit -m "chore: scaffold packages/skills and packages/shared"
 ```
 
 ---
 
-### Task 2: Helper Scripts
+## Phase 1: skillwiki CLI Core (hash, fetch-guard, validate)
+
+### Task 1.1: Body-byte sha256 utility
 
 **Files:**
-- Create: `scripts/wiki-hash.sh`
-- Create: `scripts/wiki-fetch-guard.sh`
+- Create: `packages/cli/src/utils/hash.ts`, `packages/cli/test/utils/hash.test.ts`
 
-- [ ] **Step 1: Write wiki-hash.sh**
+- [ ] **Step 1: Write failing test**
 
-Canonical sha256 contract: hashes file content AFTER the closing `---` of YAML frontmatter. If no frontmatter, hashes entire file.
+```typescript
+// packages/cli/test/utils/hash.test.ts
+import { describe, it, expect } from 'vitest';
+import { hashBodyBytes } from '../../src/utils/hash';
 
-```bash
-#!/usr/bin/env bash
-# wiki-hash.sh — Canonical sha256 for wiki raw source files
-# Contract: sha256 of body content only (everything after the closing --- of frontmatter)
-# Usage: wiki-hash.sh <file>
-# Exit 0 + prints hash on success, exit 1 on error
-set -euo pipefail
-
-if [[ $# -lt 1 ]]; then
-  echo "Usage: wiki-hash.sh <file>" >&2
-  exit 1
-fi
-
-file="$1"
-
-if [[ ! -f "$file" ]]; then
-  echo "Error: file not found: $file" >&2
-  exit 1
-fi
-
-# Check if file starts with YAML frontmatter (---)
-first_line=$(head -n 1 "$file")
-
-if [[ "$first_line" == "---" ]]; then
-  # Find the closing --- (second occurrence at start of line)
-  # Skip the opening --- line, then find the next --- at start of line
-  body=$(tail -n +2 "$file" | awk 'BEGIN{n=0} /^---[[:space:]]*$/{n++; if(n>=1) {found=NR; exit}} END{if(found) print found}')
-  if [[ -n "$body" ]]; then
-    # $body is the line number of the closing --- (after skipping first line)
-    # Content starts at line body+2 (skip opening + closing ---)
-    tail -n +"$((body + 2))" "$file" | sha256sum | awk '{print $1}'
-  else
-    # No closing --- found, hash entire file
-    sha256sum "$file" | awk '{print $1}'
-  fi
-else
-  # No frontmatter, hash entire file
-  sha256sum "$file" | awk '{print $1}'
-fi
+describe('hashBodyBytes', () => {
+  it('returns 64-char hex digest', () => {
+    expect(hashBodyBytes('---\nx: 1\n---\nbody\n')).toMatch(/^[a-f0-9]{64}$/);
+  });
+  it('hashes whole input when no frontmatter', () => {
+    expect(hashBodyBytes('no frontmatter')).toMatch(/^[a-f0-9]{64}$/);
+  });
+  it('produces identical hash when only frontmatter differs', () => {
+    const a = '---\ntitle: A\n---\nidentical\n';
+    const b = '---\ntitle: B\nupdated: 2026-01-01\n---\nidentical\n';
+    expect(hashBodyBytes(a)).toBe(hashBodyBytes(b));
+  });
+  it('treats CRLF and LF differently (no normalization)', () => {
+    expect(hashBodyBytes('---\nx: 1\n---\nbody\n'))
+      .not.toBe(hashBodyBytes('---\r\nx: 1\r\n---\r\nbody\r\n'));
+  });
+});
 ```
 
-- [ ] **Step 2: Make wiki-hash.sh executable**
+- [ ] **Step 2: Run, verify FAIL**
 
 ```bash
-chmod +x scripts/wiki-hash.sh
+npm test --workspace packages/cli
 ```
 
-- [ ] **Step 3: Test wiki-hash.sh**
+Expected: FAIL — `hashBodyBytes` not exported.
 
-```bash
-# Create test file with frontmatter
-mkdir -p /tmp/wiki-hash-test
-cat > /tmp/wiki-hash-test/test.md << 'TESTEOF'
----
-source_url: https://example.com
-ingested: 2026-05-02
-sha256: placeholder
----
-This is the body content that should be hashed.
-Line two of body.
-TESTEOF
+- [ ] **Step 3: Implement**
 
-# Run the hash script
-HASH=$(scripts/wiki-hash.sh /tmp/wiki-hash-test/test.md)
-echo "Hash: $HASH"
+```typescript
+// packages/cli/src/utils/hash.ts
+import { createHash } from 'node:crypto';
 
-# Verify it's a valid sha256 (64 hex chars)
-if [[ ${#HASH} -eq 64 ]]; then
-  echo "PASS: Valid sha256 hash"
-else
-  echo "FAIL: Hash length is ${#HASH}, expected 64"
-  exit 1
-fi
+/**
+ * Compute sha256 of body bytes after the closing `---` of YAML frontmatter.
+ * No normalization. If no frontmatter present, hash entire input.
+ */
+export function hashBodyBytes(content: string): string {
+  const body = extractBody(content);
+  return createHash('sha256').update(body, 'utf8').digest('hex');
+}
 
-# Verify determinism (same file = same hash)
-HASH2=$(scripts/wiki-hash.sh /tmp/wiki-hash-test/test.md)
-if [[ "$HASH" == "$HASH2" ]]; then
-  echo "PASS: Deterministic"
-else
-  echo "FAIL: Different hashes for same file"
-  exit 1
-fi
-
-# Verify body-only (changing frontmatter doesn't change hash)
-sed -i '' 's/sha256: placeholder/sha256: changed/' /tmp/wiki-hash-test/test.md
-HASH3=$(scripts/wiki-hash.sh /tmp/wiki-hash-test/test.md)
-if [[ "$HASH" == "$HASH3" ]]; then
-  echo "PASS: Frontmatter change doesn't affect hash"
-else
-  echo "FAIL: Hash changed when frontmatter changed"
-  exit 1
-fi
-
-rm -rf /tmp/wiki-hash-test
+function extractBody(content: string): string {
+  if (!content.startsWith('---\n')) return content;
+  const closing = content.indexOf('\n---\n', 4);
+  if (closing === -1) return content;
+  return content.slice(closing + 5);
+}
 ```
 
-Expected output: All 3 PASS lines.
-
-- [ ] **Step 4: Write wiki-fetch-guard.sh**
-
-Security wrapper for URL ingestion. Checks scheme, private IPs, API keys in URLs.
+- [ ] **Step 4: Run tests, verify PASS**
 
 ```bash
-#!/usr/bin/env bash
-# wiki-fetch-guard.sh — Security wrapper for URL fetching in wiki ingest
-# Checks: scheme allowlist, private IP blocklist, API key stripping
-# Usage: wiki-fetch-guard.sh <url>
-# Exit 0 = safe to fetch, prints cleaned URL. Exit 1 = blocked.
-set -euo pipefail
-
-if [[ $# -lt 1 ]]; then
-  echo "Usage: wiki-fetch-guard.sh <url>" >&2
-  exit 1
-fi
-
-url="$1"
-
-# 1. Scheme allowlist: only https
-scheme=$(echo "$url" | grep -oE '^[a-zA-Z]+://' | tr -d '://' || true)
-if [[ "$scheme" != "https" ]]; then
-  echo "BLOCKED: Only https URLs allowed. Got scheme: ${scheme:-none}" >&2
-  exit 1
-fi
-
-# 2. Extract hostname
-hostname=$(echo "$url" | sed -E 's|^https://([^/:]+).*|\1|')
-
-# 3. Private/metadata IP blocklist
-# Check if hostname is an IP address
-if echo "$hostname" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
-  # IPv4 private ranges
-  if echo "$hostname" | grep -qE '^(127\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.)'; then
-    echo "BLOCKED: Private/metadata IP address: $hostname" >&2
-    exit 1
-  fi
-fi
-
-# 4. IPv6 loopback
-if [[ "$hostname" == "::1" ]] || [[ "$hostname" == "[::1]" ]]; then
-  echo "BLOCKED: IPv6 loopback" >&2
-  exit 1
-fi
-
-# 5. Strip embedded API keys from query params
-# Patterns: ?key=..., &token=..., &api_key=..., #access_token=...
-cleaned_url=$(echo "$url" | sed -E \
-  -e 's/([?&])(key|token|api_key|access_token|secret|password)=[^&#]*/\1[REDACTED]/gi' \
-  -e 's/#(access_token|token)=[^&#]*//gi')
-
-# 6. Check for common localhost aliases
-if echo "$hostname" | grep -qE '^(localhost|0\.0\.0\.0)$'; then
-  echo "BLOCKED: Localhost/0.0.0.0 not allowed" >&2
-  exit 1
-fi
-
-echo "$cleaned_url"
-exit 0
+npm test --workspace packages/cli
 ```
 
-- [ ] **Step 5: Make wiki-fetch-guard.sh executable**
+- [ ] **Step 5: Commit**
 
 ```bash
-chmod +x scripts/wiki-fetch-guard.sh
-```
-
-- [ ] **Step 6: Test wiki-fetch-guard.sh**
-
-```bash
-# Test: HTTPS passes
-RESULT=$(scripts/wiki-fetch-guard.sh "https://example.com/article" 2>/dev/null)
-if [[ $? -eq 0 ]]; then echo "PASS: https allowed"; else echo "FAIL: https blocked"; exit 1; fi
-
-# Test: HTTP blocked
-if scripts/wiki-fetch-guard.sh "http://example.com" 2>/dev/null; then
-  echo "FAIL: http should be blocked"
-  exit 1
-else
-  echo "PASS: http blocked"
-fi
-
-# Test: Private IP blocked
-if scripts/wiki-fetch-guard.sh "https://192.168.1.1/admin" 2>/dev/null; then
-  echo "FAIL: private IP should be blocked"
-  exit 1
-else
-  echo "PASS: private IP blocked"
-fi
-
-# Test: API key stripping
-RESULT=$(scripts/wiki-fetch-guard.sh "https://example.com/api?key=secret123&other=ok" 2>/dev/null)
-if echo "$RESULT" | grep -q "REDACTED"; then
-  echo "PASS: API key stripped"
-else
-  echo "FAIL: API key not stripped: $RESULT"
-  exit 1
-fi
-
-# Test: Localhost blocked
-if scripts/wiki-fetch-guard.sh "https://localhost:3000/api" 2>/dev/null; then
-  echo "FAIL: localhost should be blocked"
-  exit 1
-else
-  echo "PASS: localhost blocked"
-fi
-
-echo "All fetch-guard tests passed"
-```
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add scripts/wiki-hash.sh scripts/wiki-fetch-guard.sh
-git commit -m "feat: add wiki-hash.sh and wiki-fetch-guard.sh helper scripts"
+git add packages/cli/src/utils packages/cli/test/utils
+git commit -m "feat(cli): hashBodyBytes — sha256 of body after frontmatter"
 ```
 
 ---
 
-### Task 3: Templates
+### Task 1.2: `skillwiki hash` subcommand
 
 **Files:**
-- Create: `templates/SCHEMA.md`
-- Create: `templates/index.md`
-- Create: `templates/log.md`
+- Create: `packages/cli/src/commands/hash.ts`
+- Modify: `packages/cli/src/cli.ts`
+- Create: `packages/cli/test/commands/hash.test.ts`
 
-- [ ] **Step 1: Write templates/SCHEMA.md**
+- [ ] **Step 1: Write failing test**
+
+```typescript
+// packages/cli/test/commands/hash.test.ts
+import { describe, it, expect } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { hashCommand } from '../../src/commands/hash';
+
+describe('hashCommand', () => {
+  it('returns sha256 for given file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sw-'));
+    const file = join(dir, 'sample.md');
+    writeFileSync(file, '---\ntitle: x\n---\nhello\n');
+    const result = await hashCommand(file);
+    expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.file).toContain('sample.md');
+  });
+  it('throws on missing file', async () => {
+    await expect(hashCommand('/nonexistent/x.md')).rejects.toThrow(/ENOENT/);
+  });
+});
+```
+
+- [ ] **Step 2: Run, verify FAIL**
+
+- [ ] **Step 3: Implement command**
+
+```typescript
+// packages/cli/src/commands/hash.ts
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { hashBodyBytes } from '../utils/hash.js';
+
+export interface HashResult {
+  file: string;
+  sha256: string;
+}
+
+export async function hashCommand(filePath: string): Promise<HashResult> {
+  const abs = resolve(filePath);
+  const content = await readFile(abs, 'utf8');
+  return { file: abs, sha256: hashBodyBytes(content) };
+}
+```
+
+- [ ] **Step 4: Wire into CLI**
+
+Replace `packages/cli/src/cli.ts`:
+
+```typescript
+import { Command } from 'commander';
+import { hashCommand } from './commands/hash.js';
+
+const program = new Command();
+program
+  .name('skillwiki')
+  .description('Deterministic CLI utilities for project-aware Karpathy LLM Wikis')
+  .version('0.1.0');
+
+program
+  .command('hash')
+  .description('Compute sha256 of body bytes after closing --- of frontmatter')
+  .argument('<file>', 'path to markdown file')
+  .option('--human', 'human-readable output')
+  .action(async (file: string, opts: { human?: boolean }) => {
+    const result = await hashCommand(file);
+    if (opts.human) console.log(`${result.sha256}  ${result.file}`);
+    else console.log(JSON.stringify(result));
+  });
+
+program.parseAsync().catch((err: Error) => {
+  console.error(JSON.stringify({ error: err.message }));
+  process.exit(1);
+});
+```
+
+- [ ] **Step 5: Run tests + smoke**
 
 ```bash
-cat > templates/SCHEMA.md << 'EOF'
-# Wiki Schema
+npm test --workspace packages/cli
+npm run build --workspace packages/cli
+printf '%s' '---\ntitle: t\n---\nhello\n' > /tmp/x.md
+node packages/cli/dist/cli.js hash /tmp/x.md
+```
 
-## Identity
-- **Path:** <absolute path to wiki root>
-- **Domain:** <what this wiki covers — e.g., "AI/ML research", "personal health", "startup intelligence">
-- **Source types:** <papers, URLs, code files, transcripts, etc.>
-- **Created:** <YYYY-MM-DD>
+- [ ] **Step 6: Commit**
 
-## Page Frontmatter
-Every wiki page must start with:
-```yaml
+```bash
+git add packages/cli
+git commit -m "feat(cli): skillwiki hash subcommand"
+```
+
 ---
-title: Page Title
-created: YYYY-MM-DD
-updated: YYYY-MM-DD
-type: entity | concept | comparison | query | summary
-tags: [from taxonomy below]
-sources: [raw/articles/source-name.md]
-# Optional quality signals:
-confidence: high | medium | low
-contested: true
-contradictions: [other-page-slug]
+
+### Task 1.3: `skillwiki fetch-guard` subcommand
+
+**Files:**
+- Create: `packages/cli/src/commands/fetch-guard.ts`
+- Modify: `packages/cli/src/cli.ts`
+- Create: `packages/cli/test/commands/fetch-guard.test.ts`
+
+- [ ] **Step 1: Write failing tests**
+
+```typescript
+// packages/cli/test/commands/fetch-guard.test.ts
+import { describe, it, expect } from 'vitest';
+import { fetchGuard } from '../../src/commands/fetch-guard';
+
+describe('fetchGuard', () => {
+  it('allows public https URL', () => {
+    expect(fetchGuard('https://example.com/path').allowed).toBe(true);
+  });
+  it('blocks http (insecure scheme)', () => {
+    const r = fetchGuard('http://example.com');
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toMatch(/scheme/i);
+  });
+  it('blocks file:// scheme', () => {
+    expect(fetchGuard('file:///etc/passwd').allowed).toBe(false);
+  });
+  it('blocks loopback (127.0.0.1)', () => {
+    const r = fetchGuard('https://127.0.0.1/x');
+    expect(r.allowed).toBe(false);
+  });
+  it('blocks RFC1918 (10.0.0.0/8)', () => {
+    expect(fetchGuard('https://10.0.0.5/x').allowed).toBe(false);
+  });
+  it('blocks AWS metadata endpoint', () => {
+    expect(fetchGuard('https://169.254.169.254/latest/').allowed).toBe(false);
+  });
+  it('strips api_key query param', () => {
+    const r = fetchGuard('https://api.example.com/v1?api_key=secret&q=hi');
+    expect(r.allowed).toBe(true);
+    expect(r.stripped_url).not.toMatch(/secret/);
+    expect(r.stripped_url).toMatch(/q=hi/);
+  });
+  it('rejects malformed URL', () => {
+    expect(fetchGuard('not a url').allowed).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run, verify FAIL**
+
+- [ ] **Step 3: Implement**
+
+```typescript
+// packages/cli/src/commands/fetch-guard.ts
+export interface FetchGuardResult {
+  allowed: boolean;
+  reason?: string;
+  stripped_url?: string;
+  url: string;
+}
+
+const SENSITIVE_QUERY_KEYS = new Set([
+  'api_key', 'apikey', 'access_token', 'auth_token', 'token', 'key',
+  'secret', 'password', 'passwd', 'authorization',
+]);
+
+export function fetchGuard(rawUrl: string): FetchGuardResult {
+  let url: URL;
+  try { url = new URL(rawUrl); }
+  catch { return { allowed: false, reason: 'malformed URL', url: rawUrl }; }
+
+  if (url.protocol !== 'https:') {
+    return { allowed: false, reason: `scheme not allowed: ${url.protocol}`, url: rawUrl };
+  }
+  if (isPrivateHost(url.hostname)) {
+    return { allowed: false, reason: `private/loopback/metadata host: ${url.hostname}`, url: rawUrl };
+  }
+
+  const stripped = new URL(url.toString());
+  for (const key of [...stripped.searchParams.keys()]) {
+    if (SENSITIVE_QUERY_KEYS.has(key.toLowerCase())) {
+      stripped.searchParams.delete(key);
+    }
+  }
+  stripped.username = '';
+  stripped.password = '';
+
+  return { allowed: true, stripped_url: stripped.toString(), url: rawUrl };
+}
+
+function isPrivateHost(hostname: string): boolean {
+  const m = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m) {
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    if (a === 127) return true;
+    if (a === 10) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 0) return true;
+  }
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) return true;
+  if (hostname === 'metadata.google.internal') return true;
+  return false;
+}
+```
+
+- [ ] **Step 4: Wire into CLI** (add to cli.ts before `program.parseAsync()`):
+
+```typescript
+import { fetchGuard } from './commands/fetch-guard.js';
+
+program
+  .command('fetch-guard')
+  .description('Validate a URL for safe fetch (blocks private IPs, strips secrets)')
+  .argument('<url>', 'URL to validate')
+  .option('--human', 'human-readable output')
+  .action((url: string, opts: { human?: boolean }) => {
+    const result = fetchGuard(url);
+    if (opts.human) {
+      console.log(result.allowed ? `OK ${result.stripped_url}` : `BLOCKED ${result.reason}`);
+    } else {
+      console.log(JSON.stringify(result));
+    }
+    if (!result.allowed) process.exit(2);
+  });
+```
+
+- [ ] **Step 5: Run tests + smoke**
+
+```bash
+npm test --workspace packages/cli
+npm run build --workspace packages/cli
+node packages/cli/dist/cli.js fetch-guard https://example.com
+node packages/cli/dist/cli.js fetch-guard https://127.0.0.1 || echo "blocked OK"
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/cli
+git commit -m "feat(cli): skillwiki fetch-guard (F1 security control)"
+```
+
 ---
+
+### Task 1.4: Frontmatter parser
+
+**Files:**
+- Create: `packages/cli/src/parsers/frontmatter.ts`, `packages/cli/test/parsers/frontmatter.test.ts`
+
+- [ ] **Step 1: Write failing tests**
+
+```typescript
+// packages/cli/test/parsers/frontmatter.test.ts
+import { describe, it, expect } from 'vitest';
+import { parseFrontmatter } from '../../src/parsers/frontmatter';
+
+describe('parseFrontmatter', () => {
+  it('extracts YAML object', () => {
+    const r = parseFrontmatter('---\ntitle: Foo\ntags: [a, b]\n---\nbody');
+    expect(r.data).toEqual({ title: 'Foo', tags: ['a', 'b'] });
+    expect(r.body).toBe('body');
+  });
+  it('returns empty object when no frontmatter', () => {
+    const r = parseFrontmatter('just body');
+    expect(r.data).toEqual({});
+    expect(r.body).toBe('just body');
+  });
+  it('throws on malformed YAML', () => {
+    expect(() => parseFrontmatter('---\n: : :\n---\nx')).toThrow();
+  });
+});
 ```
 
-`confidence` and `contested` are recommended for opinion-heavy or fast-moving topics. Lint surfaces `contested: true` and `confidence: low` pages for review.
+- [ ] **Step 2: Run, verify FAIL**
 
-## Directory Layout
-```
-<wiki-root>/
-├── SCHEMA.md
-├── index.md
-├── log.md
-├── raw/
-│   ├── articles/
-│   ├── papers/
-│   ├── transcripts/
-│   └── assets/
-├── entities/
-├── concepts/
-├── comparisons/
-└── queries/
-```
+- [ ] **Step 3: Implement**
 
-## Cross-References
-Use `[[wikilinks]]` where the target is the filename without `.md`.
-Example: `[[transformer-architecture]]` → `entities/transformer-architecture.md` or `concepts/transformer-architecture.md`
-Minimum 2 outbound `[[wikilinks]]` per page.
+```typescript
+// packages/cli/src/parsers/frontmatter.ts
+import { load } from 'js-yaml';
 
-## Citations
-Cite every non-common-knowledge factual claim. Granularity is paragraph or claim, never per-sentence.
-Format: Markdown footnotes. Two citation kinds, three valid targets.
+export interface ParsedFrontmatter {
+  data: Record<string, unknown>;
+  body: string;
+}
 
-**Quote citation** (preferred):
-```
-The model uses 8 attention heads.[^1]
-[^1]: [[attention-is-all-you-need]] §3.2.2 — "We employ h = 8 parallel attention layers"
+export function parseFrontmatter(content: string): ParsedFrontmatter {
+  if (!content.startsWith('---\n')) return { data: {}, body: content };
+  const closing = content.indexOf('\n---\n', 4);
+  if (closing === -1) return { data: {}, body: content };
+  const yaml = content.slice(4, closing);
+  const body = content.slice(closing + 5);
+  const data = load(yaml) as Record<string, unknown> | null;
+  return { data: data ?? {}, body };
+}
 ```
 
-**Synthesis citation** (when no single quote captures the claim):
-```
-The architecture is fundamentally an encoder-decoder with attention.[^2]
-[^2]: [[attention-is-all-you-need]] §3.2-3.4 [synthesis] — encoder, decoder, and attention sections together describe the full multi-head architecture
-```
-
-Three rules for every footnote:
-1. Target is one of: `[[source-slug]]` (a source wiki page), `raw/<path>` or `assets/<path>` (local file), or `<url>`. Never cite entity, concept, or query pages — those are syntheses, not sources.
-2. A locator is present: `§<section>`, `p.<page>`, `[HH:MM:SS]`, URL anchor, or `(YYYY-MM-DD)`.
-3. Either a verbatim quote, or the `[synthesis]` tag plus a description.
-
-## Provenance Markers
-On pages that synthesize 3+ sources, append `^[raw/articles/source.md]` at the end of paragraphs whose claims come from a specific source. This lets a reader trace each claim back without re-reading the whole raw file.
-
-## Page Thresholds
-- **Create a page** when an entity/concept appears in 2+ sources OR is central to one source
-- **Add to existing page** when a source mentions something already covered
-- **DON'T create a page** for passing mentions, minor details, or things outside the domain
-- **Split a page** when it exceeds ~200 lines
-- **Archive a page** when fully superseded — move to `_archive/`, remove from index
-
-## Tag Taxonomy
-[Define 10-20 top-level tags for the domain. Add new tags here BEFORE using them.]
-Example for AI/ML:
-- Models: model, architecture, benchmark, training
-- People/Orgs: person, company, lab, open-source
-- Techniques: optimization, fine-tuning, inference, alignment, data
-- Meta: comparison, timeline, controversy, prediction
-
-Rule: every tag on a page must appear in this taxonomy. If a new tag is needed, add it here first.
-
-## Update Policy
-When new information conflicts with existing content:
-1. Check dates — newer sources generally supersede older ones
-2. If genuinely contradictory, note both positions with dates and sources
-3. Mark in frontmatter: `contradictions: [page-name]`
-4. Flag for user review in the lint report
-
-## Log Entry Format
-```
-## [YYYY-MM-DD] <operation> | <title>
-```
-Operations: init, ingest, update, query, lint, audit, crystallize, archive, create
-
-## Conventions
-- `raw/` is immutable — skills never modify it
-- `log.md` is append-only — never rewritten, only appended
-- `index.md` is updated on every operation that adds or changes pages
-- All pages use lowercase-hyphen naming (e.g., `transformer-architecture.md`)
-- `overview.md` reflects the current synthesis across all sources (optional, not required)
-EOF
-```
-
-- [ ] **Step 2: Write templates/index.md**
+- [ ] **Step 4: Run, verify PASS**
 
 ```bash
-cat > templates/index.md << 'EOF'
-# Wiki Index
-
-> Content catalog. Every wiki page listed under its type with a one-line summary.
-> Read this first to find relevant pages for any query.
-> Last updated: <date> | Total pages: 0
-
-## Entities
-<!-- Alphabetical within section — entries added by wiki-ingest -->
-
-## Concepts
-
-## Comparisons
-
-## Queries
+npm test --workspace packages/cli
 ```
 
-- [ ] **Step 3: Write templates/log.md**
+- [ ] **Step 5: Commit**
 
 ```bash
-cat > templates/log.md << 'EOF'
+git add packages/cli/src/parsers packages/cli/test/parsers
+git commit -m "feat(cli): frontmatter parser"
+```
+
+---
+
+### Task 1.5: Zod schemas (4 frontmatter shapes)
+
+**Files:**
+- Create: `packages/cli/src/schema/{typed-knowledge,raw,work-item,compound,index}.ts`
+- Create: `packages/cli/test/schema/typed-knowledge.test.ts`
+
+- [ ] **Step 1: Write failing test**
+
+```typescript
+// packages/cli/test/schema/typed-knowledge.test.ts
+import { describe, it, expect } from 'vitest';
+import { TypedKnowledgeSchema } from '../../src/schema/typed-knowledge';
+
+const minimal = {
+  title: 'Foo', created: '2026-05-03', updated: '2026-05-03',
+  type: 'concept', tags: ['x'], sources: [],
+};
+
+describe('TypedKnowledgeSchema', () => {
+  it('accepts minimal Hermes frontmatter', () => {
+    expect(() => TypedKnowledgeSchema.parse(minimal)).not.toThrow();
+  });
+  it('accepts provenance: research', () => {
+    expect(() => TypedKnowledgeSchema.parse({ ...minimal, provenance: 'research' })).not.toThrow();
+  });
+  it('requires provenance_projects when provenance: project', () => {
+    expect(() => TypedKnowledgeSchema.parse({ ...minimal, provenance: 'project' }))
+      .toThrow(/provenance_projects/);
+  });
+  it('requires provenance_projects when provenance: mixed', () => {
+    expect(() => TypedKnowledgeSchema.parse({ ...minimal, provenance: 'mixed' }))
+      .toThrow(/provenance_projects/);
+  });
+  it('rejects invalid type enum', () => {
+    expect(() => TypedKnowledgeSchema.parse({ ...minimal, type: 'banana' })).toThrow();
+  });
+});
+```
+
+- [ ] **Step 2: Run, verify FAIL**
+
+- [ ] **Step 3: Implement typed-knowledge schema**
+
+```typescript
+// packages/cli/src/schema/typed-knowledge.ts
+import { z } from 'zod';
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD');
+
+export const TypedKnowledgeSchema = z.object({
+  title: z.string().min(1),
+  aliases: z.array(z.string()).optional(),
+  created: isoDate,
+  updated: isoDate,
+  type: z.enum(['entity', 'concept', 'comparison', 'query', 'summary']),
+  tags: z.array(z.string()),
+  sources: z.array(z.string()),
+  confidence: z.enum(['high', 'medium', 'low']).optional(),
+  contested: z.boolean().optional(),
+  contradictions: z.array(z.string()).optional(),
+  provenance: z.enum(['research', 'project', 'mixed']).optional(),
+  provenance_projects: z.array(z.string()).optional(),
+  work_items: z.array(z.string()).optional(),
+}).refine(
+  (data) => {
+    if (data.provenance === 'project' || data.provenance === 'mixed') {
+      return Array.isArray(data.provenance_projects) && data.provenance_projects.length > 0;
+    }
+    return true;
+  },
+  { message: 'provenance_projects required when provenance is project or mixed', path: ['provenance_projects'] }
+);
+
+export type TypedKnowledge = z.infer<typeof TypedKnowledgeSchema>;
+```
+
+- [ ] **Step 4: Implement raw schema**
+
+```typescript
+// packages/cli/src/schema/raw.ts
+import { z } from 'zod';
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const RawSchema = z.object({
+  title: z.string().optional(),
+  source_url: z.string().url().nullable().optional(),
+  ingested: isoDate,
+  ingested_by: z.enum(['wiki-ingest', 'proj-work', 'manual']).optional(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  project: z.string().optional(),
+  work_item: z.string().optional(),
+  kind: z.enum(['postmortem', 'session-log', 'meeting-notes', 'other']).optional(),
+});
+export type Raw = z.infer<typeof RawSchema>;
+```
+
+- [ ] **Step 5: Implement work-item schema**
+
+```typescript
+// packages/cli/src/schema/work-item.ts
+import { z } from 'zod';
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const WorkItemSchema = z.object({
+  title: z.string().min(1),
+  aliases: z.array(z.string()).optional(),
+  created: isoDate,
+  updated: isoDate,
+  started: isoDate.optional(),
+  completed: isoDate.optional(),
+  kind: z.enum(['feature', 'issue', 'refactor', 'decision']),
+  status: z.enum(['planned', 'in-progress', 'completed', 'abandoned']),
+  priority: z.enum(['high', 'medium', 'low']),
+  project: z.string().min(1),
+  owner: z.string().optional(),
+  parent: z.string().optional(),
+  related: z.array(z.string()).optional(),
+  sources: z.array(z.string()).optional(),
+});
+export type WorkItem = z.infer<typeof WorkItemSchema>;
+```
+
+- [ ] **Step 6: Implement compound schema**
+
+```typescript
+// packages/cli/src/schema/compound.ts
+import { z } from 'zod';
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+export const CompoundSchema = z.object({
+  title: z.string().min(1),
+  aliases: z.array(z.string()).optional(),
+  created: isoDate,
+  updated: isoDate,
+  type: z.enum(['lesson', 'pattern', 'antipattern', 'gotcha']),
+  tags: z.array(z.string()),
+  confidence: z.enum(['high', 'medium', 'low']).optional(),
+  contradicts: z.array(z.string()).optional(),
+  project: z.string().min(1),
+  work_items: z.array(z.string()).optional(),
+  promoted_to: z.string().optional(),
+  cssclasses: z.array(z.string()).optional(),
+});
+export type Compound = z.infer<typeof CompoundSchema>;
+```
+
+- [ ] **Step 7: Schema index**
+
+```typescript
+// packages/cli/src/schema/index.ts
+export { TypedKnowledgeSchema, type TypedKnowledge } from './typed-knowledge.js';
+export { RawSchema, type Raw } from './raw.js';
+export { WorkItemSchema, type WorkItem } from './work-item.js';
+export { CompoundSchema, type Compound } from './compound.js';
+```
+
+- [ ] **Step 8: Run tests + commit**
+
+```bash
+npm test --workspace packages/cli
+git add packages/cli/src/schema packages/cli/test/schema
+git commit -m "feat(cli): Zod schemas for 4 frontmatter shapes"
+```
+
+---
+
+### Task 1.6: `skillwiki validate` subcommand
+
+**Files:**
+- Create: `packages/cli/src/commands/validate.ts`, `packages/cli/test/commands/validate.test.ts`
+- Modify: `packages/cli/src/cli.ts`
+
+- [ ] **Step 1: Write failing tests**
+
+```typescript
+// packages/cli/test/commands/validate.test.ts
+import { describe, it, expect } from 'vitest';
+import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { validateCommand } from '../../src/commands/validate';
+
+const goodConcept = `---
+title: Foo
+created: 2026-05-03
+updated: 2026-05-03
+type: concept
+tags: [x]
+sources: []
+---
+body
+`;
+
+const badConcept = goodConcept.replace('type: concept', 'type: banana');
+
+function setup(content: string, subdir: string, name: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'sw-'));
+  mkdirSync(join(dir, subdir), { recursive: true });
+  const file = join(dir, subdir, name);
+  writeFileSync(file, content);
+  return file;
+}
+
+describe('validateCommand', () => {
+  it('reports valid for good typed-knowledge file', async () => {
+    const f = setup(goodConcept, 'concepts', 'x.md');
+    const r = await validateCommand(f);
+    expect(r.valid).toBe(true);
+    expect(r.errors).toHaveLength(0);
+  });
+  it('reports errors for invalid type enum', async () => {
+    const f = setup(badConcept, 'concepts', 'x.md');
+    const r = await validateCommand(f);
+    expect(r.valid).toBe(false);
+    expect(r.errors.length).toBeGreaterThan(0);
+  });
+  it('reports unknown schema for paths outside known folders', async () => {
+    const f = setup(goodConcept, 'random', 'x.md');
+    const r = await validateCommand(f);
+    expect(r.schema).toBe('unknown');
+    expect(r.valid).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run, verify FAIL**
+
+- [ ] **Step 3: Implement**
+
+```typescript
+// packages/cli/src/commands/validate.ts
+import { readFile } from 'node:fs/promises';
+import { resolve, sep } from 'node:path';
+import { ZodError } from 'zod';
+import { parseFrontmatter } from '../parsers/frontmatter.js';
+import {
+  TypedKnowledgeSchema, RawSchema, WorkItemSchema, CompoundSchema,
+} from '../schema/index.js';
+
+export interface ValidateResult {
+  file: string;
+  schema: 'typed-knowledge' | 'raw' | 'work-item' | 'compound' | 'unknown';
+  valid: boolean;
+  errors: { path: string; message: string }[];
+}
+
+export async function validateCommand(filePath: string): Promise<ValidateResult> {
+  const abs = resolve(filePath);
+  const content = await readFile(abs, 'utf8');
+  const { data } = parseFrontmatter(content);
+  const schema = inferSchemaFromPath(abs);
+
+  if (schema === 'unknown') {
+    return { file: abs, schema, valid: false, errors: [{ path: '', message: 'cannot infer schema from path' }] };
+  }
+
+  const map = {
+    'typed-knowledge': TypedKnowledgeSchema,
+    'raw': RawSchema,
+    'work-item': WorkItemSchema,
+    'compound': CompoundSchema,
+  } as const;
+
+  try {
+    map[schema].parse(data);
+    return { file: abs, schema, valid: true, errors: [] };
+  } catch (err) {
+    if (err instanceof ZodError) {
+      return {
+        file: abs, schema, valid: false,
+        errors: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+      };
+    }
+    throw err;
+  }
+}
+
+function inferSchemaFromPath(abs: string): ValidateResult['schema'] {
+  const norm = abs.split(sep).join('/');
+  if (/\/raw\//.test(norm)) return 'raw';
+  if (/\/projects\/[^/]+\/work\//.test(norm)) return 'work-item';
+  if (/\/projects\/[^/]+\/compound\//.test(norm)) return 'compound';
+  if (/\/(entities|concepts|comparisons|queries)\//.test(norm)) return 'typed-knowledge';
+  return 'unknown';
+}
+```
+
+- [ ] **Step 4: Wire into CLI** (add to cli.ts):
+
+```typescript
+import { validateCommand } from './commands/validate.js';
+
+program
+  .command('validate')
+  .description('Validate frontmatter against the appropriate Zod schema (inferred from path)')
+  .argument('<file>', 'path to markdown file')
+  .option('--human', 'human-readable output')
+  .action(async (file: string, opts: { human?: boolean }) => {
+    const result = await validateCommand(file);
+    if (opts.human) {
+      console.log(result.valid ? `OK ${result.schema} ${result.file}` : `INVALID ${result.schema} ${result.file}`);
+      for (const e of result.errors) console.log(`  ${e.path}: ${e.message}`);
+    } else {
+      console.log(JSON.stringify(result));
+    }
+    if (!result.valid) process.exit(3);
+  });
+```
+
+- [ ] **Step 5: Run tests + smoke + commit**
+
+```bash
+npm test --workspace packages/cli
+npm run build --workspace packages/cli
+git add packages/cli
+git commit -m "feat(cli): skillwiki validate subcommand"
+```
+
+---
+
+### Task 1.7: Phase 1 milestone — npm publish dry-run
+
+- [ ] **Step 1: Verify all tests pass**
+
+```bash
+npm test --workspace packages/cli
+```
+
+- [ ] **Step 2: npm publish dry-run**
+
+```bash
+cd packages/cli
+npm publish --dry-run --access public
+cd ../..
+```
+
+Expected: lists files in `dist/` and shows package contents.
+
+- [ ] **Step 3: Tag milestone**
+
+```bash
+git tag -a v0.1.0-alpha -m "Phase 1 milestone: skillwiki hash + fetch-guard + validate"
+```
+
+---
+
+## Phase 2: Graph & Audit Subcommands
+
+> **Note**: Phase 2 tasks follow the same TDD pattern as Phase 1 (write failing test → run → implement → verify → commit). Concrete code is sketched per task; expand into full Steps 1-N during execution.
+
+### Task 2.1: Wikilink parser
+
+**Files:**
+- Create: `packages/cli/src/parsers/wikilinks.ts`
+- Create: `packages/cli/test/parsers/wikilinks.test.ts`
+
+**Behavior:**
+- Extract `[[name]]` and `[[name|display]]` patterns from markdown body
+- Skip code fences and inline code (regex respects `` ` `` and ``` ``` ``` ``` boundaries)
+- Return list of unique target page slugs
+
+**Test cases:**
+- Single wikilink: `[[foo]]` → `['foo']`
+- With display: `[[foo|bar]]` → `['foo']`
+- Inside code fence: ignored
+- Inside inline code: ignored
+- Heading anchors: `[[foo#section]]` → `['foo']`
+- Block refs: `[[foo#^block]]` → `['foo']`
+
+**Implementation outline:**
+```typescript
+export function extractWikilinks(body: string): string[] {
+  const stripped = stripCodeBlocks(body);
+  const re = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
+  const out = new Set<string>();
+  for (const m of stripped.matchAll(re)) {
+    if (m[1]) out.add(m[1].trim());
+  }
+  return [...out];
+}
+```
+
+**Commit message:** `feat(cli): wikilink parser`
+
+---
+
+### Task 2.2: `skillwiki graph build` subcommand
+
+**Files:**
+- Create: `packages/cli/src/commands/graph.ts`
+- Create: `packages/cli/test/commands/graph.test.ts`
+
+**Behavior:**
+- Walk vault directory, read every `.md` under `entities/`, `concepts/`, `comparisons/`, `queries/`, `projects/*/compound/`, `meta/`
+- Parse wikilinks via Task 2.1's parser
+- Build adjacency map: `{ slug: { outbound: [...], inbound: [...] } }`
+- Compute Adamic-Adar score for each pair sharing a common neighbor: `AA(u, v) = Σ 1 / log(degree(w))` over shared neighbors w
+- Emit JSON: `{ nodes: [...], edges: [...], adamic_adar: [[u, v, score], ...] }`
+
+**CLI signature:** `skillwiki graph build <vault-path>`
+
+**Test cases:**
+- Three pages with linear chain `A → B → C`: adjacency correct
+- A and C share common neighbor B: Adamic-Adar score is `1 / log(2)` (B has degree 2)
+- Empty vault: returns `{ nodes: [], edges: [], adamic_adar: [] }`
+
+**Commit message:** `feat(cli): skillwiki graph build subcommand`
+
+---
+
+### Task 2.3: `skillwiki overlap` subcommand
+
+**Files:**
+- Create: `packages/cli/src/commands/overlap.ts`
+- Create: `packages/cli/test/commands/overlap.test.ts`
+
+**Behavior:**
+- Walk vault; read frontmatter `sources:` array from typed-knowledge pages
+- Group pages that share ≥1 raw source path
+- Emit clusters: `{ clusters: [{ source: 'raw/a.md', pages: ['p1', 'p2'] }, ...] }`
+
+**CLI signature:** `skillwiki overlap <vault-path>`
+
+**Test cases:**
+- Two pages cite same raw source: appear in same cluster
+- Three pages, transitive overlap (A↔B via X, B↔C via Y): two distinct cluster entries
+- Pages with no overlap: not in any cluster
+
+**Commit message:** `feat(cli): skillwiki overlap (E2 4.0× signal)`
+
+---
+
+### Task 2.4: `skillwiki orphans` subcommand
+
+**Files:**
+- Create: `packages/cli/src/commands/orphans.ts`
+- Create: `packages/cli/test/commands/orphans.test.ts`
+
+**Behavior:**
+- Reuse graph build output (or recompute)
+- Find connected components in undirected wikilink graph
+- Report orphans (component size 1), small clusters (size 2-3), and bridge nodes (single articulation point connecting two else-disconnected components)
+- Emit: `{ orphans: [...], small_clusters: [[...], ...], bridge_nodes: [{ slug, connects: [c1, c2] }] }`
+
+**CLI signature:** `skillwiki orphans <vault-path>`
+
+**Test cases:**
+- Page with no inbound or outbound links: in `orphans`
+- Two disconnected pairs: each in `small_clusters`
+- One page connecting two clusters: in `bridge_nodes`
+
+**Commit message:** `feat(cli): skillwiki orphans (E3 review queue)`
+
+---
+
+### Task 2.5: Citation parser
+
+**Files:**
+- Create: `packages/cli/src/parsers/citations.ts`
+- Create: `packages/cli/test/parsers/citations.test.ts`
+
+**Behavior:**
+- Extract `^[raw/...]` markers from body (Hermes provenance markers)
+- Extract numbered footnotes `[^N]` and their definitions `[^N]: ...`
+- Skip code blocks
+- Return: `{ provenance_markers: ['raw/articles/x.md', ...], footnotes: [{ id: '1', target: 'raw/...' | url, ... }] }`
+
+**Test cases:**
+- Paragraph ending with `^[raw/articles/x.md]`: extracted
+- Multiple markers in one paragraph: all extracted
+- Footnote `[^1]` with definition `[^1]: raw/...`: matched
+- Footnote inside code: ignored
+
+**Commit message:** `feat(cli): citation marker parser`
+
+---
+
+### Task 2.6: `skillwiki audit` subcommand
+
+**Files:**
+- Create: `packages/cli/src/commands/audit.ts`
+- Create: `packages/cli/test/commands/audit.test.ts`
+
+**Behavior:**
+- Read target file's frontmatter `sources:` and body provenance markers
+- For each `^[raw/...]` marker: verify file exists at `<vault-root>/raw/...`
+- For each entry in `sources:`: verify it's referenced at least once in body (markers OR wikilinks)
+- For pages with ≥3 sources: flag bare external URLs as "consider ingesting"
+- Emit: `{ file, unresolved_markers: [...], unreferenced_sources: [...], suggest_ingest: [...] }`
+
+**CLI signature:** `skillwiki audit <file>`
+
+**Test cases:**
+- File with valid markers and resolved files: empty unresolved
+- File with `^[raw/missing.md]` marker but file absent: in unresolved
+- `sources:` entry not referenced in body: in unreferenced_sources
+- 3+ sources page with bare `https://example.com`: in suggest_ingest
+
+**Commit message:** `feat(cli): skillwiki audit subcommand`
+
+---
+
+### Task 2.7: Phase 2 milestone
+
+- [ ] **Step 1**: Run `npm test --workspace packages/cli` — all green
+- [ ] **Step 2**: Bump `packages/cli/package.json` version to `0.2.0`
+- [ ] **Step 3**: Update `program.version('0.2.0')` in `cli.ts`
+- [ ] **Step 4**: `npm publish --dry-run --access public` from `packages/cli`
+- [ ] **Step 5**: `git tag v0.2.0-alpha`
+
+---
+
+## Phase 3: `skillwiki install` Subcommand
+
+### Task 3.1: Cross-platform skills installer
+
+**Files:**
+- Create: `packages/cli/src/commands/install.ts`
+- Create: `packages/cli/test/commands/install.test.ts`
+
+**Behavior:**
+- Locate target `~/.claude/skills/` (override via `--target <path>` for tests)
+- For each skill directory in `packages/skills/`: atomic copy to target
+- If target skill already exists: back up to `<target>.bak-<timestamp>` first
+- Write manifest at `<target>/wiki-manifest.json`: `{ installed: [{ name, version, path, sha256 }, ...], installed_at: ISO }`
+- Idempotent: re-run with same source produces no diff (verify via manifest sha256)
+
+**Failure modes:**
+- Target path not writable → exit 4 with reason
+- Disk full mid-copy → roll back partial copies, restore backups
+
+**CLI signature:** `skillwiki install [--target <path>] [--source <path>] [--dry-run]`
+
+**Test cases:**
+- Fresh install into empty target: all skills copied, manifest written
+- Re-install: backups created, new files written, manifest updated
+- `--dry-run`: prints planned operations, no writes
+- Target unwritable: exit 4
+
+**Commit message:** `feat(cli): skillwiki install (cross-platform installer F4)`
+
+---
+
+### Task 3.2: Phase 3 milestone
+
+- [ ] **Step 1**: All tests green
+- [ ] **Step 2**: Smoke test: `mkdir /tmp/sk && node packages/cli/dist/cli.js install --target /tmp/sk --source packages/skills`
+- [ ] **Step 3**: Verify manifest at `/tmp/sk/wiki-manifest.json`
+- [ ] **Step 4**: Bump version to `0.3.0`, tag `v0.3.0-alpha`
+
+---
+
+## Phase 4: Templates
+
+> **Note**: These are content authorship tasks. No TDD; instead "write content per spec section X, render-check, commit". Each template ≤ 200 lines.
+
+### Task 4.1: `templates/SCHEMA.md`
+
+**Source content:** Spec §"Vault Architecture" + §"Frontmatter Schemas" + §"Citation and Reference Conventions"
+
+**Required sections:**
+- Domain (placeholder line for users to fill)
+- Conventions (filenames, dates, wikilinks, taxonomy reference)
+- Frontmatter (4 schemas with examples)
+- Citation rules (`^[raw/...]` markers, wikilinks, external URLs)
+- Tag taxonomy (placeholder section: top-level categories)
+- Page thresholds (Hermes rules: 2+ source mentions, 200-line split)
+- Update policy (contradiction handling)
+
+**Steps:**
+- [ ] Write `templates/SCHEMA.md`
+- [ ] Open in Obsidian or any markdown renderer to confirm formatting
+- [ ] `git add templates/SCHEMA.md && git commit -m "feat(templates): SCHEMA.md vault template"`
+
+---
+
+### Task 4.2: `templates/index.md`
+
+**Source content:** Hermes index format + §"Vault Architecture" projects/meta/ sections
+
+**Required sections:**
+- Header with last-updated date placeholder, total page count placeholder
+- ## Entities, ## Concepts, ## Comparisons, ## Queries (Hermes-compat)
+- ## Meta (cross-project synthesis — NEW)
+- ## Projects (registered projects — NEW)
+
+**Steps:**
+- [ ] Write `templates/index.md`
+- [ ] Commit: `feat(templates): index.md vault template`
+
+---
+
+### Task 4.3: `templates/log.md`
+
+**Source content:** Hermes log format
+
+**Format:**
+```markdown
 # Wiki Log
-
 > Chronological record of all wiki actions. Append-only.
 > Format: `## [YYYY-MM-DD] action | subject`
-> Actions: init, ingest, update, query, lint, audit, crystallize, create, archive
-> When this file exceeds 500 entries, rotate: rename to log-YYYY.md, start fresh.
-EOF
+> Actions: ingest, update, query, lint, create, archive, delete, distill, decide
+> When this file exceeds 500 entries, rotate.
+
+## [{date}] create | Wiki initialized
+- Domain: {domain}
+- Structure created with SCHEMA.md, index.md, log.md, raw/, entities/, concepts/, comparisons/, queries/, meta/, projects/
 ```
 
-- [ ] **Step 4: Commit**
-
-```bash
-git add templates/
-git commit -m "feat: add Hermes-compatible SCHEMA.md, index.md, log.md templates"
-```
+**Steps:**
+- [ ] Write `templates/log.md`
+- [ ] Commit: `feat(templates): log.md vault template`
 
 ---
 
-### Task 4: wiki-init Skill
+### Task 4.4: `templates/project-README.md`
+
+**Source content:** Spec §"Vault Architecture" project structure + §"Cross-Skill Orientation Contract"
+
+**Format:**
+```markdown
+---
+title: {Project Name}
+created: {date}
+updated: {date}
+status: planned | active | maintenance | archived
+---
+
+# {Project Name}
+
+## Intent
+{What this project is trying to achieve. The orientation contract reads this as project intent.}
+
+## Structure
+- `requirements/` — what we're building (incl. roadmap)
+- `architecture/` — how it's designed (incl. ADRs)
+- `work/` — dated work-item folders
+- `compound/` — project-local concrete learnings
+
+## Active Work
+{Bullet list of in-progress work items, manually updated by proj-work skill.}
+
+## Recent Lessons
+{Bullet list linking to compound/ entries.}
+
+## Related
+- Cross-project meta: [[meta/{topic}]]
+- Distilled to vault: [[concepts/{slug}]]
+```
+
+**Steps:**
+- [ ] Write `templates/project-README.md`
+- [ ] Commit: `feat(templates): project-README template`
+
+---
+
+## Phase 5: Knowledge-Layer Skills (`wiki-*`)
+
+> **Note**: SKILL.md files are prompt-only Markdown describing skill behavior. They follow the structure: frontmatter (name, description, version, author, license), When This Skill Activates, Workflow, Pitfalls, Related Tools.
+
+### Task 5.1: `wiki-init/SKILL.md`
+
+**Source content:** Spec §"Skill Inventory — wiki-init" + §"Vault Architecture" + Hermes init flow
+
+**Behavior described in skill:**
+1. Determine vault path (from env `WIKI_PATH` or ask user; default `~/wiki`)
+2. Create directory tree: `raw/{articles,papers,transcripts,assets}/`, `entities/`, `concepts/`, `comparisons/`, `queries/`, `meta/`, `projects/`
+3. Ask user the domain
+4. Copy `templates/SCHEMA.md` → `<vault>/SCHEMA.md`, customize Domain section
+5. Copy `templates/index.md` → `<vault>/index.md`
+6. Copy `templates/log.md` → `<vault>/log.md`, fill in `{date}` and `{domain}`
+7. Confirm and suggest first ingestion
+
+**Skill MUST:**
+- Use `skillwiki validate` on a sample frontmatter to confirm setup
+- Run `skillwiki hash` on the seed log entry to demonstrate the contract
+
+**Steps:**
+- [ ] Create `packages/skills/wiki-init/SKILL.md` (~150 lines)
+- [ ] Manual smoke: invoke skill in scratch directory, verify tree
+- [ ] Commit: `feat(skills): wiki-init`
+
+---
+
+### Task 5.2: `wiki-ingest/SKILL.md`
+
+**Source content:** Spec §"Skill Inventory — wiki-ingest" + §"Workflow Patterns E2 prep" + §"Citation and Reference Conventions" + Hermes ingest flow
+
+**Behavior described in skill:**
+1. Orient (E5): read SCHEMA, index, recent log
+2. Capture raw:
+   - URL: run `skillwiki fetch-guard <url>`. If blocked, abort. Otherwise use Claude Code `WebFetch` and save to `raw/articles/<slug>.md`
+   - File/paste: save to appropriate `raw/` subdir
+   - Always compute `skillwiki hash <raw-file>` and store in raw frontmatter
+3. Discuss takeaways with user (skip in batch mode)
+4. Check existing pages (search index + filesystem)
+5. Write/update wiki pages with **inline citations pre-attached** (Hermes `^[raw/...]` markers per Citation Conventions)
+6. Atomic batch apply (F2): collect → apply pages → index → log
+7. Re-ingest of same URL: hash unchanged → skip; hash changed → flag drift
+8. Confidence: single-source pages get `confidence: low`; multi-source `medium`/`high`
+
+**Skill MUST:**
+- Always run `skillwiki fetch-guard` before any URL fetch
+- Always run `skillwiki hash` on raw files
+- Always run `skillwiki validate` on every page it writes (catch frontmatter errors before commit)
+
+**Steps:**
+- [ ] Create `packages/skills/wiki-ingest/SKILL.md` (~250 lines, comprehensive)
+- [ ] Commit: `feat(skills): wiki-ingest`
+
+---
+
+### Task 5.3: `wiki-query/SKILL.md`
+
+**Source content:** Spec §"Skill Inventory — wiki-query" + §"Workflow Patterns E2"
+
+**Behavior described in skill:**
+1. Orient (E5)
+2. Determine scope from user: vault | current-project | project + concepts (default: vault)
+3. Run `skillwiki graph build <vault>` and `skillwiki overlap <vault>` to get JSON precomputation
+4. Identify candidate pages via index search + filesystem grep
+5. Score candidates with the 4-signal weights (3.0× direct / 4.0× source-overlap / 1.5× Adamic-Adar / 1.0× type) using the JSON
+6. Read top-N pages
+7. Synthesize answer with `[[wikilink]]` citations
+8. File substantial answers to `queries/` or `comparisons/`
+
+**Steps:**
+- [ ] Create `packages/skills/wiki-query/SKILL.md` (~200 lines)
+- [ ] Commit: `feat(skills): wiki-query (E2 graph-aware)`
+
+---
+
+### Task 5.4: `wiki-lint/SKILL.md`
+
+**Source content:** Spec §"Skill Inventory — wiki-lint" + §"Workflow Patterns E3" + Hermes lint flow
+
+**Behavior described in skill:**
+- Orient (E5)
+- Run `skillwiki orphans <vault>`, `skillwiki validate <each page>`, `skillwiki hash <each raw>` to compare with stored sha256
+- Hermes lint checks: orphans, broken links, index completeness, frontmatter, stale content, contradictions, page size, tag audit, log rotation
+- E3 review queue: low-confidence + single-source, contested, orphan clusters, bridge nodes
+- Severity ordering: broken links > orphans > drift > contested > stale > style
+- Append `## [date] lint | N issues found` to log.md
+
+**Steps:**
+- [ ] Create `packages/skills/wiki-lint/SKILL.md` (~250 lines)
+- [ ] Commit: `feat(skills): wiki-lint (E3 review queue)`
+
+---
+
+### Task 5.5: `wiki-crystallize/SKILL.md`
+
+**Source content:** Spec §"Skill Inventory — wiki-crystallize"
+
+**Behavior described in skill:**
+- Distill working session into a typed-knowledge page
+- **Auto-detect project context**: if cwd path includes `projects/{slug}/`, set `provenance: project` and `provenance_projects: ["[[slug]]"]`; else `provenance: research`
+- Body comment: `<!-- crystallize_count: N -->` (increment on re-crystallize)
+- Run `skillwiki validate` on the new page
+- Update index.md and append to log.md
+
+**Steps:**
+- [ ] Create `packages/skills/wiki-crystallize/SKILL.md` (~150 lines)
+- [ ] Commit: `feat(skills): wiki-crystallize`
+
+---
+
+### Task 5.6: `wiki-audit/SKILL.md`
+
+**Source content:** Spec §"Skill Inventory — wiki-audit" + §"Citation and Reference Conventions"
+
+**Behavior described in skill:**
+- For each typed-knowledge page (or a single page argument), run `skillwiki audit <file>`
+- Collate JSON results into a human-readable audit report
+- Report categories:
+  - Unresolved markers (`^[raw/missing.md]`)
+  - Unreferenced sources (entry in `sources:` not cited in body)
+  - Bare URLs in synthesis-heavy pages → "consider ingesting"
+- Suggest fixes: "ingest URL X to make claim Y verifiable"
+
+**Steps:**
+- [ ] Create `packages/skills/wiki-audit/SKILL.md` (~150 lines)
+- [ ] Commit: `feat(skills): wiki-audit`
+
+---
+
+## Phase 6: Project-Layer Skills (`proj-*`)
+
+### Task 6.1: `proj-init/SKILL.md`
+
+**Source content:** Spec §"Skill Inventory — proj-init" + §"Vault Architecture" project structure
+
+**Behavior described in skill:**
+- Ask user for project slug (lowercase, hyphens)
+- Create `projects/{slug}/{requirements,architecture,work,compound}/`
+- Copy `templates/project-README.md` → `projects/{slug}/README.md`, fill placeholders
+- Register project in vault `index.md` under "## Projects" section
+- Append to `log.md`: `## [date] create | project {slug} initialized`
+
+**Steps:**
+- [ ] Create `packages/skills/proj-init/SKILL.md` (~120 lines)
+- [ ] Commit: `feat(skills): proj-init`
+
+---
+
+### Task 6.2: `proj-work/SKILL.md`
+
+**Source content:** Spec §"Skill Inventory — proj-work" + §"Frontmatter Schemas — Schema 3"
+
+**Behavior described in skill:**
+- Override brainstorming/writing-plans default output paths to `projects/{slug}/work/YYYY-MM-DD-{slug}/`
+- Create `spec.md` (from brainstorming output), `plan.md` (from writing-plans output), `log.md` (execution notes)
+- Frontmatter: kind, status, priority, project, owner, started/completed dates
+- Status lifecycle: planned → in-progress → completed (or abandoned)
+- On status: completed → set `completed:` date, update project README "Active Work" section
+- Run `skillwiki validate` on each work item file
+
+**Steps:**
+- [ ] Create `packages/skills/proj-work/SKILL.md` (~250 lines)
+- [ ] Commit: `feat(skills): proj-work`
+
+---
+
+### Task 6.3: `proj-distill/SKILL.md`
+
+**Source content:** Spec §"Skill Inventory — proj-distill" + §"Workflow Patterns E4"
+
+**Behavior described in skill:**
+- **2-step pattern (E4)**:
+  - Step 1 (Analyze): read `projects/{slug}/compound/{file}.md` + linked work items. Output a candidate concept outline. Confirm with user.
+  - Step 2 (Generate): write vault concept page with `provenance: project`, `provenance_projects: ["[[slug]]"]`, `work_items: [...]`. Set `promoted_to:` backlink on originating compound entry. Update index + log on both vault and project sides.
+- Run `skillwiki validate` on the new concept page
+- Run `skillwiki audit` to confirm citations resolve
+
+**Steps:**
+- [ ] Create `packages/skills/proj-distill/SKILL.md` (~200 lines)
+- [ ] Commit: `feat(skills): proj-distill (E4 2-step pattern)`
+
+---
+
+### Task 6.4: `proj-decide/SKILL.md`
+
+**Source content:** Spec §"Skill Inventory — proj-decide"
+
+**Behavior described in skill:**
+- Capture an architectural decision as ADR in `projects/{slug}/architecture/YYYY-MM-DD-{decision-slug}.md`
+- ADR structure: Context, Decision, Consequences, Alternatives Considered
+- If decision generalizes beyond the project, also create a `concepts/` page with `provenance: project` (or `mixed` if research-informed). Link both ways.
+- Run `skillwiki validate` on both files
+
+**Steps:**
+- [ ] Create `packages/skills/proj-decide/SKILL.md` (~150 lines)
+- [ ] Commit: `feat(skills): proj-decide`
+
+---
+
+## Phase 7: Integration, Docs, CI, Publish
+
+### Task 7.1: End-to-end vault smoke test
 
 **Files:**
-- Create: `skills/wiki-init/SKILL.md`
+- Create: `packages/cli/test/integration/vault-bootstrap.test.ts`
 
-Source: kfchou/wiki-init adapted for Hermes directory layout (typed subdirs instead of flat `wiki/pages/`).
+**Behavior:**
+- In a tmpdir: copy `templates/` files into a fake "vault"
+- Run `skillwiki validate` on a fixture page in `concepts/`
+- Run `skillwiki graph build`, `skillwiki overlap`, `skillwiki orphans` against fixture
+- Assert all return well-formed JSON with expected structure
 
-- [ ] **Step 1: Write skills/wiki-init/SKILL.md**
-
-```markdown
----
-name: wiki-init
-description: Use when bootstrapping a new wiki vault for any knowledge domain. Creates Hermes-compatible directory structure with SCHEMA.md, typed subdirs, and templates.
----
-
-# Wiki Init
-
-Bootstrap a new Hermes-compatible wiki vault.
-
-## Pre-flight
-
-Check whether a `SCHEMA.md` already exists nearby. If yes, ask the user if they want to reinitialize or continue with the existing wiki.
-
-## Process
-
-### 1. Gather configuration (one question at a time)
-
-Ask:
-1. **Where should the wiki live?** (absolute path, e.g. `~/wiki`)
-2. **What is the domain/purpose?** (one sentence)
-3. **What types of sources will you add?** (papers, URLs, code files, transcripts, etc.)
-4. **What tag taxonomy should we use?** (suggest 10-20 tags based on domain)
-
-### 2. Create directory structure
-
-```
-<wiki-root>/
-├── SCHEMA.md
-├── index.md
-├── log.md
-├── raw/
-│   ├── articles/
-│   ├── papers/
-│   ├── transcripts/
-│   └── assets/
-├── entities/
-├── concepts/
-├── comparisons/
-└── queries/
-```
-
-Use `mkdir -p` for each directory.
-
-### 3. Write SCHEMA.md
-
-Copy the template from this skill's `templates/SCHEMA.md` and customize:
-- Fill in the Identity section (path, domain, source types, created date)
-- Set the Tag Taxonomy based on the user's domain
-- Keep all conventions as-is (they're the Hermes contract)
-
-### 4. Write index.md
-
-```markdown
-# Wiki Index — <domain>
-
-> Content catalog. Every wiki page listed under its type with a one-line summary.
-> Read this first to find relevant pages for any query.
-> Last updated: <today> | Total pages: 0
-
-## Entities
-
-## Concepts
-
-## Comparisons
-
-## Queries
-```
-
-### 5. Write log.md
-
-```markdown
-# Wiki Log
-
-> Chronological record of all wiki actions. Append-only.
-> Format: `## [YYYY-MM-DD] action | subject`
-> When this file exceeds 500 entries, rotate: rename to log-YYYY.md, start fresh.
-
-## [<today>] init | <domain>
-- Domain: <domain>
-- Structure created with SCHEMA.md, index.md, log.md
-- Directories: raw/, entities/, concepts/, comparisons/, queries/
-```
-
-### 6. Confirm
-
-Tell the user:
-- Wiki initialized at `<path>`
-- Add sources to `raw/` manually, or run `wiki-ingest` directly with a URL or file path
-- Run `wiki-lint` periodically to keep the wiki healthy
-- `SCHEMA.md` is how all other skills locate this wiki — do not move or delete it
-- The wiki is Obsidian-compatible: open `<path>` as an Obsidian vault for graph view and wikilinks
-
-### 7. Append to log.md
-
-The initial log entry was already written in step 5. No additional append needed.
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add skills/wiki-init/
-git commit -m "feat: add wiki-init skill (Hermes-compatible vault bootstrap)"
-```
+**Steps:**
+- [ ] Write integration test
+- [ ] Run `npm test --workspace packages/cli`
+- [ ] Commit: `test: end-to-end vault bootstrap`
 
 ---
 
-### Task 5: wiki-ingest Skill
+### Task 7.2: Hermes wire-compat assertion test
 
 **Files:**
-- Create: `skills/wiki-ingest/SKILL.md`
+- Create: `packages/cli/test/integration/hermes-compat.test.ts`
 
-Source: kfchou/wiki-ingest adapted for Hermes typed subdirs, sha256 raw sources, staged batch writes, fetch-guard integration, confidence scoring, provenance markers.
+**Behavior:**
+- Build a fixture vault using our templates + a few sample typed-knowledge pages with new `provenance:` fields and `aliases:`
+- Parse the vault using only Hermes-known fields (title, created, updated, type, tags, sources, confidence, contested, contradictions)
+- Assert: every page passes Hermes-shape validation (ignoring our additive fields)
+- Assert: directory layout matches Hermes expectation (raw/, entities/, concepts/, comparisons/, queries/ all exist; meta/ and projects/ allowed but not required by Hermes)
 
-- [ ] **Step 1: Write skills/wiki-ingest/SKILL.md**
-
-```markdown
----
-name: wiki-ingest
-description: Use when adding a new source to a wiki — a paper, article, URL, file, transcript, or any document. One ingest may touch 10-15 wiki pages.
----
-
-# Wiki Ingest
-
-Add a source to the wiki. Capture the raw source with sha256, discuss takeaways, write wiki pages, and maintain index/log.
-
-## Pre-condition
-
-Find `SCHEMA.md` (search from cwd upward, or in common wiki locations like `~/wiki/`). If not found, tell the user to run `wiki-init` first.
-Read `SCHEMA.md` to learn: wiki root path, page frontmatter format, tag taxonomy, citation convention, log entry format.
-Then read `index.md` and the last 20 lines of `log.md` to orient.
-
-## Process
-
-### 1. Accept the source
-
-The source can be:
-- **File path** — read it directly; copy to appropriate `raw/` subdir if not already there
-- **URL** — run security check: `scripts/wiki-fetch-guard.sh "<url>"`. If it fails, tell the user why. If it passes, use `web_fetch` or `WebFetch` to get markdown, save to `raw/articles/`
-- **Pasted text** — save to appropriate `raw/` subdir
-
-### 2. Capture the raw source
-
-Save the source to the appropriate `raw/` subdirectory:
-- Web articles → `raw/articles/<descriptive-slug>.md`
-- PDFs/papers → `raw/papers/<descriptive-slug>.md`
-- Meeting notes/transcripts → `raw/transcripts/<descriptive-slug>.md`
-
-Add raw frontmatter to every captured source:
-```yaml
----
-source_url: <url or "local">
-ingested: <YYYY-MM-DD>
-sha256: <compute using scripts/wiki-hash.sh on the file AFTER adding this frontmatter>
----
-```
-
-**On re-ingest of the same URL:** recompute sha256, compare to stored value. If identical, skip. If different, flag drift and update.
-
-### 3. Read the source in full
-
-Read all content. For long sources, read in sections. Do not skip.
-
-### 4. Surface takeaways — BEFORE writing anything
-
-Tell the user:
-- 3-5 bullet points of key takeaways
-- What entities/concepts this introduces or updates
-- Whether it contradicts anything already in the wiki (check index.md and relevant pages)
-
-Ask: **"Anything specific you want me to emphasize or de-emphasize?"**
-Wait for the user's response before proceeding.
-
-### 5. Check existing pages
-
-Read `index.md` and use `Grep` to find existing pages for the entities/concepts mentioned in this source. This prevents duplicates.
-
-### 6. Staged batch write — collect all page operations
-
-Before writing anything, plan the full set of changes:
-- Which new pages to create (with their `type:` — entity, concept, comparison, query, summary)
-- Which existing pages to update
-- What index.md and log.md changes are needed
-
-**New page structure** (Hermes-compatible):
-```
-entities/<slug>.md    — for people, orgs, products, models
-concepts/<slug>.md    — for topics, techniques, ideas
-comparisons/<slug>.md — for side-by-side analyses
-queries/<slug>.md     — for filed query results
-```
-
-**Page template:**
-```yaml
----
-title: <Page Title>
-created: <today>
-updated: <today>
-type: entity | concept | comparison | query | summary
-tags: [from SCHEMA.md taxonomy]
-sources: [<raw-path-or-source-slug>]
-confidence: medium
----
-```
-
-Set `confidence: low` for single-source pages. Set `confidence: high` only when the claim is well-supported across multiple sources.
-
-For single-source pages with `confidence: low`, add a `## Pending Review` section:
-```markdown
-## Pending Review
-- This page relies on a single source. Find corroborating evidence or note the limitation.
-```
-
-### 7. Write the source summary page
-
-Create a summary page (type: `summary`) in the appropriate typed subdir. Use lowercase-hyphen slugs.
-
-```yaml
----
-title: <Title>
-created: <today>
-updated: <today>
-type: summary
-tags: [from taxonomy]
-sources: [<raw/articles/slug.md>]
-confidence: <based on source count>
----
-```
-
-Include:
-- **Source:** `<url or file path>`
-- **Summary:** 2-3 paragraph synthesis in your own words
-- **Key Takeaways:** bullet points
-- **Entities & Concepts:** list with `[[wikilinks]]` to their pages
-- **Relation to Other Wiki Pages:** how this connects
-
-### 8. Cite as you write
-
-While drafting, every non-common-knowledge factual claim must carry a footnote per the Citations section in `SCHEMA.md`. Two kinds:
-- Quote: `[^N]: [[<source-slug>]] <locator> — "<quote>"`
-- Synthesis: `[^N]: [[<source-slug>]] <locator> [synthesis] — <description>`
-
-If you cannot produce a citation, find one, weaken the claim, or drop it.
-
-### 9. Update entity and concept pages
-
-For each entity/concept touched by this source:
-- **Page exists:** Read it, update relevant section, add this source to `sources:` frontmatter, bump `updated` date
-- **Page doesn't exist:** Create it in the appropriate typed subdir with frontmatter
-
-### 10. Cross-reference audit — do not skip
-
-Scan existing pages for entities/concepts this source introduces. Add `[[new-slug]]` references where appropriate. Every new or updated page must have at least 2 outbound `[[wikilinks]]`.
-
-On pages that synthesize 3+ sources, add provenance markers `^[raw/articles/source.md]` at the end of paragraphs whose claims come from a specific source.
-
-### 11. Update index.md
-
-Add new pages under the correct section (Entities, Concepts, Comparisons, Queries) in alphabetical order. Update the "Total pages" count and "Last updated" date in the header.
-
-### 12. Append to log.md
-
-```
-## [<date>] ingest | <source title>
-Pages written: <list of new pages>
-Pages updated: <list of updated pages>
-```
-
-### 13. Report to user
-
-List every file created or updated. Mention any contradictions found.
-
-## Common Mistakes
-
-- **Appending chronological updates instead of editing in-place** — Wiki pages are living documents. Update in-place, bump `updated` date, log the change.
-- **Skipping the cross-reference audit** — A wiki's value compounds through bidirectional links.
-- **Summarizing the abstract instead of synthesizing** — The Summary section should reflect your own synthesis.
-- **Not running fetch-guard on URLs** — Always run `scripts/wiki-fetch-guard.sh` before fetching URLs.
-- **Creating pages for passing mentions** — Follow the Page Thresholds in SCHEMA.md (2+ source mentions or central to one source).
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add skills/wiki-ingest/
-git commit -m "feat: add wiki-ingest skill with fetch-guard, sha256, staged writes"
-```
+**Steps:**
+- [ ] Write test
+- [ ] Run, verify pass
+- [ ] Commit: `test: assert Hermes wire-compatibility (additive fields ignored)`
 
 ---
 
-### Task 6: wiki-query Skill
+### Task 7.3: README.md (root + packages/cli)
 
 **Files:**
-- Create: `skills/wiki-query/SKILL.md`
+- Create: `README.md` (root)
+- Create: `packages/cli/README.md`
 
-Source: kfchou/wiki-query enhanced with 3-tier search chain from claude-wiki-verbs (adapted for Hermes directory layout).
+**Root README sections:**
+- What this is (skillwiki + 10 Claude Code skills)
+- Quick start (install command for Claude Code users)
+- Architecture overview (link to spec)
+- Repo layout (workspaces)
+- Contributing
+- License
 
-- [ ] **Step 1: Write skills/wiki-query/SKILL.md**
+**Package CLI README sections:**
+- Installation (`npm install -g skillwiki` or `npx skillwiki`)
+- Subcommand reference (table from spec §"Implementation Toolchain")
+- JSON output examples for each subcommand
+- Cross-platform notes
+- License
 
-```markdown
----
-name: wiki-query
-description: Use when asking a question against a wiki. Do not answer from general knowledge — always read the wiki pages first.
----
-
-# Wiki Query
-
-Ask a question. Read the wiki using multi-tier search. Synthesize with citations. Offer to file the answer back.
-
-## Pre-condition
-
-Find `SCHEMA.md` (search from cwd upward, or in common wiki locations). If not found, tell the user to run `wiki-init` first. Read it to get wiki root path and citation convention.
-Read `index.md` and the last 10 lines of `log.md` to orient.
-
-## Process
-
-### 1. Read `index.md` first
-
-Scan the full index to identify which pages are likely relevant. Do NOT answer from general knowledge — the wiki is the source of truth, even if you think you know the answer.
-
-### 2. Multi-tier search
-
-**Tier 1 — Wiki index** (automatic, always first):
-Scan `index.md` for pages whose title, summary, or tags match the query terms. Read the top 2-6 most relevant pages in full.
-
-**Tier 2 — File grep** (automatic if Tier 1 is insufficient):
-Use `Grep` to search all `.md` files in the wiki for key terms from the query. The index summary may miss relevant content inside pages.
-
-**Tier 3 — External web** (only if wiki is insufficient):
-If the wiki has no relevant pages and the question is about a topic the wiki doesn't cover, tell the user: "The wiki has no page on X. Want me to search the web and ingest what I find?"
-
-Never search external sources before checking the wiki. The wiki may contradict what you think you know.
-
-### 3. Read relevant pages
-
-Read the identified pages in full. Follow one level of `[[wikilinks]]` if they point to pages that seem relevant to the question.
-
-### 4. Synthesize the answer
-
-Write a response that:
-- Is grounded in the wiki pages you read
-- Cites inline using `[[slug]]` for every claim sourced from a specific page
-- Notes agreements and disagreements between pages
-- Flags gaps: "The wiki has no page on X" or "[[page]] doesn't cover Y yet"
-- Suggests follow-up sources to ingest or questions to investigate
-
-Format for the question type:
-- Factual → prose with citations
-- Comparison → table
-- How-it-works → numbered steps
-- What-do-we-know-about-X → structured summary with open questions
-
-### 5. Always offer to save
-
-After answering, say:
-> "Worth saving as a query page?"
-
-If yes:
-- Create the page in `queries/<slug>.md` with type `query`
-- Add entry to `index.md` under Queries
-- Append to log.md
-
-If no:
-- Append to log.md: `## [<date>] query | <question summary> — not filed`
-
-## Common Mistakes
-
-- **Answering from memory** — Always read the wiki pages first. The wiki may contradict what you think you know.
-- **Skipping the save offer** — Good query answers compound the wiki's value. Always offer.
-- **No citations** — Every factual claim should trace back to a `[[slug]]`.
-- **Searching external sources before the wiki** — The wiki is the source of truth. Check it first.
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add skills/wiki-query/
-git commit -m "feat: add wiki-query skill with 3-tier search chain"
-```
+**Steps:**
+- [ ] Write both READMEs
+- [ ] Commit: `docs: README files`
 
 ---
 
-### Task 7: wiki-lint Skill
+### Task 7.4: CLAUDE.md
 
 **Files:**
-- Create: `skills/wiki-lint/SKILL.md`
+- Create: `CLAUDE.md` (root)
 
-Source: kfchou/wiki-lint adapted for Hermes typed subdirs + sha256 drift detection + Hermes quality signals (confidence, contested, contradictions).
+**Sections:**
+- Repo overview (1 paragraph)
+- How skills relate to CLI (skills are prompt-only; CLI does deterministic data work)
+- Spec location: `docs/superpowers/specs/2026-05-02-llm-wiki-skill-design.md`
+- Plan location: `docs/superpowers/plans/2026-05-02-llm-wiki-skill.md` (this file)
+- Build/test commands
+- Hermes compat policy reminder
 
-- [ ] **Step 1: Write skills/wiki-lint/SKILL.md**
-
-```markdown
----
-name: wiki-lint
-description: Use when auditing a wiki for health issues — broken links, orphans, stale content, contradictions, missing frontmatter, source drift. Run after every 5-10 ingests.
----
-
-# Wiki Lint
-
-Audit the wiki. Produce a severity-tiered report. Offer concrete fixes. Log the operation.
-
-## Pre-condition
-
-Find `SCHEMA.md` (search from cwd upward). If not found, tell the user to run `wiki-init` first. Read it to get wiki root path and conventions.
-
-## Process
-
-### 1. Build the page inventory
-
-Read `index.md` and all files in the wiki typed subdirs (`entities/`, `concepts/`, `comparisons/`, `queries/`). Build a map of:
-- All existing page slugs (filenames without `.md`)
-- All `[[wikilinks]]` found in any page
-- All `sources` listed in frontmatter
-- All tags in use
-
-### 2. Run all checks
-
-**🔴 Errors (must fix)**
-- **Broken links** — `[[slug]]` references where no corresponding page exists in any typed subdir
-- **Missing frontmatter** — pages without required fields (title, created, updated, type, tags, sources)
-- **Invalid tags** — tags not in the SCHEMA.md taxonomy
-
-**🟡 Warnings (should fix)**
-- **Orphan pages** — pages with zero inbound `[[wikilinks]]` from other pages (excluding index.md)
-- **Contradictions** — pages that share entities/tags but state conflicting facts. Surface all pages with `contested: true` or `contradictions:` frontmatter
-- **Stale content** — pages with `updated` >90 days older than the most recent source mentioning the same entities
-- **Missing cross-references** — two pages that discuss the same entity but don't link to each other
-- **Low confidence** — pages with `confidence: low` that have no Pending Review section
-
-**🔵 Info (consider addressing)**
-- **Page size** — pages over 200 lines (candidates for splitting)
-- **Source drift** — for each file in `raw/` with `sha256:` frontmatter, recompute using `scripts/wiki-hash.sh` and flag mismatches
-- **Missing concept pages** — `[[slug]]` references that appear 3+ times but have no dedicated page
-- **Index completeness** — pages on disk not listed in index.md
-- **Log rotation** — if log.md exceeds 500 entries, rotate it
-
-### 3. Write the lint report
-
-Always write — do not ask permission. Path: `queries/lint-<date>.md`
-
-```yaml
----
-title: Lint Report <date>
-created: <date>
-updated: <date>
-type: query
-tags: [lint, maintenance]
-sources: []
----
-# Lint Report — <date>
-
-## Summary
-- 🔴 Errors: N
-- 🟡 Warnings: N
-- 🔵 Info: N
-
-## 🔴 Broken Links
-- [[source-page]] references [[missing-slug]] — does not exist
-  Fix: create the page or remove the reference
-
-## 🟡 Orphan Pages
-- [[slug]] — no inbound links
-  Fix: add link from [[related-page]], or delete if no longer relevant
-
-## 🟡 Contradictions
-- [[page-a]] says: "<claim>"
-- [[page-b]] says: "<contradicting claim>"
-  Recommendation: <which to keep and why>
-
-## 🟡 Stale Content
-- [[page]] last updated <date>, contains "latest" — may be outdated
-
-## 🔵 Source Drift
-- raw/articles/slug.md: sha256 mismatch (stored: <old>, computed: <new>)
-
-## 🔵 Page Size
-- [[page]] is N lines (limit: 200) — consider splitting
-```
-
-Add the lint report to `index.md` under Queries.
-
-### 4. Offer concrete fixes
-
-For each fixable category, offer to fix with exact diffs shown before writing. Apply only after confirmation.
-
-### 5. Append to log.md
-
-```
-## [<date>] lint | N errors, N warnings, N info
-Report: [[lint-<date>]]
-Fixed: <list if any>
-```
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add skills/wiki-lint/
-git commit -m "feat: add wiki-lint skill with sha256 drift detection and Hermes quality checks"
-```
+**Steps:**
+- [ ] Write CLAUDE.md
+- [ ] Commit: `docs: CLAUDE.md repo guide`
 
 ---
 
-### Task 8: wiki-crystallize Skill
+### Task 7.5: GitHub Actions CI
 
 **Files:**
-- Create: `skills/wiki-crystallize/SKILL.md`
+- Create: `.github/workflows/ci.yml`
 
-Source: vanillaflava/llm-wiki-claude-skills crystallize concept, rewritten using Hermes field names (type not page_type, confidence not reliability, SCHEMA.md not wiki-schema.md).
+**Workflow:**
+- Triggers: push to main, PRs
+- Matrix: Node 20, 22; OS ubuntu-latest, macos-latest, windows-latest
+- Steps: checkout, setup-node, npm ci, npm run build, npm test
+- Coverage upload (Codecov optional)
 
-- [ ] **Step 1: Write skills/wiki-crystallize/SKILL.md**
-
-```markdown
----
-name: wiki-crystallize
-description: Use at the end of a productive session to distill the conversation's key insights into wiki pages. This is the primary mechanism for compounding chat knowledge into persistent wiki.
----
-
-# Wiki Crystallize
-
-Distill working session knowledge into wiki pages. End-of-session compounding.
-
-## Pre-condition
-
-Find `SCHEMA.md` (search from cwd upward). If not found, tell the user to run `wiki-init` first. Read `SCHEMA.md`, `index.md`, and the last 20 lines of `log.md` to orient.
-
-## When to Use
-
-- End of a productive conversation that generated new insights
-- After a brainstorming session that produced a design or decision
-- When the user says "save this to the wiki" or "crystallize this session"
-- After solving a hard problem where the solution path is worth preserving
-
-## Process
-
-### 1. Identify session content
-
-Review the conversation and extract:
-- Key insights, decisions, or discoveries
-- Problem-solving approaches that worked
-- Information that would be painful to re-derive
-- Connections between concepts that emerged during the session
-
-Skip: routine operations, temporary debugging, trivial lookups.
-
-### 2. Check existing wiki pages
-
-Read `index.md` and use `Grep` to find pages related to the session topics. For each insight:
-- **Existing page can absorb it:** Update the page in-place, bump `updated` date
-- **No existing page, substantial insight:** Create a new page
-- **Fleeting mention:** Don't create a page; add to an existing related page if one exists
-
-### 3. Write or update wiki pages
-
-For new pages, use the Hermes-compatible frontmatter:
-```yaml
----
-title: <Page Title>
-created: <today>
-updated: <today>
-type: entity | concept | comparison | query | summary
-tags: [from SCHEMA.md taxonomy]
-sources: []
-confidence: medium
----
-```
-
-Since crystallized pages come from a single session (one "source"), set `confidence: medium` by default. Add a `## Pending Review` section:
-
-```markdown
-## Pending Review
-- This page was crystallized from a single conversation session. Verify key claims against external sources.
-```
-
-If the same page has been crystallized from multiple sessions, note the count in the page body:
-```markdown
-<!-- crystallize_count: N -->
-```
-
-### 4. Cross-reference
-
-Every crystallized page must have at least 2 outbound `[[wikilinks]]` to other wiki pages. Scan existing pages and add backlinks where appropriate.
-
-### 5. Update index.md and log.md
-
-Add new pages to `index.md` under the correct section. Append to `log.md`:
-
-```
-## [<date>] crystallize | <session topic summary>
-Pages written: <list>
-Pages updated: <list>
-```
-
-### 6. Report to user
-
-List what was saved:
-- New pages created
-- Existing pages updated
-- A one-sentence summary of what was crystallized
-
-## What NOT to Crystallize
-
-- Temporary debugging steps or error messages
-- Routine file operations or git commands
-- Information already well-covered in existing wiki pages
-- Speculative ideas without substance
-
-## Crystallize vs Ingest
-
-- **Ingest** processes an external source (URL, file, paper) into the wiki
-- **Crystallize** processes an internal conversation into the wiki
-- Both produce the same output format (Hermes-compatible wiki pages)
-- Crystallized pages should be verified later via `wiki-audit` against external sources
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add skills/wiki-crystallize/
-git commit -m "feat: add wiki-crystallize skill for session-to-wiki distillation"
-```
+**Steps:**
+- [ ] Write `.github/workflows/ci.yml`
+- [ ] Push branch, verify workflow runs green on all matrix entries
+- [ ] Commit: `ci: GitHub Actions cross-platform test matrix`
 
 ---
 
-### Task 9: wiki-audit Skill
+### Task 7.6: LICENSE
 
 **Files:**
-- Create: `skills/wiki-audit/SKILL.md`
+- Create: `LICENSE` (MIT)
 
-Source: kfchou/wiki-audit, already close to Hermes format. Adapted for Hermes typed subdirs and frontmatter fields.
-
-- [ ] **Step 1: Write skills/wiki-audit/SKILL.md**
-
-```markdown
----
-name: wiki-audit
-description: Use when fact-checking a single wiki page against its cited sources — verifies that every footnote supports its claim and surfaces uncited factual claims.
----
-
-# Wiki Audit
-
-Verify a single wiki page against its cited sources. Two phases: detect uncited factual claims, then verify cited claims against raw sources.
-
-## Pre-condition
-
-Find `SCHEMA.md` (search from cwd upward). If not found, tell the user to run `wiki-init` first. Read `SCHEMA.md` for the wiki root path and the Citations section.
-
-If the user did not name a page, ask which page to audit. Accept slug, filename, or absolute path. Resolve to the correct typed subdir (e.g., `concepts/<slug>.md`). Audit one page per run.
-
-## Process
-
-### 1. Read the target page
-
-Read the full page. Note:
-- The frontmatter `sources:` list
-- All footnote definitions (`[^N]: ...`) and references (`[^N]` in body text)
-
-If the page has zero footnotes but contains factual content, every claim becomes an uncited finding. Still run Phase A; skip Phase B.
-
-### 2. Phase A — Uncited claim detection
-
-List every non-common-knowledge factual claim that lacks a footnote. For each:
-- Line number
-- Claim text
-- Suggested source from the page's `sources:` list, or "unknown"
-
-### 3. Phase B — Cited claim verification
-
-For every footnote definition in the page, parse:
-- The **target** — one of `[[source-slug]]`, a path under `raw/`/`assets/`, or a URL
-- The **locator** (§section, p.N, timestamp, anchor, dated post)
-- Either the verbatim **quote** or the `[synthesis]` description
-
-**Resolve each target to readable content:**
-- `[[source-slug]]` → read the summary page to find the raw file path in its `sources:` field, then read that raw file from `raw/`
-- `raw/<path>` or `assets/<path>` → read the file directly
-- `<url>` → check for cached copy in `raw/assets/`. If yes, read it. If not, mark `🚫 source-missing`
-
-**Group resolvable footnotes by their resolved file** (multiple footnotes against the same PDF read it once).
-
-For each footnote, assign one verdict:
-- `✅ supported` — quote matches the source at the cited locator, or the `[synthesis]` description honestly summarizes the cited range
-- `❌ unsupported` — quote not found at the cited locator, or claim is contradicted by the source
-- `⚠️ partial` — quote is paraphrased rather than verbatim (lacks `[synthesis]` tag), or synthesis description overstates the cited range
-- `🚫 source-missing` — target cannot be resolved
-
-For ❌ and ⚠️, include what the source actually says.
-
-### 4. Write the audit report
-
-Always write — do not ask permission. Path: `queries/audit-<slug>-<date>.md`
-
-```yaml
----
-title: Audit Report — <slug> — <date>
-created: <date>
-updated: <date>
-type: query
-tags: [audit, maintenance]
-sources: []
----
-# Audit Report — [[<slug>]] — <date>
-
-## Summary
-- Cited claims verified: N
-- ✅ Supported: N  ❌ Unsupported: N  ⚠️ Partial: N  🚫 Source missing: N
-- 🆘 Uncited factual claims: N
-
-## 🆘 Uncited Claims
-- Line 42: "<claim>"
-  Suggested source: [[<source-slug>]] or unknown
-  Fix: add footnote, weaken claim, or remove
-
-## ❌ Unsupported
-- [^3]: claims "<quote>"
-  Source says: "<actual text>"
-  Fix: correct the claim
-
-## ⚠️ Partial
-- [^7]: [synthesis] description says "<description>"
-  Source range covers less. Tighten the description.
-
-## 🚫 Source Missing
-- [^5]: <url> — no cached copy in raw/
-  Fix: re-fetch source, or remove citation
-
-## ✅ Supported
-- [^1], [^2], [^4], [^6] — all verified
-```
-
-Add the report to `index.md` under Queries.
-
-### 5. Offer concrete fixes
-
-For each non-empty category, offer fixes one at a time. Show exact diffs before writing. Apply only after user confirmation.
-
-### 6. Append to log.md
-
-```
-## [<date>] audit | [[<slug>]] — N supported, N unsupported, N partial, N uncited
-Report: [[audit-<slug>-<date>]]
-```
-
-### 7. Report to user
-
-One-line verdict (e.g., "5/8 cited claims verified, 2 uncited claims found") and whether any fixes were applied.
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add skills/wiki-audit/
-git commit -m "feat: add wiki-audit skill for per-page citation verification"
-```
+**Steps:**
+- [ ] Add standard MIT LICENSE text with copyright `2026 karlorz`
+- [ ] Commit: `chore: MIT license`
 
 ---
 
-### Task 10: install.sh
+### Task 7.7: npm publish (real, not dry-run)
 
-**Files:**
-- Create: `install.sh`
-
-Source: claude-wiki-verbs install.sh simplified for Claude Code only (no cross-tool symlinks, no qmd, no vault path prompting).
-
-- [ ] **Step 1: Write install.sh**
-
-```bash
-#!/usr/bin/env bash
-# llm-wiki skill installer for Claude Code
-# Copies skill files to ~/.claude/skills/ with preflight, backup, and manifest.
-set -euo pipefail
-
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SKILLS_SRC="$REPO_ROOT/skills"
-TARGET_DIR="$HOME/.claude/skills"
-MANIFEST="$TARGET_DIR/.wiki-manifest.json"
-UNINSTALL=0
-FORCE=0
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --uninstall) UNINSTALL=1; shift ;;
-    --force) FORCE=1; shift ;;
-    -h|--help)
-      echo "Usage: ./install.sh [--uninstall] [--force]"
-      exit 0 ;;
-    *) echo "Unknown flag: $1" >&2; exit 1 ;;
-  esac
-done
-
-red() { printf '\033[31m%s\033[0m\n' "$*"; }
-green() { printf '\033[32m%s\033[0m\n' "$*"; }
-blue() { printf '\033[34m%s\033[0m\n' "$*"; }
-
-# Uninstall
-if [[ $UNINSTALL -eq 1 ]]; then
-  if [[ ! -f "$MANIFEST" ]]; then
-    red "No manifest found. Nothing to uninstall."
-    exit 1
-  fi
-  blue "Removing wiki skills..."
-  while IFS= read -r file; do
-    if [[ -f "$TARGET_DIR/$file" ]]; then
-      rm "$TARGET_DIR/$file"
-      green "  ✓ removed $file"
-    fi
-  done < <(python3 -c "import json,sys; [print(f) for f in json.load(open('$MANIFEST'))]" 2>/dev/null || true)
-  rm -f "$MANIFEST"
-  green "✅ Uninstall complete."
-  exit 0
-fi
-
-# Preflight
-blue "📦 llm-wiki skill installer"
-echo
-
-if [[ ! -d "$SKILLS_SRC" ]]; then
-  red "Skills directory not found: $SKILLS_SRC"
-  exit 1
-fi
-
-mkdir -p "$TARGET_DIR"
-
-# Install each skill
-installed=()
-backup_ts="$(date +%Y%m%d-%H%M%S)"
-
-for skill_dir in "$SKILLS_SRC"/*/; do
-  skill_name=$(basename "$skill_dir")
-  skill_file="$skill_dir/SKILL.md"
-
-  if [[ ! -f "$skill_file" ]]; then
-    continue
-  fi
-
-  target="$TARGET_DIR/$skill_name/SKILL.md"
-
-  # Backup existing
-  if [[ -f "$target" ]] && [[ $FORCE -eq 0 ]]; then
-    backup="${target}.backup-${backup_ts}"
-    mkdir -p "$(dirname "$backup")"
-    cp "$target" "$backup"
-    green "  ↩ backed up existing $skill_name"
-  fi
-
-  # Copy
-  mkdir -p "$(dirname "$target")"
-  cp "$skill_file" "$target"
-  green "  ✓ installed $skill_name"
-  installed+=("$skill_name")
-done
-
-# Write manifest
-printf '%s\n' "${installed[@]}" | python3 -c "
-import json, sys
-skills = [line.strip() for line in sys.stdin if line.strip()]
-manifest = {s: f'{s}/SKILL.md' for s in skills}
-json.dump(manifest, open('$MANIFEST', 'w'), indent=2)
-" 2>/dev/null
-
-# Copy helper scripts to ~/.claude/skills/
-if [[ -d "$REPO_ROOT/scripts" ]]; then
-  for script in "$REPO_ROOT/scripts"/*.sh; do
-    [[ -f "$script" ]] || continue
-    cp "$script" "$TARGET_DIR/$(basename "$script")"
-    chmod +x "$TARGET_DIR/$(basename "$script")"
-    green "  ✓ installed $(basename "$script")"
-  done
-fi
-
-echo
-green "✅ Install complete. ${#installed[@]} skills installed."
-blue "Skills: ${installed[*]}"
-blue "Manifest: $MANIFEST"
-blue "Uninstall: ./install.sh --uninstall"
-echo
-blue "Usage: Skills are available via the /wiki-init, /wiki-ingest, etc. commands in Claude Code."
-```
-
-- [ ] **Step 2: Make install.sh executable**
-
-```bash
-chmod +x install.sh
-```
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add install.sh
-git commit -m "feat: add Claude Code skill installer with preflight and manifest"
-```
+**Steps:**
+- [ ] **Step 1**: Final test sweep: `npm test --workspace packages/cli`
+- [ ] **Step 2**: Bump version to `1.0.0`: edit `packages/cli/package.json` and `program.version()` in `cli.ts`
+- [ ] **Step 3**: Build: `npm run build --workspace packages/cli`
+- [ ] **Step 4**: Login to npm: `npm login`
+- [ ] **Step 5**: Publish: `cd packages/cli && npm publish --access public`
+- [ ] **Step 6**: Verify on npm registry: `npm view skillwiki`
+- [ ] **Step 7**: Tag release: `git tag -a v1.0.0 -m "skillwiki v1.0.0 — Phase 7 complete"`
+- [ ] **Step 8**: Push tags: `git push --tags`
 
 ---
 
-### Task 11: README.md and CLAUDE.md
+## Self-Review Notes
 
-**Files:**
-- Create: `README.md`
-- Create: `CLAUDE.md`
+**Spec coverage check:**
+- Vault structure → Templates (Phase 4) + wiki-init (Task 5.1)
+- 4 frontmatter schemas → Zod schemas (Task 1.5)
+- 10 SKILL.md files → Phases 5 & 6
+- skillwiki CLI 8 subcommands → Phases 1-3 (hash, fetch-guard, validate, graph build, overlap, orphans, audit, install)
+- Cross-platform installer → Task 3.1
+- Hermes wire-compat → Task 7.2 assertion test
+- Citation conventions → wiki-audit (Task 5.6) + audit subcommand (Task 2.6)
+- nashsu E1-E5 → E1 deferred to v1.1; E2 in wiki-query + graph/overlap; E3 in wiki-lint + orphans; E4 in proj-distill; E5 in all SKILL.md orientation sections
 
-- [ ] **Step 1: Write README.md**
+**Type consistency check:**
+- `hashBodyBytes` used in `hash.ts` and `audit.ts` — same signature
+- `parseFrontmatter` used in `validate.ts` — single source of truth
+- Schema names match spec section names exactly: `TypedKnowledgeSchema`, `RawSchema`, `WorkItemSchema`, `CompoundSchema`
 
-```markdown
-# llm-wiki
-
-A multi-skill Claude Code plugin implementing [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — a persistent, compounding knowledge base maintained by your LLM.
-
-**Wire-compatible with Hermes Agent's built-in `llm-wiki` skill (v2.1.0).** A wiki built by this plugin can be maintained by Hermes, and vice versa.
-
-## Installation
-
-```bash
-git clone https://github.com/<owner>/llm-wiki ~/repos/llm-wiki
-cd ~/repos/llm-wiki
-./install.sh
-```
-
-## Skills
-
-| Skill | Description |
-|-------|-------------|
-| `wiki-init` | Bootstrap a new Hermes-compatible wiki vault |
-| `wiki-ingest` | Add a source (paper, URL, file, transcript) to the wiki |
-| `wiki-query` | Ask a question against the wiki; optionally save the answer back |
-| `wiki-lint` | Health audit: contradictions, orphans, broken links, source drift |
-| `wiki-crystallize` | Distill session knowledge into wiki pages |
-| `wiki-audit` | Verify a page's citations against its raw sources |
-
-## Wiki Structure
-
-```
-<wiki-root>/
-├── SCHEMA.md           # Conventions, tag taxonomy, domain config
-├── index.md            # Sectioned content catalog
-├── log.md              # Append-only action log (rotate at 500 entries)
-├── raw/                # Layer 1: Immutable source material
-│   ├── articles/
-│   ├── papers/
-│   ├── transcripts/
-│   └── assets/
-├── entities/           # Layer 2: People, orgs, products
-├── concepts/           # Layer 2: Topics, techniques, ideas
-├── comparisons/        # Layer 2: Side-by-side analyses
-└── queries/            # Layer 2: Filed query results
-```
-
-## Typical Workflow
-
-```
-wiki-init → bootstrap a new wiki
-wiki-ingest → add sources one at a time (repeat)
-wiki-crystallize → distill session insights at end of conversation
-wiki-query → ask questions; save good answers back
-wiki-lint → periodic health check (every 5-10 ingests)
-wiki-audit → verify specific pages against their sources
-```
-
-## Inspired By
-
-[Andrej Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) (April 2026)
-
-## License
-
-MIT
-```
-
-- [ ] **Step 2: Write CLAUDE.md**
-
-```markdown
-# LLM Wiki Skill
-
-## TL;DR
-Multi-skill Claude Code plugin for building Karpathy-style interlinked markdown knowledge bases.
-Output is wire-compatible with Hermes Agent llm-wiki v2.1.0.
-
-## Skills
-- `/wiki-init` — bootstrap a new wiki vault
-- `/wiki-ingest` — add a source to the wiki
-- `/wiki-query` — ask a question against the wiki
-- `/wiki-lint` — health audit
-- `/wiki-crystallize` — session → wiki page distillation
-- `/wiki-audit` — citation verification per page
-
-## Wiki Location
-Set via `WIKI_PATH` env var. If unset, defaults to `~/wiki`.
-
-## Key Rules
-- `raw/` is immutable — never modify source files
-- `log.md` is append-only — never rewrite
-- `SCHEMA.md` defines the tag taxonomy — closed set, add new tags there first
-- Every page needs 2+ outbound `[[wikilinks]]`
-- Run `scripts/wiki-fetch-guard.sh` before fetching any URL
-- Run `scripts/wiki-hash.sh` to compute sha256 for raw source drift detection
-- Set `confidence: low` for single-source pages, `high` only when well-supported
-- Use provenance markers `^[raw/articles/source.md]` on pages with 3+ sources
-```
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add README.md CLAUDE.md
-git commit -m "docs: add README and CLAUDE.md with usage and skill descriptions"
-```
+**Phases 2-7 granularity caveat:** Per the note in the header, Phases 2-7 use task-outline + behavior-spec format rather than full step-by-step TDD. The CLI subcommand tasks (Phase 2) have enough sketched implementation to follow Phase 1's pattern. SKILL.md tasks (Phases 5-6) reference spec sections rather than reproducing content. If executing Phases 2-7 reveals ambiguity, **stop and re-plan that phase as a follow-up plan file** (`docs/superpowers/plans/2026-05-DD-phase-N-detail.md`).
 
 ---
 
-### Task 12: Integration Test
+## Execution Handoff
 
-**Files:**
-- Test only (no new files created)
+**Plan complete and saved to `docs/superpowers/plans/2026-05-02-llm-wiki-skill.md`.**
 
-- [ ] **Step 1: Install the skills**
+Two execution options:
 
-```bash
-cd /Users/karlchow/Desktop/code/llm-wiki
-./install.sh
-```
+1. **Subagent-Driven (recommended)** — Dispatch a fresh subagent per task, review between tasks, fast iteration. REQUIRED SUB-SKILL: `superpowers:subagent-driven-development`.
 
-Expected: 6 skills installed, scripts copied, manifest created.
+2. **Inline Execution** — Execute tasks in this session using `superpowers:executing-plans`, batch with checkpoints.
 
-- [ ] **Step 2: Verify installation**
-
-```bash
-ls ~/.claude/skills/wiki-*/SKILL.md
-cat ~/.claude/skills/.wiki-manifest.json
-```
-
-Expected: 6 SKILL.md files listed, manifest contains all 6 skill names.
-
-- [ ] **Step 3: Verify wiki-init creates Hermes-compatible structure**
-
-```bash
-# Manually verify the wiki-init skill file contains the Hermes directory layout
-grep -c "entities/" skills/wiki-init/SKILL.md
-grep -c "concepts/" skills/wiki-init/SKILL.md
-grep -c "comparisons/" skills/wiki-init/SKILL.md
-grep -c "queries/" skills/wiki-init/SKILL.md
-```
-
-Expected: All return >= 1 (references to typed subdirs).
-
-- [ ] **Step 4: Verify wiki-ingest references fetch-guard and sha256**
-
-```bash
-grep -c "wiki-fetch-guard" skills/wiki-ingest/SKILL.md
-grep -c "wiki-hash.sh" skills/wiki-ingest/SKILL.md
-grep -c "confidence:" skills/wiki-ingest/SKILL.md
-grep -c "staged batch" skills/wiki-ingest/SKILL.md
-```
-
-Expected: All return >= 1.
-
-- [ ] **Step 5: Verify wiki-lint references hash script**
-
-```bash
-grep -c "wiki-hash.sh" skills/wiki-lint/SKILL.md
-grep -c "source drift" skills/wiki-lint/SKILL.md
-grep -c "contested" skills/wiki-lint/SKILL.md
-```
-
-Expected: All return >= 1.
-
-- [ ] **Step 6: Verify Hermes frontmatter compatibility**
-
-```bash
-# All skills should use Hermes field names, not vanillaflava's
-grep -c "page_type" skills/*/SKILL.md 2>/dev/null | grep -v ":0$" && echo "FAIL: found page_type" || echo "PASS: no page_type"
-grep -c "reliability:" skills/*/SKILL.md 2>/dev/null | grep -v ":0$" && echo "FAIL: found reliability" || echo "PASS: no reliability"
-grep -c "wiki-schema.md" skills/*/SKILL.md 2>/dev/null | grep -v ":0$" && echo "FAIL: found wiki-schema.md" || echo "PASS: no wiki-schema.md"
-```
-
-Expected: All PASS lines.
-
-- [ ] **Step 7: Clean up test artifacts**
-
-```bash
-# Uninstall
-./install.sh --uninstall
-```
-
-Expected: All skills removed, manifest deleted.
-
-- [ ] **Step 8: Final commit**
-
-```bash
-git status
-git add -A
-git commit -m "test: verify Hermes compatibility of all skill files" || echo "Nothing to commit (clean)"
-```
+**Which approach?**
