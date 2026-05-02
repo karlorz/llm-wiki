@@ -1,0 +1,8 @@
+---
+title: Note
+source_url: null
+ingested: 2026-05-03
+ingested_by: manual
+sha256: 0000000000000000000000000000000000000000000000000000000000000000
+---
+Note body.
