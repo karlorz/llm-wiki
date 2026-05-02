@@ -1,0 +1,39 @@
+export const ExitCode = {
+  OK: 0,
+  FILE_NOT_FOUND: 2,
+  MISSING_CLOSING_DELIMITER: 3,
+  SCHEME_REJECTED: 4,
+  HOST_BLOCKED: 5,
+  MALFORMED_URL: 6,
+  INVALID_FRONTMATTER: 7,
+  SCHEMA_NOT_DETECTED: 8,
+  VAULT_PATH_INVALID: 9,
+  WRITE_FAILED: 10,
+  UNRESOLVED_MARKERS: 11,
+  SOURCES_INCONSISTENT: 12,
+  PREFLIGHT_FAILED: 13,
+  ATOMIC_COPY_FAILED: 14
+} as const;
+
+export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
+
+const NAMES: Record<number, string> = {
+  0: "OK",
+  2: "FILE_NOT_FOUND",
+  3: "MISSING_CLOSING_DELIMITER",
+  4: "SCHEME_REJECTED",
+  5: "HOST_BLOCKED",
+  6: "MALFORMED_URL",
+  7: "INVALID_FRONTMATTER",
+  8: "SCHEMA_NOT_DETECTED",
+  9: "VAULT_PATH_INVALID",
+  10: "WRITE_FAILED",
+  11: "UNRESOLVED_MARKERS",
+  12: "SOURCES_INCONSISTENT",
+  13: "PREFLIGHT_FAILED",
+  14: "ATOMIC_COPY_FAILED"
+};
+
+export function exitCodeName(code: number): string {
+  return NAMES[code] ?? `UNKNOWN_${code}`;
+}
