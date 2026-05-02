@@ -1,0 +1,13 @@
+{
+  "name": "skillwiki-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": ["packages/shared", "packages/cli", "packages/skills"],
+  "scripts": {
+    "build": "npm run -ws --if-present build",
+    "test": "npm run -ws --if-present test",
+    "lint": "npm run -ws --if-present lint",
+    "clean": "rm -rf packages/*/dist packages/*/.tsbuildinfo"
+  },
+  "engines": { "node": ">=20" }
+}
