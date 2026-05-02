@@ -26,7 +26,7 @@ export function extractFrontmatter(text: string): Result<Record<string, unknown>
   if (!split.ok) return split;
   if (!split.data.rawFrontmatter) return ok({});
   try {
-    const parsed = yaml.load(split.data.rawFrontmatter);
+    const parsed = yaml.load(split.data.rawFrontmatter, { schema: yaml.JSON_SCHEMA });
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return ok({});
     return ok(parsed as Record<string, unknown>);
   } catch (e) {
