@@ -1,6 +1,14 @@
 # Vault Schema
 
-This vault follows the CodeWiki schema (Hermes llm-wiki v2.1.0 wire-compatible).
+## Domain
+
+{{DOMAIN}}
+
+## Output Language
+
+{{WIKI_LANG}}
+
+This sets the language of generated page prose. Frontmatter keys, schema section headers, file names, and log/index structural lines remain English (parser and Hermes wire-compat invariant).
 
 ## Layers
 
@@ -12,6 +20,30 @@ This vault follows the CodeWiki schema (Hermes llm-wiki v2.1.0 wire-compatible).
 ## Frontmatter
 
 Four shapes: typed-knowledge, raw, work-item, compound. See spec for full Zod schemas.
+
+## Tag Taxonomy
+
+```yaml
+taxonomy:
+{{TAXONOMY_YAML}}
+```
+
+Rule: every tag on every page MUST appear in this taxonomy. Add new tags here first, then use them.
+
+## Page Thresholds
+
+- Create a page when an entity/concept appears in 2+ sources OR is central to one source.
+- Add to an existing page when overlap with covered material.
+- DO NOT create a page for passing mentions.
+- Split a page when it exceeds ~200 lines.
+- Archive a page when fully superseded — move to `_archive/`, remove from `index.md`.
+
+## Update Policy
+
+- Newer sources generally supersede older ones (compare dates).
+- Genuine contradictions: note both positions with dates and sources.
+- Mark in frontmatter: `contested: true` and `contradictions: [other-page]`.
+- Flag for user review during lint.
 
 ## Conventions
 
