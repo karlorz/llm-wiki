@@ -9,6 +9,8 @@ import { runOverlap } from "./commands/overlap.js";
 import { runOrphans } from "./commands/orphans.js";
 import { runAudit } from "./commands/audit.js";
 import { runInstall } from "./commands/install.js";
+import { runPath } from "./commands/path.js";
+import { runLang } from "./commands/lang.js";
 
 const program = new Command();
 program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version("0.1.0");
@@ -46,6 +48,37 @@ program
   .action(async (opts) => {
     const skillsRoot = opts.skillsRoot ?? new URL("../../skills/", import.meta.url).pathname;
     emit(await runInstall({ skillsRoot, target: opts.target, dryRun: !!opts.dryRun }));
+  });
+
+program
+  .command("path")
+  .option("--vault <dir>", "explicit vault override (runtime)")
+  .option("--target <dir>", "explicit target override (init-time)")
+  .option("--init-time", "use init-time chain instead of runtime", false)
+  .option("--explain", "include resolution chain in output", false)
+  .action(async (opts) => {
+    const initTime = !!opts.initTime;
+    const flag = initTime ? opts.target : opts.vault;
+    emit(await runPath({
+      flag,
+      envValue: process.env.WIKI_PATH,
+      home: process.env.HOME ?? "",
+      initTime,
+      explain: !!opts.explain
+    }));
+  });
+
+program
+  .command("lang")
+  .option("--lang <code>", "explicit language override")
+  .option("--explain", "include resolution chain in output", false)
+  .action(async (opts) => {
+    emit(await runLang({
+      flag: opts.lang,
+      envValue: process.env.WIKI_LANG,
+      home: process.env.HOME ?? "",
+      explain: !!opts.explain
+    }));
   });
 
 program.parseAsync(process.argv).catch((e) => {
