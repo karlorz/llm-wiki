@@ -6,7 +6,6 @@ export default defineConfig({
   target: "node20",
   clean: true,
   dts: false,
-  shims: true,
   banner: { js: "#!/usr/bin/env node" },
   noExternal: ["@skillwiki/shared"]
 });
