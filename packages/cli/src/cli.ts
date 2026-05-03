@@ -18,6 +18,7 @@ import { runIndexCheck } from "./commands/index-check.js";
 import { runStale } from "./commands/stale.js";
 import { runPagesize } from "./commands/pagesize.js";
 import { runLogRotate } from "./commands/log-rotate.js";
+import { runLint } from "./commands/lint.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 
 const program = new Command();
@@ -174,6 +175,23 @@ program
     const v = await resolveVaultArg(vault);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runLogRotate({ vault: v.vault, threshold: opts.threshold, apply: !!opts.apply }));
+  });
+
+program
+  .command("lint [vault]")
+  .option("--days <n>", "stale threshold", (s) => parseInt(s, 10), 90)
+  .option("--lines <n>", "pagesize threshold", (s) => parseInt(s, 10), 200)
+  .option("--log-threshold <n>", "log rotation threshold", (s) => parseInt(s, 10), 500)
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runLint({
+      vault: v.vault,
+      source: vault ? "flag" : undefined,
+      days: opts.days,
+      lines: opts.lines,
+      logThreshold: opts.logThreshold
+    }));
   });
 
 program.parseAsync(process.argv).catch((e) => {
