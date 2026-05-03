@@ -69,6 +69,8 @@ describe("writeDotenv", () => {
     expect(text).toContain("WIKI_PATH=/new");
     expect(text).not.toContain("WIKI_PATH=/old");
     expect(text).toContain("WIKI_LANG=en");
+    // Verify blank line between WIKI_PATH and WIKI_LANG is preserved
+    expect(text).toMatch(/WIKI_PATH=\/new\n\nWIKI_LANG=en/);
   });
 
   it("appends a new key to an existing file", async () => {

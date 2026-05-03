@@ -45,7 +45,11 @@ function freshLines(entries: DotenvMap): string[] {
 }
 
 function updateLines(originalContent: string, entries: DotenvMap): string[] {
-  const rawLines = originalContent.split(/\r?\n/);
+  let rawLines = originalContent.split(/\r?\n/);
+  // Drop trailing empty string produced by split when content ends with \n
+  if (rawLines.length > 0 && rawLines[rawLines.length - 1] === "") {
+    rawLines = rawLines.slice(0, -1);
+  }
   const keysToWrite = new Set(Object.keys(entries));
   const out: string[] = [];
 
@@ -58,11 +62,8 @@ function updateLines(originalContent: string, entries: DotenvMap): string[] {
     const eq = trimmed.indexOf("=");
     if (eq <= 0) { out.push(line); continue; }
     const key = trimmed.slice(0, eq).trim();
-    if (keysToWrite.has(key) && entries[key as keyof DotenvMap] !== undefined) {
+    if (keysToWrite.has(key)) {
       out.push(`${key}=${entries[key as keyof DotenvMap]}`);
-      keysToWrite.delete(key);
-    } else if (keysToWrite.has(key)) {
-      // key is being removed — skip the line
       keysToWrite.delete(key);
     } else {
       out.push(line);
