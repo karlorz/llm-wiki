@@ -1,5 +1,7 @@
 # Vault Index
 
+> Last updated: {{INIT_DATE}} | Total pages: 0
+
 ## Entities
 <!-- entities listed here -->
 
