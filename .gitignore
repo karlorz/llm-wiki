@@ -4,3 +4,4 @@ dist/
 *.tsbuildinfo
 coverage/
 *.bak
+packages/cli/skills/

@@ -5,7 +5,7 @@
 # Prerequisites:
 #   - ssh sg01 works with key auth
 #   - Remote host has Node.js 20+
-#   - CLI deployed to /opt/skillwiki-test/ (dist/cli.js + templates/ + skills/)
+#   - skillwiki@beta installed globally (npm install -g skillwiki@beta)
 #
 # Usage:
 #   ./scripts/e2e-remote.sh
@@ -21,8 +21,7 @@ source "$SCRIPT_DIR/e2e-common.sh"
 # 2. Setup
 # ---------------------------------------------------------------------------
 SSH_HOST="sg01"
-REMOTE_CLI="node /opt/skillwiki-test/dist/cli.js"
-REMOTE_SKILLS="/opt/skillwiki-test/skills"
+REMOTE_CLI="skillwiki"
 VAULT_NAME="skillwiki-e2e-$(date +%s)"
 VAULT_REMOTE="/tmp/$VAULT_NAME"
 INSTALL_TARGET="/tmp/skillwiki-install-$(date +%s)"
@@ -311,7 +310,7 @@ assert_json_contains "$output" "data.canonical" "zh-Hant" "remote lang resolves 
 printf "\n--- Remote install ---\n"
 
 rc=0
-output=$(ssh "$SSH_HOST" "$REMOTE_CLI install --target $INSTALL_TARGET --skills-root $REMOTE_SKILLS" 2>/dev/null) || rc=$?
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI install --target $INSTALL_TARGET" 2>/dev/null) || rc=$?
 assert_exit 0 "$rc" "remote install succeeds"
 
 # Verify manifest was written
