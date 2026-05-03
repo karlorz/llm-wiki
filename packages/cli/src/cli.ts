@@ -12,6 +12,13 @@ import { runInstall } from "./commands/install.js";
 import { runPath } from "./commands/path.js";
 import { runLang } from "./commands/lang.js";
 import { runInit } from "./commands/init.js";
+import { runLinks } from "./commands/links.js";
+import { runTagAudit } from "./commands/tag-audit.js";
+import { runIndexCheck } from "./commands/index-check.js";
+import { runStale } from "./commands/stale.js";
+import { runPagesize } from "./commands/pagesize.js";
+import { runLogRotate } from "./commands/log-rotate.js";
+import { resolveRuntimePath } from "./utils/wiki-path.js";
 
 const program = new Command();
 program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version("0.1.0");
@@ -110,6 +117,63 @@ program
       lang: opts.lang,
       force: !!opts.force
     }));
+  });
+
+async function resolveVaultArg(arg: string | undefined): Promise<{ ok: true; vault: string } | { ok: false; exitCode: number; payload: any }> {
+  if (arg) return { ok: true, vault: arg };
+  const r = await resolveRuntimePath({
+    flag: undefined,
+    envValue: process.env.WIKI_PATH,
+    home: process.env.HOME ?? ""
+  });
+  if (!r.ok) return { ok: false, exitCode: 25, payload: r };
+  return { ok: true, vault: r.data.path };
+}
+
+program.command("links [vault]").action(async (vault) => {
+  const v = await resolveVaultArg(vault);
+  if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+  else emit(await runLinks({ vault: v.vault }));
+});
+
+program.command("tag-audit [vault]").action(async (vault) => {
+  const v = await resolveVaultArg(vault);
+  if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+  else emit(await runTagAudit({ vault: v.vault }));
+});
+
+program.command("index-check [vault]").action(async (vault) => {
+  const v = await resolveVaultArg(vault);
+  if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+  else emit(await runIndexCheck({ vault: v.vault }));
+});
+
+program
+  .command("stale [vault]")
+  .option("--days <n>", "staleness threshold in days", (s) => parseInt(s, 10), 90)
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runStale({ vault: v.vault, days: opts.days }));
+  });
+
+program
+  .command("pagesize [vault]")
+  .option("--lines <n>", "max body lines", (s) => parseInt(s, 10), 200)
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runPagesize({ vault: v.vault, lines: opts.lines }));
+  });
+
+program
+  .command("log-rotate [vault]")
+  .option("--threshold <n>", "entry count threshold", (s) => parseInt(s, 10), 500)
+  .option("--apply", "actually rotate", false)
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runLogRotate({ vault: v.vault, threshold: opts.threshold, apply: !!opts.apply }));
   });
 
 program.parseAsync(process.argv).catch((e) => {
