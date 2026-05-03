@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseDotenvFile } from "../../src/utils/dotenv.js";
+import { parseDotenvFile, writeDotenv } from "../../src/utils/dotenv.js";
 
 function tmp(): string { return mkdtempSync(join(tmpdir(), "dotenv-")); }
 
@@ -38,5 +38,55 @@ describe("parseDotenvFile", () => {
     const p = join(dir, ".env");
     writeFileSync(p, "no-equals-here\nWIKI_PATH=/x\n=missing-key\n");
     expect(await parseDotenvFile(p)).toEqual({ WIKI_PATH: "/x" });
+  });
+});
+
+describe("writeDotenv", () => {
+  it("creates a new file with the given entries", async () => {
+    const dir = tmp();
+    const filePath = join(dir, ".env");
+    await writeDotenv(filePath, { WIKI_PATH: "/my/vault" }, undefined);
+    const text = readFileSync(filePath, "utf8");
+    expect(text).toContain("WIKI_PATH=/my/vault");
+  });
+
+  it("creates parent directories if missing", async () => {
+    const dir = tmp();
+    const filePath = join(dir, "sub", "dir", ".env");
+    await writeDotenv(filePath, { WIKI_LANG: "zh" }, undefined);
+    const text = readFileSync(filePath, "utf8");
+    expect(text).toContain("WIKI_LANG=zh");
+  });
+
+  it("updates an existing key while preserving comments and blank lines", async () => {
+    const dir = tmp();
+    const filePath = join(dir, ".env");
+    const original = "# my config\nWIKI_PATH=/old\n\nWIKI_LANG=en\n";
+    writeFileSync(filePath, original);
+    await writeDotenv(filePath, { WIKI_PATH: "/new" }, original);
+    const text = readFileSync(filePath, "utf8");
+    expect(text).toContain("# my config");
+    expect(text).toContain("WIKI_PATH=/new");
+    expect(text).not.toContain("WIKI_PATH=/old");
+    expect(text).toContain("WIKI_LANG=en");
+  });
+
+  it("appends a new key to an existing file", async () => {
+    const dir = tmp();
+    const filePath = join(dir, ".env");
+    const original = "WIKI_PATH=/vault\n";
+    writeFileSync(filePath, original);
+    await writeDotenv(filePath, { WIKI_LANG: "ja" }, original);
+    const text = readFileSync(filePath, "utf8");
+    expect(text).toContain("WIKI_PATH=/vault");
+    expect(text).toContain("WIKI_LANG=ja");
+  });
+
+  it("round-trips through parseDotenvFile", async () => {
+    const dir = tmp();
+    const filePath = join(dir, ".env");
+    await writeDotenv(filePath, { WIKI_PATH: "/rt", WIKI_LANG: "de" }, undefined);
+    const parsed = await parseDotenvFile(filePath);
+    expect(parsed).toEqual({ WIKI_PATH: "/rt", WIKI_LANG: "de" });
   });
 });
