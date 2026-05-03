@@ -8,10 +8,11 @@
 
 ## TL;DR
 
-Close two parity gaps with the upstream Hermes `llm-wiki` v2.1.0 SKILL while staying inside the v1 normative envelope:
+Close two parity gaps with the upstream Hermes `llm-wiki` v2.1.0 SKILL while staying inside the v1 normative envelope, and add one skillwiki-only configuration axis (output language):
 
 1. **Onboarding parity** — add a `skillwiki init` subcommand that does a domain-aware vault scaffold, including a tag taxonomy seeded into `SCHEMA.md`, with a Hermes-import reconciliation step persisted to `~/.skillwiki/.env`.
 2. **Lint parity** — add 7 missing health checks (broken wikilinks, tag-vs-taxonomy, filesystem↔index reconciliation, stale content, page size, log rotation), and an umbrella `skillwiki lint` that runs all checks in one vault scan and returns a severity-grouped report.
+3. **Output language configuration** — `WIKI_LANG` (BCP 47, default `en`) drives the language of generated page prose. Persisted alongside `WIKI_PATH` in `~/.skillwiki/.env`. Structural elements (frontmatter keys, schema headers, log format) stay English to preserve parser and Hermes wire-compat.
 
 Skills remain prompt-only; CLI does no LLM calls (preserves N5). Existing exit codes are not reassigned (preserves the v1 line stability rule). Hermes wire-compat preserved.
 
@@ -26,16 +27,18 @@ Skills remain prompt-only; CLI does no LLM calls (preserves N5). Existing exit c
 7. **Process env vs. dotenv priority**: process env beats dotenv (conventional).
 8. **Init against an existing populated `~/.skillwiki/.env`**: fails with `ENV_WRITE_CONFLICT` unless `--force`.
 9. **`init --write-env` flag dropped**: init always writes `~/.skillwiki/.env` (idempotent on same value, error on conflict).
+10. **Output language as a configured axis**: `WIKI_LANG` is a BCP 47 tag (default `en`); persisted in `~/.skillwiki/.env`; resolution chain mirrors `WIKI_PATH` minus the Hermes-import step (Hermes does not define this concept). Structural elements (frontmatter keys, schema section headers, index/log format) MUST remain English regardless of `WIKI_LANG`; only page-body prose follows the configured language.
 
 ## Scope
 
 ### In this round
-- New `skillwiki init` subcommand with domain + taxonomy + Hermes-import reconciliation.
-- New `skillwiki path` subcommand exposing the resolution chain.
+- New `skillwiki init` subcommand with domain + taxonomy + Hermes-import reconciliation + language reconciliation.
+- New `skillwiki path` subcommand exposing the path resolution chain.
+- New `skillwiki lang` subcommand exposing the language resolution chain (with alias normalization).
 - Six new lint subcommands: `links`, `tag-audit`, `index-check`, `stale`, `pagesize`, `log-rotate`.
 - New umbrella `skillwiki lint` subcommand.
-- Rewrite of `templates/SCHEMA.md` to Hermes-parity prose with two substitution slots (`{{DOMAIN}}`, `{{TAXONOMY_YAML}}`).
-- Update of `wiki-init` and `wiki-lint` SKILL prompts; light update to other `wiki-*` SKILLs to add an explicit "When This Skill Activates" section and a step-0 path-resolution call.
+- Rewrite of `templates/SCHEMA.md` to Hermes-parity prose with three substitution slots (`{{DOMAIN}}`, `{{TAXONOMY_YAML}}`, `{{WIKI_LANG}}`).
+- Update of `wiki-init` and `wiki-lint` SKILL prompts; light update to other `wiki-*` SKILLs to add an explicit "When This Skill Activates" section, a step-0 path/lang resolution call, and an output-language preamble.
 - Vitest coverage for every new command, every utility, every parser, and a Hermes wire-compat smoke test on the rendered vault.
 
 ### Out of scope
@@ -120,8 +123,51 @@ The runtime resolver returns `Result<{ path: string; source: 'flag'|'env'|'skill
 - Accepts only `KEY=VALUE` lines.
 - Ignores blank lines and lines starting with `#`.
 - No quoting, escaping, multi-line, interpolation.
-- Whitelisted keys: `WIKI_PATH` only (everything else is silently dropped — keeps the file purpose narrow).
+- Whitelisted keys: `WIKI_PATH`, `WIKI_LANG`. Everything else is silently dropped (keeps the file purpose narrow).
 - Unreadable file (missing, permission denied) → returns empty map; never throws.
+
+## Wiki output language
+
+A second configuration axis driving the language of generated page prose. Skillwiki-only — no Hermes equivalent.
+
+### Resolution chain (same at init time and runtime — language always has a default)
+
+| # | Source | Notes |
+|---|---|---|
+| 1 | `--lang <code>` | Per-command override. |
+| 2 | process env `WIKI_LANG` | Per-shell override. |
+| 3 | `~/.skillwiki/.env` → `WIKI_LANG=…` | Durable binding written by `init`. |
+| 4 | `en` | Default. |
+
+The resolver returns `{ value: string; source: 'flag'|'env'|'skillwiki-dotenv'|'default'; canonical: string }`.
+
+### Alias normalization
+
+`utils/lang.ts` provides `normalizeLang(input: string): string`. Case-insensitive. Whitespace trimmed. Specific aliases:
+
+| Input (any case) | Canonical output |
+|---|---|
+| `english`, `en` | `en` |
+| `chinese-traditional`, `zh-hant`, `zh-tw` | `zh-Hant` |
+| `chinese-simplified`, `zh-hans`, `zh-cn` | `zh-Hans` |
+| anything else | input as-is (BCP 47 is permissive; we don't reject) |
+
+The canonical form is what's written to `~/.skillwiki/.env`, what's emitted in JSON output, and what skill prompts reference.
+
+### What `WIKI_LANG` affects
+
+- **Yes** — page body prose, narrative sections of entities/concepts/comparisons/queries, lint report `--human` output, log entry free-text descriptions.
+- **No** — frontmatter keys (`title:`, `tags:`, `sources:`, `provenance:`, etc.), file names, SCHEMA.md section headers (`## Domain`, `## Tag Taxonomy`, …), index.md section names (`## Entities`, `## Concepts`, …), log entry format prefix (`## [YYYY-MM-DD] action |`), citation markers (`^[raw/...]`), wikilink slugs.
+
+This split is the parser/wire-compat firewall. Hermes parsers and our CLI parsers both depend on the structural elements being English.
+
+### `skillwiki lang` subcommand
+
+- Signature: `skillwiki lang [--explain]`
+- Default JSON: `{ ok: true, data: { value: "zh-Hant", source: "skillwiki-dotenv", canonical: "zh-Hant" } }`
+- `--explain`: adds a `chain` array showing every source checked.
+- `--human`: adds `lang: zh-Hant (from skillwiki-dotenv)` header. Does not alter exit code (N2).
+- Exit codes: always `0` (default fallback applies).
 
 ## `skillwiki init` subcommand
 
@@ -132,30 +178,34 @@ skillwiki init
     [--target <dir>]
     --domain "<text>"
     [--taxonomy a,b,c,...]
+    [--lang <bcp47>]
     [--force]
 ```
 
 ### Behavior
 
-1. Resolve target via the **init-time chain** above.
-2. Verify target is empty or contains no `SCHEMA.md`. If not, fail with `INIT_TARGET_NOT_EMPTY` (code 15) unless `--force` is also passed.
-3. Create the vault tree:
+1. Resolve target via the **init-time path chain** above.
+2. Resolve language via the **language chain** above (`--lang` → env → skillwiki-dotenv → `en`). Normalize via alias table.
+3. Verify target is empty or contains no `SCHEMA.md`. If not, fail with `INIT_TARGET_NOT_EMPTY` (code 15) unless `--force` is also passed.
+4. Create the vault tree:
    ```
    raw/{articles,papers,transcripts,assets}/
    entities/  concepts/  comparisons/  queries/  meta/  projects/
    ```
-4. Render `SCHEMA.md` from the new template, substituting `{{DOMAIN}}` and `{{TAXONOMY_YAML}}`. If `--taxonomy` is omitted, use the default 10-tag generic taxonomy:
+5. Render `SCHEMA.md` from the new template, substituting `{{DOMAIN}}`, `{{TAXONOMY_YAML}}`, and `{{WIKI_LANG}}`. If `--taxonomy` is omitted, use the default 10-tag generic taxonomy:
    ```
    research, comparison, timeline, summary, person,
    organization, concept, technique, tool, model
    ```
-5. Render `index.md` from template, substituting `{{INIT_DATE}}` (today's date in `YYYY-MM-DD`).
-6. Render `log.md` from template, substituting `{{INIT_DATE}}` and `{{DOMAIN}}` into the structured initialization entry (`## [YYYY-MM-DD] create | Wiki initialized` with bullets `Domain: <domain>` and `Structure created with SCHEMA.md, index.md, log.md`).
-7. **Reconcile `~/.skillwiki/.env`**:
-   - File missing or `WIKI_PATH` absent → create the directory if needed; write `WIKI_PATH=<resolved-target>`.
-   - File has `WIKI_PATH=<same value>` → no-op.
-   - File has `WIKI_PATH=<different value>` → fail with `ENV_WRITE_CONFLICT` (code 24) unless `--force`.
-8. Return JSON envelope:
+6. Render `index.md` from template, substituting `{{INIT_DATE}}` (today's date in `YYYY-MM-DD`).
+7. Render `log.md` from template, substituting `{{INIT_DATE}}`, `{{DOMAIN}}`, and `{{WIKI_LANG}}` into the structured initialization entry (`## [YYYY-MM-DD] create | Wiki initialized` with bullets `Domain: <domain>`, `Output language: <lang>`, and `Structure created with SCHEMA.md, index.md, log.md`).
+8. **Reconcile `~/.skillwiki/.env`** (both keys, atomic):
+   - For each of `WIKI_PATH=<resolved-target>` and `WIKI_LANG=<canonical-lang>`:
+     - File missing or key absent → create the directory if needed; write the line.
+     - Key present with same value → no-op.
+     - Key present with different value → fail with `ENV_WRITE_CONFLICT` (code 24) unless `--force`.
+   - On `--force`, both keys are rewritten to the resolved values.
+9. Return JSON envelope:
    ```json
    {
      "ok": true,
@@ -163,6 +213,7 @@ skillwiki init
        "vault": "/abs/path",
        "domain": "...",
        "taxonomy": ["..."],
+       "lang": "zh-Hant",
        "created": ["SCHEMA.md", "index.md", "log.md", "raw/", ...],
        "env_written": "/Users/x/.skillwiki/.env",
        "imported_from_hermes": true
@@ -170,7 +221,7 @@ skillwiki init
    }
    ```
 
-`imported_from_hermes` is `true` iff (a) the resolved target came from `~/.hermes/.env` (chain level 4) AND (b) `~/.skillwiki/.env` did not previously contain `WIKI_PATH` (so step 7 wrote a new line). In every other case it is `false`.
+`imported_from_hermes` is `true` iff (a) the resolved target came from `~/.hermes/.env` (chain level 4) AND (b) `~/.skillwiki/.env` did not previously contain `WIKI_PATH` (so step 8 wrote a new line). In every other case it is `false`. (Language is never imported from Hermes — Hermes does not define `WIKI_LANG`.)
 
 ### Exit codes
 
@@ -189,6 +240,12 @@ skillwiki init
 ## Domain
 
 {{DOMAIN}}
+
+## Output Language
+
+{{WIKI_LANG}}
+
+This sets the language of generated page prose. Frontmatter keys, schema section headers, file names, and log/index structural lines remain English (parser and Hermes wire-compat invariant).
 
 ## Layers
 
@@ -279,6 +336,7 @@ Chronological action log. Newest entries last. Skill writes append entries; lint
 ## [{{INIT_DATE}}] create | Wiki initialized
 
 - Domain: {{DOMAIN}}
+- Output language: {{WIKI_LANG}}
 - Structure created with SCHEMA.md, index.md, log.md
 ```
 
@@ -307,13 +365,14 @@ None for the first run.
 1. Verify target is empty or has no SCHEMA.md.
 2. Ask the domain question: "What knowledge domain will this vault cover? Be specific."
 3. Propose a 10–15 tag taxonomy tailored to the domain. Confirm or accept the user's revision.
-4. Run `skillwiki init --target <dir> --domain "<answer>" --taxonomy "<comma list>"`.
-5. **Suggest first sources.** Propose 3–5 initial sources (URLs, papers, articles) appropriate to the domain. Prompt the user to provide the first one to ingest, then hand off to wiki-ingest.
+4. Ask the language question: "What language should generated page prose use? Default is `en`. Aliases like `chinese-traditional` or `zh-Hant` are accepted."
+5. Run `skillwiki init --target <dir> --domain "<answer>" --taxonomy "<comma list>" --lang "<lang>"`.
+6. **Suggest first sources.** Propose 3–5 initial sources (URLs, papers, articles) appropriate to the domain. Prompt the user to provide the first one to ingest, then hand off to wiki-ingest.
 
 ## Stop conditions
 
 - Target non-empty and `--force` not consented.
-- `~/.skillwiki/.env` already binds a different vault and `--force` not consented.
+- `~/.skillwiki/.env` already binds a different vault or language and `--force` not consented.
 
 ## Forbidden
 
@@ -467,14 +526,16 @@ None — lint reports all findings even on per-page errors.
 
 ## Other `wiki-*` SKILL.md updates
 
-Each gets a `When This Skill Activates` section (Hermes-style trigger list) and a step-0 path resolution call:
+Each gets a `When This Skill Activates` section (Hermes-style trigger list), a step-0 path/lang resolution, and an output-language preamble:
+
+> **Output language.** Run `skillwiki lang` at the start. Generate page-body prose, narrative sections, and `--human` summaries in the resolved language. Frontmatter keys, file names, schema headers, index/log structural lines, citation markers, and wikilink slugs MUST stay English.
 
 - `wiki-ingest`: triggers on URL/paste/file in research context, when a vault is resolvable.
 - `wiki-query`: triggers on a question, when a vault is resolvable.
 - `wiki-audit`: triggers on per-page audit ask or pre-merge gate.
-- `wiki-crystallize`: existing triggers + path resolution preamble.
+- `wiki-crystallize`: existing triggers + path/lang resolution preamble.
 
-The 4 `proj-*` skills are unchanged; they operate on `projects/{slug}/` paths under whatever vault the wiki-* skills resolved.
+The 4 `proj-*` skills are unchanged for v1 of this delta; they inherit the language hint from the same `~/.skillwiki/.env` if and when they are revised in a follow-up. They operate on `projects/{slug}/` paths under whatever vault the wiki-* skills resolved.
 
 ## Exit code allocation
 
@@ -503,9 +564,11 @@ Existing 0–14 unchanged. New codes (next-unused integers):
 ```
 packages/cli/src/utils/wiki-path.ts
 packages/cli/src/utils/dotenv.ts
+packages/cli/src/utils/lang.ts
 packages/cli/src/parsers/taxonomy.ts
 packages/cli/src/commands/init.ts
 packages/cli/src/commands/path.ts
+packages/cli/src/commands/lang.ts
 packages/cli/src/commands/links.ts
 packages/cli/src/commands/tag-audit.ts
 packages/cli/src/commands/index-check.ts
@@ -516,9 +579,11 @@ packages/cli/src/commands/lint.ts
 
 packages/cli/src/utils/__tests__/wiki-path.test.ts
 packages/cli/src/utils/__tests__/dotenv.test.ts
+packages/cli/src/utils/__tests__/lang.test.ts
 packages/cli/src/parsers/__tests__/taxonomy.test.ts
 packages/cli/src/commands/__tests__/init.test.ts
 packages/cli/src/commands/__tests__/path.test.ts
+packages/cli/src/commands/__tests__/lang.test.ts
 packages/cli/src/commands/__tests__/links.test.ts
 packages/cli/src/commands/__tests__/tag-audit.test.ts
 packages/cli/src/commands/__tests__/index-check.test.ts
@@ -532,19 +597,19 @@ packages/cli/src/commands/__tests__/wire-compat.test.ts
 ### Modified
 
 ```
-packages/cli/templates/SCHEMA.md           (full rewrite per template above)
+packages/cli/templates/SCHEMA.md           (full rewrite per template above; adds {{WIKI_LANG}} slot)
 packages/cli/templates/index.md            (add header line with Total pages and last updated)
-packages/cli/templates/log.md              (add structured init entry placeholder)
-packages/cli/src/cli.ts                    (register init, path, links, tag-audit, index-check, stale, pagesize, log-rotate, lint)
+packages/cli/templates/log.md              (add structured init entry placeholder; includes Output language line)
+packages/cli/src/cli.ts                    (register init, path, lang, links, tag-audit, index-check, stale, pagesize, log-rotate, lint)
 packages/cli/src/commands/orphans.ts       (vault arg becomes optional → use resolver)
 packages/shared/src/exit-codes.ts          (append codes 15–25)
 packages/shared/src/exit-codes.test.ts     (append assertions for new codes)
-packages/skills/wiki-init/SKILL.md         (new flow per spec)
+packages/skills/wiki-init/SKILL.md         (new flow per spec; asks the language question)
 packages/skills/wiki-lint/SKILL.md         (collapse to umbrella call per spec)
-packages/skills/wiki-ingest/SKILL.md       (add trigger list + step-0)
-packages/skills/wiki-query/SKILL.md        (add trigger list + step-0)
-packages/skills/wiki-audit/SKILL.md        (add trigger list + step-0)
-packages/skills/wiki-crystallize/SKILL.md  (add trigger list + step-0)
+packages/skills/wiki-ingest/SKILL.md       (add trigger list + step-0 + output-language preamble)
+packages/skills/wiki-query/SKILL.md        (add trigger list + step-0 + output-language preamble)
+packages/skills/wiki-audit/SKILL.md        (add trigger list + step-0 + output-language preamble)
+packages/skills/wiki-crystallize/SKILL.md  (add trigger list + step-0 + output-language preamble)
 ```
 
 ### Untouched
@@ -557,18 +622,21 @@ packages/skills/wiki-crystallize/SKILL.md  (add trigger list + step-0)
 
 ### Unit
 
-- `dotenv.test.ts` — parses `KEY=VALUE`, ignores comments and blanks, ignores non-whitelisted keys, missing/unreadable file returns empty map without throwing.
+- `dotenv.test.ts` — parses `KEY=VALUE`, ignores comments and blanks, accepts `WIKI_PATH` and `WIKI_LANG`, drops other keys, missing/unreadable file returns empty map without throwing.
 - `wiki-path.test.ts` — init-time and runtime chain priority; `source` label correctness for each level; runtime miss returns `NO_VAULT_CONFIGURED`; unreadable files don't throw.
+- `lang.test.ts` (utils) — alias normalization (`chinese-traditional` → `zh-Hant`, case-insensitive, whitespace-trimmed); pass-through for unknown tags; default `en`; chain priority (flag > env > skillwiki-dotenv > default); source labels.
 - `taxonomy.test.ts` — extracts the fenced YAML block from a SCHEMA.md fixture; rejects malformed YAML; returns empty list for missing block (caller decides if this is fatal).
 
 ### Per-subcommand
 
 - `init.test.ts`
   - empty target succeeds; non-empty fails `INIT_TARGET_NOT_EMPTY`; `--force` overrides.
-  - `{{DOMAIN}}` and `{{TAXONOMY_YAML}}` substituted correctly; default taxonomy applied when flag omitted.
-  - `~/.skillwiki/.env` absent → written; same value → no-op; different value → `ENV_WRITE_CONFLICT`; `--force` overwrites.
-  - Hermes-import path: `~/.hermes/.env` populated, `~/.skillwiki/.env` missing, no `--target` → resolves to Hermes value, writes to skillwiki dotenv, `imported_from_hermes: true` in JSON output.
+  - `{{DOMAIN}}`, `{{TAXONOMY_YAML}}`, and `{{WIKI_LANG}}` substituted correctly; default taxonomy applied when flag omitted; default `en` lang applied when `--lang` omitted.
+  - `--lang chinese-traditional` normalizes to `zh-Hant` in dotenv and JSON output.
+  - `~/.skillwiki/.env` absent → both `WIKI_PATH` and `WIKI_LANG` written; same values → no-op; different `WIKI_PATH` → `ENV_WRITE_CONFLICT`; different `WIKI_LANG` → `ENV_WRITE_CONFLICT`; `--force` overwrites both.
+  - Hermes-import path: `~/.hermes/.env` populated, `~/.skillwiki/.env` missing, no `--target` → resolves to Hermes value, writes to skillwiki dotenv, `imported_from_hermes: true` in JSON output. Language is NOT imported from Hermes (Hermes doesn't define `WIKI_LANG`); language falls through to default unless flag/env/skillwiki-dotenv supplies one.
 - `path.test.ts` — JSON shape, `--explain` chain, `--init-time` vs runtime difference, `--human` header line.
+- `lang.test.ts` (command) — JSON shape, `--explain` chain, alias normalization in output, `--human` header line.
 - `links.test.ts` — clean / broken-target / cross-folder / self-reference cases.
 - `tag-audit.test.ts` — clean / missing taxonomy block / tag-not-in-taxonomy.
 - `index-check.test.ts` — page missing from index / ghost entry in index / clean.
@@ -579,7 +647,7 @@ packages/skills/wiki-crystallize/SKILL.md  (add trigger list + step-0)
 
 ### Wire-compat
 
-- `wire-compat.test.ts` — drives `runInit` against a tmp dir, then asserts that the rendered `SCHEMA.md` contains the exact prose section headers Hermes v2.1.0 references (`## Domain`, `## Tag Taxonomy`, `## Page Thresholds`, `## Update Policy`, `## Conventions`), and that `index.md` and `log.md` contain the structural elements Hermes prompts expect (`## [YYYY-MM-DD] create |` line in log; sectioned headers in index).
+- `wire-compat.test.ts` — drives `runInit` against a tmp dir, then asserts that the rendered `SCHEMA.md` contains the exact prose section headers Hermes v2.1.0 references (`## Domain`, `## Tag Taxonomy`, `## Page Thresholds`, `## Update Policy`, `## Conventions`), and that `index.md` and `log.md` contain the structural elements Hermes prompts expect (`## [YYYY-MM-DD] create |` line in log; sectioned headers in index). Verify that the new `## Output Language` section is additive (Hermes parsers ignore unknown sections, satisfying N13).
 
 ### Existing-suite invariants
 
@@ -588,17 +656,19 @@ packages/skills/wiki-crystallize/SKILL.md  (add trigger list + step-0)
 
 ## Definition of Done
 
-- [ ] `skillwiki init` implemented with full Hermes-import reconciliation; passes all `init.test.ts` cases including the Hermes-import path.
+- [ ] `skillwiki init` implemented with full Hermes-import reconciliation AND language reconciliation; passes all `init.test.ts` cases including the Hermes-import path and the `chinese-traditional` alias case.
 - [ ] `skillwiki path` implemented; both chains tested.
+- [ ] `skillwiki lang` implemented; alias normalization tested; resolution chain tested.
 - [ ] All 6 small lint subcommands implemented and tested in isolation.
 - [ ] `skillwiki lint` umbrella implemented; severity grouping and exit code matrix tested.
-- [ ] `templates/SCHEMA.md` rewritten with substitution slots; rendered output passes wire-compat smoke test.
-- [ ] `wiki-init` and `wiki-lint` SKILL.md files rewritten per spec; other `wiki-*` SKILLs gain trigger lists and step-0.
+- [ ] `templates/SCHEMA.md` rewritten with substitution slots (`{{DOMAIN}}`, `{{TAXONOMY_YAML}}`, `{{WIKI_LANG}}`); rendered output passes wire-compat smoke test.
+- [ ] `templates/log.md` includes `Output language:` line in the initialization entry.
+- [ ] `wiki-init` and `wiki-lint` SKILL.md files rewritten per spec; other `wiki-*` SKILLs gain trigger lists, step-0, and the output-language preamble.
 - [ ] Exit codes 15–25 added to `packages/shared/src/exit-codes.ts` with no reassignment of 0–14; tests updated.
 - [ ] `npm run -w packages/cli test` and `npm run -w packages/shared test` both green.
 - [ ] N1–N18 still satisfied (manually re-verified against this spec's deltas).
 - [ ] No bash scripts; no LLM API calls in CLI (N5).
-- [ ] Hermes wire-compat preserved (verified via wire-compat test).
+- [ ] Hermes wire-compat preserved (verified via wire-compat test, including verification that the new `## Output Language` section is additive per N13).
 
 ## Traceability
 
@@ -611,6 +681,7 @@ packages/skills/wiki-crystallize/SKILL.md  (add trigger list + step-0)
 | 6 | runtime resolver fail-closed; `NO_VAULT_CONFIGURED` |
 | 7 | resolver ordering test cases |
 | 8, 9 | `init` always writes; `ENV_WRITE_CONFLICT` semantics |
+| 10 | `utils/lang.ts`, `commands/lang.ts`, `WIKI_LANG` slot in templates, output-language preamble in skills |
 
 | Hermes section | Covered by |
 |---|---|
@@ -621,3 +692,4 @@ packages/skills/wiki-crystallize/SKILL.md  (add trigger list + step-0)
 | "index.md Template" | extended `templates/index.md` |
 | "log.md Template" | extended `templates/log.md` |
 | "Lint" 1–11 | `links`, `tag-audit`, `index-check`, `stale`, `pagesize`, `log-rotate`, `lint` umbrella + existing `validate`, `hash`, `orphans` |
+| (skillwiki extension) | `WIKI_LANG` configuration; `## Output Language` section in SCHEMA.md; output-language preamble in all wiki-* SKILLs |
