@@ -58,7 +58,8 @@ describe("runConfigSet", () => {
   });
 
   it("creates .skillwiki/.env when it does not exist", async () => {
-    const h = home();
+    const h = mkdtempSync(join(tmpdir(), "home-"));
+    // Do NOT create .skillwiki dir — writeDotenv must handle this
     const r = await runConfigSet({ key: "WIKI_PATH", value: "/fresh", home: h });
     expect(r.exitCode).toBe(0);
     expect(existsSync(join(h, ".skillwiki", ".env"))).toBe(true);

@@ -4,7 +4,11 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { parseDotenvFile, writeDotenv, type DotenvMap } from "../utils/dotenv.js";
 
-const VALID_KEYS = new Set(["WIKI_PATH", "WIKI_LANG"]);
+type ConfigKey = "WIKI_PATH" | "WIKI_LANG";
+
+function validateKey(key: string): key is ConfigKey {
+  return key === "WIKI_PATH" || key === "WIKI_LANG";
+}
 
 function configPath(home: string): string {
   return join(home, ".skillwiki", ".env");
@@ -24,11 +28,11 @@ export interface ConfigGetOutput {
 export async function runConfigGet(
   input: ConfigGetInput
 ): Promise<{ exitCode: number; result: Result<ConfigGetOutput> }> {
-  if (!VALID_KEYS.has(input.key)) {
+  if (!validateKey(input.key)) {
     return { exitCode: ExitCode.INVALID_CONFIG_KEY, result: err("INVALID_CONFIG_KEY", { key: input.key }) };
   }
   const map = await parseDotenvFile(configPath(input.home));
-  const value = (map as Record<string, string | undefined>)[input.key] ?? "";
+  const value = map[input.key] ?? "";
   return { exitCode: ExitCode.OK, result: ok({ key: input.key, value }) };
 }
 
@@ -48,19 +52,19 @@ export interface ConfigSetOutput {
 export async function runConfigSet(
   input: ConfigSetInput
 ): Promise<{ exitCode: number; result: Result<ConfigSetOutput> }> {
-  if (!VALID_KEYS.has(input.key)) {
+  if (!validateKey(input.key)) {
     return { exitCode: ExitCode.INVALID_CONFIG_KEY, result: err("INVALID_CONFIG_KEY", { key: input.key }) };
   }
   const filePath = configPath(input.home);
   try {
-    const map = await parseDotenvFile(filePath);
-    const merged: DotenvMap = { ...map, [input.key]: input.value };
     let originalContent: string | undefined;
     try { originalContent = await readFile(filePath, "utf8"); } catch { /* file may not exist yet */ }
+    const existing = originalContent !== undefined ? await parseDotenvFile(filePath) : {};
+    const merged: DotenvMap = { ...existing, [input.key]: input.value };
     await writeDotenv(filePath, merged, originalContent);
     return { exitCode: ExitCode.OK, result: ok({ key: input.key, value: input.value, written: true }) };
-  } catch {
-    return { exitCode: ExitCode.CONFIG_WRITE_FAILED, result: err("CONFIG_WRITE_FAILED", { key: input.key }) };
+  } catch (e) {
+    return { exitCode: ExitCode.CONFIG_WRITE_FAILED, result: err("CONFIG_WRITE_FAILED", { key: input.key, error: String(e) }) };
   }
 }
 
@@ -77,7 +81,7 @@ export async function runConfigList(
   input: ConfigListInput
 ): Promise<{ exitCode: number; result: Result<ConfigListOutput> }> {
   const map = await parseDotenvFile(configPath(input.home));
-  const entries = Object.entries(map).map(([key, value]) => ({ key, value: value as string }));
+  const entries = Object.entries(map).map(([key, value]) => ({ key, value: value ?? "" }));
   return { exitCode: ExitCode.OK, result: ok({ entries }) };
 }
 
