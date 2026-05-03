@@ -5,14 +5,20 @@ description: Search the vault and synthesize an answer with E2 4-signal ranking.
 
 # wiki-query
 
-## When to invoke
-- User asks a question that can be answered from existing vault content.
-- Either no scope hint or one of: vault / current-project / project+concepts.
+## When This Skill Activates
+
+- User asks a question that should be answered from vault contents.
+- A vault is resolvable (see step 0).
+
+## Output language
+
+Run `skillwiki lang` at the start. Generate query-result prose and `--human` summaries in the resolved language. Frontmatter keys, file names, schema headers, index/log structural lines, citation markers, and wikilink slugs MUST stay English.
 
 ## Pre-orientation reads
 Standard four reads (SCHEMA, index, log, project context if applicable).
 
 ## Steps
+0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`.
 1. **Determine scope.** Ask the user once if ambiguous: vault | current project | project+concepts.
 2. **Refresh graph.** If `.skillwiki/graph.json` is missing or older than 24h: `npx skillwiki graph build <vault>`.
 3. **Compute overlap.** `npx skillwiki overlap <vault>`.
