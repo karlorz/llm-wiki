@@ -23,6 +23,7 @@ export interface ConfigGetInput {
 export interface ConfigGetOutput {
   key: string;
   value: string;
+  humanHint: string;
 }
 
 export async function runConfigGet(
@@ -33,7 +34,7 @@ export async function runConfigGet(
   }
   const map = await parseDotenvFile(configPath(input.home));
   const value = map[input.key] ?? "";
-  return { exitCode: ExitCode.OK, result: ok({ key: input.key, value }) };
+  return { exitCode: ExitCode.OK, result: ok({ key: input.key, value, humanHint: value }) };
 }
 
 // ── runConfigSet ──────────────────────────────────────────────
@@ -47,6 +48,7 @@ export interface ConfigSetOutput {
   key: string;
   value: string;
   written: true;
+  humanHint: string;
 }
 
 export async function runConfigSet(
@@ -62,7 +64,7 @@ export async function runConfigSet(
     const existing = originalContent !== undefined ? await parseDotenvFile(filePath) : {};
     const merged: DotenvMap = { ...existing, [input.key]: input.value };
     await writeDotenv(filePath, merged, originalContent);
-    return { exitCode: ExitCode.OK, result: ok({ key: input.key, value: input.value, written: true }) };
+    return { exitCode: ExitCode.OK, result: ok({ key: input.key, value: input.value, written: true, humanHint: `${input.key}=${input.value}` }) };
   } catch (e) {
     return { exitCode: ExitCode.CONFIG_WRITE_FAILED, result: err("CONFIG_WRITE_FAILED", { key: input.key, error: String(e) }) };
   }
@@ -75,6 +77,7 @@ export interface ConfigListInput {
 }
 export interface ConfigListOutput {
   entries: Array<{ key: string; value: string }>;
+  humanHint: string;
 }
 
 export async function runConfigList(
@@ -82,7 +85,7 @@ export async function runConfigList(
 ): Promise<{ exitCode: number; result: Result<ConfigListOutput> }> {
   const map = await parseDotenvFile(configPath(input.home));
   const entries = Object.entries(map).map(([key, value]) => ({ key, value: value ?? "" }));
-  return { exitCode: ExitCode.OK, result: ok({ entries }) };
+  return { exitCode: ExitCode.OK, result: ok({ entries, humanHint: entries.map(e => `${e.key}=${e.value}`).join("\n") }) };
 }
 
 // ── runConfigPath ─────────────────────────────────────────────
@@ -93,11 +96,12 @@ export interface ConfigPathInput {
 export interface ConfigPathOutput {
   path: string;
   exists: boolean;
+  humanHint: string;
 }
 
 export async function runConfigPath(
   input: ConfigPathInput
 ): Promise<{ exitCode: number; result: Result<ConfigPathOutput> }> {
-  const path = configPath(input.home);
-  return { exitCode: ExitCode.OK, result: ok({ path, exists: existsSync(path) }) };
+  const filePath = configPath(input.home);
+  return { exitCode: ExitCode.OK, result: ok({ path: filePath, exists: existsSync(filePath), humanHint: filePath }) };
 }

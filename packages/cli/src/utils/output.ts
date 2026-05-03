@@ -6,7 +6,11 @@ export function printJson<T>(r: Result<T>): void {
 
 export function printHuman<T>(r: Result<T>): void {
   if (r.ok) {
-    process.stdout.write(`OK\n${formatData(r.data)}\n`);
+    if (typeof r.data === "object" && r.data !== null && "humanHint" in r.data) {
+      process.stdout.write(`${(r.data as { humanHint: string }).humanHint}\n`);
+    } else {
+      process.stdout.write(`OK\n${formatData(r.data)}\n`);
+    }
   } else {
     process.stdout.write(`ERR ${r.error}\n${r.detail !== undefined ? formatData(r.detail) + "\n" : ""}`);
   }

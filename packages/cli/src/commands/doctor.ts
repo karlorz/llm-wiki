@@ -7,16 +7,19 @@ import { parseDotenvFile } from "../utils/dotenv.js";
 
 // ── Types ─────────────────────────────────────────────────────
 
+export type CheckStatus = "pass" | "warn" | "error";
+
 export interface CheckResult {
   id: string;
   label: string;
-  status: "pass" | "warn" | "error";
+  status: CheckStatus;
   detail: string;
 }
 
 export interface DoctorOutput {
   checks: CheckResult[];
   summary: { pass: number; warn: number; error: number };
+  humanHint: string;
 }
 
 export interface DoctorInput {
@@ -191,5 +194,15 @@ export async function runDoctor(
       ? ExitCode.DOCTOR_HAS_WARNINGS
       : ExitCode.OK;
 
-  return { exitCode, result: ok({ checks, summary }) };
+  const statusIcon: Record<CheckStatus, string> = { pass: "✓", warn: "⚠", error: "✗" };
+  const lines = checks.map(c => {
+    const icon = statusIcon[c.status];
+    const padded = c.label.padEnd(24);
+    return `  ${icon} ${padded} ${c.detail}`;
+  });
+  lines.push("");
+  lines.push(`${summary.pass} pass · ${summary.warn} warn · ${summary.error} error`);
+  const humanHint = lines.join("\n");
+
+  return { exitCode, result: ok({ checks, summary, humanHint }) };
 }
