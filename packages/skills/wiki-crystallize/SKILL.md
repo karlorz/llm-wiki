@@ -5,14 +5,20 @@ description: Distill the current working session into a typed-knowledge page wit
 
 # wiki-crystallize
 
-## When to invoke
-- User asks to capture a session as a vault page.
-- A reasoning thread has produced a stable insight worth durable storage.
+## When This Skill Activates
+
+- User asks to crystallize, consolidate, or promote draft material into typed-knowledge pages.
+- A vault is resolvable (see step 0).
+
+## Output language
+
+Run `skillwiki lang` at the start. Generate consolidated page prose and `--human` summaries in the resolved language. Frontmatter keys, file names, schema headers, index/log structural lines, citation markers, and wikilink slugs MUST stay English.
 
 ## Pre-orientation reads
 Standard four reads. If cwd is inside `projects/{slug}/`, also read project README and recent work logs.
 
 ## Steps
+0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`.
 1. Identify type: entity / concept / comparison / query / summary.
 2. Set `provenance:`. Default `research`. If in project context: `project` with `provenance_projects: ["[[slug]]"]`.
 3. Compose the page with citations pre-attached. Reuse existing `raw/` sources where possible.
