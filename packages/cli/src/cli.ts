@@ -20,6 +20,8 @@ import { runStale } from "./commands/stale.js";
 import { runPagesize } from "./commands/pagesize.js";
 import { runLogRotate } from "./commands/log-rotate.js";
 import { runLint } from "./commands/lint.js";
+import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "./commands/config.js";
+import { runDoctor } from "./commands/doctor.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -196,6 +198,40 @@ program
       logThreshold: opts.logThreshold
     }));
   });
+
+// config — grouped under a parent command
+const configCmd = program.command("config").description("manage skillwiki configuration");
+
+configCmd
+  .command("get <key>")
+  .description("print the value of a config key")
+  .action(async (key) => emit(await runConfigGet({ key, home: process.env.HOME ?? "" })));
+
+configCmd
+  .command("set <key> <value>")
+  .description("set a config key value")
+  .action(async (key, value) => emit(await runConfigSet({ key, value, home: process.env.HOME ?? "" })));
+
+configCmd
+  .command("list")
+  .description("list all config key=value pairs")
+  .action(async () => emit(await runConfigList({ home: process.env.HOME ?? "" })));
+
+configCmd
+  .command("path")
+  .description("print the config file path")
+  .action(async () => emit(await runConfigPath({ home: process.env.HOME ?? "" })));
+
+// doctor
+program
+  .command("doctor")
+  .description("diagnose skillwiki setup issues")
+  .action(async () => emit(await runDoctor({
+    home: process.env.HOME ?? "",
+    envValue: process.env.WIKI_PATH,
+    envLang: process.env.WIKI_LANG,
+    argv: process.argv
+  })));
 
 program.parseAsync(process.argv).catch((e) => {
   process.stdout.write(JSON.stringify({ ok: false, error: "INTERNAL", detail: { message: String(e) } }) + "\n");
