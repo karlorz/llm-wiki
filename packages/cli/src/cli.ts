@@ -37,7 +37,13 @@ program
 
 program.command("overlap <vault>").action(async (vault) => emit(await runOverlap({ vault })));
 
-program.command("orphans <vault>").action(async (vault) => emit(await runOrphans({ vault })));
+program
+  .command("orphans [vault]")
+  .action(async (vault) => emit(await runOrphans({
+    vault,
+    envValue: process.env.WIKI_PATH,
+    home: process.env.HOME ?? ""
+  })));
 
 program.command("audit <file>").action(async (file) => emit(await runAudit({ file })));
 

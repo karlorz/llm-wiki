@@ -2,15 +2,25 @@ import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { resolveRuntimePath } from "../utils/wiki-path.js";
 
-export interface OrphansInput { vault: string }
+export interface OrphansInput { vault: string | undefined; envValue?: string; home?: string }
 export interface OrphansOutput {
   orphans: string[];
   bridges: Array<{ path: string; connects: string[] }>;
 }
 
 export async function runOrphans(input: OrphansInput): Promise<{ exitCode: number; result: Result<OrphansOutput> }> {
-  const scan = await scanVault(input.vault);
+  let vault: string;
+  if (input.vault) {
+    vault = input.vault;
+  } else {
+    const r = await resolveRuntimePath({ flag: undefined, envValue: input.envValue, home: input.home ?? "" });
+    if (!r.ok) return { exitCode: ExitCode.NO_VAULT_CONFIGURED, result: r };
+    vault = r.data.path;
+  }
+
+  const scan = await scanVault(vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
   const slugToPath: Record<string, string> = {};
