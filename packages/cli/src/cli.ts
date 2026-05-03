@@ -22,7 +22,7 @@ import { runLint } from "./commands/lint.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 
 const program = new Command();
-program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version("0.2.0-beta.2");
+program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version("0.2.0-beta.3");
 program.option("--human", "render terminal-readable output instead of JSON");
 
 function emit<T>(r: { exitCode: number; result: Result<T> }): never {
@@ -61,7 +61,7 @@ program
   .option("--dry-run", "preview only", false)
   .option("--skills-root <dir>", "source skills directory (defaults to packaged)")
   .action(async (opts) => {
-    const skillsRoot = opts.skillsRoot ?? new URL("../../skills/", import.meta.url).pathname;
+    const skillsRoot = opts.skillsRoot ?? new URL("../skills/", import.meta.url).pathname;
     emit(await runInstall({ skillsRoot, target: opts.target, dryRun: !!opts.dryRun }));
   });
 
