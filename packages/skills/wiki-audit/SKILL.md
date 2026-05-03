@@ -5,14 +5,20 @@ description: Verify per-page that every ^[raw/...] resolves and sources frontmat
 
 # wiki-audit
 
-## When to invoke
-- User asks to audit a specific page.
-- Pre-merge gate on a synthesis-heavy page.
+## When This Skill Activates
+
+- User asks for a per-page audit or invokes a pre-merge gate.
+- A vault is resolvable (see step 0).
+
+## Output language
+
+Run `skillwiki lang` at the start. Generate audit narrative and `--human` summaries in the resolved language. Frontmatter keys, file names, schema headers, index/log structural lines, citation markers, and wikilink slugs MUST stay English.
 
 ## Pre-orientation reads
 Standard four reads.
 
 ## Steps
+0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`.
 1. `npx skillwiki audit <page>`. Read the JSON report.
 2. Reason over the report:
    - For each unresolved marker: suggest ingesting the missing source or correcting the path.
