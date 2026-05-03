@@ -83,7 +83,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   return {
     exitCode,
     result: ok({
-      vault: { path: input.vault, source: input.source ?? "flag" },
+      vault: { path: input.vault, source: input.source ?? "resolved" },
       summary,
       by_severity: { error: errorOut, warning: warningOut, info: infoOut }
     })

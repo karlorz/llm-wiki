@@ -77,7 +77,7 @@ describe("runLint", () => {
     const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
     if (r.result.ok) {
       expect(r.result.data.vault.path).toBe(v);
-      expect(r.result.data.vault.source).toBe("flag");
+      expect(r.result.data.vault.source).toBe("resolved");
     }
   });
 });
