@@ -23,7 +23,11 @@ export const ExitCode = {
   LINT_HAS_WARNINGS: 22,
   LINT_HAS_ERRORS: 23,
   ENV_WRITE_CONFLICT: 24,
-  NO_VAULT_CONFIGURED: 25
+  NO_VAULT_CONFIGURED: 25,
+  INVALID_CONFIG_KEY: 26,
+  CONFIG_WRITE_FAILED: 27,
+  DOCTOR_HAS_WARNINGS: 28,
+  DOCTOR_HAS_ERRORS: 29
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -53,7 +57,11 @@ const NAMES: Record<number, string> = {
   22: "LINT_HAS_WARNINGS",
   23: "LINT_HAS_ERRORS",
   24: "ENV_WRITE_CONFLICT",
-  25: "NO_VAULT_CONFIGURED"
+  25: "NO_VAULT_CONFIGURED",
+  26: "INVALID_CONFIG_KEY",
+  27: "CONFIG_WRITE_FAILED",
+  28: "DOCTOR_HAS_WARNINGS",
+  29: "DOCTOR_HAS_ERRORS"
 };
 
 export function exitCodeName(code: number): string {
