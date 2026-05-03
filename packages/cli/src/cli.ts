@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import type { Result } from "@skillwiki/shared";
 import { printJson, printHuman } from "./utils/output.js";
@@ -21,8 +22,10 @@ import { runLogRotate } from "./commands/log-rotate.js";
 import { runLint } from "./commands/lint.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+
 const program = new Command();
-program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version("0.2.0-beta.3");
+program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version(pkg.version);
 program.option("--human", "render terminal-readable output instead of JSON");
 
 function emit<T>(r: { exitCode: number; result: Result<T> }): never {

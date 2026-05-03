@@ -13,6 +13,23 @@
 PASS=0
 FAIL=0
 
+# Captured output from the most recent run_cli call.
+RUN_OUTPUT=""
+RUN_RC=0
+
+# ---------------------------------------------------------------------------
+# run_cli <cmd...>
+#
+# Runs the given command, capturing stdout into RUN_OUTPUT and exit code into
+# RUN_RC. Redirects stderr to /dev/null. Use after calling:
+#   assert_exit <expected> "$RUN_RC" "label"
+#   assert_json_contains "$RUN_OUTPUT" "field" "value" "label"
+# ---------------------------------------------------------------------------
+run_cli() {
+  RUN_RC=0
+  RUN_OUTPUT=$("$@" 2>/dev/null) || RUN_RC=$?
+}
+
 # ---------------------------------------------------------------------------
 # assert_exit <expected> <actual> <label>
 # ---------------------------------------------------------------------------
