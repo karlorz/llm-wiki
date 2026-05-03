@@ -11,6 +11,7 @@ import { runAudit } from "./commands/audit.js";
 import { runInstall } from "./commands/install.js";
 import { runPath } from "./commands/path.js";
 import { runLang } from "./commands/lang.js";
+import { runInit } from "./commands/init.js";
 
 const program = new Command();
 program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version("0.1.0");
@@ -78,6 +79,30 @@ program
       envValue: process.env.WIKI_LANG,
       home: process.env.HOME ?? "",
       explain: !!opts.explain
+    }));
+  });
+
+program
+  .command("init")
+  .option("--target <dir>", "explicit target directory")
+  .requiredOption("--domain <text>", "knowledge domain seed")
+  .option("--taxonomy <csv>", "comma-separated tag list")
+  .option("--lang <code>", "output language (BCP 47 or alias)")
+  .option("--force", "override existing target / env conflict", false)
+  .action(async (opts) => {
+    const templates = new URL("../templates/", import.meta.url).pathname;
+    const taxonomy = typeof opts.taxonomy === "string"
+      ? opts.taxonomy.split(",").map((s: string) => s.trim()).filter((s: string) => s.length > 0)
+      : undefined;
+    emit(await runInit({
+      flag: opts.target,
+      envValue: process.env.WIKI_PATH,
+      home: process.env.HOME ?? "",
+      templates,
+      domain: opts.domain,
+      taxonomy,
+      lang: opts.lang,
+      force: !!opts.force
     }));
   });
 
