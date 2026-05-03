@@ -22,7 +22,7 @@ import { runLint } from "./commands/lint.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 
 const program = new Command();
-program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version("0.2.0-beta.1");
+program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version("0.2.0-beta.2");
 program.option("--human", "render terminal-readable output instead of JSON");
 
 function emit<T>(r: { exitCode: number; result: Result<T> }): never {
