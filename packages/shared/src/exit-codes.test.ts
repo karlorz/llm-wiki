@@ -17,6 +17,17 @@ describe("exit-codes", () => {
     expect(ExitCode.SOURCES_INCONSISTENT).toBe(12);
     expect(ExitCode.PREFLIGHT_FAILED).toBe(13);
     expect(ExitCode.ATOMIC_COPY_FAILED).toBe(14);
+    expect(ExitCode.INIT_TARGET_NOT_EMPTY).toBe(15);
+    expect(ExitCode.BROKEN_WIKILINKS).toBe(16);
+    expect(ExitCode.TAG_NOT_IN_TAXONOMY).toBe(17);
+    expect(ExitCode.INDEX_INCOMPLETE).toBe(18);
+    expect(ExitCode.STALE_PAGE).toBe(19);
+    expect(ExitCode.PAGE_TOO_LARGE).toBe(20);
+    expect(ExitCode.LOG_ROTATE_NEEDED).toBe(21);
+    expect(ExitCode.LINT_HAS_WARNINGS).toBe(22);
+    expect(ExitCode.LINT_HAS_ERRORS).toBe(23);
+    expect(ExitCode.ENV_WRITE_CONFLICT).toBe(24);
+    expect(ExitCode.NO_VAULT_CONFIGURED).toBe(25);
   });
 
   it("exposes a stable name for every code (non-empty, unique)", () => {
