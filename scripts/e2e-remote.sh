@@ -5,7 +5,7 @@
 # Prerequisites:
 #   - ssh sg01 works with key auth
 #   - Remote host has Node.js 20+
-#   - Remote host has skillwiki published to npm (or installs it below)
+#   - CLI deployed to /opt/skillwiki-test/ (dist/cli.js + templates/ + skills/)
 #
 # Usage:
 #   ./scripts/e2e-remote.sh
@@ -21,6 +21,8 @@ source "$SCRIPT_DIR/e2e-common.sh"
 # 2. Setup
 # ---------------------------------------------------------------------------
 SSH_HOST="sg01"
+REMOTE_CLI="node /opt/skillwiki-test/dist/cli.js"
+REMOTE_SKILLS="/opt/skillwiki-test/skills"
 VAULT_NAME="skillwiki-e2e-$(date +%s)"
 VAULT_REMOTE="/tmp/$VAULT_NAME"
 INSTALL_TARGET="/tmp/skillwiki-install-$(date +%s)"
@@ -41,14 +43,11 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------------
 # 3. Install / verify skillwiki on remote
 # ---------------------------------------------------------------------------
-printf "\n--- Install skillwiki on %s ---\n" "$SSH_HOST"
+printf "\n--- Verify skillwiki on %s ---\n" "$SSH_HOST"
 
-install_output=$(ssh "$SSH_HOST" "npm install -g skillwiki@0.2.0-beta.1 2>&1 | tail -1") || true
-printf "  npm: %s\n" "$install_output"
-
-version_output=$(ssh "$SSH_HOST" "skillwiki --version" 2>/dev/null) || true
-ec=$?
-assert_exit 0 "$ec" "skillwiki --version on remote"
+rc=0
+version_output=$(ssh "$SSH_HOST" "$REMOTE_CLI --version" 2>/dev/null) || rc=$?
+assert_exit 0 "$rc" "skillwiki --version on remote"
 printf "  version: %s\n" "$version_output"
 
 # ---------------------------------------------------------------------------
@@ -72,9 +71,9 @@ printf "  Hermes .env: WIKI_PATH=%s\n" "$VAULT_REMOTE"
 # ---------------------------------------------------------------------------
 printf "\n--- Init with Hermes fallback ---\n"
 
-output=$(ssh "$SSH_HOST" "skillwiki init --domain 'E2E Remote Test' --taxonomy 'research,concept,tool' --lang en" 2>/dev/null) || true
-ec=$?
-assert_exit 0 "$ec" "remote init succeeds"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI init --domain 'E2E Remote Test' --taxonomy 'research,concept,tool' --lang en" 2>/dev/null) || rc=$?
+assert_exit 0 "$rc" "remote init succeeds"
 assert_json_contains "$output" "data.imported_from_hermes" "true" "init detects Hermes fallback"
 
 # ---------------------------------------------------------------------------
@@ -111,18 +110,20 @@ ssh "$SSH_HOST" "mv ~/.hermes/.env.e2e-backup ~/.hermes/.env 2>/dev/null || rm -
 printf "\n--- Seed vault on remote ---\n"
 
 # We need to compute a stale date on the remote (GNU date).
-# Send a self-contained script over SSH that creates all 8 test files.
-ssh "$SSH_HOST" bash -s <<REMOTE_SEED
+# Write a seed script to a temp file, scp it, execute on remote.
+# This avoids nested-heredoc issues with SSH.
+SEED_SCRIPT=$(mktemp)
+cat > "$SEED_SCRIPT" <<'SEED_EOF'
+#!/usr/bin/env bash
 set -euo pipefail
-VAULT="$VAULT_REMOTE"
-
-mkdir -p "\$VAULT/entities" "\$VAULT/concepts" "\$VAULT/meta" "\$VAULT/raw/articles"
+VAULT="$1"
+mkdir -p "$VAULT/entities" "$VAULT/concepts" "$VAULT/meta" "$VAULT/raw/articles"
 
 # GNU date (Debian)
-stale_date=\$(date -d '120 days ago' '+%Y-%m-%d')
+stale_date=$(date -d '120 days ago' '+%Y-%m-%d')
 
 # ---- entities/valid-entity.md ----
-cat > "\$VAULT/entities/valid-entity.md" <<'FRONTMATTER'
+cat > "$VAULT/entities/valid-entity.md" <<'FRONTMATTER'
 ---
 title: "Valid Entity"
 tags: ["research"]
@@ -133,7 +134,7 @@ Links to [[valid-concept]].
 FRONTMATTER
 
 # ---- concepts/valid-concept.md ----
-cat > "\$VAULT/concepts/valid-concept.md" <<'FRONTMATTER'
+cat > "$VAULT/concepts/valid-concept.md" <<'FRONTMATTER'
 ---
 title: "Valid Concept"
 tags: ["research"]
@@ -144,7 +145,7 @@ Links to [[valid-entity]].
 FRONTMATTER
 
 # ---- entities/orphan-entity.md (warning: orphans) ----
-cat > "\$VAULT/entities/orphan-entity.md" <<'FRONTMATTER'
+cat > "$VAULT/entities/orphan-entity.md" <<'FRONTMATTER'
 ---
 title: "Orphan Entity"
 tags: ["research"]
@@ -155,7 +156,7 @@ No wikilinks here.
 FRONTMATTER
 
 # ---- concepts/broken-link.md (error: broken_wikilinks) ----
-cat > "\$VAULT/concepts/broken-link.md" <<'FRONTMATTER'
+cat > "$VAULT/concepts/broken-link.md" <<'FRONTMATTER'
 ---
 title: "Broken Link"
 tags: ["research"]
@@ -166,7 +167,7 @@ A link to [[nonexistent-page]].
 FRONTMATTER
 
 # ---- entities/bad-tag.md (error: tag_not_in_taxonomy) ----
-cat > "\$VAULT/entities/bad-tag.md" <<'FRONTMATTER'
+cat > "$VAULT/entities/bad-tag.md" <<'FRONTMATTER'
 ---
 title: "Bad Tag"
 tags: ["not-in-taxonomy"]
@@ -177,11 +178,11 @@ Normal content.
 FRONTMATTER
 
 # ---- concepts/stale-page.md (warning: stale_page) ----
-cat > "\$VAULT/concepts/stale-page.md" <<FRONTMATTER
+cat > "$VAULT/concepts/stale-page.md" <<FRONTMATTER
 ---
 title: "Stale Page"
 tags: ["research"]
-updated: "\$stale_date"
+updated: "$stale_date"
 sources: ["raw/articles/stale-source.md"]
 ---
 
@@ -189,7 +190,7 @@ Normal content.
 FRONTMATTER
 
 # ---- raw/articles/stale-source.md (companion for stale-page) ----
-cat > "\$VAULT/raw/articles/stale-source.md" <<'FRONTMATTER'
+cat > "$VAULT/raw/articles/stale-source.md" <<'FRONTMATTER'
 ---
 title: "Stale Source"
 ingested: "2026-05-03"
@@ -206,24 +207,30 @@ FRONTMATTER
   printf 'updated: "2026-05-03"\n'
   printf -- '---\n\n'
   i=0
-  while [ "\$i" -lt 252 ]; do
+  while [ "$i" -lt 252 ]; do
     printf 'line content\n'
-    i=\$((i + 1))
+    i=$((i + 1))
   done
-} > "\$VAULT/entities/big-page.md"
+} > "$VAULT/entities/big-page.md"
 
 # ---- log.md (warning: log_rotate_needed) ----
 {
   printf -- '---\ntitle: "Changelog"\n---\n\n'
   i=0
-  while [ "\$i" -lt 620 ]; do
-    printf '## [2026-05-03] update | log entry %d\n\n' "\$i"
-    i=\$((i + 1))
+  while [ "$i" -lt 620 ]; do
+    printf '## [2026-05-03] update | log entry %d\n\n' "$i"
+    i=$((i + 1))
   done
-} > "\$VAULT/log.md"
+} > "$VAULT/log.md"
 
-echo "Seeded \$VAULT"
-REMOTE_SEED
+echo "Seeded $VAULT"
+SEED_EOF
+
+REMOTE_SEED_PATH="/tmp/sw-seed-$(date +%s).sh"
+scp "$SEED_SCRIPT" "$SSH_HOST:$REMOTE_SEED_PATH" >/dev/null
+rm -f "$SEED_SCRIPT"
+
+ssh "$SSH_HOST" "bash $REMOTE_SEED_PATH $VAULT_REMOTE && rm -f $REMOTE_SEED_PATH" 2>&1 | tail -1
 
 if [ $? -eq 0 ]; then
   PASS=$((PASS + 1))
@@ -239,53 +246,53 @@ fi
 printf "\n--- Remote lint suite ---\n"
 
 # lint → 23 (has errors)
-output=$(ssh "$SSH_HOST" "skillwiki lint $VAULT_REMOTE" 2>/dev/null) || true
-ec=$?
-assert_exit 23 "$ec" "remote lint (errors)"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI lint $VAULT_REMOTE" 2>/dev/null) || rc=$?
+assert_exit 23 "$rc" "remote lint (errors)"
 
 # links → 16 (broken wikilinks)
-output=$(ssh "$SSH_HOST" "skillwiki links $VAULT_REMOTE" 2>/dev/null) || true
-ec=$?
-assert_exit 16 "$ec" "remote links (broken)"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI links $VAULT_REMOTE" 2>/dev/null) || rc=$?
+assert_exit 16 "$rc" "remote links (broken)"
 
 # orphans → 0 (orphans is a warning, lint aggregates as warning; command succeeds)
-output=$(ssh "$SSH_HOST" "skillwiki orphans $VAULT_REMOTE" 2>/dev/null) || true
-ec=$?
-assert_exit 0 "$ec" "remote orphans (ok)"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI orphans $VAULT_REMOTE" 2>/dev/null) || rc=$?
+assert_exit 0 "$rc" "remote orphans (ok)"
 
 # tag-audit → 17 (tag not in taxonomy)
-output=$(ssh "$SSH_HOST" "skillwiki tag-audit $VAULT_REMOTE" 2>/dev/null) || true
-ec=$?
-assert_exit 17 "$ec" "remote tag-audit (bad tag)"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI tag-audit $VAULT_REMOTE" 2>/dev/null) || rc=$?
+assert_exit 17 "$rc" "remote tag-audit (bad tag)"
 
 # index-check → 18 (index incomplete)
-output=$(ssh "$SSH_HOST" "skillwiki index-check $VAULT_REMOTE" 2>/dev/null) || true
-ec=$?
-assert_exit 18 "$ec" "remote index-check (incomplete)"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI index-check $VAULT_REMOTE" 2>/dev/null) || rc=$?
+assert_exit 18 "$rc" "remote index-check (incomplete)"
 
 # stale → 19 (stale page)
-output=$(ssh "$SSH_HOST" "skillwiki stale $VAULT_REMOTE" 2>/dev/null) || true
-ec=$?
-assert_exit 19 "$ec" "remote stale (stale page)"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI stale $VAULT_REMOTE" 2>/dev/null) || rc=$?
+assert_exit 19 "$rc" "remote stale (stale page)"
 
 # pagesize → 20 (page too large)
-output=$(ssh "$SSH_HOST" "skillwiki pagesize $VAULT_REMOTE" 2>/dev/null) || true
-ec=$?
-assert_exit 20 "$ec" "remote pagesize (oversized)"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI pagesize $VAULT_REMOTE" 2>/dev/null) || rc=$?
+assert_exit 20 "$rc" "remote pagesize (oversized)"
 
 # log-rotate → 21 (log rotate needed)
-output=$(ssh "$SSH_HOST" "skillwiki log-rotate $VAULT_REMOTE" 2>/dev/null) || true
-ec=$?
-assert_exit 21 "$ec" "remote log-rotate (rotation needed)"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI log-rotate $VAULT_REMOTE" 2>/dev/null) || rc=$?
+assert_exit 21 "$rc" "remote log-rotate (rotation needed)"
 
 # ---------------------------------------------------------------------------
 # 10. path --explain
 # ---------------------------------------------------------------------------
 printf "\n--- Remote path --explain ---\n"
 
-output=$(ssh "$SSH_HOST" "skillwiki path --vault $VAULT_REMOTE --explain" 2>/dev/null) || true
-ec=$?
-assert_exit 0 "$ec" "remote path succeeds"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI path --vault $VAULT_REMOTE --explain" 2>/dev/null) || rc=$?
+assert_exit 0 "$rc" "remote path succeeds"
 assert_json_contains "$output" "data.source" "flag" "remote path source is flag"
 
 # ---------------------------------------------------------------------------
@@ -293,9 +300,9 @@ assert_json_contains "$output" "data.source" "flag" "remote path source is flag"
 # ---------------------------------------------------------------------------
 printf "\n--- Remote lang --explain ---\n"
 
-output=$(ssh "$SSH_HOST" "skillwiki lang --lang chinese-traditional --explain" 2>/dev/null) || true
-ec=$?
-assert_exit 0 "$ec" "remote lang succeeds"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI lang --lang chinese-traditional --explain" 2>/dev/null) || rc=$?
+assert_exit 0 "$rc" "remote lang succeeds"
 assert_json_contains "$output" "data.canonical" "zh-Hant" "remote lang resolves alias"
 
 # ---------------------------------------------------------------------------
@@ -303,9 +310,9 @@ assert_json_contains "$output" "data.canonical" "zh-Hant" "remote lang resolves 
 # ---------------------------------------------------------------------------
 printf "\n--- Remote install ---\n"
 
-output=$(ssh "$SSH_HOST" "skillwiki install --target $INSTALL_TARGET" 2>/dev/null) || true
-ec=$?
-assert_exit 0 "$ec" "remote install succeeds"
+rc=0
+output=$(ssh "$SSH_HOST" "$REMOTE_CLI install --target $INSTALL_TARGET --skills-root $REMOTE_SKILLS" 2>/dev/null) || rc=$?
+assert_exit 0 "$rc" "remote install succeeds"
 
 # Verify manifest was written
 if ssh "$SSH_HOST" "test -f $INSTALL_TARGET/wiki-manifest.json" 2>/dev/null; then
