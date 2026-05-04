@@ -24,4 +24,4 @@ jobs:
       - run: npm run -w skillwiki test
       # setup-node injects NODE_AUTH_TOKEN=${GITHUB_TOKEN} which blocks OIDC.
       # Use npx to get npm 11+ (required for trusted publishing) and clear the token.
-      - run: unset NODE_AUTH_TOKEN && npx -y npm@latest publish -w skillwiki --provenance --access public
+      - run: unset NODE_AUTH_TOKEN && npx -y npm@latest publish -w skillwiki --tag beta --provenance --access public
