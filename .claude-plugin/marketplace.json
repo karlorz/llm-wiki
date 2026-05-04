@@ -30,18 +30,7 @@
         "skills",
         "karpathy"
       ],
-      "skills": [
-        "./wiki-init",
-        "./wiki-ingest",
-        "./wiki-query",
-        "./wiki-lint",
-        "./wiki-crystallize",
-        "./wiki-audit",
-        "./proj-init",
-        "./proj-work",
-        "./proj-distill",
-        "./proj-decide"
-      ]
+      "skills": "./"
     }
   ]
 }
