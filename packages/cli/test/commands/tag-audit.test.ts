@@ -53,12 +53,11 @@ describe("runTagAudit", () => {
     }
   });
 
-  it("missing taxonomy block -> empty taxonomy means no tags allowed", async () => {
+  it("missing taxonomy block -> exit 7 (NO_TAXONOMY_BLOCK)", async () => {
     const dir = v("# Vault Schema\n");
     writeFileSync(join(dir, "concepts", "a.md"), FM(["model"]));
     const r = await runTagAudit({ vault: dir });
-    expect(r.exitCode).toBe(17);
-    if (r.result.ok) expect(r.result.data.taxonomy).toEqual([]);
+    expect(r.exitCode).toBe(7);
   });
 
   it("malformed taxonomy YAML -> exit 7 (INVALID_FRONTMATTER)", async () => {

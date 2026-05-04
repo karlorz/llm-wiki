@@ -2,6 +2,7 @@ import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { buildSlugMap } from "../utils/slug.js";
 
 export interface LinksInput { vault: string }
 export interface LinksOutput {
@@ -12,10 +13,7 @@ export async function runLinks(input: LinksInput): Promise<{ exitCode: number; r
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  const slugs = new Set<string>();
-  for (const p of scan.data.typedKnowledge) {
-    slugs.add(p.relPath.replace(/\.md$/, "").split("/").pop()!);
-  }
+  const slugs = buildSlugMap(scan.data.typedKnowledge);
 
   const broken: LinksOutput["broken"] = [];
   for (const p of scan.data.typedKnowledge) {
@@ -25,7 +23,7 @@ export async function runLinks(input: LinksInput): Promise<{ exitCode: number; r
     const lines = body.split("\n");
     for (const slug of extractBodyWikilinks(body)) {
       const tail = slug.split("/").pop()!;
-      if (!slugs.has(tail)) {
+      if (!slugs.has(tail.toLowerCase())) {
         const line = lines.findIndex(l => l.includes(`[[${slug}`));
         broken.push({ page: p.relPath, slug, line: line >= 0 ? line + 1 : 0 });
       }

@@ -17,7 +17,11 @@ export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode:
   let indexText = "";
   try { indexText = await readFile(join(input.vault, "index.md"), "utf8"); } catch { /* empty */ }
 
-  const indexSlugs = new Set(extractBodyWikilinks(indexText).map(s => s.split("/").pop()!));
+  const indexSlugsLower = new Map<string, string>(); // lowercase -> original
+  for (const s of extractBodyWikilinks(indexText)) {
+    const tail = s.split("/").pop()!;
+    indexSlugsLower.set(tail.toLowerCase(), tail);
+  }
   const fileSlugs = new Map<string, string>(); // slug -> relPath
   for (const p of scan.data.typedKnowledge) {
     const slug = p.relPath.replace(/\.md$/, "").split("/").pop()!;
@@ -26,11 +30,12 @@ export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode:
 
   const missing_from_index: string[] = [];
   for (const [slug, relPath] of fileSlugs.entries()) {
-    if (!indexSlugs.has(slug)) missing_from_index.push(relPath);
+    if (!indexSlugsLower.has(slug.toLowerCase())) missing_from_index.push(relPath);
   }
+  const fileSlugsLower = new Set([...fileSlugs.keys()].map(s => s.toLowerCase()));
   const ghost_entries: string[] = [];
-  for (const slug of indexSlugs) {
-    if (!fileSlugs.has(slug)) ghost_entries.push(slug);
+  for (const [lower, orig] of indexSlugsLower) {
+    if (!fileSlugsLower.has(lower)) ghost_entries.push(orig);
   }
 
   if (missing_from_index.length > 0 || ghost_entries.length > 0) {

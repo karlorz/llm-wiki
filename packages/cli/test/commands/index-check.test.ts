@@ -52,4 +52,26 @@ describe("runIndexCheck", () => {
       expect(r.result.data.ghost_entries).toContain("ghost");
     }
   });
+
+  it("matches index entries case-insensitively", async () => {
+    const dir = v();
+    writeFileSync(join(dir, "entities", "c929.md"), `---
+title: C929
+created: 2026-01-01
+updated: 2026-01-01
+type: entity
+tags: []
+sources: []
+---
+
+# C929
+`);
+    writeFileSync(join(dir, "index.md"), "# Index\n\n- [[C929]] — widebody\n");
+    const r = await runIndexCheck({ vault: dir });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.missing_from_index).toHaveLength(0);
+      expect(r.result.data.ghost_entries).toHaveLength(0);
+    }
+  });
 });
