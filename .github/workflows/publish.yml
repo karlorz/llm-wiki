@@ -23,5 +23,3 @@ jobs:
       - run: npm run -w skillwiki build
       - run: npm run -w skillwiki test
       - run: npm publish -w skillwiki --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ''
