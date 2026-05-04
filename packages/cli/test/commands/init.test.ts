@@ -263,4 +263,71 @@ describe("runInit", () => {
     const idx = readFileSync(join(target, "index.md"), "utf8");
     expect(idx).toContain("Total pages: 0");
   });
+
+  it("--force migrates existing hermes SCHEMA.md (domain preserved, taxonomy merged)", async () => {
+    const h = home();
+    const target = tmp();
+    writeFileSync(join(target, "SCHEMA.md"), `# Wiki Schema
+
+## Domain
+Finance and markets knowledge base — HK/Asia, US, commodities.
+
+## Conventions
+- File names: lowercase, hyphens, no spaces
+- Use [[wikilinks]] for cross-references
+
+## Tag Taxonomy
+- markets, macro, central-bank, earnings, commodity, crypto, forex
+`);
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "", taxonomy: undefined, lang: undefined, force: true, noEnv: true
+    });
+    expect(r.exitCode).toBe(0);
+    const schema = readFileSync(join(target, "SCHEMA.md"), "utf8");
+    expect(schema).toContain("Finance and markets");
+    expect(schema).toContain("## Output Language");
+    expect(schema).toContain("## Layers");
+  });
+
+  it("--force discovers taxonomy from existing page tags", async () => {
+    const h = home();
+    const target = tmp();
+    writeFileSync(join(target, "SCHEMA.md"), `# Vault Schema\n\n## Domain\nTest\n`);
+    mkdirSync(join(target, "concepts"), { recursive: true });
+    mkdirSync(join(target, "entities"), { recursive: true });
+    mkdirSync(join(target, "raw"), { recursive: true });
+    writeFileSync(join(target, "concepts", "oil.md"),
+      `---\ntitle: Oil\ncreated: 2026-01-01\nupdated: 2026-01-01\ntype: concept\ntags: [oil, energy, commodity]\nsources: []\n---\n\n# Oil\n`);
+    writeFileSync(join(target, "entities", "fed.md"),
+      `---\ntitle: Fed\ncreated: 2026-01-01\nupdated: 2026-01-01\ntype: entity\ntags: [central-bank, fed, usd]\nsources: []\n---\n\n# Fed\n`);
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "Test", taxonomy: ["oil", "commodity"], lang: undefined, force: true, noEnv: true
+    });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) expect(r.result.data.discovered_tags).toBeGreaterThan(0);
+    const schema = readFileSync(join(target, "SCHEMA.md"), "utf8");
+    expect(schema).toContain("- energy");
+    expect(schema).toContain("- central-bank");
+    expect(schema).toContain("- fed");
+    expect(schema).toContain("- usd");
+    expect(schema).toContain("Discovered from existing pages");
+    expect(schema).toContain("- oil");
+    expect(schema).toContain("- commodity");
+  });
+
+  it("--domain flag overrides old domain when both provided", async () => {
+    const h = home();
+    const target = tmp();
+    writeFileSync(join(target, "SCHEMA.md"), `# Vault Schema\n\n## Domain\nOld domain text\n`);
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "New domain override", taxonomy: undefined, lang: undefined, force: true, noEnv: true
+    });
+    expect(r.exitCode).toBe(0);
+    const schema = readFileSync(join(target, "SCHEMA.md"), "utf8");
+    expect(schema).toContain("New domain override");
+    expect(schema).not.toContain("Old domain text");
+  });
 });

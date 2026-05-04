@@ -1,9 +1,11 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { resolveInitTimePath } from "../utils/wiki-path.js";
 import { resolveLang } from "../utils/lang.js";
 import { parseDotenvFile, writeDotenv } from "../utils/dotenv.js";
+import { extractTaxonomy } from "../parsers/taxonomy.js";
+import { extractFrontmatter } from "../parsers/frontmatter.js";
 
 const DEFAULT_TAXONOMY = [
   "research", "comparison", "timeline", "summary", "person",
@@ -37,6 +39,36 @@ export interface InitOutput {
   env_written: string;
   env_skipped: boolean;
   imported_from_hermes: boolean;
+  discovered_tags: number;
+}
+
+function extractDomainFromSchema(text: string): string {
+  const m = text.match(/^##\s+Domain\s*\n+([\s\S]*?)(?=\n##\s|\n$)/m);
+  return m ? m[1].trim() : "";
+}
+
+async function discoverTagsFromPages(target: string, knownSlugs: string[]): Promise<string[]> {
+  const knownSet = new Set(knownSlugs);
+  const discovered = new Set<string>();
+  for (const dir of ["entities", "concepts", "comparisons", "queries"]) {
+    let entries: string[];
+    try {
+      entries = (await readdir(join(target, dir), { withFileTypes: true }))
+        .filter(e => e.isFile() && e.name.endsWith(".md"))
+        .map(e => e.name);
+    } catch { continue; }
+    for (const file of entries) {
+      try {
+        const text = await readFile(join(target, dir, file), "utf8");
+        const fm = extractFrontmatter(text);
+        if (!fm.ok || !fm.data.tags || !Array.isArray(fm.data.tags)) continue;
+        for (const t of fm.data.tags) {
+          if (typeof t === "string" && !knownSet.has(t)) discovered.add(t);
+        }
+      } catch { /* skip unreadable files */ }
+    }
+  }
+  return [...discovered].sort();
 }
 
 export async function runInit(input: InitInput): Promise<{ exitCode: number; result: Result<InitOutput> }> {
@@ -86,15 +118,45 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const taxonomy = input.taxonomy && input.taxonomy.length > 0 ? input.taxonomy : DEFAULT_TAXONOMY;
-  const taxonomyYaml = taxonomy.map(t => `  - ${t}`).join("\n");
+  let taxonomy = input.taxonomy && input.taxonomy.length > 0 ? input.taxonomy : DEFAULT_TAXONOMY;
+  let domain = input.domain;
+
+  // SCHEMA.md migration — read old domain and taxonomy from existing SCHEMA.md
+  let oldTaxonomy: string[] = [];
+  if (hasSchema) {
+    try {
+      const oldSchema = await readFile(join(target, "SCHEMA.md"), "utf8");
+      if (!domain) {
+        const oldDomain = extractDomainFromSchema(oldSchema);
+        if (oldDomain) domain = oldDomain;
+      }
+      const oldTax = extractTaxonomy(oldSchema);
+      if (oldTax.ok) oldTaxonomy = oldTax.data;
+    } catch { /* ignore read errors */ }
+  }
+
+  // Merge old taxonomy into new
+  const taxonomySet = new Set(taxonomy);
+  for (const t of oldTaxonomy) {
+    if (!taxonomySet.has(t)) { taxonomy.push(t); taxonomySet.add(t); }
+  }
+
+  // Taxonomy auto-discovery from existing pages
+  const discovered = await discoverTagsFromPages(target, taxonomy);
+  const discovered_tags = discovered.length;
+
+  const fullTaxonomyYaml = discovered.length > 0
+    ? taxonomy.map(t => `  - ${t}`).join("\n")
+      + "\n  # --- Discovered from existing pages ---\n"
+      + discovered.map(t => `  - ${t}`).join("\n")
+    : taxonomy.map(t => `  - ${t}`).join("\n");
 
   try {
     const schemaTpl = await readFile(join(input.templates, "SCHEMA.md"), "utf8");
     const schema = schemaTpl
-      .replace("{{DOMAIN}}", input.domain)
+      .replace("{{DOMAIN}}", domain)
       .replace("{{WIKI_LANG}}", canonicalLang)
-      .replace("{{TAXONOMY_YAML}}", taxonomyYaml);
+      .replace("{{TAXONOMY_YAML}}", fullTaxonomyYaml);
     await writeFile(join(target, "SCHEMA.md"), schema, "utf8");
     created.push("SCHEMA.md");
   } catch (e) {
@@ -163,14 +225,15 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
     exitCode: ExitCode.OK,
     result: ok({
       vault: target,
-      domain: input.domain,
+      domain,
       taxonomy,
       lang: canonicalLang,
       created,
       preserved,
       env_written: envWritten,
       env_skipped: skipEnv,
-      imported_from_hermes: importedFromHermes
+      imported_from_hermes: importedFromHermes,
+      discovered_tags
     })
   };
 }
