@@ -45,6 +45,7 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 
 ## Plugin release workflow
 
+- **Local dev marketplace:** `claude plugin marketplace add /path/to/llm-wiki` (pass the repo root, not `.claude-plugin/` — the CLI appends `.claude-plugin/` automatically). Then `claude plugin install skillwiki@llm-wiki`.
 - **Pushing to `dev` = releasing the plugin.** There is no version pinning or channel tag (`@beta`) for Claude Code plugins. Every push to the default branch (`dev`) is what users get on `plugin install`.
 - **Version gate:** `/plugin update` only detects changes when the `version` field in `plugin.json` is bumped. New commits without a version bump are ignored.
 - **npm is a separate channel:** `npm publish --tag beta` gives CLI users a beta track independent of the plugin channel.
