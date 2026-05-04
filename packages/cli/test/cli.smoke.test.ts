@@ -1,5 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const BIN = join(__dirname, "..", "dist", "cli.js");
@@ -12,6 +14,20 @@ function run(args: string[]): { stdout: string; status: number } {
     return { stdout: e.stdout?.toString() ?? "", status: e.status ?? 1 };
   }
 }
+
+const TMP_VAULT = mkdtempSync(join(tmpdir(), "smoke-vault-"));
+afterAll(() => {
+  // tmp dirs cleaned by OS; no explicit teardown needed
+});
+
+function setupTmpVault() {
+  writeFileSync(join(TMP_VAULT, "SCHEMA.md"), "# Vault Schema\n");
+  mkdirSync(join(TMP_VAULT, "raw"), { recursive: true });
+  mkdirSync(join(TMP_VAULT, "concepts"), { recursive: true });
+  writeFileSync(join(TMP_VAULT, "index.md"), "# Index\n");
+  writeFileSync(join(TMP_VAULT, "log.md"), "# Vault Log\n");
+}
+setupTmpVault();
 
 describe("cli smoke", () => {
   it("fetch-guard rejects http with exit 4", () => {
@@ -62,5 +78,28 @@ describe("cli smoke", () => {
   it("unknown subcommand exits non-zero", () => {
     const r = run(["bogus"]);
     expect(r.status).not.toBe(0);
+  });
+
+  it("--human produces non-JSON output for lint", () => {
+    const json = run(["lint", TMP_VAULT]);
+    const human = run(["lint", TMP_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.length).toBeGreaterThan(0);
+  });
+
+  it("--human produces non-JSON output for graph", () => {
+    const json = run(["graph", "build", TMP_VAULT]);
+    const human = run(["graph", "build", TMP_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+  });
+
+  it("--human produces non-JSON output for dedup", () => {
+    const json = run(["dedup", TMP_VAULT]);
+    const human = run(["dedup", TMP_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.toLowerCase()).toContain("duplicate");
   });
 });
