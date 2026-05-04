@@ -43,8 +43,10 @@ export interface InitOutput {
 }
 
 function extractDomainFromSchema(text: string): string {
-  const m = text.match(/^##\s+Domain\s*\n+([\s\S]*?)(?=\n##\s|\n$)/m);
-  return m ? m[1].trim() : "";
+  const m = text.match(/^##\s+Domain\s*\n([\s\S]*?)(?=\n\n|\n##|\s*$)/m);
+  if (!m) return "";
+  const d = m[1].trim();
+  return d.startsWith("##") ? "" : d;
 }
 
 async function discoverTagsFromPages(target: string, knownSlugs: string[]): Promise<string[]> {
@@ -198,7 +200,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       const logTpl = await readFile(join(input.templates, "log.md"), "utf8");
       const log = logTpl
         .replace(/\{\{INIT_DATE\}\}/g, today)
-        .replace("{{DOMAIN}}", input.domain)
+        .replace("{{DOMAIN}}", domain)
         .replace("{{WIKI_LANG}}", canonicalLang);
       await writeFile(join(target, "log.md"), log, "utf8");
       created.push("log.md");
@@ -207,7 +209,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
     }
   }
 
-  const isTempPath = target.startsWith("/tmp/") || target === "/tmp" || target.startsWith("/var/tmp/") || target === "/var/tmp";
+  const isTempPath = target.startsWith("/tmp/") || target === "/tmp" || target.startsWith("/var/tmp/") || target === "/var/tmp" || target.startsWith("/private/tmp/");
   const skipEnv = !!input.noEnv || isTempPath;
   let envWritten = "";
   if (!skipEnv) {

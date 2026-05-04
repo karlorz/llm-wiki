@@ -284,6 +284,7 @@ Finance and markets knowledge base — HK/Asia, US, commodities.
       domain: "", taxonomy: undefined, lang: undefined, force: true, noEnv: true
     });
     expect(r.exitCode).toBe(0);
+    if (r.result.ok) expect(r.result.data.domain).toBe("Finance and markets knowledge base — HK/Asia, US, commodities.");
     const schema = readFileSync(join(target, "SCHEMA.md"), "utf8");
     expect(schema).toContain("Finance and markets");
     expect(schema).toContain("## Output Language");
@@ -326,6 +327,7 @@ Finance and markets knowledge base — HK/Asia, US, commodities.
       domain: "New domain override", taxonomy: undefined, lang: undefined, force: true, noEnv: true
     });
     expect(r.exitCode).toBe(0);
+    if (r.result.ok) expect(r.result.data.domain).toBe("New domain override");
     const schema = readFileSync(join(target, "SCHEMA.md"), "utf8");
     expect(schema).toContain("New domain override");
     expect(schema).not.toContain("Old domain text");
