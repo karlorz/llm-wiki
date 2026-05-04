@@ -6,6 +6,7 @@ import { runStale } from "./stale.js";
 import { runPagesize } from "./pagesize.js";
 import { runLogRotate } from "./log-rotate.js";
 import { runOrphans } from "./orphans.js";
+import { runTopicMapCheck } from "./topic-map-check.js";
 
 export interface LintInput {
   vault: string;
@@ -24,7 +25,7 @@ export interface LintOutput {
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_drift", "tag_not_in_taxonomy"] as const;
 const WARNING_ORDER = ["index_incomplete", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans"] as const;
-const INFO_ORDER = ["bridges", "low_confidence_single_source"] as const;
+const INFO_ORDER = ["bridges", "low_confidence_single_source", "topic_map_recommended"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
   const buckets: Record<string, unknown[]> = {};
@@ -64,6 +65,11 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   if (orphans.result.ok) {
     if (orphans.result.data.orphans.length > 0) buckets.orphans = orphans.result.data.orphans;
     if (orphans.result.data.bridges.length > 0) buckets.bridges = orphans.result.data.bridges;
+  }
+
+  const topicMap = await runTopicMapCheck({ vault: input.vault });
+  if (topicMap.result.ok && topicMap.result.data.recommended) {
+    buckets.topic_map_recommended = [{ page_count: topicMap.result.data.page_count, threshold: topicMap.result.data.threshold }];
   }
 
   const errorOut: Bucket[] = ERROR_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);

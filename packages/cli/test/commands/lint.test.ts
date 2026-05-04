@@ -80,4 +80,15 @@ describe("runLint", () => {
       expect(r.result.data.vault.source).toBe("resolved");
     }
   });
+
+  it("does not produce topic_map_recommended for small vaults", async () => {
+    const v = vault();
+    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "Body [[alpha]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).not.toContain("topic_map_recommended");
+    }
+  });
 });
