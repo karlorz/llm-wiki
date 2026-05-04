@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { resolveInitTimePath } from "../utils/wiki-path.js";
 import { resolveLang } from "../utils/lang.js";
-import { parseDotenvFile, parseDotenvText, writeDotenv } from "../utils/dotenv.js";
+import { parseDotenvText, writeDotenv } from "../utils/dotenv.js";
 import { extractTaxonomy } from "../parsers/taxonomy.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 

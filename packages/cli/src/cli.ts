@@ -123,7 +123,7 @@ program
       taxonomy,
       lang: opts.lang,
       force: !!opts.force,
-      noEnv: !!opts.noEnv
+      noEnv: opts.env === false
     }));
   });
 
