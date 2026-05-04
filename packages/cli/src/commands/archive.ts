@@ -1,0 +1,45 @@
+import { rename, mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, dirname } from "node:path";
+import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
+import { scanVault } from "../utils/vault.js";
+
+export interface ArchiveInput { vault: string; page: string }
+export interface ArchiveOutput {
+  archived_from: string;
+  archived_to: string;
+  index_updated: boolean;
+}
+
+export async function runArchive(input: ArchiveInput): Promise<{ exitCode: number; result: Result<ArchiveOutput> }> {
+  const scan = await scanVault(input.vault);
+  if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
+
+  let relPath: string | undefined;
+  if (input.page.includes("/")) {
+    relPath = scan.data.typedKnowledge.find(p => p.relPath === input.page)?.relPath;
+  } else {
+    relPath = scan.data.typedKnowledge.find(p => p.relPath.replace(/\.md$/, "").split("/").pop() === input.page)?.relPath;
+  }
+  if (!relPath) return { exitCode: ExitCode.ARCHIVE_TARGET_NOT_FOUND, result: err("ARCHIVE_TARGET_NOT_FOUND", { page: input.page }) };
+
+  if (relPath.startsWith("_archive/")) return { exitCode: ExitCode.ARCHIVE_ALREADY_ARCHIVED, result: err("ARCHIVE_ALREADY_ARCHIVED", { page: relPath }) };
+
+  const archivePath = join("_archive", relPath);
+  await mkdir(dirname(join(input.vault, archivePath)), { recursive: true });
+
+  let indexUpdated = false;
+  const indexPath = join(input.vault, "index.md");
+  try {
+    const idx = await readFile(indexPath, "utf8");
+    const slug = relPath.replace(/\.md$/, "").split("/").pop()!;
+    const lines = idx.split("\n").filter(l => !l.includes(`[[${slug}]]`));
+    if (lines.length !== idx.split("\n").length) {
+      await writeFile(indexPath, lines.join("\n"), "utf8");
+      indexUpdated = true;
+    }
+  } catch { /* index.md may not exist */ }
+
+  await rename(join(input.vault, relPath), join(input.vault, archivePath));
+
+  return { exitCode: ExitCode.OK, result: ok({ archived_from: relPath, archived_to: archivePath, index_updated: indexUpdated }) };
+}

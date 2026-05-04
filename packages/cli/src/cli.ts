@@ -22,6 +22,7 @@ import { runLogRotate } from "./commands/log-rotate.js";
 import { runLint } from "./commands/lint.js";
 import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "./commands/config.js";
 import { runDoctor } from "./commands/doctor.js";
+import { runArchive } from "./commands/archive.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -233,6 +234,16 @@ program
     envValue: process.env.WIKI_PATH,
     argv: process.argv
   })));
+
+// archive
+program
+  .command("archive <page> [vault]")
+  .description("archive a typed-knowledge page")
+  .action(async (page, vault) => {
+    const v = await resolveVaultArg(vault);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runArchive({ vault: v.vault, page }));
+  });
 
 program.parseAsync(process.argv).catch((e) => {
   process.stdout.write(JSON.stringify({ ok: false, error: "INTERNAL", detail: { message: String(e) } }) + "\n");
