@@ -33,8 +33,8 @@ Skills are prompt-only Markdown. Deterministic helpers (frontmatter validation, 
 ### In v1
 - Vault top-level structure (folders + extended SCHEMA/index/log)
 - 4 frontmatter schemas (typed knowledge, raw, work items, project compound)
-- 10 skill `SKILL.md` files (6 `wiki-*`, 4 `proj-*`)
-- `skillwiki` npm package (TypeScript CLI with 8 subcommands: `hash`, `fetch-guard`, `validate`, `graph build`, `overlap`, `orphans`, `audit`, `install`)
+- 14 skill `SKILL.md` files (9 `wiki-*`, 4 `proj-*`, 1 `using-skillwiki`)
+- `skillwiki` npm package (TypeScript CLI — originally 8 subcommands, grew to 24+ through lint buckets, config/doctor, archive, drift, and compatibility work. Core 8: `hash`, `fetch-guard`, `validate`, `graph build`, `overlap`, `orphans`, `audit`, `install`)
 - Cross-platform installation via `skillwiki install` (replaces previous bash `install.sh`)
 - Skill behavior enhancements E2–E5 baked into prompts (no schema impact)
 - Vitest test suite for the CLI package
