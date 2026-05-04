@@ -32,12 +32,15 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
   try {
     const idx = await readFile(indexPath, "utf8");
     const slug = relPath.replace(/\.md$/, "").split("/").pop()!;
-    const lines = idx.split("\n").filter(l => !l.includes(`[[${slug}]]`));
-    if (lines.length !== idx.split("\n").length) {
-      await writeFile(indexPath, lines.join("\n"), "utf8");
+    const originalLines = idx.split("\n");
+    const filtered = originalLines.filter(l => !l.includes(`[[${slug}]]`));
+    if (filtered.length !== originalLines.length) {
+      await writeFile(indexPath, filtered.join("\n"), "utf8");
       indexUpdated = true;
     }
-  } catch { /* index.md may not exist */ }
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") throw e;
+  }
 
   await rename(join(input.vault, relPath), join(input.vault, archivePath));
 
