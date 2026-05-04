@@ -60,6 +60,7 @@ Add a `SessionStart` hook that injects `using-skillwiki/SKILL.md` content into e
 
 1. `packages/skills/hooks/hooks.json` — registers the SessionStart hook
 2. `packages/skills/hooks/session-start` — bash script that reads the SKILL.md and emits JSON
+3. `packages/skills/hooks/run-hook.cmd` — cross-platform polyglot wrapper (Windows + Unix)
 
 **hooks.json:**
 ```json
@@ -71,7 +72,7 @@ Add a `SessionStart` hook that injects `using-skillwiki/SKILL.md` content into e
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/session-start\"",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" session-start",
             "async": false
           }
         ]
@@ -81,16 +82,18 @@ Add a `SessionStart` hook that injects `using-skillwiki/SKILL.md` content into e
 }
 ```
 
+**run-hook.cmd** — Cross-platform polyglot wrapper adapted from superpowers v5.0.7:
+- On Windows (cmd.exe): batch portion finds Git Bash and delegates to the named script
+- On Unix: shell portion (`:` no-op + `exec bash`) runs the named script directly
+- Hook scripts use extensionless filenames (`session-start`, not `session-start.sh`) so Claude Code's Windows auto-detection (which prepends `bash` to `.sh` commands) doesn't interfere
+- Graceful fallback: if no bash found on Windows, exits silently (plugin still works, just without SessionStart context injection)
+
 **session-start script:**
 - Determine plugin root via `$CLAUDE_PLUGIN_ROOT` (set by Claude Code at runtime)
 - Read `skills/using-skillwiki/SKILL.md` from plugin root
 - JSON-escape the content using bash parameter substitution (no jq dependency)
 - Emit Claude Code format: `{ "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": "..." } }`
 - Exit 0
-
-The script is ~40 lines of bash. No Windows cross-platform polyglot wrapper needed (skillwiki targets macOS/Linux only).
-
-**No `run-hook.cmd` wrapper** — superpowers uses this for Windows support. skillwiki doesn't need it, keeping the hook simpler.
 
 **Must also update:**
 - `packages/skills/package.json` — add `"hooks"` to the `files` array so hooks are included in the plugin package
@@ -112,6 +115,7 @@ The script is ~40 lines of bash. No Windows cross-platform polyglot wrapper need
 | `packages/skills/using-skillwiki/SKILL.md` | New — onboarding skill content |
 | `packages/skills/hooks/hooks.json` | New — SessionStart hook registration |
 | `packages/skills/hooks/session-start` | New — bash hook script |
+| `packages/skills/hooks/run-hook.cmd` | New — cross-platform polyglot wrapper (Windows + Unix) |
 | `packages/skills/package.json` | Add `hooks` to `files` array |
 | `CLAUDE.md` | Update "10" → "11" skills count |
 
