@@ -16,9 +16,12 @@ function home(): string {
 function tmp(): string { return mkdtempSync(join(tmpdir(), "init-")); }
 
 /** Create a vault target outside /tmp/ so isTempPath does not skip env writes.
- *  CI runners use /tmp/ for tmpdir(); macOS uses /var/…, which already works. */
+ *  CI runners use /tmp/ for tmpdir(); placing the vault under HOME
+ *  (e.g. /home/runner on Linux, /Users/runner on macOS) avoids the
+ *  /tmp/ prefix check while staying in a world-writable location. */
 function vault(): string {
-  const base = join(tmpdir(), "skillwiki-tests");
+  const home = process.env.HOME || "/root";
+  const base = join(home, "skillwiki-tests");
   mkdirSync(base, { recursive: true });
   return mkdtempSync(join(base, "vault-"));
 }
