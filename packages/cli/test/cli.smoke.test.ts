@@ -34,6 +34,31 @@ describe("cli smoke", () => {
     expect(r.stdout).toContain("SCHEME_REJECTED");
   });
 
+  it("--human produces non-JSON output for path", () => {
+    const json = run(["path"]);
+    const human = run(["path", "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(human.stdout).not.toBe(json.stdout);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.length).toBeGreaterThan(0);
+  });
+
+  it("--human produces non-JSON output for lang", () => {
+    const json = run(["lang"]);
+    const human = run(["lang", "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(human.stdout).not.toBe(json.stdout);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+  });
+
+  it("--human produces non-JSON output for doctor", () => {
+    const json = run(["doctor"]);
+    const human = run(["doctor", "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.length).toBeGreaterThan(0);
+  });
+
   it("unknown subcommand exits non-zero", () => {
     const r = run(["bogus"]);
     expect(r.status).not.toBe(0);
