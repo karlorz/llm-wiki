@@ -35,35 +35,18 @@ fi
 
 echo "Bumping version to ${VERSION}..."
 
-# 1. packages/cli/package.json
-CLI_PKG="${REPO_ROOT}/packages/cli/package.json"
-sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "$CLI_PKG" && rm -f "${CLI_PKG}.bak"
-echo "  ✓ packages/cli/package.json"
+bump_file() {
+  local label="$1" file="$2" global="${3:-}"
+  sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/${global}" "$file" && rm -f "${file}.bak"
+  echo "  ✓ ${label}"
+}
 
-# 2. packages/skills/.claude-plugin/plugin.json
-PLUGIN_JSON="${REPO_ROOT}/packages/skills/.claude-plugin/plugin.json"
-sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "$PLUGIN_JSON" && rm -f "${PLUGIN_JSON}.bak"
-echo "  ✓ packages/skills/.claude-plugin/plugin.json"
-
-# 3. packages/skills/package.json
-SKILLS_PKG="${REPO_ROOT}/packages/skills/package.json"
-sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "$SKILLS_PKG" && rm -f "${SKILLS_PKG}.bak"
-echo "  ✓ packages/skills/package.json"
-
-# 4. .claude-plugin/marketplace.json (two version fields)
-MARKETPLACE="${REPO_ROOT}/.claude-plugin/marketplace.json"
-sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/g" "$MARKETPLACE" && rm -f "${MARKETPLACE}.bak"
-echo "  ✓ .claude-plugin/marketplace.json (2 fields)"
-
-# 5. packages/shared/package.json
-SHARED_PKG="${REPO_ROOT}/packages/shared/package.json"
-sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "$SHARED_PKG" && rm -f "${SHARED_PKG}.bak"
-echo "  ✓ packages/shared/package.json"
-
-# 6. package.json (root)
-ROOT_PKG="${REPO_ROOT}/package.json"
-sed -i.bak "s/\"version\": \"[^\"]*\"/\"version\": \"${VERSION}\"/" "$ROOT_PKG" && rm -f "${ROOT_PKG}.bak"
-echo "  ✓ package.json (root)"
+bump_file "packages/cli/package.json"              "${REPO_ROOT}/packages/cli/package.json"
+bump_file "packages/skills/.claude-plugin/plugin.json" "${REPO_ROOT}/packages/skills/.claude-plugin/plugin.json"
+bump_file "packages/skills/package.json"           "${REPO_ROOT}/packages/skills/package.json"
+bump_file ".claude-plugin/marketplace.json (×2)"   "${REPO_ROOT}/.claude-plugin/marketplace.json" "g"
+bump_file "packages/shared/package.json"           "${REPO_ROOT}/packages/shared/package.json"
+bump_file "package.json (root)"                    "${REPO_ROOT}/package.json"
 
 echo ""
 echo "Verifying all files..."

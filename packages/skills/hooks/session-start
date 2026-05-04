@@ -4,11 +4,9 @@
 
 set -euo pipefail
 
-# Determine plugin root directory
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-# Read using-skillwiki content
-skill_content=$(cat "${PLUGIN_ROOT}/using-skillwiki/SKILL.md" 2>&1 || echo "Error reading using-skillwiki skill")
+skill_content=$(cat "${PLUGIN_ROOT}/using-skillwiki/SKILL.md" 2>/dev/null || echo "Error reading using-skillwiki skill")
 
 # Escape string for JSON embedding using bash parameter substitution.
 # Each ${s//old/new} is a single C-level pass.
@@ -25,7 +23,6 @@ escape_for_json() {
 skill_escaped=$(escape_for_json "$skill_content")
 session_context="<EXTREMELY_IMPORTANT>\nYou have skillwiki.\n\n**Below is the full content of your 'skillwiki:using-skillwiki' skill - your introduction to the skillwiki skills. For all other skills, use the 'Skill' tool:**\n\n${skill_escaped}\n</EXTREMELY_IMPORTANT>"
 
-# Output context injection as JSON for Claude Code.
 # Uses printf instead of heredoc to work around bash 5.3+ heredoc hang.
 printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "$session_context"
 
