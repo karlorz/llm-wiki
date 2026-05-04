@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This repo ships the `skillwiki` CLI and 10 prompt-only SKILL.md files.
+This repo ships the `skillwiki` CLI and 11 prompt-only SKILL.md files.
 
 ## Working in this repo
 
@@ -24,13 +24,13 @@ This repo ships the `skillwiki` CLI and 10 prompt-only SKILL.md files.
 - SKILL.md files: `packages/skills/<skill-name>/SKILL.md`.
 - Templates: `packages/cli/templates/`.
 - Claude plugin manifest: `packages/skills/.claude-plugin/plugin.json`.
-- Claude marketplace manifest: `.claude-plugin/marketplace.json` (repo root). The marketplace points the plugin source at `./packages/skills` and enumerates the 10 skill paths explicitly so the existing flat layout works without a `skills/` subdirectory.
+- Claude marketplace manifest: `.claude-plugin/marketplace.json` (repo root). Skill discovery is driven by `plugin.json`'s `"skills": "./"` field; `marketplace.json` points the plugin source at `./packages/skills`.
 
 ## Distribution channels
 
 The skills ship through two independent channels — keep both working:
 
-1. **Claude Code plugin** — `/plugin marketplace add karlorz/llm-wiki` then `/plugin install skillwiki@llm-wiki`. Discovery is driven by `.claude-plugin/marketplace.json` + `packages/skills/.claude-plugin/plugin.json`.
+1. **Claude Code plugin** — `/plugin marketplace add karlorz/llm-wiki` then `/plugin install skillwiki@llm-wiki`. Discovery is driven by `packages/skills/.claude-plugin/plugin.json` with a SessionStart hook that auto-injects the `using-skillwiki` onboarding skill.
 2. **npm CLI installer** — `npx skillwiki install` copies SKILL.md files into `~/.claude/skills/` via the `install` subcommand (see `packages/cli/src/commands/install.ts`).
 
-Changing the layout under `packages/skills/<skill>/` requires updating BOTH `.claude-plugin/marketplace.json#plugins[0].skills` AND the `install` subcommand's directory scan.
+Changing the layout under `packages/skills/<skill>/` requires updating BOTH `packages/skills/.claude-plugin/plugin.json` AND the `install` subcommand's directory scan.
