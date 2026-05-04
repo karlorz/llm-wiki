@@ -229,7 +229,6 @@ program
   .action(async () => emit(await runDoctor({
     home: process.env.HOME ?? "",
     envValue: process.env.WIKI_PATH,
-    envLang: process.env.WIKI_LANG,
     argv: process.argv
   })));
 

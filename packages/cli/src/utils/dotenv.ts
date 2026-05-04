@@ -1,14 +1,13 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
-const WHITELIST = new Set(["WIKI_PATH", "WIKI_LANG"]);
+export const CONFIG_KEYS = ["WIKI_PATH", "WIKI_LANG"] as const;
+export type ConfigKey = typeof CONFIG_KEYS[number];
+const _whitelist = new Set<string>(CONFIG_KEYS);
 
-export type DotenvMap = Partial<Record<"WIKI_PATH" | "WIKI_LANG", string>>;
+export type DotenvMap = Partial<Record<ConfigKey, string>>;
 
-export async function parseDotenvFile(path: string): Promise<DotenvMap> {
-  let text: string;
-  try { text = await readFile(path, "utf8"); }
-  catch { return {}; }
+export function parseDotenvText(text: string): DotenvMap {
   const out: DotenvMap = {};
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -17,11 +16,18 @@ export async function parseDotenvFile(path: string): Promise<DotenvMap> {
     if (eq <= 0) continue;
     const key = line.slice(0, eq).trim();
     const value = line.slice(eq + 1).trim();
-    if (!WHITELIST.has(key)) continue;
+    if (!_whitelist.has(key)) continue;
     if (value.length === 0) continue;
     (out as Record<string, string>)[key] = value;
   }
   return out;
+}
+
+export async function parseDotenvFile(path: string): Promise<DotenvMap> {
+  let text: string;
+  try { text = await readFile(path, "utf8"); }
+  catch { return {}; }
+  return parseDotenvText(text);
 }
 
 export async function writeDotenv(

@@ -16,6 +16,7 @@ describe("runConfigGet", () => {
     writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/my/vault\n");
     const r = await runConfigGet({ key: "WIKI_PATH", home: h });
     expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       expect(r.result.data.key).toBe("WIKI_PATH");
       expect(r.result.data.value).toBe("/my/vault");
@@ -26,6 +27,7 @@ describe("runConfigGet", () => {
     const h = home();
     const r = await runConfigGet({ key: "WIKI_LANG", home: h });
     expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       expect(r.result.data.key).toBe("WIKI_LANG");
       expect(r.result.data.value).toBe("");
@@ -47,6 +49,7 @@ describe("runConfigSet", () => {
     writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/old\n");
     const r = await runConfigSet({ key: "WIKI_PATH", value: "/new", home: h });
     expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       expect(r.result.data.key).toBe("WIKI_PATH");
       expect(r.result.data.value).toBe("/new");
@@ -59,7 +62,6 @@ describe("runConfigSet", () => {
 
   it("creates .skillwiki/.env when it does not exist", async () => {
     const h = mkdtempSync(join(tmpdir(), "home-"));
-    // Do NOT create .skillwiki dir — writeDotenv must handle this
     const r = await runConfigSet({ key: "WIKI_PATH", value: "/fresh", home: h });
     expect(r.exitCode).toBe(0);
     expect(existsSync(join(h, ".skillwiki", ".env"))).toBe(true);
@@ -79,6 +81,7 @@ describe("runConfigList", () => {
     writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/v\nWIKI_LANG=ja\n");
     const r = await runConfigList({ home: h });
     expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       expect(r.result.data.entries).toEqual([
         { key: "WIKI_PATH", value: "/v" },
@@ -91,6 +94,7 @@ describe("runConfigList", () => {
     const h = home();
     const r = await runConfigList({ home: h });
     expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       expect(r.result.data.entries).toEqual([]);
     }
@@ -103,6 +107,7 @@ describe("runConfigPath", () => {
     writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/v\n");
     const r = await runConfigPath({ home: h });
     expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       expect(r.result.data.path).toBe(join(h, ".skillwiki", ".env"));
       expect(r.result.data.exists).toBe(true);
@@ -113,6 +118,7 @@ describe("runConfigPath", () => {
     const h = home();
     const r = await runConfigPath({ home: h });
     expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       expect(r.result.data.path).toBe(join(h, ".skillwiki", ".env"));
       expect(r.result.data.exists).toBe(false);

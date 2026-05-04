@@ -26,8 +26,9 @@ describe("runDoctor", () => {
     const h = home();
     const v = fullVault();
     writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
-    const r = await runDoctor({ home: h, envValue: undefined, envLang: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
     expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       expect(r.result.data.summary.error).toBe(0);
       expect(r.result.data.summary.warn).toBe(0);
@@ -36,7 +37,8 @@ describe("runDoctor", () => {
 
   it("missing config file gives warn for config_file check", async () => {
     const h = home();
-    const r = await runDoctor({ home: h, envValue: undefined, envLang: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const cfg = r.result.data.checks.find(c => c.id === "config_file");
       expect(cfg?.status).toBe("warn");
@@ -46,7 +48,8 @@ describe("runDoctor", () => {
   it("missing WIKI_PATH gives error for wiki_path_set check", async () => {
     const h = home();
     writeFileSync(join(h, ".skillwiki", ".env"), "# empty\n");
-    const r = await runDoctor({ home: h, envValue: undefined, envLang: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const wp = r.result.data.checks.find(c => c.id === "wiki_path_set");
       expect(wp?.status).toBe("error");
@@ -57,7 +60,8 @@ describe("runDoctor", () => {
   it("WIKI_PATH pointing to non-existent dir gives error for wiki_path_exists", async () => {
     const h = home();
     writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/no/such/dir\n");
-    const r = await runDoctor({ home: h, envValue: undefined, envLang: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const wpe = r.result.data.checks.find(c => c.id === "wiki_path_exists");
       expect(wpe?.status).toBe("error");
@@ -69,7 +73,8 @@ describe("runDoctor", () => {
     const v = mkdtempSync(join(tmpdir(), "vault-"));
     writeFileSync(join(v, "SCHEMA.md"), "# Schema\n");
     writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
-    const r = await runDoctor({ home: h, envValue: undefined, envLang: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const vs = r.result.data.checks.find(c => c.id === "vault_structure");
       expect(vs?.status).toBe("error");
@@ -80,7 +85,8 @@ describe("runDoctor", () => {
     const h = home();
     const v = fullVault();
     writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
-    const r = await runDoctor({ home: h, envValue: undefined, envLang: undefined, argv: ["node", "/path/to/cli.js", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "/path/to/cli.js", "doctor"] });
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const cli = r.result.data.checks.find(c => c.id === "cli_on_path");
       expect(cli?.status).toBe("warn");
@@ -93,7 +99,8 @@ describe("runDoctor", () => {
   it("envValue override is used for wiki_path_set resolution", async () => {
     const h = home();
     const v = fullVault();
-    const r = await runDoctor({ home: h, envValue: v, envLang: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"] });
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const wp = r.result.data.checks.find(c => c.id === "wiki_path_set");
       expect(wp?.status).toBe("pass");
@@ -102,7 +109,8 @@ describe("runDoctor", () => {
 
   it("always returns exactly 7 checks", async () => {
     const h = home();
-    const r = await runDoctor({ home: h, envValue: undefined, envLang: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
+    expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       expect(r.result.data.checks).toHaveLength(7);
     }
