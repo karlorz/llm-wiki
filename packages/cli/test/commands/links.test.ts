@@ -56,4 +56,16 @@ describe("runLinks", () => {
     const r = await runLinks({ vault: v });
     expect(r.exitCode).toBe(9);
   });
+
+  it("matches wikilinks case-insensitively", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "links-ci-"));
+    mkdirSync(join(dir, "entities"), { recursive: true });
+    mkdirSync(join(dir, "concepts"), { recursive: true });
+    writeFileSync(join(dir, "SCHEMA.md"), "# Vault Schema\n## Tag Taxonomy\n```yaml\ntaxonomy: []\n```\n");
+    writeFileSync(join(dir, "entities", "c929.md"), `---\ntitle: C929\ncreated: 2026-01-01\nupdated: 2026-01-01\ntype: entity\ntags: []\nsources: []\n---\n\n# C929\n`);
+    writeFileSync(join(dir, "concepts", "aviation.md"), `---\ntitle: Aviation\ncreated: 2026-01-01\nupdated: 2026-01-01\ntype: concept\ntags: []\nsources: []\n---\n\nSee [[C929]] for details.\n`);
+    const r = await runLinks({ vault: dir });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) expect(r.result.data.broken).toHaveLength(0);
+  });
 });
