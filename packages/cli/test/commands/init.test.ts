@@ -227,4 +227,40 @@ describe("runInit", () => {
       expect(r.result.data.env_skipped).toBe(true);
     }
   });
+
+  it("--force preserves existing index.md when it has >10 lines", async () => {
+    const h = home();
+    const target = tmp();
+    const bigIndex = Array.from({ length: 25 }, (_, i) => `- [[page-${i}]] — page ${i}`).join("\n");
+    writeFileSync(join(target, "SCHEMA.md"), "# Old\n");
+    writeFileSync(join(target, "index.md"), "# Index\n\n" + bigIndex + "\n");
+    writeFileSync(join(target, "log.md"), "# Log\n" + "## [2026-01-01] test\n".repeat(15));
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: undefined, force: true, noEnv: true
+    });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) expect(r.result.data.preserved).toContain("index.md");
+    if (r.result.ok) expect(r.result.data.preserved).toContain("log.md");
+    const idx = readFileSync(join(target, "index.md"), "utf8");
+    expect(idx).toContain("page-0");
+    expect(idx).not.toContain("Total pages: 0");
+  });
+
+  it("--force overwrites empty index.md and log.md", async () => {
+    const h = home();
+    const target = tmp();
+    writeFileSync(join(target, "SCHEMA.md"), "# Old\n");
+    writeFileSync(join(target, "index.md"), "");
+    writeFileSync(join(target, "log.md"), "");
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: undefined, force: true, noEnv: true
+    });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) expect(r.result.data.preserved).not.toContain("index.md");
+    if (r.result.ok) expect(r.result.data.preserved).not.toContain("log.md");
+    const idx = readFileSync(join(target, "index.md"), "utf8");
+    expect(idx).toContain("Total pages: 0");
+  });
 });

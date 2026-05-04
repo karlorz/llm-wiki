@@ -33,6 +33,7 @@ export interface InitOutput {
   taxonomy: string[];
   lang: string;
   created: string[];
+  preserved: string[];
   env_written: string;
   env_skipped: boolean;
   imported_from_hermes: boolean;
@@ -100,25 +101,48 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
     return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: "SCHEMA.md", message: String(e) }) };
   }
 
+  const preserved: string[] = [];
+  const CONTENT_THRESHOLD = 10;
+
+  let skipIndex = false;
   try {
-    const idxTpl = await readFile(join(input.templates, "index.md"), "utf8");
-    const idx = idxTpl.replace("{{INIT_DATE}}", today);
-    await writeFile(join(target, "index.md"), idx, "utf8");
-    created.push("index.md");
-  } catch (e) {
-    return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: "index.md", message: String(e) }) };
+    const existingIdx = await readFile(join(target, "index.md"), "utf8");
+    if (existingIdx.split("\n").length > CONTENT_THRESHOLD) {
+      skipIndex = true;
+      preserved.push("index.md");
+    }
+  } catch { /* no existing index */ }
+  if (!skipIndex) {
+    try {
+      const idxTpl = await readFile(join(input.templates, "index.md"), "utf8");
+      const idx = idxTpl.replace("{{INIT_DATE}}", today);
+      await writeFile(join(target, "index.md"), idx, "utf8");
+      created.push("index.md");
+    } catch (e) {
+      return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: "index.md", message: String(e) }) };
+    }
   }
 
+  let skipLog = false;
   try {
-    const logTpl = await readFile(join(input.templates, "log.md"), "utf8");
-    const log = logTpl
-      .replace(/\{\{INIT_DATE\}\}/g, today)
-      .replace("{{DOMAIN}}", input.domain)
-      .replace("{{WIKI_LANG}}", canonicalLang);
-    await writeFile(join(target, "log.md"), log, "utf8");
-    created.push("log.md");
-  } catch (e) {
-    return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: "log.md", message: String(e) }) };
+    const existingLog = await readFile(join(target, "log.md"), "utf8");
+    if (existingLog.split("\n").length > CONTENT_THRESHOLD) {
+      skipLog = true;
+      preserved.push("log.md");
+    }
+  } catch { /* no existing log */ }
+  if (!skipLog) {
+    try {
+      const logTpl = await readFile(join(input.templates, "log.md"), "utf8");
+      const log = logTpl
+        .replace(/\{\{INIT_DATE\}\}/g, today)
+        .replace("{{DOMAIN}}", input.domain)
+        .replace("{{WIKI_LANG}}", canonicalLang);
+      await writeFile(join(target, "log.md"), log, "utf8");
+      created.push("log.md");
+    } catch (e) {
+      return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: "log.md", message: String(e) }) };
+    }
   }
 
   const isTempPath = target.startsWith("/tmp/") || target === "/tmp" || target.startsWith("/var/tmp/") || target === "/var/tmp";
@@ -143,6 +167,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       taxonomy,
       lang: canonicalLang,
       created,
+      preserved,
       env_written: envWritten,
       env_skipped: skipEnv,
       imported_from_hermes: importedFromHermes
