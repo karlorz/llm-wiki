@@ -7,6 +7,7 @@ import { runPagesize } from "./pagesize.js";
 import { runLogRotate } from "./log-rotate.js";
 import { runOrphans } from "./orphans.js";
 import { runTopicMapCheck } from "./topic-map-check.js";
+import { runIndexLinkFormat } from "./index-link-format.js";
 
 export interface LintInput {
   vault: string;
@@ -24,7 +25,7 @@ export interface LintOutput {
 }
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_drift", "tag_not_in_taxonomy"] as const;
-const WARNING_ORDER = ["index_incomplete", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans"] as const;
+const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans"] as const;
 const INFO_ORDER = ["bridges", "low_confidence_single_source", "topic_map_recommended"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
@@ -48,6 +49,11 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       missing_from_index: idx.result.data.missing_from_index,
       ghost_entries: idx.result.data.ghost_entries
     }];
+  }
+
+  const linkFmt = await runIndexLinkFormat({ vault: input.vault });
+  if (linkFmt.result.ok && linkFmt.result.data.markdown_links.length > 0) {
+    buckets.index_link_format = linkFmt.result.data.markdown_links;
   }
 
   const stale = await runStale({ vault: input.vault, days: input.days });
