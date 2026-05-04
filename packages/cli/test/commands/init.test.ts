@@ -197,4 +197,34 @@ describe("runInit", () => {
     const idx = readFileSync(join(target, "index.md"), "utf8");
     expect(idx).toMatch(/^> Last updated: \d{4}-\d{2}-\d{2} \| Total pages: 0/m);
   });
+
+  it("--no-env skips env file write", async () => {
+    const h = home();
+    const target = tmp();
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: undefined, force: false, noEnv: true
+    });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.env_written).toBe("");
+      expect(r.result.data.env_skipped).toBe(true);
+    }
+    expect(() => statSync(join(h, ".skillwiki", ".env"))).toThrow();
+  });
+
+  it("skips env write when target is under /tmp", async () => {
+    const h = home();
+    const target = "/tmp/skillwiki-test-" + Date.now();
+    mkdirSync(target, { recursive: true });
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: undefined, force: false, noEnv: false
+    });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.env_written).toBe("");
+      expect(r.result.data.env_skipped).toBe(true);
+    }
+  });
 });

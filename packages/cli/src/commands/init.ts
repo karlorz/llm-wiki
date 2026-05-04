@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { resolveInitTimePath } from "../utils/wiki-path.js";
 import { resolveLang } from "../utils/lang.js";
-import { parseDotenvFile } from "../utils/dotenv.js";
+import { parseDotenvFile, writeDotenv } from "../utils/dotenv.js";
 
 const DEFAULT_TAXONOMY = [
   "research", "comparison", "timeline", "summary", "person",
@@ -24,6 +24,7 @@ export interface InitInput {
   taxonomy: string[] | undefined;
   lang: string | undefined;
   force: boolean;
+  noEnv?: boolean;
 }
 
 export interface InitOutput {
@@ -33,6 +34,7 @@ export interface InitOutput {
   lang: string;
   created: string[];
   env_written: string;
+  env_skipped: boolean;
   imported_from_hermes: boolean;
 }
 
@@ -53,6 +55,8 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   }
 
   const envPath = join(input.home, ".skillwiki", ".env");
+  let existingEnvRaw: string | undefined;
+  try { existingEnvRaw = await readFile(envPath, "utf8"); } catch { /* new file */ }
   const existingEnv = await parseDotenvFile(envPath);
   const swDotenvHadPath = existingEnv.WIKI_PATH !== undefined;
   if (existingEnv.WIKI_PATH !== undefined && existingEnv.WIKI_PATH !== target && !input.force) {
@@ -117,12 +121,16 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
     return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: "log.md", message: String(e) }) };
   }
 
-  try {
-    await mkdir(dirname(envPath), { recursive: true });
-    const envBody = `WIKI_PATH=${target}\nWIKI_LANG=${canonicalLang}\n`;
-    await writeFile(envPath, envBody, "utf8");
-  } catch (e) {
-    return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: envPath, message: String(e) }) };
+  const isTempPath = target.startsWith("/tmp/") || target === "/tmp" || target.startsWith("/var/tmp/") || target === "/var/tmp";
+  const skipEnv = !!input.noEnv || isTempPath;
+  let envWritten = "";
+  if (!skipEnv) {
+    try {
+      await writeDotenv(envPath, { WIKI_PATH: target, WIKI_LANG: canonicalLang }, existingEnvRaw);
+      envWritten = envPath;
+    } catch (e) {
+      return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: envPath, message: String(e) }) };
+    }
   }
 
   const importedFromHermes = pathRes.source === "hermes-dotenv" && !swDotenvHadPath;
@@ -135,7 +143,8 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       taxonomy,
       lang: canonicalLang,
       created,
-      env_written: envPath,
+      env_written: envWritten,
+      env_skipped: skipEnv,
       imported_from_hermes: importedFromHermes
     })
   };
