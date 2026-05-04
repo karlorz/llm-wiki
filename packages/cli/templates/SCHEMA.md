@@ -51,3 +51,19 @@ Rule: every tag on every page MUST appear in this taxonomy. Add new tags here fi
 - Wikilinks in YAML: quoted, `"[[name]]"`. Body wikilinks: unquoted `[[name]]`.
 - Citations in body: `^[raw/...]` markers; every entry in `sources:` MUST appear in body.
 - sha256 in `raw/` frontmatter is computed by `skillwiki hash` over body bytes after closing `---`.
+
+## Obsidian Integration
+
+- **Attachment folder:** `raw/assets/` — binary assets (images, diagrams) live here.
+  Set Obsidian's "Attachment folder path" to `raw/assets` for automatic filing.
+- **Dataview queries** (read-only; do not replace index.md):
+
+```dataview
+LIST WHERE type = "concept" AND contains(tags, "architecture")
+```
+
+```dataview
+TABLE updated, length(sources) AS sources
+WHERE file.folder = "concepts"
+SORT updated DESC
+```
