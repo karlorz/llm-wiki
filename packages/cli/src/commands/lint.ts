@@ -8,6 +8,7 @@ import { runLogRotate } from "./log-rotate.js";
 import { runOrphans } from "./orphans.js";
 import { runTopicMapCheck } from "./topic-map-check.js";
 import { runIndexLinkFormat } from "./index-link-format.js";
+import { runDedup } from "./dedup.js";
 
 export interface LintInput {
   vault: string;
@@ -25,7 +26,7 @@ export interface LintOutput {
   humanHint: string;
 }
 
-const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_drift", "tag_not_in_taxonomy"] as const;
+const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "tag_not_in_taxonomy"] as const;
 const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans"] as const;
 const INFO_ORDER = ["bridges", "low_confidence_single_source", "topic_map_recommended"] as const;
 
@@ -78,6 +79,9 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   if (topicMap.result.ok && topicMap.result.data.recommended) {
     buckets.topic_map_recommended = [{ page_count: topicMap.result.data.page_count, threshold: topicMap.result.data.threshold }];
   }
+
+  const dedup = await runDedup({ vault: input.vault });
+  if (dedup.result.ok && dedup.result.data.duplicates.length > 0) buckets.raw_dedup = dedup.result.data.duplicates;
 
   const errorOut: Bucket[] = ERROR_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);
   const warningOut: Bucket[] = WARNING_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);

@@ -24,6 +24,7 @@ import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "./comm
 import { runDoctor } from "./commands/doctor.js";
 import { runArchive } from "./commands/archive.js";
 import { runDrift } from "./commands/drift.js";
+import { runDedup } from "./commands/dedup.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -254,6 +255,16 @@ program
     const v = await resolveVaultArg(vault);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runDrift({ vault: v.vault }));
+  });
+
+// dedup
+program
+  .command("dedup [vault]")
+  .description("detect duplicate raw sources by sha256")
+  .action(async (vault) => {
+    const v = await resolveVaultArg(vault);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runDedup({ vault: v.vault }));
   });
 
 program.parseAsync(process.argv).catch((e) => {

@@ -31,6 +31,7 @@ describe("exit-codes", () => {
     expect(ExitCode.ARCHIVE_TARGET_NOT_FOUND).toBe(30);
     expect(ExitCode.ARCHIVE_ALREADY_ARCHIVED).toBe(31);
     expect(ExitCode.DRIFT_DETECTED).toBe(32);
+    expect(ExitCode.RAW_DEDUP_DETECTED).toBe(33);
   });
 
   it("exposes a stable name for every code (non-empty, unique)", () => {
