@@ -15,10 +15,18 @@ function home(): string {
 
 function tmp(): string { return mkdtempSync(join(tmpdir(), "init-")); }
 
+/** Create a vault target outside /tmp/ so isTempPath does not skip env writes.
+ *  CI runners use /tmp/ for tmpdir(); macOS uses /var/…, which already works. */
+function vault(): string {
+  const base = join(tmpdir(), "skillwiki-tests");
+  mkdirSync(base, { recursive: true });
+  return mkdtempSync(join(base, "vault-"));
+}
+
 describe("runInit", () => {
   it("creates the vault tree, SCHEMA.md, index.md, log.md and writes both env keys", async () => {
     const h = home();
-    const target = tmp();
+    const target = vault();
     const r = await runInit({
       flag: target, envValue: undefined, home: h, templates: TEMPLATES,
       domain: "AI safety", taxonomy: undefined, lang: undefined, force: false
@@ -71,7 +79,7 @@ describe("runInit", () => {
 
   it("normalizes --lang chinese-traditional → zh-Hant in dotenv and JSON", async () => {
     const h = home();
-    const target = tmp();
+    const target = vault();
     const r = await runInit({
       flag: target, envValue: undefined, home: h, templates: TEMPLATES,
       domain: "X", taxonomy: undefined, lang: "chinese-traditional", force: false
@@ -146,7 +154,7 @@ describe("runInit", () => {
 
   it("--force overrides ENV_WRITE_CONFLICT and rewrites both keys", async () => {
     const h = home();
-    const target = tmp();
+    const target = vault();
     writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/different/path\nWIKI_LANG=zh-Hant\n");
     const r = await runInit({
       flag: target, envValue: undefined, home: h, templates: TEMPLATES,
@@ -162,7 +170,7 @@ describe("runInit", () => {
 
   it("idempotent on identical values (no error, no diff)", async () => {
     const h = home();
-    const target = tmp();
+    const target = vault();
     writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${target}\nWIKI_LANG=en\n`);
     const r = await runInit({
       flag: target, envValue: undefined, home: h, templates: TEMPLATES,
