@@ -17,14 +17,9 @@ jobs:
         with:
           node-version: 20.x
           cache: npm
+          registry-url: https://registry.npmjs.org
       - run: npm ci
       - run: npm run -w @skillwiki/shared test
       - run: npm run -w skillwiki build
       - run: npm run -w skillwiki test
-      # Write a minimal .npmrc with ONLY the registry URL — no auth token.
-      # This lets npm use OIDC trusted publishing (id-token: write) instead
-      # of a stale NODE_AUTH_TOKEN secret from setup-node.
-      - run: echo "registry=https://registry.npmjs.org" > "${{ runner.temp }}/.npmrc"
       - run: npm publish -w skillwiki --provenance --access public
-        env:
-          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
