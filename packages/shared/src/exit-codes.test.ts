@@ -28,6 +28,8 @@ describe("exit-codes", () => {
     expect(ExitCode.LINT_HAS_ERRORS).toBe(23);
     expect(ExitCode.ENV_WRITE_CONFLICT).toBe(24);
     expect(ExitCode.NO_VAULT_CONFIGURED).toBe(25);
+    expect(ExitCode.ARCHIVE_TARGET_NOT_FOUND).toBe(30);
+    expect(ExitCode.ARCHIVE_ALREADY_ARCHIVED).toBe(31);
   });
 
   it("exposes a stable name for every code (non-empty, unique)", () => {

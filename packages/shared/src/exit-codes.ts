@@ -27,7 +27,9 @@ export const ExitCode = {
   INVALID_CONFIG_KEY: 26,
   CONFIG_WRITE_FAILED: 27,
   DOCTOR_HAS_WARNINGS: 28,
-  DOCTOR_HAS_ERRORS: 29
+  DOCTOR_HAS_ERRORS: 29,
+  ARCHIVE_TARGET_NOT_FOUND: 30,
+  ARCHIVE_ALREADY_ARCHIVED: 31
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -61,7 +63,9 @@ const NAMES: Record<number, string> = {
   26: "INVALID_CONFIG_KEY",
   27: "CONFIG_WRITE_FAILED",
   28: "DOCTOR_HAS_WARNINGS",
-  29: "DOCTOR_HAS_ERRORS"
+  29: "DOCTOR_HAS_ERRORS",
+  30: "ARCHIVE_TARGET_NOT_FOUND",
+  31: "ARCHIVE_ALREADY_ARCHIVED"
 };
 
 export function exitCodeName(code: number): string {
