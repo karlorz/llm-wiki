@@ -1,6 +1,6 @@
 {
   "name": "@skillwiki/skills",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.4",
   "private": true,
-  "files": ["wiki-*", "proj-*", ".claude-plugin", "README.md"]
+  "files": ["wiki-*", "proj-*", "using-skillwiki", ".claude-plugin", "hooks", "README.md"]
 }
