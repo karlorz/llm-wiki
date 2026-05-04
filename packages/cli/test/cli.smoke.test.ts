@@ -102,4 +102,25 @@ describe("cli smoke", () => {
     expect(() => JSON.parse(human.stdout)).toThrow();
     expect(human.stdout.toLowerCase()).toContain("duplicate");
   });
+
+  it("--human produces non-JSON output for orphans", () => {
+    const json = run(["orphans", TMP_VAULT]);
+    const human = run(["orphans", TMP_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+  });
+
+  it("--human produces non-JSON output for overlap", () => {
+    const json = run(["overlap", TMP_VAULT]);
+    const human = run(["overlap", TMP_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+  });
+
+  it("--human produces non-JSON output for drift", () => {
+    const json = run(["drift", TMP_VAULT]);
+    const human = run(["drift", TMP_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+  });
 });
