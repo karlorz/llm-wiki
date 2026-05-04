@@ -29,7 +29,8 @@ export const ExitCode = {
   DOCTOR_HAS_WARNINGS: 28,
   DOCTOR_HAS_ERRORS: 29,
   ARCHIVE_TARGET_NOT_FOUND: 30,
-  ARCHIVE_ALREADY_ARCHIVED: 31
+  ARCHIVE_ALREADY_ARCHIVED: 31,
+  DRIFT_DETECTED: 32
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -65,7 +66,8 @@ const NAMES: Record<number, string> = {
   28: "DOCTOR_HAS_WARNINGS",
   29: "DOCTOR_HAS_ERRORS",
   30: "ARCHIVE_TARGET_NOT_FOUND",
-  31: "ARCHIVE_ALREADY_ARCHIVED"
+  31: "ARCHIVE_ALREADY_ARCHIVED",
+  32: "DRIFT_DETECTED"
 };
 
 export function exitCodeName(code: number): string {
