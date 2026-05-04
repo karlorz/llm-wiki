@@ -18,9 +18,10 @@ jobs:
           node-version: 22.x
           cache: npm
           registry-url: https://registry.npmjs.org
-      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm run -w @skillwiki/shared test
       - run: npm run -w skillwiki build
       - run: npm run -w skillwiki test
-      - run: npm publish -w skillwiki --provenance --access public
+      # setup-node injects NODE_AUTH_TOKEN=${GITHUB_TOKEN} which blocks OIDC.
+      # Use npx to get npm 11+ (required for trusted publishing) and clear the token.
+      - run: unset NODE_AUTH_TOKEN && npx -y npm@latest publish -w skillwiki --provenance --access public
