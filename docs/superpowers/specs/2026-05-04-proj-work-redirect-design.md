@@ -108,4 +108,5 @@ Update the loop from 11 steps to 9:
 - Manual verification: run superpowers:brainstorming with redirect paths, confirm spec lands in vault
 - Manual verification: run superpowers:writing-plans with redirect paths, confirm plan lands in vault
 - Verify `skillwiki validate` passes on work item frontmatter
-- Verify vault `index.md` and `log.md` are updated by proj-work
+- Verify vault `log.md` is updated by proj-work on creation and status transitions
+- Note: `index.md` is only updated by `proj-init` (project registration), not by individual work items
