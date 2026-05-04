@@ -12,9 +12,10 @@ export async function runLinks(input: LinksInput): Promise<{ exitCode: number; r
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  const slugs = new Set<string>();
+  const slugs = new Map<string, string>(); // lowercase -> actual slug
   for (const p of scan.data.typedKnowledge) {
-    slugs.add(p.relPath.replace(/\.md$/, "").split("/").pop()!);
+    const slug = p.relPath.replace(/\.md$/, "").split("/").pop()!;
+    slugs.set(slug.toLowerCase(), slug);
   }
 
   const broken: LinksOutput["broken"] = [];
@@ -25,7 +26,7 @@ export async function runLinks(input: LinksInput): Promise<{ exitCode: number; r
     const lines = body.split("\n");
     for (const slug of extractBodyWikilinks(body)) {
       const tail = slug.split("/").pop()!;
-      if (!slugs.has(tail)) {
+      if (!slugs.has(tail.toLowerCase())) {
         const line = lines.findIndex(l => l.includes(`[[${slug}`));
         broken.push({ page: p.relPath, slug, line: line >= 0 ? line + 1 : 0 });
       }
