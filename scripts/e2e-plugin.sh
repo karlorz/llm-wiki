@@ -8,20 +8,24 @@ set -euo pipefail
 # Usage:  ./scripts/e2e-plugin.sh
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "$SCRIPT_DIR/e2e-common.sh"
 
 SSH_HOST="sg01"
 REMOTE_CLI="skillwiki"
+
+# Read expected version from package.json (no manual updates needed)
+EXPECTED_VERSION=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 
 printf "=== Plugin E2E (sg01) ===\n\n"
 
 # ---- 0. Verify plugin version ----
 printf "%s\n" "--- Plugin version ---"
 PLUGIN_VERSION=$(ssh "$SSH_HOST" "find /root/.claude/plugins/cache/llm-wiki/skillwiki/ -name plugin.json -exec head -4 {} \; 2>/dev/null | grep version | head -1 | sed 's/.*: \"\\(.*\\)\",/\\1/'")
-if [ "$PLUGIN_VERSION" = "0.2.0-beta.6" ]; then
+if [ "$PLUGIN_VERSION" = "$EXPECTED_VERSION" ]; then
   PASS=$((PASS + 1)); printf "  \u2713 plugin version is %s\n" "$PLUGIN_VERSION"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 plugin version is %s, expected 0.2.0-beta.6\n" "$PLUGIN_VERSION"
+  FAIL=$((FAIL + 1)); printf "  \u2717 plugin version is %s, expected %s\n" "$PLUGIN_VERSION" "$EXPECTED_VERSION"
 fi
 
 # ---- 1. Verify plugin installed with 11 skills ----
@@ -96,7 +100,7 @@ assert_json_contains "$RUN_OUTPUT" "data.value" "de" "config get round-trip"
 
 # ---- 5. Test doctor ----
 printf "\n--- doctor via CLI ---\n"
-run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME $REMOTE_CLI doctor"
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME WIKI_PATH=$VAULT $REMOTE_CLI doctor"
 # TEMP_HOME has no ~/.claude/skills/ so skills_installed warns → exit 28
 assert_exit 28 "$RUN_RC" "doctor exits 28 (skills_installed warn)"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0" "doctor 0 errors"

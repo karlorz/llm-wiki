@@ -15,10 +15,16 @@ set -euo pipefail
 # 1. Source shared helpers
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "$SCRIPT_DIR/e2e-common.sh"
 
 # ---------------------------------------------------------------------------
-# 2. Setup
+# 2. Read expected version from package.json (no manual updates needed)
+# ---------------------------------------------------------------------------
+EXPECTED_VERSION=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
+
+# ---------------------------------------------------------------------------
+# 3. Setup
 # ---------------------------------------------------------------------------
 SSH_HOST="sg01"
 REMOTE_CLI="skillwiki"
@@ -49,11 +55,11 @@ run_cli ssh "$SSH_HOST" "$REMOTE_CLI --version"
 assert_exit 0 "$RUN_RC" "skillwiki --version on remote"
 printf "  version: %s\n" "$RUN_OUTPUT"
 
-# Verify we got 0.2.0-beta.6
-if printf '%s' "$RUN_OUTPUT" | grep -q '0.2.0-beta.6'; then
-  PASS=$((PASS + 1)); printf "  \u2713 version is 0.2.0-beta.6\n"
+# Verify remote CLI matches local package.json version
+if printf '%s' "$RUN_OUTPUT" | grep -q "$EXPECTED_VERSION"; then
+  PASS=$((PASS + 1)); printf "  \u2713 version is %s\n" "$EXPECTED_VERSION"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 version is not 0.2.0-beta.6: %s\n" "$RUN_OUTPUT"
+  FAIL=$((FAIL + 1)); printf "  \u2717 version is not %s: %s\n" "$EXPECTED_VERSION" "$RUN_OUTPUT"
 fi
 
 # ---------------------------------------------------------------------------
@@ -255,7 +261,7 @@ printf "\n--- Remote doctor ---\n"
 
 # doctor with valid vault — should be all-pass or warn-only
 # (skillwiki is globally installed on sg01, so cli_on_path should pass)
-run_cli ssh "$SSH_HOST" "$REMOTE_CLI doctor"
+run_cli ssh "$SSH_HOST" "WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI doctor"
 assert_exit 0 "$RUN_RC" "remote doctor exits 0 (all pass)"
 assert_json_contains "$RUN_OUTPUT" "ok"                "true" "remote doctor returns ok"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0"   "remote doctor reports 0 errors"
@@ -282,7 +288,7 @@ assert_json_contains "$RUN_OUTPUT" "data.summary.error" "2" "remote doctor repor
 ssh "$SSH_HOST" "rm -rf $ERR_HOME_REMOTE" 2>/dev/null
 
 # doctor --human (N2: exit code unchanged)
-run_cli ssh "$SSH_HOST" "$REMOTE_CLI --human doctor"
+run_cli ssh "$SSH_HOST" "WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI --human doctor"
 assert_exit 0 "$RUN_RC" "remote doctor --human exit matches JSON exit (N2)"
 if printf '%s' "$RUN_OUTPUT" | grep -q '"ok"'; then
   FAIL=$((FAIL + 1)); printf "  \u2717 remote doctor --human produced JSON\n"
