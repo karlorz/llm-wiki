@@ -37,10 +37,10 @@ describe("extractTaxonomy", () => {
     if (r.ok) expect(r.data).toEqual(["research", "timeline", "person"]);
   });
 
-  it("returns ok with [] when the block is absent (caller decides if fatal)", () => {
+  it("returns NO_TAXONOMY_BLOCK error when the block is absent", () => {
     const r = extractTaxonomy(MISSING);
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.data).toEqual([]);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("NO_TAXONOMY_BLOCK");
   });
 
   it("returns INVALID_FRONTMATTER on malformed YAML", () => {

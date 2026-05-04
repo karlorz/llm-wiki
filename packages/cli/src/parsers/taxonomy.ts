@@ -5,7 +5,7 @@ const FENCE_RE = /^##\s+Tag Taxonomy\s*$[\s\S]*?```yaml\s*\n([\s\S]*?)\n```/m;
 
 export function extractTaxonomy(schemaText: string): Result<string[]> {
   const m = schemaText.match(FENCE_RE);
-  if (!m) return ok([]);
+  if (!m) return err("NO_TAXONOMY_BLOCK", { message: "No fenced YAML taxonomy block found in SCHEMA.md" });
   let parsed: unknown;
   try { parsed = yaml.load(m[1], { schema: yaml.JSON_SCHEMA }); }
   catch (e) { return err("INVALID_FRONTMATTER", { message: (e as Error).message }); }
