@@ -8,6 +8,7 @@ export interface ArchiveOutput {
   archived_from: string;
   archived_to: string;
   index_updated: boolean;
+  humanHint: string;
 }
 
 export async function runArchive(input: ArchiveInput): Promise<{ exitCode: number; result: Result<ArchiveOutput> }> {
@@ -44,5 +45,5 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
 
   await rename(join(input.vault, relPath), join(input.vault, archivePath));
 
-  return { exitCode: ExitCode.OK, result: ok({ archived_from: relPath, archived_to: archivePath, index_updated: indexUpdated }) };
+  return { exitCode: ExitCode.OK, result: ok({ archived_from: relPath, archived_to: archivePath, index_updated: indexUpdated, humanHint: `${relPath} -> ${archivePath}${indexUpdated ? " (index updated)" : ""}` }) };
 }

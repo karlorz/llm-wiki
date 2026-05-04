@@ -6,7 +6,7 @@ import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 
 export interface GraphBuildInput { vault: string; out: string }
-export interface GraphBuildOutput { out_path: string; node_count: number; edge_count: number }
+export interface GraphBuildOutput { out_path: string; node_count: number; edge_count: number; humanHint: string }
 
 export async function runGraphBuild(input: GraphBuildInput): Promise<{ exitCode: number; result: Result<GraphBuildOutput> }> {
   const scan = await scanVault(input.vault);
@@ -40,7 +40,7 @@ export async function runGraphBuild(input: GraphBuildInput): Promise<{ exitCode:
   }
   return {
     exitCode: ExitCode.OK,
-    result: ok({ out_path: input.out, node_count: scan.data.typedKnowledge.length, edge_count })
+    result: ok({ out_path: input.out, node_count: scan.data.typedKnowledge.length, edge_count, humanHint: `nodes: ${scan.data.typedKnowledge.length}, edges: ${edge_count}\nwritten: ${input.out}` })
   };
 }
 

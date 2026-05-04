@@ -11,6 +11,7 @@ export interface ValidateOutput {
   schema: SchemaName | null;
   valid: boolean;
   errors: Array<{ path: string; message: string }>;
+  humanHint: string;
 }
 
 const SCHEMAS = {
@@ -36,15 +37,15 @@ export async function runValidate(input: ValidateInput): Promise<{ exitCode: num
   }
   const det = detectSchema(fm.data);
   if (!det.schema) {
-    return { exitCode: ExitCode.SCHEMA_NOT_DETECTED, result: ok({ schema: null, valid: false, errors: [] }) };
+    return { exitCode: ExitCode.SCHEMA_NOT_DETECTED, result: ok({ schema: null, valid: false, errors: [], humanHint: "schema not detected" }) };
   }
   const parsed = SCHEMAS[det.schema].safeParse(fm.data);
   if (!parsed.success) {
     const errors = parsed.error.issues.map(i => ({ path: i.path.join("."), message: i.message }));
     return {
       exitCode: ExitCode.INVALID_FRONTMATTER,
-      result: ok({ schema: det.schema, valid: false, errors })
+      result: ok({ schema: det.schema, valid: false, errors, humanHint: `INVALID (${det.schema})\n${errors.map(e => `  ${e.path}: ${e.message}`).join("\n")}` })
     };
   }
-  return { exitCode: ExitCode.OK, result: ok({ schema: det.schema, valid: true, errors: [] }) };
+  return { exitCode: ExitCode.OK, result: ok({ schema: det.schema, valid: true, errors: [], humanHint: `VALID (${det.schema})` }) };
 }

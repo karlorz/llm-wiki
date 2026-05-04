@@ -25,6 +25,7 @@ export interface DriftOutput {
   drifted: DriftSource[];
   fetch_failed: DriftSource[];
   unchanged: number;
+  humanHint: string;
 }
 
 export async function runDrift(input: DriftInput): Promise<{ exitCode: number; result: Result<DriftOutput> }> {
@@ -71,8 +72,11 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
   const unchanged = results.filter(r => r.status === "unchanged").length;
 
   const exitCode = drifted.length > 0 ? ExitCode.DRIFT_DETECTED : ExitCode.OK;
+  const hintLines: string[] = [`scanned: ${results.length}, unchanged: ${unchanged}`];
+  if (drifted.length > 0) hintLines.push(`drifted: ${drifted.length}`, ...drifted.map(d => `  ${d.raw_path}`));
+  if (fetchFailed.length > 0) hintLines.push(`fetch_failed: ${fetchFailed.length}`, ...fetchFailed.map(f => `  ${f.raw_path}: ${f.fetch_error}`));
   return {
     exitCode,
-    result: ok({ scanned: results.length, drifted, fetch_failed: fetchFailed, unchanged }),
+    result: ok({ scanned: results.length, drifted, fetch_failed: fetchFailed, unchanged, humanHint: hintLines.join("\n") }),
   };
 }

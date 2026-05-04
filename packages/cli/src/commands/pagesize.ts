@@ -5,6 +5,7 @@ import { splitFrontmatter } from "../parsers/frontmatter.js";
 export interface PagesizeInput { vault: string; lines: number }
 export interface PagesizeOutput {
   oversized: Array<{ page: string; lines: number }>;
+  humanHint: string;
 }
 
 export async function runPagesize(input: PagesizeInput): Promise<{ exitCode: number; result: Result<PagesizeOutput> }> {
@@ -19,6 +20,6 @@ export async function runPagesize(input: PagesizeInput): Promise<{ exitCode: num
     const count = body.split("\n").length;
     if (count > input.lines) oversized.push({ page: p.relPath, lines: count });
   }
-  if (oversized.length > 0) return { exitCode: ExitCode.PAGE_TOO_LARGE, result: ok({ oversized }) };
-  return { exitCode: ExitCode.OK, result: ok({ oversized }) };
+  if (oversized.length > 0) return { exitCode: ExitCode.PAGE_TOO_LARGE, result: ok({ oversized, humanHint: oversized.map(p => `${p.page}: ${p.lines} lines`).join("\n") }) };
+  return { exitCode: ExitCode.OK, result: ok({ oversized, humanHint: "all pages within size limit" }) };
 }

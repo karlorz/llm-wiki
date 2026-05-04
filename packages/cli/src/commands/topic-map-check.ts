@@ -12,6 +12,7 @@ export interface TopicMapCheckOutput {
   recommended: boolean;
   page_count: number;
   threshold: number;
+  humanHint: string;
 }
 
 export async function runTopicMapCheck(
@@ -22,12 +23,16 @@ export async function runTopicMapCheck(
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
   const page_count = scan.data.typedKnowledge.length;
+  const recommended = page_count >= threshold;
   return {
     exitCode: ExitCode.OK,
     result: ok({
-      recommended: page_count >= threshold,
+      recommended,
       page_count,
       threshold,
+      humanHint: recommended
+        ? `topic map recommended (${page_count} pages >= ${threshold} threshold)`
+        : `topic map not needed (${page_count} pages < ${threshold} threshold)`,
     }),
   };
 }

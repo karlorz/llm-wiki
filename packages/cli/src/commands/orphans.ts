@@ -8,6 +8,7 @@ export interface OrphansInput { vault: string | undefined; envValue?: string; ho
 export interface OrphansOutput {
   orphans: string[];
   bridges: Array<{ path: string; connects: string[] }>;
+  humanHint: string;
 }
 
 export async function runOrphans(input: OrphansInput): Promise<{ exitCode: number; result: Result<OrphansOutput> }> {
@@ -70,7 +71,11 @@ export async function runOrphans(input: OrphansInput): Promise<{ exitCode: numbe
       }
     }
   }
-  return { exitCode: ExitCode.OK, result: ok({ orphans, bridges }) };
+  const hintLines: string[] = [];
+  if (orphans.length > 0) hintLines.push(`orphans: ${orphans.length}`, ...orphans.map(o => `  ${o}`));
+  if (bridges.length > 0) hintLines.push(`bridges: ${bridges.length}`, ...bridges.map(b => `  ${b.path}`));
+  if (hintLines.length === 0) hintLines.push("no orphans or bridges");
+  return { exitCode: ExitCode.OK, result: ok({ orphans, bridges, humanHint: hintLines.join("\n") }) };
 }
 
 function simulateRemoval(adj: Record<string, Set<string>>, removed: string): number {

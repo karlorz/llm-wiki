@@ -7,6 +7,7 @@ import { buildSlugMap } from "../utils/slug.js";
 export interface LinksInput { vault: string }
 export interface LinksOutput {
   broken: Array<{ page: string; slug: string; line: number }>;
+  humanHint: string;
 }
 
 export async function runLinks(input: LinksInput): Promise<{ exitCode: number; result: Result<LinksOutput> }> {
@@ -30,7 +31,7 @@ export async function runLinks(input: LinksInput): Promise<{ exitCode: number; r
     }
   }
   if (broken.length > 0) {
-    return { exitCode: ExitCode.BROKEN_WIKILINKS, result: ok({ broken }) };
+    return { exitCode: ExitCode.BROKEN_WIKILINKS, result: ok({ broken, humanHint: `broken: ${broken.length}\n${broken.map(b => `  ${b.page}:[[${b.slug}]] (line ${b.line})`).join("\n")}` }) };
   }
-  return { exitCode: ExitCode.OK, result: ok({ broken }) };
+  return { exitCode: ExitCode.OK, result: ok({ broken, humanHint: "no broken wikilinks" }) };
 }

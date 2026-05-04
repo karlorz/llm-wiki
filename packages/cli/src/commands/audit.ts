@@ -8,6 +8,7 @@ export interface AuditInput { file: string }
 export interface AuditOutput {
   markers: Array<{ marker: string; target: string; resolved: boolean }>;
   sources_consistency: { unused_sources: string[]; missing_from_sources: string[] };
+  humanHint: string;
 }
 
 export async function runAudit(input: AuditInput): Promise<{ exitCode: number; result: Result<AuditOutput> }> {
@@ -35,13 +36,21 @@ export async function runAudit(input: AuditInput): Promise<{ exitCode: number; r
   const unused_sources = sources.filter(s => !referenced.has(s));
   const missing_from_sources = [...referenced].filter(t => !sources.includes(t));
 
+  const broken = resolved.filter(m => !m.resolved);
+  const hintLines: string[] = [];
+  hintLines.push(`markers: ${resolved.length}, broken: ${broken.length}`);
+  if (unused_sources.length > 0) hintLines.push(`unused_sources: ${unused_sources.length}`);
+  if (missing_from_sources.length > 0) hintLines.push(`missing_from_sources: ${missing_from_sources.length}`);
+  if (broken.length === 0 && unused_sources.length === 0 && missing_from_sources.length === 0) hintLines.push("OK");
+  const humanHint = hintLines.join("\n");
+
   if (resolved.some(m => !m.resolved)) {
-    return { exitCode: ExitCode.UNRESOLVED_MARKERS, result: ok({ markers: resolved, sources_consistency: { unused_sources, missing_from_sources } }) };
+    return { exitCode: ExitCode.UNRESOLVED_MARKERS, result: ok({ markers: resolved, sources_consistency: { unused_sources, missing_from_sources }, humanHint }) };
   }
   if (unused_sources.length > 0 || missing_from_sources.length > 0) {
-    return { exitCode: ExitCode.SOURCES_INCONSISTENT, result: ok({ markers: resolved, sources_consistency: { unused_sources, missing_from_sources } }) };
+    return { exitCode: ExitCode.SOURCES_INCONSISTENT, result: ok({ markers: resolved, sources_consistency: { unused_sources, missing_from_sources }, humanHint }) };
   }
-  return { exitCode: ExitCode.OK, result: ok({ markers: resolved, sources_consistency: { unused_sources, missing_from_sources } }) };
+  return { exitCode: ExitCode.OK, result: ok({ markers: resolved, sources_consistency: { unused_sources, missing_from_sources }, humanHint }) };
 }
 
 async function findVaultRoot(start: string): Promise<string | null> {

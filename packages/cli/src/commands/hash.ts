@@ -4,7 +4,7 @@ import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 
 export interface HashInput { file: string }
-export interface HashOutput { path: string; sha256: string; byte_count: number }
+export interface HashOutput { path: string; sha256: string; byte_count: number; humanHint: string }
 
 export async function runHash(input: HashInput): Promise<{ exitCode: number; result: Result<HashOutput> }> {
   let text: string;
@@ -19,6 +19,6 @@ export async function runHash(input: HashInput): Promise<{ exitCode: number; res
   const sha256 = createHash("sha256").update(bodyBytes).digest("hex");
   return {
     exitCode: ExitCode.OK,
-    result: ok({ path: input.file, sha256, byte_count: bodyBytes.byteLength })
+    result: ok({ path: input.file, sha256, byte_count: bodyBytes.byteLength, humanHint: sha256 })
   };
 }

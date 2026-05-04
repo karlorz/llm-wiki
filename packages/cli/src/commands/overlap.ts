@@ -4,7 +4,7 @@ import { extractFrontmatter } from "../parsers/frontmatter.js";
 
 export interface OverlapInput { vault: string }
 export interface OverlapCluster { id: string; members: string[]; score: number }
-export interface OverlapOutput { clusters: OverlapCluster[] }
+export interface OverlapOutput { clusters: OverlapCluster[]; humanHint: string }
 
 export async function runOverlap(input: OverlapInput): Promise<{ exitCode: number; result: Result<OverlapOutput> }> {
   const scan = await scanVault(input.vault);
@@ -50,5 +50,8 @@ export async function runOverlap(input: OverlapInput): Promise<{ exitCode: numbe
       return { id, members, score };
     });
 
-  return { exitCode: ExitCode.OK, result: ok({ clusters }) };
+  const humanHint = clusters.length === 0
+    ? "no overlap clusters found"
+    : clusters.map(c => `cluster (${c.members.length} pages, score ${c.score}): ${c.members.join(", ")}`).join("\n");
+  return { exitCode: ExitCode.OK, result: ok({ clusters, humanHint }) };
 }

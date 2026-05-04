@@ -4,7 +4,7 @@ const REDACT_PARAMS = new Set(["api_key", "token", "key", "auth", "password", "s
 const PATH_TOKEN_RE = /[A-Fa-f0-9]{32,}|[A-Za-z0-9_\-]{40,}/g;
 
 export interface FetchGuardInput { url: string }
-export interface FetchGuardOutput { allowed: boolean; reason?: string; sanitized_url: string }
+export interface FetchGuardOutput { allowed: boolean; reason?: string; sanitized_url: string; humanHint: string }
 
 export interface GuardRun { exitCode: number; result: Result<FetchGuardOutput> }
 
@@ -36,7 +36,7 @@ export function runFetchGuardSync(input: FetchGuardInput): GuardRun {
     };
   }
 
-  return { exitCode: ExitCode.OK, result: ok({ allowed: true, sanitized_url: sanitized }) };
+  return { exitCode: ExitCode.OK, result: ok({ allowed: true, sanitized_url: sanitized, humanHint: `ALLOWED: ${sanitized}` }) };
 }
 
 export function sanitizeUrl(u: URL): string {

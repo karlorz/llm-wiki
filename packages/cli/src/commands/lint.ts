@@ -22,6 +22,7 @@ export interface LintOutput {
   vault: { path: string; source: string };
   summary: { errors: number; warnings: number; info: number };
   by_severity: { error: Bucket[]; warning: Bucket[]; info: Bucket[] };
+  humanHint: string;
 }
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_drift", "tag_not_in_taxonomy"] as const;
@@ -92,12 +93,23 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   if (summary.errors > 0) exitCode = ExitCode.LINT_HAS_ERRORS;
   else if (summary.warnings > 0 || summary.info > 0) exitCode = ExitCode.LINT_HAS_WARNINGS;
 
+  const hintLines: string[] = [];
+  if (summary.errors > 0) hintLines.push(`errors: ${summary.errors}`);
+  if (summary.warnings > 0) hintLines.push(`warnings: ${summary.warnings}`);
+  if (summary.info > 0) hintLines.push(`info: ${summary.info}`);
+  const allBuckets = [...errorOut, ...warningOut, ...infoOut];
+  for (const b of allBuckets) {
+    hintLines.push(`  ${b.kind}: ${b.items.length}`);
+  }
+  if (hintLines.length === 0) hintLines.push("0 errors, 0 warnings, 0 info");
+
   return {
     exitCode,
     result: ok({
       vault: { path: input.vault, source: input.source ?? "resolved" },
       summary,
-      by_severity: { error: errorOut, warning: warningOut, info: infoOut }
+      by_severity: { error: errorOut, warning: warningOut, info: infoOut },
+      humanHint: hintLines.join("\n")
     })
   };
 }

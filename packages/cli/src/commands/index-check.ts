@@ -8,6 +8,7 @@ export interface IndexCheckInput { vault: string }
 export interface IndexCheckOutput {
   missing_from_index: string[];
   ghost_entries: string[];
+  humanHint: string;
 }
 
 export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode: number; result: Result<IndexCheckOutput> }> {
@@ -38,8 +39,13 @@ export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode:
     if (!fileSlugsLower.has(lower)) ghost_entries.push(orig);
   }
 
+  const hintLines: string[] = [];
+  if (missing_from_index.length > 0) hintLines.push(`missing from index: ${missing_from_index.length}`, ...missing_from_index.map(p => `  ${p}`));
+  if (ghost_entries.length > 0) hintLines.push(`ghost entries: ${ghost_entries.length}`, ...ghost_entries.map(g => `  ${g}`));
+  if (hintLines.length === 0) hintLines.push("index OK");
+
   if (missing_from_index.length > 0 || ghost_entries.length > 0) {
-    return { exitCode: ExitCode.INDEX_INCOMPLETE, result: ok({ missing_from_index, ghost_entries }) };
+    return { exitCode: ExitCode.INDEX_INCOMPLETE, result: ok({ missing_from_index, ghost_entries, humanHint: hintLines.join("\n") }) };
   }
-  return { exitCode: ExitCode.OK, result: ok({ missing_from_index, ghost_entries }) };
+  return { exitCode: ExitCode.OK, result: ok({ missing_from_index, ghost_entries, humanHint: hintLines.join("\n") }) };
 }

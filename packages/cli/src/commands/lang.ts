@@ -14,6 +14,7 @@ export interface LangOutput {
   source: "flag" | "env" | "skillwiki-dotenv" | "default";
   canonical: string;
   chain?: Array<{ source: string; matched: boolean; value?: string }>;
+  humanHint: string;
 }
 
 export async function runLang(input: LangInput): Promise<{ exitCode: number; result: Result<LangOutput> }> {
@@ -34,7 +35,8 @@ export async function runLang(input: LangInput): Promise<{ exitCode: number; res
       value: resolved.value,
       source: resolved.source,
       canonical: resolved.canonical,
-      ...(chain ? { chain } : {})
+      ...(chain ? { chain } : {}),
+      humanHint: `${resolved.value} (via ${resolved.source})`
     })
   };
 }

@@ -7,6 +7,7 @@ import { extractFrontmatter } from "../parsers/frontmatter.js";
 export interface StaleInput { vault: string; days: number }
 export interface StaleOutput {
   stale: Array<{ page: string; page_updated: string; newest_source_ingested: string; gap_days: number }>;
+  humanHint: string;
 }
 
 function dayDiff(a: string, b: string): number {
@@ -44,6 +45,6 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     }
   }
 
-  if (stale.length > 0) return { exitCode: ExitCode.STALE_PAGE, result: ok({ stale }) };
-  return { exitCode: ExitCode.OK, result: ok({ stale }) };
+  if (stale.length > 0) return { exitCode: ExitCode.STALE_PAGE, result: ok({ stale, humanHint: stale.map(s => `${s.page} (${s.gap_days}d stale)`).join("\n") }) };
+  return { exitCode: ExitCode.OK, result: ok({ stale, humanHint: "no stale pages" }) };
 }

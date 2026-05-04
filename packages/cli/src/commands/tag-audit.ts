@@ -9,6 +9,7 @@ export interface TagAuditInput { vault: string }
 export interface TagAuditOutput {
   violations: Array<{ page: string; tag: string }>;
   taxonomy: string[];
+  humanHint: string;
 }
 
 export async function runTagAudit(input: TagAuditInput): Promise<{ exitCode: number; result: Result<TagAuditOutput> }> {
@@ -36,7 +37,7 @@ export async function runTagAudit(input: TagAuditInput): Promise<{ exitCode: num
   }
 
   if (violations.length > 0) {
-    return { exitCode: ExitCode.TAG_NOT_IN_TAXONOMY, result: ok({ violations, taxonomy: tax.data }) };
+    return { exitCode: ExitCode.TAG_NOT_IN_TAXONOMY, result: ok({ violations, taxonomy: tax.data, humanHint: violations.map(v => `${v.page}: "${v.tag}" not in taxonomy`).join("\n") }) };
   }
-  return { exitCode: ExitCode.OK, result: ok({ violations, taxonomy: tax.data }) };
+  return { exitCode: ExitCode.OK, result: ok({ violations, taxonomy: tax.data, humanHint: "all tags valid" }) };
 }

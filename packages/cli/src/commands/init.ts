@@ -40,6 +40,7 @@ export interface InitOutput {
   env_skipped: boolean;
   imported_from_hermes: boolean;
   discovered_tags: number;
+  humanHint: string;
 }
 
 function extractDomainFromSchema(text: string): string {
@@ -205,6 +206,15 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
 
   const importedFromHermes = pathRes.source === "hermes-dotenv" && !swDotenvHadPath;
 
+  const humanHint = [
+    `vault: ${target}`,
+    `domain: ${domain}`,
+    `lang: ${canonicalLang}`,
+    `created: ${created.length}, preserved: ${preserved.length}`,
+    `discovered tags: ${discovered_tags}`,
+    skipEnv ? "env: skipped" : `env: ${envWritten}`,
+  ].join("\n");
+
   return {
     exitCode: ExitCode.OK,
     result: ok({
@@ -217,7 +227,8 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       env_written: envWritten,
       env_skipped: skipEnv,
       imported_from_hermes: importedFromHermes,
-      discovered_tags
+      discovered_tags,
+      humanHint
     })
   };
 }

@@ -12,6 +12,7 @@ export interface InstallOutput {
   installed: string[];
   backed_up: string[];
   manifest_path: string;
+  humanHint: string;
 }
 
 export async function runInstall(input: InstallInput): Promise<{ exitCode: number; result: Result<InstallOutput> }> {
@@ -45,5 +46,10 @@ export async function runInstall(input: InstallInput): Promise<{ exitCode: numbe
 
   const manifest_path = join(input.target, "wiki-manifest.json");
   if (!input.dryRun) await writeManifest(manifest_path, { installed, backed_up });
-  return { exitCode: ExitCode.OK, result: ok({ installed, backed_up, manifest_path }) };
+  const hintLines = [
+    `installed: ${installed.length}`,
+    input.dryRun ? "(dry run)" : `backed up: ${backed_up.length}`,
+    `manifest: ${manifest_path}`,
+  ];
+  return { exitCode: ExitCode.OK, result: ok({ installed, backed_up, manifest_path, humanHint: hintLines.join("\n") }) };
 }

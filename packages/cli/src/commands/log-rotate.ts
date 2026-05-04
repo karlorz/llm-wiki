@@ -10,6 +10,7 @@ export interface LogRotateOutput {
   threshold: number;
   rotated: boolean;
   rotated_to?: string;
+  humanHint: string;
 }
 
 export async function runLogRotate(input: LogRotateInput): Promise<{ exitCode: number; result: Result<LogRotateOutput> }> {
@@ -25,13 +26,13 @@ export async function runLogRotate(input: LogRotateInput): Promise<{ exitCode: n
   const entries = matches.length;
 
   if (entries < input.threshold) {
-    return { exitCode: ExitCode.OK, result: ok({ entries, threshold: input.threshold, rotated: false }) };
+    return { exitCode: ExitCode.OK, result: ok({ entries, threshold: input.threshold, rotated: false, humanHint: `${entries}/${input.threshold} entries — no rotation needed` }) };
   }
 
   if (!input.apply) {
     return {
       exitCode: ExitCode.LOG_ROTATE_NEEDED,
-      result: ok({ entries, threshold: input.threshold, rotated: false })
+      result: ok({ entries, threshold: input.threshold, rotated: false, humanHint: `${entries}/${input.threshold} entries — rotation needed (use --apply)` })
     };
   }
 
@@ -48,5 +49,5 @@ export async function runLogRotate(input: LogRotateInput): Promise<{ exitCode: n
     return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { message: String(e) }) };
   }
 
-  return { exitCode: ExitCode.OK, result: ok({ entries, threshold: input.threshold, rotated: true, rotated_to: rotatedName }) };
+  return { exitCode: ExitCode.OK, result: ok({ entries, threshold: input.threshold, rotated: true, rotated_to: rotatedName, humanHint: `rotated ${entries} entries to ${rotatedName}` }) };
 }
