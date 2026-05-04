@@ -14,7 +14,7 @@
       "description": "10 prompt-only skills (wiki-* + proj-*) backed by the deterministic skillwiki CLI.",
       "version": "0.1.0",
       "source": "./packages/skills",
-      "strict": false,
+      "strict": true,
       "author": {
         "name": "karlorz",
         "url": "https://github.com/karlorz"
