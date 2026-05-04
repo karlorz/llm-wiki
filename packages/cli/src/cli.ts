@@ -23,6 +23,7 @@ import { runLint } from "./commands/lint.js";
 import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "./commands/config.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runArchive } from "./commands/archive.js";
+import { runDrift } from "./commands/drift.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -243,6 +244,16 @@ program
     const v = await resolveVaultArg(vault);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runArchive({ vault: v.vault, page }));
+  });
+
+// drift
+program
+  .command("drift [vault]")
+  .description("detect content drift in raw sources")
+  .action(async (vault) => {
+    const v = await resolveVaultArg(vault);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runDrift({ vault: v.vault }));
   });
 
 program.parseAsync(process.argv).catch((e) => {
