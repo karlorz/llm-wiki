@@ -1,6 +1,6 @@
 ---
 name: wiki-ingest
-description: Convert URLs, files, or pasted text into typed-knowledge pages with raw provenance. Single-pass v1.
+description: Convert URLs, files, or pasted text into typed-knowledge pages with raw provenance. Supports single and batch mode.
 ---
 
 # wiki-ingest
@@ -45,3 +45,14 @@ Run `skillwiki lang` at the start. Generate page-body prose, narrative sections,
 - Skipping `fetch-guard`.
 - Updating `index.md` or `log.md` before all pages validate.
 - Modifying any existing file in `raw/`.
+
+## Batch Mode
+
+When the user provides multiple sources (a directory of files, a list of URLs, or a multi-document input):
+
+1. **Loop per source.** Execute steps 1–5 for each source individually (guard → fetch → hash → generate → validate).
+2. **Accumulate, don't write yet.** Collect all raw files and pages in memory. Do not write `index.md` or `log.md` until every source has validated.
+3. **Fail fast.** If any page fails validation, STOP. Report all failures. Do not write index/log for any source.
+4. **Deduplication.** Before writing each raw file, check `sha256` against existing vault raw sources. Skip sources whose content is already present.
+5. **Single index/log update.** After all sources validate, write all raw files and pages, then update `index.md` and `log.md` once.
+6. **Progress.** After each source completes validation, report progress (e.g., "Validated 3/10 sources").
