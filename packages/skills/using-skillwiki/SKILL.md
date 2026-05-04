@@ -20,6 +20,9 @@ Invoke a skillwiki skill when the user:
 - Wants a health check or lint on their vault
 - Mentions crystallizing a session into a note
 - Talks about project workspaces, ADRs, or distillation
+- Wants to archive or clean up old vault pages
+- Needs to detect source drift or re-ingest updated content
+- Has a spec/plan in a non-skillwiki format (CodeStable, RFC, AIDE)
 - Asks about their skillwiki configuration or setup health
 
 ## Skill Map
@@ -32,6 +35,9 @@ Invoke a skillwiki skill when the user:
 | `wiki-lint` | Vault health check (stale pages, oversized pages, log rotation) |
 | `wiki-crystallize` | Distill the current working session into a typed-knowledge page |
 | `wiki-audit` | Verify raw provenance references and source frontmatter integrity |
+| `wiki-archive` | Archive a typed-knowledge page — move to `_archive/`, remove from index |
+| `wiki-reingest` | Detect drift in raw sources (sha256 comparison) and re-ingest updated content |
+| `wiki-adapter-prd` | Map foreign PRD formats (CodeStable, RFC, AIDE, Hermes) into vault pages |
 | `proj-init` | Bootstrap a project workspace (README, requirements, architecture) |
 | `proj-work` | Open or run a work item under a project's work/ directory |
 | `proj-distill` | Distill project compound entries into vault concept pages |
@@ -41,7 +47,7 @@ Invoke a skillwiki skill when the user:
 
 All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, and linting. Skills invoke it via Bash for the mechanical parts and use Claude for the creative parts.
 
-Key CLI subcommands: `init`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `graph build`.
+Key CLI subcommands: `init`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `graph build`, `archive`, `drift`.
 
 Run `skillwiki doctor` to diagnose setup issues. Run `skillwiki config list` to see current configuration.
 
@@ -55,3 +61,5 @@ Run `skillwiki doctor` to diagnose setup issues. Run `skillwiki config list` to 
 6. **Audit** (`wiki-audit`) — verify source integrity
 
 For longer-running project work, use `proj-init` → `proj-work` → `proj-distill` / `proj-decide`.
+
+Maintenance: **Archive** (`wiki-archive`) superseded pages, **Drift** (`wiki-reingest`) to detect stale sources, **Adapter** (`wiki-adapter-prd`) for foreign PRD format ingestion.
