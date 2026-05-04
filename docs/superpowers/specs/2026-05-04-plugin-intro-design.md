@@ -90,7 +90,7 @@ Add a `SessionStart` hook that injects `using-skillwiki/SKILL.md` content into e
 
 **session-start script:**
 - Determine plugin root via `$CLAUDE_PLUGIN_ROOT` (set by Claude Code at runtime)
-- Read `skills/using-skillwiki/SKILL.md` from plugin root
+- Read `using-skillwiki/SKILL.md` from plugin root (skills are at plugin root level, not inside a `skills/` subdirectory)
 - JSON-escape the content using bash parameter substitution (no jq dependency)
 - Emit Claude Code format: `{ "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": "..." } }`
 - Exit 0

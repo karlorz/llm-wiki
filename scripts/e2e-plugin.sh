@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# e2e-plugin.sh — Plugin channel E2E test for skillwiki on sg01.
+# Verifies the Claude Code plugin discovers all 11 skills and that
+# the backing CLI commands work correctly through the plugin channel.
+#
+# Usage:  ./scripts/e2e-plugin.sh
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/e2e-common.sh"
+
+SSH_HOST="sg01"
+REMOTE_CLI="skillwiki"
+
+printf "=== Plugin E2E (sg01) ===\n\n"
+
+# ---- 0. Verify plugin version ----
+printf "%s\n" "--- Plugin version ---"
+PLUGIN_VERSION=$(ssh "$SSH_HOST" "find /root/.claude/plugins/cache/llm-wiki/skillwiki/ -name plugin.json -exec head -4 {} \; 2>/dev/null | grep version | head -1 | sed 's/.*: \"\\(.*\\)\",/\\1/'")
+if [ "$PLUGIN_VERSION" = "0.2.0-beta.6" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 plugin version is %s\n" "$PLUGIN_VERSION"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 plugin version is %s, expected 0.2.0-beta.6\n" "$PLUGIN_VERSION"
+fi
+
+# ---- 1. Verify plugin installed with 11 skills ----
+printf "%s\n" "--- Plugin installation ---"
+SKILL_COUNT=$(ssh "$SSH_HOST" "find /root/.claude/plugins/cache/llm-wiki/skillwiki/ -name 'SKILL.md' 2>/dev/null | wc -l")
+if [ "$SKILL_COUNT" -eq 11 ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 plugin has 11 SKILL.md files\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s SKILL.md files, expected 11\n" "$SKILL_COUNT"
+fi
+
+# Verify skill discovery via claude (10 CLI skills — using-skillwiki is hook-injected, not listed by /skills)
+DISCOVERED=$(ssh "$SSH_HOST" "claude -p 'list skills starting with wiki- or proj-. names only, one per line, nothing else.' 2>&1")
+DISC_COUNT=$(printf '%s' "$DISCOVERED" | grep -cE '^(wiki-|proj-)' || true)
+if [ "$DISC_COUNT" -eq 10 ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 claude discovers all 10 CLI skills\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 claude discovered %s/10 CLI skills\n" "$DISC_COUNT"
+fi
+
+# Verify specific skills are present
+for skill in wiki-init wiki-ingest wiki-query wiki-lint wiki-crystallize wiki-audit proj-init proj-work proj-distill proj-decide; do
+  if printf '%s' "$DISCOVERED" | grep -q "^${skill}$"; then
+    PASS=$((PASS + 1)); printf "  \u2713 skill '%s' discoverable\n" "$skill"
+  else
+    FAIL=$((FAIL + 1)); printf "  \u2717 skill '%s' NOT discoverable\n" "$skill"
+  fi
+done
+
+# ---- 2. Test wiki-init skill can run init via CLI ----
+printf "\n--- wiki-init skill (init round-trip) ---\n"
+VAULT=$(ssh "$SSH_HOST" "mktemp -d")
+TEMP_HOME=$(ssh "$SSH_HOST" "mktemp -d")
+
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME $REMOTE_CLI init --target $VAULT --domain 'Plugin E2E' --taxonomy 'research,concept,tool' --lang en"
+assert_exit 0 "$RUN_RC" "plugin e2e init succeeds"
+
+for dir in raw/articles entities concepts meta; do
+  if ssh "$SSH_HOST" "test -d $VAULT/$dir" 2>/dev/null; then
+    PASS=$((PASS + 1)); printf "  \u2713 vault has %s/\n" "$dir"
+  else
+    FAIL=$((FAIL + 1)); printf "  \u2717 vault missing %s/\n" "$dir"
+  fi
+done
+
+# ---- 3. Test wiki-lint skill (lint via CLI) ----
+printf "\n--- wiki-lint skill (lint via CLI) ---\n"
+REMOTE_COMMON="/tmp/sw-plugin-$(date +%s).sh"
+scp "$SCRIPT_DIR/e2e-common.sh" "$SSH_HOST:$REMOTE_COMMON" >/dev/null
+rc=0
+ssh "$SSH_HOST" "source $REMOTE_COMMON && seed_vault $VAULT && rm -f $REMOTE_COMMON" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 seed_vault on remote\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 seed_vault on remote failed\n"
+fi
+
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI lint $VAULT"
+assert_exit 23 "$RUN_RC" "plugin e2e lint detects errors"
+
+# ---- 4. Test config command ----
+printf "\n--- config via CLI (backing wiki-* skills) ---\n"
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME $REMOTE_CLI config list"
+assert_exit 0 "$RUN_RC" "config list succeeds"
+
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME $REMOTE_CLI config set WIKI_LANG de"
+assert_exit 0 "$RUN_RC" "config set succeeds"
+
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME $REMOTE_CLI config get WIKI_LANG"
+assert_exit 0 "$RUN_RC" "config get succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.value" "de" "config get round-trip"
+
+# ---- 5. Test doctor ----
+printf "\n--- doctor via CLI ---\n"
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME $REMOTE_CLI doctor"
+# TEMP_HOME has no ~/.claude/skills/ so skills_installed warns → exit 28
+assert_exit 28 "$RUN_RC" "doctor exits 28 (skills_installed warn)"
+assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0" "doctor 0 errors"
+assert_json_contains "$RUN_OUTPUT" "data.summary.warn" "1" "doctor 1 warn (skills_installed)"
+
+# ---- 6. Cleanup ----
+ssh "$SSH_HOST" "rm -rf $VAULT $TEMP_HOME" 2>/dev/null || true
+
+# ---- Summary ----
+printf "\n"
+summary

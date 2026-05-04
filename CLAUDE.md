@@ -17,6 +17,14 @@ This repo ships the `skillwiki` CLI and 11 prompt-only SKILL.md files.
 - `--human` MUST NOT alter exit codes (N2).
 - Files under `raw/` MUST NOT be modified after ingestion (N9).
 
+## E2E test suite
+
+Three scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
+
+- **`e2e-local.sh`** — builds from source, runs all CLI commands locally (73 assertions). No network required.
+- **`e2e-remote.sh`** — upgrades skillwiki on sg01 via `npm install -g skillwiki@beta`, then runs the full CLI suite over SSH (48 assertions).
+- **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 11 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
+
 ## Where things live
 
 - Schemas: `packages/shared/src/schemas.ts`.
@@ -34,3 +42,12 @@ The skills ship through two independent channels — keep both working:
 2. **npm CLI installer** — `npx skillwiki install` copies SKILL.md files into `~/.claude/skills/` via the `install` subcommand (see `packages/cli/src/commands/install.ts`).
 
 Changing the layout under `packages/skills/<skill>/` requires updating BOTH `packages/skills/.claude-plugin/plugin.json` AND the `install` subcommand's directory scan.
+
+## Plugin release workflow
+
+- **Pushing to `dev` = releasing the plugin.** There is no version pinning or channel tag (`@beta`) for Claude Code plugins. Every push to the default branch (`dev`) is what users get on `plugin install`.
+- **Version gate:** `/plugin update` only detects changes when the `version` field in `plugin.json` is bumped. New commits without a version bump are ignored.
+- **npm is a separate channel:** `npm publish --tag beta` gives CLI users a beta track independent of the plugin channel.
+- **Always run `e2e-plugin.sh` before pushing to `dev`** — there is no publish gate.
+- **Updating plugin on test hosts:** the marketplace cache at `~/.claude/plugins/marketplaces/<name>/` does NOT auto-update. Run `git fetch origin && git reset --hard origin/dev` inside it, then `claude plugin uninstall skillwiki@llm-wiki && rm -rf ~/.claude/plugins/cache/llm-wiki && claude plugin install skillwiki@llm-wiki`.
+- **Shell command, not slash command:** use `claude plugin install` (no slash) from the terminal. The `/plugin` slash command only works inside an interactive Claude session.

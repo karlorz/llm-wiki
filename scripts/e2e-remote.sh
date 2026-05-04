@@ -40,13 +40,21 @@ cleanup() {
 trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
-# 3. Install / verify skillwiki on remote
+# 3. Upgrade skillwiki on remote
 # ---------------------------------------------------------------------------
-printf "\n--- Verify skillwiki on %s ---\n" "$SSH_HOST"
+printf "\n--- Upgrade skillwiki on %s ---\n" "$SSH_HOST"
 
+UPGRADE_OUTPUT=$(ssh "$SSH_HOST" "npm install -g skillwiki@beta 2>&1") || true
 run_cli ssh "$SSH_HOST" "$REMOTE_CLI --version"
 assert_exit 0 "$RUN_RC" "skillwiki --version on remote"
 printf "  version: %s\n" "$RUN_OUTPUT"
+
+# Verify we got 0.2.0-beta.6
+if printf '%s' "$RUN_OUTPUT" | grep -q '0.2.0-beta.6'; then
+  PASS=$((PASS + 1)); printf "  \u2713 version is 0.2.0-beta.6\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 version is not 0.2.0-beta.6: %s\n" "$RUN_OUTPUT"
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Prepare Hermes compat environment on remote
@@ -194,7 +202,101 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 13. Summary
+# 13. config commands on remote
+# ---------------------------------------------------------------------------
+printf "\n--- Remote config ---\n"
+
+# config path — should report the .env written by init
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI config path"
+assert_exit 0 "$RUN_RC" "remote config path succeeds"
+
+# config list — should show WIKI_PATH at minimum
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI config list"
+assert_exit 0 "$RUN_RC" "remote config list succeeds"
+assert_json_contains "$RUN_OUTPUT" "ok" "true" "remote config list returns ok"
+
+# config get WIKI_PATH — should return the vault path
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI config get WIKI_PATH"
+assert_exit 0 "$RUN_RC" "remote config get WIKI_PATH succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.key" "WIKI_PATH" "remote config get returns key"
+
+# config set WIKI_LANG
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI config set WIKI_LANG ja"
+assert_exit 0 "$RUN_RC" "remote config set WIKI_LANG succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.value" "ja" "remote config set returns value"
+
+# config get WIKI_LANG — verify round-trip
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI config get WIKI_LANG"
+assert_exit 0 "$RUN_RC" "remote config get WIKI_LANG succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.value" "ja" "remote config get round-trip"
+
+# config set invalid key — exit 26
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI config set BOGUS value"
+assert_exit 26 "$RUN_RC" "remote config set invalid key (exit 26)"
+assert_json_contains "$RUN_OUTPUT" "error" "INVALID_CONFIG_KEY" "remote config set returns error code"
+
+# config get invalid key — exit 26
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI config get BOGUS"
+assert_exit 26 "$RUN_RC" "remote config get invalid key (exit 26)"
+
+# config --human list (N2: exit unchanged)
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI --human config list"
+assert_exit 0 "$RUN_RC" "remote config list --human exit 0"
+if printf '%s' "$RUN_OUTPUT" | grep -q '"ok"'; then
+  FAIL=$((FAIL + 1)); printf "  \u2717 remote config list --human produced JSON\n"
+else
+  PASS=$((PASS + 1)); printf "  \u2713 remote config list --human is not JSON\n"
+fi
+
+# ---------------------------------------------------------------------------
+# 14. doctor on remote
+# ---------------------------------------------------------------------------
+printf "\n--- Remote doctor ---\n"
+
+# doctor with valid vault — should be all-pass or warn-only
+# (skillwiki is globally installed on sg01, so cli_on_path should pass)
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI doctor"
+assert_exit 0 "$RUN_RC" "remote doctor exits 0 (all pass)"
+assert_json_contains "$RUN_OUTPUT" "ok"                "true" "remote doctor returns ok"
+assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0"   "remote doctor reports 0 errors"
+assert_json_contains "$RUN_OUTPUT" "data.summary.warn"  "0"   "remote doctor reports 0 warns"
+
+# Verify exactly 7 checks
+checks_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(len(data.get('data',{}).get('checks',[])))
+" 2>/dev/null)
+if [ "$checks_count" = "7" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 remote doctor returns 7 checks\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 remote doctor returned %s checks, expected 7\n" "$checks_count"
+fi
+
+# doctor with bad WIKI_PATH — should report errors
+ERR_HOME_REMOTE="/tmp/sw-err-home-$(date +%s)"
+ssh "$SSH_HOST" "mkdir -p $ERR_HOME_REMOTE/.skillwiki && echo 'WIKI_PATH=/no/such/path' > $ERR_HOME_REMOTE/.skillwiki/.env" 2>/dev/null
+run_cli ssh "$SSH_HOST" "HOME=$ERR_HOME_REMOTE $REMOTE_CLI doctor"
+assert_exit 29 "$RUN_RC" "remote doctor exits 29 (errors)"
+assert_json_contains "$RUN_OUTPUT" "data.summary.error" "2" "remote doctor reports 2 errors"
+ssh "$SSH_HOST" "rm -rf $ERR_HOME_REMOTE" 2>/dev/null
+
+# doctor --human (N2: exit code unchanged)
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI --human doctor"
+assert_exit 0 "$RUN_RC" "remote doctor --human exit matches JSON exit (N2)"
+if printf '%s' "$RUN_OUTPUT" | grep -q '"ok"'; then
+  FAIL=$((FAIL + 1)); printf "  \u2717 remote doctor --human produced JSON\n"
+else
+  PASS=$((PASS + 1)); printf "  \u2713 remote doctor --human is not JSON\n"
+fi
+if printf '%s' "$RUN_OUTPUT" | grep -q 'pass.*warn.*error'; then
+  PASS=$((PASS + 1)); printf "  \u2713 remote doctor --human shows summary line\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 remote doctor --human missing summary line\n"
+fi
+
+# ---------------------------------------------------------------------------
+# 15. Summary
 # ---------------------------------------------------------------------------
 printf "\n"
 summary

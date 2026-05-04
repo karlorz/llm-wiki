@@ -282,7 +282,7 @@ set -euo pipefail
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 # Read using-skillwiki content
-skill_content=$(cat "${PLUGIN_ROOT}/skills/using-skillwiki/SKILL.md" 2>&1 || echo "Error reading using-skillwiki skill")
+skill_content=$(cat "${PLUGIN_ROOT}/using-skillwiki/SKILL.md" 2>&1 || echo "Error reading using-skillwiki skill")
 
 # Escape string for JSON embedding using bash parameter substitution.
 # Each ${s//old/new} is a single C-level pass.

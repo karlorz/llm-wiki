@@ -148,5 +148,115 @@ assert_exit 0 "$RUN_RC" "install succeeds"
 assert_json_contains "$RUN_OUTPUT" "ok" "true" "install returns ok"
 assert_file_exists "$INSTALL_TARGET/wiki-manifest.json" "install writes manifest"
 
+# ==== 16. config path ========================================================
+printf "\n--- config path ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config path
+assert_exit 0 "$RUN_RC" "config path succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.path" "$TEMP_HOME/.skillwiki/.env" "config path returns correct path"
+assert_json_contains "$RUN_OUTPUT" "data.exists" "true" "config path reports exists"
+
+# ==== 17. config set =========================================================
+printf "\n--- config set ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config set WIKI_LANG ja
+assert_exit 0 "$RUN_RC" "config set succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.key"     "WIKI_LANG" "config set returns key"
+assert_json_contains "$RUN_OUTPUT" "data.value"   "ja"        "config set returns value"
+assert_json_contains "$RUN_OUTPUT" "data.written" "true"      "config set confirms written"
+
+# ==== 18. config get =========================================================
+printf "\n--- config get ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config get WIKI_LANG
+assert_exit 0 "$RUN_RC" "config get succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.key"   "WIKI_LANG" "config get returns key"
+assert_json_contains "$RUN_OUTPUT" "data.value" "ja"        "config get returns value"
+
+# ==== 19. config get (unset key) =============================================
+printf "\n--- config get unset key ---\n"
+# Use a fresh HOME with no config to test unset key
+FRESH_HOME=$(mktemp -d)
+run_cli env HOME="$FRESH_HOME" "${CLI[@]}" config get WIKI_LANG
+assert_exit 0 "$RUN_RC" "config get unset key exits 0"
+assert_json_contains "$RUN_OUTPUT" "data.value" "" "config get returns empty for unset"
+rm -rf "$FRESH_HOME"
+
+# ==== 20. config list ========================================================
+printf "\n--- config list ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config list
+assert_exit 0 "$RUN_RC" "config list succeeds"
+assert_json_contains "$RUN_OUTPUT" "ok" "true" "config list returns ok"
+
+# ==== 21. config set invalid key =============================================
+printf "\n--- config set invalid key ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config set BOGUS value
+assert_exit 26 "$RUN_RC" "config set rejects invalid key (exit 26)"
+assert_json_contains "$RUN_OUTPUT" "ok" "false" "config set invalid returns error"
+assert_json_contains "$RUN_OUTPUT" "error" "INVALID_CONFIG_KEY" "config set invalid returns error code"
+
+# ==== 22. config get invalid key =============================================
+printf "\n--- config get invalid key ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config get BOGUS
+assert_exit 26 "$RUN_RC" "config get rejects invalid key (exit 26)"
+
+# ==== 23. config --human =====================================================
+printf "\n--- config --human ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" --human config list
+assert_exit 0 "$RUN_RC" "config list --human exit 0"
+# --human should print KEY=VALUE lines, not JSON
+if printf '%s' "$RUN_OUTPUT" | grep -q '"ok"'; then
+  FAIL=$((FAIL + 1)); printf "  \u2717 config list --human produced JSON\n"
+else
+  PASS=$((PASS + 1)); printf "  \u2713 config list --human is not JSON\n"
+fi
+
+# ==== 24. config --human path ================================================
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" --human config path
+assert_exit 0 "$RUN_RC" "config path --human exit 0"
+
+# ==== 25. doctor (valid vault, warns from cli_on_path) ========================
+printf "\n--- doctor (valid vault) ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" doctor
+# Running via `node cli.js` triggers cli_on_path=warn, so exit is 28 not 0
+assert_exit 28 "$RUN_RC" "doctor exits 28 (warn from dev-mode cli_on_path)"
+assert_json_contains "$RUN_OUTPUT" "ok"                "true" "doctor returns ok"
+assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0"   "doctor reports 0 errors"
+
+# Verify exactly 7 checks
+checks_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print(len(data.get('data',{}).get('checks',[])))
+" 2>/dev/null)
+if [ "$checks_count" = "7" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 doctor returns 7 checks\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 doctor returned %s checks, expected 7\n" "$checks_count"
+fi
+
+# ==== 26. doctor (errors from bad WIKI_PATH) =================================
+printf "\n--- doctor (errors) ---\n"
+ERR_HOME=$(mktemp -d)
+mkdir -p "$ERR_HOME/.skillwiki"
+printf 'WIKI_PATH=/no/such/path\n' > "$ERR_HOME/.skillwiki/.env"
+run_cli env HOME="$ERR_HOME" "${CLI[@]}" doctor
+assert_exit 29 "$RUN_RC" "doctor exits 29 (has errors)"
+assert_json_contains "$RUN_OUTPUT" "data.summary.error" "2" "doctor reports 2 errors (wiki_path_exists + vault_structure)"
+rm -rf "$ERR_HOME"
+
+# ==== 27. doctor --human (exit code unchanged per N2) ========================
+printf "\n--- doctor --human ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" --human doctor
+assert_exit 28 "$RUN_RC" "doctor --human exit matches JSON exit (N2)"
+if printf '%s' "$RUN_OUTPUT" | grep -q '"ok"'; then
+  FAIL=$((FAIL + 1)); printf "  \u2717 doctor --human produced JSON\n"
+else
+  PASS=$((PASS + 1)); printf "  \u2713 doctor --human is not JSON\n"
+fi
+# Should contain summary line
+if printf '%s' "$RUN_OUTPUT" | grep -q 'pass.*warn.*error'; then
+  PASS=$((PASS + 1)); printf "  \u2713 doctor --human shows summary line\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 doctor --human missing summary line\n"
+fi
+
 # ==== Summary ===============================================================
 summary
