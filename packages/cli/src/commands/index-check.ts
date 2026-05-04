@@ -32,13 +32,10 @@ export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode:
   for (const [slug, relPath] of fileSlugs.entries()) {
     if (!indexSlugsLower.has(slug.toLowerCase())) missing_from_index.push(relPath);
   }
+  const fileSlugsLower = new Set([...fileSlugs.keys()].map(s => s.toLowerCase()));
   const ghost_entries: string[] = [];
   for (const [lower, orig] of indexSlugsLower) {
-    let found = false;
-    for (const [fileSlug] of fileSlugs) {
-      if (fileSlug.toLowerCase() === lower) { found = true; break; }
-    }
-    if (!found) ghost_entries.push(orig);
+    if (!fileSlugsLower.has(lower)) ghost_entries.push(orig);
   }
 
   if (missing_from_index.length > 0 || ghost_entries.length > 0) {

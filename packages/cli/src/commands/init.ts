@@ -1,9 +1,9 @@
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { resolveInitTimePath } from "../utils/wiki-path.js";
 import { resolveLang } from "../utils/lang.js";
-import { parseDotenvFile, writeDotenv } from "../utils/dotenv.js";
+import { parseDotenvFile, parseDotenvText, writeDotenv } from "../utils/dotenv.js";
 import { extractTaxonomy } from "../parsers/taxonomy.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 
@@ -80,9 +80,9 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   const langRes = await resolveLang({ flag: input.lang, envValue: undefined, home: input.home });
   const canonicalLang = langRes.canonical;
 
-  let hasSchema = false;
-  try { await stat(join(target, "SCHEMA.md")); hasSchema = true; } catch { /* good */ }
-  if (hasSchema && !input.force) {
+  let oldSchemaText: string | undefined;
+  try { oldSchemaText = await readFile(join(target, "SCHEMA.md"), "utf8"); } catch { /* no existing schema */ }
+  if (oldSchemaText && !input.force) {
     return {
       exitCode: ExitCode.INIT_TARGET_NOT_EMPTY,
       result: err("INIT_TARGET_NOT_EMPTY", { target })
@@ -90,9 +90,9 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   }
 
   const envPath = join(input.home, ".skillwiki", ".env");
-  let existingEnvRaw: string | undefined;
+  let existingEnvRaw = "";
   try { existingEnvRaw = await readFile(envPath, "utf8"); } catch { /* new file */ }
-  const existingEnv = await parseDotenvFile(envPath);
+  const existingEnv = parseDotenvText(existingEnvRaw);
   const swDotenvHadPath = existingEnv.WIKI_PATH !== undefined;
   if (existingEnv.WIKI_PATH !== undefined && existingEnv.WIKI_PATH !== target && !input.force) {
     return {
@@ -125,25 +125,21 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
 
   // SCHEMA.md migration — read old domain and taxonomy from existing SCHEMA.md
   let oldTaxonomy: string[] = [];
-  if (hasSchema) {
-    try {
-      const oldSchema = await readFile(join(target, "SCHEMA.md"), "utf8");
-      if (!domain) {
-        const oldDomain = extractDomainFromSchema(oldSchema);
-        if (oldDomain) domain = oldDomain;
-      }
-      const oldTax = extractTaxonomy(oldSchema);
-      if (oldTax.ok) oldTaxonomy = oldTax.data;
-    } catch { /* ignore read errors */ }
+  if (oldSchemaText) {
+    if (!domain) {
+      const oldDomain = extractDomainFromSchema(oldSchemaText);
+      if (oldDomain) domain = oldDomain;
+    }
+    const oldTax = extractTaxonomy(oldSchemaText);
+    if (oldTax.ok) oldTaxonomy = oldTax.data;
   }
 
-  // Merge old taxonomy into new
   const taxonomySet = new Set(taxonomy);
   for (const t of oldTaxonomy) {
     if (!taxonomySet.has(t)) { taxonomy.push(t); taxonomySet.add(t); }
   }
 
-  // Taxonomy auto-discovery from existing pages
+
   const discovered = await discoverTagsFromPages(target, taxonomy);
   const discovered_tags = discovered.length;
 
@@ -166,48 +162,34 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   }
 
   const preserved: string[] = [];
-  const CONTENT_THRESHOLD = 10;
 
-  let skipIndex = false;
-  try {
-    const existingIdx = await readFile(join(target, "index.md"), "utf8");
-    if (existingIdx.split("\n").length > CONTENT_THRESHOLD) {
-      skipIndex = true;
-      preserved.push("index.md");
-    }
-  } catch { /* no existing index */ }
-  if (!skipIndex) {
+  async function writeOrPreserve(
+    fileName: string, render: () => Promise<string>
+  ): Promise<{ exitCode: number; result: Result<InitOutput> } | undefined> {
     try {
-      const idxTpl = await readFile(join(input.templates, "index.md"), "utf8");
-      const idx = idxTpl.replace("{{INIT_DATE}}", today);
-      await writeFile(join(target, "index.md"), idx, "utf8");
-      created.push("index.md");
+      const existing = await readFile(join(target, fileName), "utf8");
+      if (existing.split("\n").length > 10) { preserved.push(fileName); return undefined; }
+    } catch { /* no existing file */ }
+    try {
+      await writeFile(join(target, fileName), await render(), "utf8");
+      created.push(fileName);
+      return undefined;
     } catch (e) {
-      return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: "index.md", message: String(e) }) };
+      return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: fileName, message: String(e) }) };
     }
   }
 
-  let skipLog = false;
-  try {
-    const existingLog = await readFile(join(target, "log.md"), "utf8");
-    if (existingLog.split("\n").length > CONTENT_THRESHOLD) {
-      skipLog = true;
-      preserved.push("log.md");
-    }
-  } catch { /* no existing log */ }
-  if (!skipLog) {
-    try {
-      const logTpl = await readFile(join(input.templates, "log.md"), "utf8");
-      const log = logTpl
-        .replace(/\{\{INIT_DATE\}\}/g, today)
-        .replace("{{DOMAIN}}", domain)
-        .replace("{{WIKI_LANG}}", canonicalLang);
-      await writeFile(join(target, "log.md"), log, "utf8");
-      created.push("log.md");
-    } catch (e) {
-      return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: "log.md", message: String(e) }) };
-    }
-  }
+  const err1 = await writeOrPreserve("index.md", async () => {
+    const tpl = await readFile(join(input.templates, "index.md"), "utf8");
+    return tpl.replace("{{INIT_DATE}}", today);
+  });
+  if (err1) return err1;
+
+  const err2 = await writeOrPreserve("log.md", async () => {
+    const tpl = await readFile(join(input.templates, "log.md"), "utf8");
+    return tpl.replace(/\{\{INIT_DATE\}\}/g, today).replace("{{DOMAIN}}", domain).replace("{{WIKI_LANG}}", canonicalLang);
+  });
+  if (err2) return err2;
 
   const isTempPath = target.startsWith("/tmp/") || target === "/tmp" || target.startsWith("/var/tmp/") || target === "/var/tmp" || target.startsWith("/private/tmp/");
   const skipEnv = !!input.noEnv || isTempPath;

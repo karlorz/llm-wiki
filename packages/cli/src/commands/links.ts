@@ -2,6 +2,7 @@ import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { buildSlugMap } from "../utils/slug.js";
 
 export interface LinksInput { vault: string }
 export interface LinksOutput {
@@ -12,11 +13,7 @@ export async function runLinks(input: LinksInput): Promise<{ exitCode: number; r
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  const slugs = new Map<string, string>(); // lowercase -> actual slug
-  for (const p of scan.data.typedKnowledge) {
-    const slug = p.relPath.replace(/\.md$/, "").split("/").pop()!;
-    slugs.set(slug.toLowerCase(), slug);
-  }
+  const slugs = buildSlugMap(scan.data.typedKnowledge);
 
   const broken: LinksOutput["broken"] = [];
   for (const p of scan.data.typedKnowledge) {
