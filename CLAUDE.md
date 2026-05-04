@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-This repo ships the `skillwiki` CLI and 11 prompt-only SKILL.md files.
+This repo ships the `skillwiki` CLI and 14 prompt-only SKILL.md files.
 
 ## Working in this repo
 
-- The canonical spec is `docs/superpowers/specs/2026-05-02-llm-wiki-skill-design.md`. Do not regress N1–N18.
+- The canonical spec is in the vault at `~/wiki/projects/llm-wiki/history/specs/2026-05-02-llm-wiki-skill-design.md`. Do not regress N1–N18. Historical specs/plans are archived in `~/wiki/projects/llm-wiki/history/`.
 - Skills are prompt-only Markdown — no build step, no LLM calls in the CLI.
 - All deterministic logic lives under `packages/cli/src/`.
 - Shared types live in `packages/shared/src/` and are imported via `@skillwiki/shared`.
@@ -23,7 +23,7 @@ Three scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 
 - **`e2e-local.sh`** — builds from source, runs all CLI commands locally (73 assertions). No network required.
 - **`e2e-remote.sh`** — upgrades skillwiki on sg01 via `npm install -g skillwiki@beta`, then runs the full CLI suite over SSH (48 assertions).
-- **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 11 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
+- **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 14 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
 
 ## Where things live
 
@@ -52,3 +52,15 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 - **Always run `e2e-plugin.sh` before pushing to `dev`** — there is no publish gate.
 - **Updating plugin on test hosts:** the marketplace cache at `~/.claude/plugins/marketplaces/<name>/` does NOT auto-update. Run `git fetch origin && git reset --hard origin/dev` inside it, then `claude plugin uninstall skillwiki@llm-wiki && rm -rf ~/.claude/plugins/cache/llm-wiki && claude plugin install skillwiki@llm-wiki`.
 - **Shell command, not slash command:** use `claude plugin install` (no slash) from the terminal. The `/plugin` slash command only works inside an interactive Claude session.
+
+## Project vault
+
+- The vault at `~/wiki` is the canonical project knowledge base. All specs, plans, and retros land there via `skillwiki` skills.
+- Historical specs/plans archived at `~/wiki/projects/llm-wiki/history/{specs,plans}/`. Do not recreate `docs/superpowers/`.
+- The dev-loop commands (`~/.claude/commands/dev-loop.md`, `dev-loop-research.md`) drive the PRD+skillwiki workflow. Their shared prompt lives in user memory at `~/.claude/projects/.../memory/dev-loop-prompt.md`.
+
+## Current counts (2026-05-05)
+
+- 14 SKILL.md files in `packages/skills/`
+- 24 CLI subcommands in `packages/cli/src/commands/`
+- 25 test files in `packages/cli/test/commands/`
