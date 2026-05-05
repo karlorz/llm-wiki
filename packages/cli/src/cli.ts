@@ -25,6 +25,7 @@ import { runDoctor } from "./commands/doctor.js";
 import { runArchive } from "./commands/archive.js";
 import { runDrift } from "./commands/drift.js";
 import { runDedup } from "./commands/dedup.js";
+import { runMigrateCitations } from "./commands/migrate-citations.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -265,6 +266,17 @@ program
     const v = await resolveVaultArg(vault);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runDedup({ vault: v.vault }));
+  });
+
+// migrate-citations
+program
+  .command("migrate-citations [vault]")
+  .description("migrate ^[raw/...] markers to paragraph-end citations")
+  .option("--dry-run", "preview changes without writing", false)
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runMigrateCitations({ vault: v.vault, dryRun: !!opts.dryRun }));
   });
 
 program.parseAsync(process.argv).catch((e) => {
