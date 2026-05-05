@@ -226,10 +226,10 @@ import sys, json
 data = json.load(sys.stdin)
 print(len(data.get('data',{}).get('checks',[])))
 " 2>/dev/null)
-if [ "$checks_count" = "7" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 doctor returns 7 checks\n"
+if [ "$checks_count" = "9" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 doctor returns 9 checks\n"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 doctor returned %s checks, expected 7\n" "$checks_count"
+  FAIL=$((FAIL + 1)); printf "  \u2717 doctor returned %s checks, expected 9\n" "$checks_count"
 fi
 
 # ==== 26. doctor (errors from bad WIKI_PATH) =================================
