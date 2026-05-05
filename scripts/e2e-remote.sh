@@ -254,7 +254,7 @@ printf "\n--- Remote doctor ---\n"
 
 # doctor with valid vault — should be all-pass or warn-only
 # (skillwiki is globally installed on sg01, so cli_on_path should pass)
-run_cli ssh "$SSH_HOST" "WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI doctor"
+run_cli ssh "$SSH_HOST" "NO_UPDATE_NOTIFIER=1 WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI doctor"
 assert_exit 0 "$RUN_RC" "remote doctor exits 0 (all pass)"
 assert_json_contains "$RUN_OUTPUT" "ok"                "true" "remote doctor returns ok"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0"   "remote doctor reports 0 errors"
@@ -275,13 +275,13 @@ fi
 # doctor with bad WIKI_PATH — should report errors
 ERR_HOME_REMOTE="/tmp/sw-err-home-$(date +%s)"
 ssh "$SSH_HOST" "mkdir -p $ERR_HOME_REMOTE/.skillwiki && echo 'WIKI_PATH=/no/such/path' > $ERR_HOME_REMOTE/.skillwiki/.env" 2>/dev/null
-run_cli ssh "$SSH_HOST" "HOME=$ERR_HOME_REMOTE $REMOTE_CLI doctor"
+run_cli ssh "$SSH_HOST" "NO_UPDATE_NOTIFIER=1 HOME=$ERR_HOME_REMOTE $REMOTE_CLI doctor"
 assert_exit 29 "$RUN_RC" "remote doctor exits 29 (errors)"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "2" "remote doctor reports 2 errors"
 ssh "$SSH_HOST" "rm -rf $ERR_HOME_REMOTE" 2>/dev/null
 
 # doctor --human (N2: exit code unchanged)
-run_cli ssh "$SSH_HOST" "WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI --human doctor"
+run_cli ssh "$SSH_HOST" "NO_UPDATE_NOTIFIER=1 WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI --human doctor"
 assert_exit 0 "$RUN_RC" "remote doctor --human exit matches JSON exit (N2)"
 if printf '%s' "$RUN_OUTPUT" | grep -q '"ok"'; then
   FAIL=$((FAIL + 1)); printf "  \u2717 remote doctor --human produced JSON\n"
