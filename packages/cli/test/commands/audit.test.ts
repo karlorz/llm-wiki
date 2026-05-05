@@ -27,4 +27,14 @@ describe("audit", () => {
       expect(r.result.data.sources_consistency.unused_sources).toContain("raw/articles/y.md");
     }
   });
+
+  it("returns exit 0 for new-style citation page with footer", async () => {
+    const r = await runAudit({ file: F("concepts/newstyle.md") });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.footer_consistency).toBeDefined();
+      expect(r.result.data.footer_consistency!.missing_from_footer).toEqual([]);
+      expect(r.result.data.footer_consistency!.extra_in_footer).toEqual([]);
+    }
+  });
 });
