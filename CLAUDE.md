@@ -64,3 +64,4 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 - 14 SKILL.md files in `packages/skills/`
 - 27 CLI subcommands in `packages/cli/src/commands/`
 - 28 test files in `packages/cli/test/commands/`
+- Lint buckets: 4 error, 8 warning, 4 info (incl. `page_structure`)

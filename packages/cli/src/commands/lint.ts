@@ -13,6 +13,9 @@ import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 import { isLegacyCitationStyle } from "../parsers/citations.js";
 
+const STRUCT_MIN_BODY_LINES = 60;
+const STRUCT_MIN_SECTIONS = 3;
+
 export interface LintInput {
   vault: string;
   source?: string;
@@ -31,7 +34,7 @@ export interface LintOutput {
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "tag_not_in_taxonomy"] as const;
 const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans", "legacy_citation_style"] as const;
-const INFO_ORDER = ["bridges", "low_confidence_single_source", "topic_map_recommended"] as const;
+const INFO_ORDER = ["bridges", "low_confidence_single_source", "page_structure", "topic_map_recommended"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
   const buckets: Record<string, unknown[]> = {};
@@ -86,17 +89,34 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   const dedup = await runDedup({ vault: input.vault });
   if (dedup.result.ok && dedup.result.data.duplicates.length > 0) buckets.raw_dedup = dedup.result.data.duplicates;
 
-  // Citation style check
+  // Citation style + page structure check
   const scan = await scanVault(input.vault);
   if (scan.ok) {
     const legacyPages: string[] = [];
+    const structFlags: string[] = [];
     for (const page of scan.data.typedKnowledge) {
       const text = await readPage(page);
       const split = splitFrontmatter(text);
       if (!split.ok) continue;
-      if (isLegacyCitationStyle(split.data.body)) legacyPages.push(page.relPath);
+      const body = split.data.body;
+      if (isLegacyCitationStyle(body)) legacyPages.push(page.relPath);
+
+      const bodyLines = body.split("\n").filter(l => l.trim().length > 0).length;
+      if (bodyLines < STRUCT_MIN_BODY_LINES) {
+        const hasOverview = /^## Overview/m.test(body);
+        const hasRelated = /^## Related/m.test(body);
+        const sectionCount = (body.match(/^## /gm) ?? []).length;
+        if (!hasOverview || !hasRelated || sectionCount < STRUCT_MIN_SECTIONS) {
+          const reasons: string[] = [];
+          if (!hasOverview) reasons.push("no Overview");
+          if (!hasRelated) reasons.push("no Related");
+          if (sectionCount < STRUCT_MIN_SECTIONS) reasons.push(`only ${sectionCount} sections`);
+          structFlags.push(`${page.relPath}: ${bodyLines} lines, ${reasons.join(", ")}`);
+        }
+      }
     }
     if (legacyPages.length > 0) buckets.legacy_citation_style = legacyPages;
+    if (structFlags.length > 0) buckets.page_structure = structFlags;
   }
 
   const errorOut: Bucket[] = ERROR_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);

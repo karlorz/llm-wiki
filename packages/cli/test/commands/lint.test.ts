@@ -38,13 +38,14 @@ function vault(): string {
 describe("runLint", () => {
   it("clean fixture exits 0", async () => {
     const v = vault();
-    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "Body [[alpha]]\n");
+    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");
     writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
     const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
     expect(r.exitCode).toBe(0);
     if (r.result.ok) {
       expect(r.result.data.summary.errors).toBe(0);
       expect(r.result.data.summary.warnings).toBe(0);
+      expect(r.result.data.summary.info).toBe(0);
     }
   });
 
@@ -102,6 +103,19 @@ describe("runLint", () => {
     if (r.result.ok) {
       const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
       expect(warningKinds).toContain("legacy_citation_style");
+    }
+  });
+
+  it("flags thin pages missing structural sections as page_structure", async () => {
+    const v = vault();
+    // Page with no Overview, no Related, only 1 section — under 60 lines
+    writeFileSync(join(v, "concepts", "thin.md"), FM(["model"]) + "Just a short body.\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[thin]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(22); // info counts as LINT_HAS_WARNINGS
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).toContain("page_structure");
     }
   });
 });
