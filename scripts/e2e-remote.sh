@@ -37,20 +37,30 @@ printf "Vault : %s\n" "$VAULT_REMOTE"
 printf "Target: %s\n" "$INSTALL_TARGET"
 
 # ---------------------------------------------------------------------------
-# Cleanup trap — remove temp dirs only (NEVER touch ~/.hermes/.env)
+# Cleanup trap — remove temp dirs only (NEVER touch ~/.hermes/.env or ~/.skillwiki/.env)
 # ---------------------------------------------------------------------------
+TEMP_HOME_REMOTE=""
+
 cleanup() {
-  ssh "$SSH_HOST" "rm -rf $VAULT_REMOTE $INSTALL_TARGET" 2>/dev/null || true
+  ssh "$SSH_HOST" "rm -rf $VAULT_REMOTE $INSTALL_TARGET $TEMP_HOME_REMOTE" 2>/dev/null || true
 }
 trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
-# 3. Upgrade skillwiki on remote
+# 3. Install or verify skillwiki on remote
 # ---------------------------------------------------------------------------
-printf "\n--- Upgrade skillwiki on %s ---\n" "$SSH_HOST"
+printf "\n--- Verify skillwiki on %s ---\n" "$SSH_HOST"
 
-UPGRADE_OUTPUT=$(ssh "$SSH_HOST" "npm install -g skillwiki@beta 2>&1") || true
+# Check if already at expected version
 run_cli ssh "$SSH_HOST" "$REMOTE_CLI --version"
+if printf '%s' "$RUN_OUTPUT" | grep -q "$EXPECTED_VERSION"; then
+  PASS=$((PASS + 1)); printf "  \u2713 already at version %s, skipping npm install\n" "$EXPECTED_VERSION"
+else
+  printf "  Installing skillwiki@%s ...\n" "$EXPECTED_VERSION"
+  UPGRADE_OUTPUT=$(ssh "$SSH_HOST" "npm install -g skillwiki@$EXPECTED_VERSION 2>&1") || true
+  run_cli ssh "$SSH_HOST" "$REMOTE_CLI --version"
+fi
+
 assert_exit 0 "$RUN_RC" "skillwiki --version on remote"
 printf "  version: %s\n" "$RUN_OUTPUT"
 
@@ -181,52 +191,60 @@ else
   printf "  \u2717 remote manifest missing\n"
 fi
 
+# Initialize temp home for config tests (declared early for cleanup trap visibility)
+TEMP_HOME_REMOTE="/tmp/sw-e2e-home-$(date +%s)"
+
 # ---------------------------------------------------------------------------
-# 10. config commands on remote
+# 10. config commands on remote (using TEMP_HOME to avoid modifying real ~/.skillwiki/.env)
 # ---------------------------------------------------------------------------
 printf "\n--- Remote config ---\n"
 
-# config path — should report the .env written by init
-run_cli ssh "$SSH_HOST" "$REMOTE_CLI config path"
+# Create temp home for isolated config tests
+ssh "$SSH_HOST" "mkdir -p $TEMP_HOME_REMOTE/.skillwiki" 2>/dev/null || true
+
+# config path — should report the .env path in temp home
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME_REMOTE $REMOTE_CLI config path"
 assert_exit 0 "$RUN_RC" "remote config path succeeds"
 
-# config list — should show WIKI_PATH at minimum
-run_cli ssh "$SSH_HOST" "$REMOTE_CLI config list"
+# config list — should show empty (fresh temp home)
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME_REMOTE $REMOTE_CLI config list"
 assert_exit 0 "$RUN_RC" "remote config list succeeds"
 assert_json_contains "$RUN_OUTPUT" "ok" "true" "remote config list returns ok"
 
-# config get WIKI_PATH — should return the vault path
-run_cli ssh "$SSH_HOST" "$REMOTE_CLI config get WIKI_PATH"
+# config get WIKI_PATH — should return empty (not set in temp home)
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME_REMOTE $REMOTE_CLI config get WIKI_PATH"
 assert_exit 0 "$RUN_RC" "remote config get WIKI_PATH succeeds"
-assert_json_contains "$RUN_OUTPUT" "data.key" "WIKI_PATH" "remote config get returns key"
 
 # config set WIKI_LANG
-run_cli ssh "$SSH_HOST" "$REMOTE_CLI config set WIKI_LANG ja"
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME_REMOTE $REMOTE_CLI config set WIKI_LANG ja"
 assert_exit 0 "$RUN_RC" "remote config set WIKI_LANG succeeds"
 assert_json_contains "$RUN_OUTPUT" "data.value" "ja" "remote config set returns value"
 
 # config get WIKI_LANG — verify round-trip
-run_cli ssh "$SSH_HOST" "$REMOTE_CLI config get WIKI_LANG"
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME_REMOTE $REMOTE_CLI config get WIKI_LANG"
 assert_exit 0 "$RUN_RC" "remote config get WIKI_LANG succeeds"
 assert_json_contains "$RUN_OUTPUT" "data.value" "ja" "remote config get round-trip"
 
 # config set invalid key — exit 26
-run_cli ssh "$SSH_HOST" "$REMOTE_CLI config set BOGUS value"
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME_REMOTE $REMOTE_CLI config set BOGUS value"
 assert_exit 26 "$RUN_RC" "remote config set invalid key (exit 26)"
 assert_json_contains "$RUN_OUTPUT" "error" "INVALID_CONFIG_KEY" "remote config set returns error code"
 
 # config get invalid key — exit 26
-run_cli ssh "$SSH_HOST" "$REMOTE_CLI config get BOGUS"
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME_REMOTE $REMOTE_CLI config get BOGUS"
 assert_exit 26 "$RUN_RC" "remote config get invalid key (exit 26)"
 
 # config --human list (N2: exit unchanged)
-run_cli ssh "$SSH_HOST" "$REMOTE_CLI --human config list"
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME_REMOTE $REMOTE_CLI --human config list"
 assert_exit 0 "$RUN_RC" "remote config list --human exit 0"
 if printf '%s' "$RUN_OUTPUT" | grep -q '"ok"'; then
   FAIL=$((FAIL + 1)); printf "  \u2717 remote config list --human produced JSON\n"
 else
   PASS=$((PASS + 1)); printf "  \u2713 remote config list --human is not JSON\n"
 fi
+
+# Cleanup temp home
+ssh "$SSH_HOST" "rm -rf $TEMP_HOME_REMOTE" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 11. doctor on remote
