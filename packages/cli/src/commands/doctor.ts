@@ -1,11 +1,12 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 import { parseDotenvFile } from "../utils/dotenv.js";
 import { configPath } from "./config.js";
 import { latestFromCache } from "../utils/auto-update.js";
+import { semverGt } from "../utils/semver.js";
 
 export type CheckStatus = "pass" | "warn" | "error";
 
@@ -121,6 +122,36 @@ function checkNpmUpdate(home: string, currentVersion: string): CheckResult {
   return check("pass", "npm_update", "npm CLI version", `v${currentVersion} (latest: v${latest})`);
 }
 
+function checkPluginVersionDrift(home: string, currentVersion: string): CheckResult {
+  const pluginJsonPath = join(home, ".claude", "plugins", "cache", "llm-wiki", "plugin.json");
+  if (!existsSync(pluginJsonPath)) {
+    return check("pass", "plugin_version_drift", "Plugin/CLI version", "Plugin cache not found — plugin not installed");
+  }
+  try {
+    const content = readFileSync(pluginJsonPath, { encoding: "utf8" });
+    const pluginData = JSON.parse(content) as { version?: string };
+    const pluginVersion = pluginData.version;
+    if (!pluginVersion) {
+      return check("pass", "plugin_version_drift", "Plugin/CLI version", "Plugin version not found in cache");
+    }
+    if (pluginVersion === currentVersion) {
+      return check("pass", "plugin_version_drift", "Plugin/CLI version", `Both at v${currentVersion}`);
+    }
+    // Versions differ — warn
+    const updateCmd = semverGt(pluginVersion, currentVersion)
+      ? "npm install -g skillwiki@beta"
+      : "claude plugin update skillwiki@llm-wiki";
+    return check(
+      "warn",
+      "plugin_version_drift",
+      "Plugin/CLI version",
+      `Plugin v${pluginVersion} ≠ CLI v${currentVersion} — run \`${updateCmd}\``
+    );
+  } catch {
+    return check("pass", "plugin_version_drift", "Plugin/CLI version", "Could not read plugin cache");
+  }
+}
+
 function findSkillMd(dir: string): string[] {
   const results: string[] = [];
   let entries;
@@ -160,6 +191,7 @@ export async function runDoctor(
   checks.push(checkVaultStructure(resolvedPath));
   checks.push(checkSkillsInstalled(input.home));
   checks.push(checkNpmUpdate(input.home, input.currentVersion));
+  checks.push(checkPluginVersionDrift(input.home, input.currentVersion));
 
   const summary = {
     pass: checks.filter(c => c.status === "pass").length,

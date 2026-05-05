@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runDoctor } from "../../src/commands/doctor.js";
@@ -107,12 +107,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 8 checks", async () => {
+  it("always returns exactly 9 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(8);
+      expect(r.result.data.checks).toHaveLength(9);
     }
   });
 
@@ -139,6 +139,46 @@ describe("runDoctor", () => {
       const npmUpdate = r.result.data.checks.find(c => c.id === "npm_update");
       expect(npmUpdate?.status).toBe("warn");
       expect(npmUpdate?.detail).toContain("update available");
+    }
+  });
+
+  it("plugin_version_drift check passes when no plugin cache", async () => {
+    const h = home();
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
+      expect(drift?.status).toBe("pass");
+      expect(drift?.detail).toContain("Plugin cache not found");
+    }
+  });
+
+  it("plugin_version_drift check passes when versions match", async () => {
+    const h = home();
+    const pluginDir = join(h, ".claude", "plugins", "cache", "llm-wiki");
+    mkdirSync(pluginDir, { recursive: true });
+    writeFileSync(join(pluginDir, "plugin.json"), JSON.stringify({ version: "0.2.0-beta.15" }));
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
+      expect(drift?.status).toBe("pass");
+      expect(drift?.detail).toContain("Both at v0.2.0-beta.15");
+    }
+  });
+
+  it("plugin_version_drift check warns when versions differ", async () => {
+    const h = home();
+    const pluginDir = join(h, ".claude", "plugins", "cache", "llm-wiki");
+    mkdirSync(pluginDir, { recursive: true });
+    writeFileSync(join(pluginDir, "plugin.json"), JSON.stringify({ version: "0.2.0-beta.99" }));
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
+      expect(drift?.status).toBe("warn");
+      expect(drift?.detail).toContain("Plugin v0.2.0-beta.99");
+      expect(drift?.detail).toContain("CLI v0.2.0-beta.15");
     }
   });
 });
