@@ -25,22 +25,27 @@ export function isLegacyCitationStyle(body: string): boolean {
   if (!hasSourcesFooter(body)) return true;
 
   const stripped = body.replace(FENCE, "");
-  const paragraphs = stripped.split(/\n\s*\n/);
+  const lines = stripped.split("\n");
+  let inSources = false;
 
-  for (const para of paragraphs) {
-    if (/^## Sources\b/.test(para.trim())) continue;
+  for (const line of lines) {
+    if (/^## Sources\b/.test(line.trim())) { inSources = true; continue; }
+    if (inSources) continue;
 
-    const paraMarkerRe = /\^\[(raw\/[^\]]+)\]/g;
-    const paraMarkers = [...para.matchAll(paraMarkerRe)];
-    if (paraMarkers.length === 0) continue;
+    // A line containing ONLY markers (and whitespace) is legacy style
+    const markerOnly = line.replace(/\^\[(raw\/[^\]]+)\]/g, "").trim();
+    if (markerOnly.length === 0 && /\^\[raw\//.test(line)) return true;
 
-    const lastMarkerIdx = para.lastIndexOf("^[raw/");
-    const afterLast = para.slice(lastMarkerIdx).replace(paraMarkerRe, "").trim();
-    if (afterLast.length > 0) return true;
+    // A line with markers NOT at the end (prose after markers) is legacy
+    const lastMarkerIdx = line.lastIndexOf("^[raw/");
+    if (lastMarkerIdx >= 0) {
+      const afterLast = line.slice(lastMarkerIdx).replace(/\^\[(raw\/[^\]]+)\]/g, "").trim();
+      if (afterLast.length > 0) return true;
 
-    const firstMarkerIdx = para.indexOf("^[raw/");
-    const beforeFirst = para.slice(0, firstMarkerIdx).trim();
-    if (beforeFirst.length > 0 && !/[.!?]\s*$/.test(beforeFirst)) return true;
+      // Markers must follow sentence-ending punctuation on the same line
+      const beforeFirst = line.slice(0, line.indexOf("^[raw/")).trim();
+      if (beforeFirst.length > 0 && !/[.!?]\s*$/.test(beforeFirst)) return true;
+    }
   }
 
   return false;
@@ -48,22 +53,26 @@ export function isLegacyCitationStyle(body: string): boolean {
 
 export function extractParagraphEndCitations(body: string): string[] {
   const stripped = body.replace(FENCE, "");
-  const paragraphs = stripped.split(/\n\s*\n/);
+  const lines = stripped.split("\n");
   const targets: string[] = [];
   const markerRe = /\^\[(raw\/[^\]]+)\]/g;
+  let inSources = false;
 
-  for (const para of paragraphs) {
-    if (/^## Sources\b/.test(para.trim())) continue;
+  for (const line of lines) {
+    if (/^## Sources\b/.test(line.trim())) { inSources = true; continue; }
+    if (inSources) continue;
 
-    const markers = [...para.matchAll(markerRe)];
+    const markerOnly = line.replace(markerRe, "").trim();
+    if (markerOnly.length === 0) continue; // marker-only line → not paragraph-end
+
+    const markers = [...line.matchAll(markerRe)];
     if (markers.length === 0) continue;
 
-    const lastMarkerIdx = para.lastIndexOf("^[raw/");
-    const afterLast = para.slice(lastMarkerIdx).replace(markerRe, "").trim();
+    const lastMarkerIdx = line.lastIndexOf("^[raw/");
+    const afterLast = line.slice(lastMarkerIdx).replace(markerRe, "").trim();
     if (afterLast.length > 0) continue;
 
-    const firstMarkerIdx = para.indexOf("^[raw/");
-    const beforeFirst = para.slice(0, firstMarkerIdx).trim();
+    const beforeFirst = line.slice(0, line.indexOf("^[raw/")).trim();
     if (beforeFirst.length > 0 && !/[.!?]\s*$/.test(beforeFirst)) continue;
 
     for (const m of markers) targets.push(m[1]);
