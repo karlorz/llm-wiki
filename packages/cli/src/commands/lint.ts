@@ -9,6 +9,9 @@ import { runOrphans } from "./orphans.js";
 import { runTopicMapCheck } from "./topic-map-check.js";
 import { runIndexLinkFormat } from "./index-link-format.js";
 import { runDedup } from "./dedup.js";
+import { scanVault, readPage } from "../utils/vault.js";
+import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { isLegacyCitationStyle } from "../parsers/citations.js";
 
 export interface LintInput {
   vault: string;
@@ -27,7 +30,7 @@ export interface LintOutput {
 }
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "tag_not_in_taxonomy"] as const;
-const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans"] as const;
+const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans", "legacy_citation_style"] as const;
 const INFO_ORDER = ["bridges", "low_confidence_single_source", "topic_map_recommended"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
@@ -82,6 +85,19 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
 
   const dedup = await runDedup({ vault: input.vault });
   if (dedup.result.ok && dedup.result.data.duplicates.length > 0) buckets.raw_dedup = dedup.result.data.duplicates;
+
+  // Citation style check
+  const scan = await scanVault(input.vault);
+  if (scan.ok) {
+    const legacyPages: string[] = [];
+    for (const page of scan.data.typedKnowledge) {
+      const text = await readPage(page);
+      const split = splitFrontmatter(text);
+      if (!split.ok) continue;
+      if (isLegacyCitationStyle(split.data.body)) legacyPages.push(page.relPath);
+    }
+    if (legacyPages.length > 0) buckets.legacy_citation_style = legacyPages;
+  }
 
   const errorOut: Bucket[] = ERROR_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);
   const warningOut: Bucket[] = WARNING_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);

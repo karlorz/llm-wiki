@@ -91,4 +91,17 @@ describe("runLint", () => {
       expect(infoKinds).not.toContain("topic_map_recommended");
     }
   });
+
+  it("warns on legacy citation style pages", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "Body cites X.\n^[raw/articles/x.md]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(22);
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).toContain("legacy_citation_style");
+    }
+  });
 });
