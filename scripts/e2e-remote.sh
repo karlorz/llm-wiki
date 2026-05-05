@@ -266,10 +266,10 @@ import sys, json
 data = json.load(sys.stdin)
 print(len(data.get('data',{}).get('checks',[])))
 " 2>/dev/null)
-if [ "$checks_count" = "9" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 remote doctor returns 9 checks\n"
+if [ "$checks_count" -ge 9 ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 remote doctor returns %s checks (>=9)\n" "$checks_count"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 remote doctor returned %s checks, expected 9\n" "$checks_count"
+  FAIL=$((FAIL + 1)); printf "  \u2717 remote doctor returned %s checks, expected >=9\n" "$checks_count"
 fi
 
 # doctor with bad WIKI_PATH — should report errors

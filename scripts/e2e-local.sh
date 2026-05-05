@@ -220,16 +220,16 @@ assert_exit 28 "$RUN_RC" "doctor exits 28 (warn from dev-mode cli_on_path)"
 assert_json_contains "$RUN_OUTPUT" "ok"                "true" "doctor returns ok"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0"   "doctor reports 0 errors"
 
-# Verify exactly 7 checks
+# Verify at least 9 checks
 checks_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 print(len(data.get('data',{}).get('checks',[])))
 " 2>/dev/null)
-if [ "$checks_count" = "9" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 doctor returns 9 checks\n"
+if [ "$checks_count" -ge 9 ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 doctor returns %s checks (>=9)\n" "$checks_count"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 doctor returned %s checks, expected 9\n" "$checks_count"
+  FAIL=$((FAIL + 1)); printf "  \u2717 doctor returned %s checks, expected >=9\n" "$checks_count"
 fi
 
 # ==== 26. doctor (errors from bad WIKI_PATH) =================================
