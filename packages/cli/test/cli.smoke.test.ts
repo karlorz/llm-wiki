@@ -200,4 +200,13 @@ describe("cli smoke", () => {
     expect(() => JSON.parse(human.stdout)).toThrow();
     expect(human.stdout.length).toBeGreaterThan(0);
   });
+
+  it("--human produces non-JSON output for hash", () => {
+    const fixture = join(RICH_VAULT, "concepts", "test.md");
+    const json = run(["hash", fixture]);
+    const human = run(["hash", fixture, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.length).toBeGreaterThan(0);
+  });
 });
