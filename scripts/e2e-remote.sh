@@ -37,10 +37,9 @@ printf "Vault : %s\n" "$VAULT_REMOTE"
 printf "Target: %s\n" "$INSTALL_TARGET"
 
 # ---------------------------------------------------------------------------
-# Cleanup trap — always restore Hermes .env and remove temp dirs
+# Cleanup trap — remove temp dirs only (NEVER touch ~/.hermes/.env)
 # ---------------------------------------------------------------------------
 cleanup() {
-  ssh "$SSH_HOST" "mv ~/.hermes/.env.e2e-backup ~/.hermes/.env 2>/dev/null || rm -f ~/.hermes/.env" 2>/dev/null || true
   ssh "$SSH_HOST" "rm -rf $VAULT_REMOTE $INSTALL_TARGET" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -63,35 +62,15 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Prepare Hermes compat environment on remote
+# 4. Init with --target (no dotfile modification)
 # ---------------------------------------------------------------------------
-printf "\n--- Prepare Hermes compat ---\n"
+printf "\n--- Init with --target ---\n"
 
-# Backup existing ~/.hermes/.env if present
-ssh "$SSH_HOST" "cp ~/.hermes/.env ~/.hermes/.env.e2e-backup 2>/dev/null || true"
-
-# Write test Hermes .env pointing at our temp vault
-ssh "$SSH_HOST" "echo 'WIKI_PATH=$VAULT_REMOTE' > ~/.hermes/.env"
-
-# Ensure no ~/.skillwiki/.env exists (so skillwiki-dotenv has no WIKI_PATH)
-ssh "$SSH_HOST" "rm -f ~/.skillwiki/.env"
-
-printf "  Hermes .env: WIKI_PATH=%s\n" "$VAULT_REMOTE"
-
-# ---------------------------------------------------------------------------
-# 5. Init with Hermes fallback (no --target)
-# ---------------------------------------------------------------------------
-printf "\n--- Init with Hermes fallback ---\n"
-
-run_cli ssh "$SSH_HOST" "$REMOTE_CLI init --domain 'E2E Remote Test' --taxonomy 'research,concept,tool' --lang en"
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI init --target $VAULT_REMOTE --domain 'E2E Remote Test' --taxonomy 'research,concept,tool' --lang en"
 assert_exit 0 "$RUN_RC" "remote init succeeds"
-assert_json_contains "$RUN_OUTPUT" "data.imported_from_hermes" "true" "init detects Hermes fallback"
+assert_json_contains "$RUN_OUTPUT" "ok" "true" "init returns ok"
 
-# ---------------------------------------------------------------------------
-# 6. Verify vault dirs created on remote
-# ---------------------------------------------------------------------------
-printf "\n--- Verify vault structure ---\n"
-
+# Verify vault structure
 for dir in raw/articles entities concepts meta; do
   if ssh "$SSH_HOST" "test -d $VAULT_REMOTE/$dir" 2>/dev/null; then
     PASS=$((PASS + 1))
@@ -111,12 +90,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 7. Restore ~/.hermes/.env before proceeding
-# ---------------------------------------------------------------------------
-ssh "$SSH_HOST" "mv ~/.hermes/.env.e2e-backup ~/.hermes/.env 2>/dev/null || rm -f ~/.hermes/.env" 2>/dev/null || true
-
-# ---------------------------------------------------------------------------
-# 8. Seed vault with fixture files on remote
+# 5. Seed vault with fixture files on remote
 # ---------------------------------------------------------------------------
 printf "\n--- Seed vault on remote ---\n"
 
@@ -136,7 +110,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 9. Run lint suite on remote
+# 6. Run lint suite on remote
 # ---------------------------------------------------------------------------
 printf "\n--- Remote lint suite ---\n"
 
@@ -173,7 +147,7 @@ run_cli ssh "$SSH_HOST" "$REMOTE_CLI log-rotate $VAULT_REMOTE"
 assert_exit 21 "$RUN_RC" "remote log-rotate (rotation needed)"
 
 # ---------------------------------------------------------------------------
-# 10. path --explain
+# 7. path --explain
 # ---------------------------------------------------------------------------
 printf "\n--- Remote path --explain ---\n"
 
@@ -182,7 +156,7 @@ assert_exit 0 "$RUN_RC" "remote path succeeds"
 assert_json_contains "$RUN_OUTPUT" "data.source" "flag" "remote path source is flag"
 
 # ---------------------------------------------------------------------------
-# 11. lang --explain
+# 8. lang --explain
 # ---------------------------------------------------------------------------
 printf "\n--- Remote lang --explain ---\n"
 
@@ -191,7 +165,7 @@ assert_exit 0 "$RUN_RC" "remote lang succeeds"
 assert_json_contains "$RUN_OUTPUT" "data.canonical" "zh-Hant" "remote lang resolves alias"
 
 # ---------------------------------------------------------------------------
-# 12. install on remote
+# 9. install on remote
 # ---------------------------------------------------------------------------
 printf "\n--- Remote install ---\n"
 
@@ -208,7 +182,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 13. config commands on remote
+# 10. config commands on remote
 # ---------------------------------------------------------------------------
 printf "\n--- Remote config ---\n"
 
@@ -255,7 +229,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 14. doctor on remote
+# 11. doctor on remote
 # ---------------------------------------------------------------------------
 printf "\n--- Remote doctor ---\n"
 
@@ -267,16 +241,16 @@ assert_json_contains "$RUN_OUTPUT" "ok"                "true" "remote doctor ret
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0"   "remote doctor reports 0 errors"
 assert_json_contains "$RUN_OUTPUT" "data.summary.warn"  "0"   "remote doctor reports 0 warns"
 
-# Verify exactly 7 checks
+# Verify exactly 9 checks
 checks_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 print(len(data.get('data',{}).get('checks',[])))
 " 2>/dev/null)
-if [ "$checks_count" = "7" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 remote doctor returns 7 checks\n"
+if [ "$checks_count" = "9" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 remote doctor returns 9 checks\n"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 remote doctor returned %s checks, expected 7\n" "$checks_count"
+  FAIL=$((FAIL + 1)); printf "  \u2717 remote doctor returned %s checks, expected 9\n" "$checks_count"
 fi
 
 # doctor with bad WIKI_PATH — should report errors
@@ -302,7 +276,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 15. Summary
+# 12. Summary
 # ---------------------------------------------------------------------------
 printf "\n"
 summary
