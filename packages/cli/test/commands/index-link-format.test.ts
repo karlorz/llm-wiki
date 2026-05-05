@@ -15,45 +15,37 @@ function makeVault(structure: Record<string, string>): string {
 }
 
 describe("runIndexLinkFormat", () => {
-  it("detects markdown links in index.md", () => {
+  it("detects markdown links in index.md", async () => {
     const vault = makeVault({
       "index.md": "# Index\n## Concepts\n- [Foo](concepts/foo.md) — desc\n- [[concepts/bar]] — ok\n",
     });
     try {
-      const r = runIndexLinkFormat({ vault });
-      // Run async
-      return (async () => {
-        const res = await r;
-        expect(res.exitCode).toBe(0);
-        expect(res.result.ok).toBe(true);
-        expect(res.result.data!.markdown_links).toHaveLength(1);
-        expect(res.result.data!.markdown_links[0].line).toBe(3);
-        expect(res.result.data!.markdown_links[0].text).toContain("[Foo](concepts/foo.md)");
-      })();
+      const res = await runIndexLinkFormat({ vault });
+      expect(res.exitCode).toBe(0);
+      expect(res.result.ok).toBe(true);
+      expect(res.result.data!.markdown_links).toHaveLength(1);
+      expect(res.result.data!.markdown_links[0].line).toBe(3);
+      expect(res.result.data!.markdown_links[0].text).toContain("[Foo](concepts/foo.md)");
     } finally { rmSync(vault, { recursive: true, force: true }); }
   });
 
-  it("returns empty when index.md has only wikilinks", () => {
+  it("returns empty when index.md has only wikilinks", async () => {
     const vault = makeVault({
       "index.md": "# Index\n## Concepts\n- [[concepts/foo]] — desc\n",
     });
     try {
-      return (async () => {
-        const res = await runIndexLinkFormat({ vault });
-        expect(res.result.ok).toBe(true);
-        expect(res.result.data!.markdown_links).toHaveLength(0);
-      })();
+      const res = await runIndexLinkFormat({ vault });
+      expect(res.result.ok).toBe(true);
+      expect(res.result.data!.markdown_links).toHaveLength(0);
     } finally { rmSync(vault, { recursive: true, force: true }); }
   });
 
-  it("returns empty when index.md does not exist", () => {
+  it("returns empty when index.md does not exist", async () => {
     const vault = makeVault({});
     try {
-      return (async () => {
-        const res = await runIndexLinkFormat({ vault });
-        expect(res.result.ok).toBe(true);
-        expect(res.result.data!.markdown_links).toHaveLength(0);
-      })();
+      const res = await runIndexLinkFormat({ vault });
+      expect(res.result.ok).toBe(true);
+      expect(res.result.data!.markdown_links).toHaveLength(0);
     } finally { rmSync(vault, { recursive: true, force: true }); }
   });
 });
