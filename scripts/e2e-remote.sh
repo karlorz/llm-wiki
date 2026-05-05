@@ -5,7 +5,7 @@
 # Prerequisites:
 #   - ssh sg01 works with key auth
 #   - Remote host has Node.js 20+
-#   - skillwiki@beta installed globally (npm install -g skillwiki@beta)
+#   - skillwiki installed globally (auto-installed from package.json version)
 #
 # Usage:
 #   ./scripts/e2e-remote.sh
@@ -40,9 +40,10 @@ printf "Target: %s\n" "$INSTALL_TARGET"
 # Cleanup trap — remove temp dirs only (NEVER touch ~/.hermes/.env or ~/.skillwiki/.env)
 # ---------------------------------------------------------------------------
 TEMP_HOME_REMOTE=""
+ERR_HOME_REMOTE=""
 
 cleanup() {
-  ssh "$SSH_HOST" "rm -rf $VAULT_REMOTE $INSTALL_TARGET $TEMP_HOME_REMOTE" 2>/dev/null || true
+  ssh "$SSH_HOST" "rm -rf $VAULT_REMOTE $INSTALL_TARGET $TEMP_HOME_REMOTE $ERR_HOME_REMOTE" 2>/dev/null || true
 }
 trap cleanup EXIT
 
