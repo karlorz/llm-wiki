@@ -16,6 +16,7 @@ function run(args: string[]): { stdout: string; status: number } {
 }
 
 const TMP_VAULT = mkdtempSync(join(tmpdir(), "smoke-vault-"));
+const RICH_VAULT = mkdtempSync(join(tmpdir(), "smoke-rich-"));
 afterAll(() => {
   // tmp dirs cleaned by OS; no explicit teardown needed
 });
@@ -27,7 +28,17 @@ function setupTmpVault() {
   writeFileSync(join(TMP_VAULT, "index.md"), "# Index\n");
   writeFileSync(join(TMP_VAULT, "log.md"), "# Vault Log\n");
 }
+
+function setupRichVault() {
+  writeFileSync(join(RICH_VAULT, "SCHEMA.md"), `# Vault Schema\n\n## Tag Taxonomy\n\n\`\`\`yaml\ntaxonomy:\n  - model\n\`\`\`\n`);
+  mkdirSync(join(RICH_VAULT, "raw"), { recursive: true });
+  mkdirSync(join(RICH_VAULT, "concepts"), { recursive: true });
+  writeFileSync(join(RICH_VAULT, "concepts", "test.md"), `---\ntitle: Test\ntype: concept\ntags: [model]\nsources: []\nprovenance: research\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\n## Overview\n\nTest page [[test]].\n\n## Related\n\n- [[test]]\n`);
+  writeFileSync(join(RICH_VAULT, "index.md"), "# Index\n\n## Concepts\n\n- [Test](concepts/test.md)\n");
+  writeFileSync(join(RICH_VAULT, "log.md"), "# Vault Log\n");
+}
 setupTmpVault();
+setupRichVault();
 
 describe("cli smoke", () => {
   it("fetch-guard rejects http with exit 4", () => {
@@ -171,5 +182,22 @@ describe("cli smoke", () => {
     expect(json.status).toBe(human.status);
     expect(() => JSON.parse(human.stdout)).toThrow();
     expect(human.stdout.toLowerCase()).toContain("index");
+  });
+
+  it("--human produces non-JSON output for tag-audit", () => {
+    const json = run(["tag-audit", RICH_VAULT]);
+    const human = run(["tag-audit", RICH_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.toLowerCase()).toContain("tag");
+  });
+
+  it("--human produces non-JSON output for validate", () => {
+    const fixture = join(RICH_VAULT, "concepts", "test.md");
+    const json = run(["validate", fixture]);
+    const human = run(["validate", fixture, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.length).toBeGreaterThan(0);
   });
 });
