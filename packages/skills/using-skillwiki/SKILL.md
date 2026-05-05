@@ -25,6 +25,31 @@ Invoke a skillwiki skill when the user:
 - Has a spec/plan in a non-skillwiki format (CodeStable, RFC, AIDE)
 - Asks about their skillwiki configuration or setup health
 
+## Vault Structure
+
+A skillwiki vault has two layers:
+
+**Layer 1 — Raw (`raw/`):** Immutable source material. Never modify after ingest.
+
+```
+raw/
+├── articles/    # Web articles, clippings
+├── papers/      # PDFs, arxiv papers
+├── transcripts/ # Meeting notes, interviews
+└── assets/      # Images, diagrams referenced by sources
+```
+
+Raw frontmatter:
+```yaml
+---
+source_url: https://…
+ingested: YYYY-MM-DD
+sha256:          # computed by skillwiki hash over body bytes after closing ---
+---
+```
+
+**Layer 2 — Agent-owned pages:** `entities/`, `concepts/`, `comparisons/`, `queries/`, `meta/`, `projects/`. Citations use `^[raw/articles/source-file.md]` markers at paragraph-end.
+
 ## Skill Map
 
 | Skill | When to Invoke |
