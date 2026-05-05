@@ -123,4 +123,21 @@ describe("cli smoke", () => {
     expect(json.status).toBe(human.status);
     expect(() => JSON.parse(human.stdout)).toThrow();
   });
+
+  it("--human produces non-JSON output for audit", () => {
+    const fixture = join(__dirname, "..", "test", "fixtures", "audit-vault", "concepts", "clean.md");
+    const json = run(["audit", fixture]);
+    const human = run(["audit", fixture, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.length).toBeGreaterThan(0);
+  });
+
+  it("--human produces non-JSON output for migrate-citations", () => {
+    const json = run(["migrate-citations", TMP_VAULT]);
+    const human = run(["migrate-citations", TMP_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.toLowerCase()).toContain("scanned");
+  });
 });
