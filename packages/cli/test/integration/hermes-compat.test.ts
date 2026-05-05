@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import yaml from "js-yaml";
+import { RawSourceSchema } from "@skillwiki/shared";
+import { runValidate } from "../../src/commands/validate.js";
 
 const VAULT = join(__dirname, "..", "fixtures", "hermes-vault");
 
@@ -24,6 +26,35 @@ describe("Hermes wire-compat", () => {
     const reserved = new Set(["title", "created", "updated", "type", "tags", "sources", "confidence", "contested", "contradictions"]);
     for (const k of ["provenance", "provenance_projects", "aliases", "work_items"]) {
       expect(reserved.has(k)).toBe(false);
+    }
+  });
+
+  it("Hermes-shaped raw (no title, no ingested_by, non-URL source_url) passes schema validation", () => {
+    const hermesRaw = {
+      source_url: "multi-rss-aggregation",
+      ingested: "2026-04-26",
+      sha256: "aa44b17c80b6b54e8a8fc4dc719c71daa552a2d96a4488cdb2008b0e78eecc81"
+    };
+    expect(RawSourceSchema.safeParse(hermesRaw).success).toBe(true);
+  });
+
+  it("skillwiki-shaped raw (with title, ingested_by, URL source_url) still passes", () => {
+    const skillwikiRaw = {
+      title: "Test Source",
+      source_url: "https://example.com/article",
+      ingested: "2026-05-01",
+      ingested_by: "wiki-ingest",
+      sha256: "bb44b17c80b6b54e8a8fc4dc719c71daa552a2d96a4488cdb2008b0e78eecc82"
+    };
+    expect(RawSourceSchema.safeParse(skillwikiRaw).success).toBe(true);
+  });
+
+  it("validate command accepts Hermes-shaped raw file", async () => {
+    const r = await runValidate({ file: join(VAULT, "raw/articles/hermes-note.md") });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.valid).toBe(true);
+      expect(r.result.data.schema).toBe("raw");
     }
   });
 });

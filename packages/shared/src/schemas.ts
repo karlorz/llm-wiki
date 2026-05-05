@@ -33,10 +33,10 @@ export type TypedKnowledge = z.infer<typeof TypedKnowledgeSchema>;
 const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/);
 
 export const RawSourceSchema = z.object({
-  title: z.string().min(1),
-  source_url: z.string().url().nullable(),
+  title: z.string().min(1).optional(),
+  source_url: z.string().nullable(),
   ingested: isoDate,
-  ingested_by: z.enum(["wiki-ingest", "proj-work", "manual"]),
+  ingested_by: z.enum(["wiki-ingest", "proj-work", "manual"]).optional(),
   sha256: sha256Hex,
   project: wikilink.optional(),
   work_item: wikilink.optional(),
