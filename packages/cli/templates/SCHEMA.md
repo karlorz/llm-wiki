@@ -49,7 +49,8 @@ Rule: every tag on every page MUST appear in this taxonomy. Add new tags here fi
 
 - File names: lowercase-hyphenated, no spaces.
 - Wikilinks in YAML: quoted, `"[[name]]"`. Body wikilinks: unquoted `[[name]]`.
-- Citations in body: `^[raw/...]` markers; every entry in `sources:` MUST appear in body.
+- Citations in body: `^[raw/...]` markers at paragraph-end; every entry in `sources:` MUST appear in body and in `## Sources` footer.
+- Legacy inline `^[raw/...]` markers remain valid; `migrate-citations` converts them.
 - sha256 in `raw/` frontmatter is computed by `skillwiki hash` over body bytes after closing `---`.
 
 ## Obsidian Integration
