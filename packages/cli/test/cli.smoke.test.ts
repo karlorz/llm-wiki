@@ -140,4 +140,36 @@ describe("cli smoke", () => {
     expect(() => JSON.parse(human.stdout)).toThrow();
     expect(human.stdout.toLowerCase()).toContain("scanned");
   });
+
+  it("--human produces non-JSON output for stale", () => {
+    const json = run(["stale", TMP_VAULT]);
+    const human = run(["stale", TMP_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.toLowerCase()).toContain("stale");
+  });
+
+  it("--human produces non-JSON output for pagesize", () => {
+    const json = run(["pagesize", TMP_VAULT]);
+    const human = run(["pagesize", TMP_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.toLowerCase()).toContain("size");
+  });
+
+  it("--human produces non-JSON output for log-rotate", () => {
+    const json = run(["log-rotate", TMP_VAULT]);
+    const human = run(["log-rotate", TMP_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.toLowerCase()).toContain("rotation");
+  });
+
+  it("--human produces non-JSON output for index-check", () => {
+    const json = run(["index-check", TMP_VAULT]);
+    const human = run(["index-check", TMP_VAULT, "--human"]);
+    expect(json.status).toBe(human.status);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout.toLowerCase()).toContain("index");
+  });
 });
