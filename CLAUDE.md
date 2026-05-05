@@ -56,7 +56,7 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 ## Project vault
 
 - The vault at `~/wiki` is the canonical project knowledge base. All specs, plans, and retros land there via `skillwiki` skills.
-- Historical specs/plans archived at `~/wiki/projects/llm-wiki/history/{specs,plans}/`. Do not recreate `docs/superpowers/`.
+- **New** specs and plans go into work items via `proj-work` → `projects/llm-wiki/work/YYYY-MM-DD-{slug}/spec.md` or `plan.md`. The `history/{specs,plans}/` folder is **archive-only** for superseded historical documents — do not write new work there. Do not recreate `docs/superpowers/`.
 - The dev-loop commands (`~/.claude/commands/dev-loop.md`, `dev-loop-research.md`) drive the PRD+skillwiki workflow. Their shared prompt lives in user memory at `~/.claude/projects/.../memory/dev-loop-prompt.md`.
 
 ## Current counts (2026-05-05)
