@@ -5,6 +5,7 @@ import { execSync } from "node:child_process";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 import { parseDotenvFile } from "../utils/dotenv.js";
 import { configPath } from "./config.js";
+import { latestFromCache } from "../utils/auto-update.js";
 
 export type CheckStatus = "pass" | "warn" | "error";
 
@@ -25,6 +26,7 @@ export interface DoctorInput {
   home: string;
   envValue: string | undefined;
   argv: string[];
+  currentVersion: string;
 }
 
 function check(status: CheckStatus, id: string, label: string, detail: string): CheckResult {
@@ -108,6 +110,17 @@ function checkSkillsInstalled(home: string): CheckResult {
   return check("warn", "skills_installed", "Skills installed", "No SKILL.md files found in ~/.claude/skills/");
 }
 
+function checkNpmUpdate(home: string, currentVersion: string): CheckResult {
+  const { hasUpdate, latest } = latestFromCache(home, currentVersion);
+  if (!latest) {
+    return check("pass", "npm_update", "npm CLI version", `v${currentVersion} (no cache yet)`);
+  }
+  if (hasUpdate) {
+    return check("warn", "npm_update", "npm CLI version", `v${currentVersion} — update available: v${latest}. Run \`skillwiki update\`.`);
+  }
+  return check("pass", "npm_update", "npm CLI version", `v${currentVersion} (latest: v${latest})`);
+}
+
 function findSkillMd(dir: string): string[] {
   const results: string[] = [];
   let entries;
@@ -146,6 +159,7 @@ export async function runDoctor(
   checks.push(checkWikiPathExists(resolvedPath));
   checks.push(checkVaultStructure(resolvedPath));
   checks.push(checkSkillsInstalled(input.home));
+  checks.push(checkNpmUpdate(input.home, input.currentVersion));
 
   const summary = {
     pass: checks.filter(c => c.status === "pass").length,

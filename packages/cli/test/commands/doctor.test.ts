@@ -26,7 +26,7 @@ describe("runDoctor", () => {
     const h = home();
     const v = fullVault();
     writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
-    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.exitCode).toBe(0);
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
@@ -37,7 +37,7 @@ describe("runDoctor", () => {
 
   it("missing config file gives warn for config_file check", async () => {
     const h = home();
-    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const cfg = r.result.data.checks.find(c => c.id === "config_file");
@@ -48,7 +48,7 @@ describe("runDoctor", () => {
   it("missing WIKI_PATH gives error for wiki_path_set check", async () => {
     const h = home();
     writeFileSync(join(h, ".skillwiki", ".env"), "# empty\n");
-    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const wp = r.result.data.checks.find(c => c.id === "wiki_path_set");
@@ -60,7 +60,7 @@ describe("runDoctor", () => {
   it("WIKI_PATH pointing to non-existent dir gives error for wiki_path_exists", async () => {
     const h = home();
     writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/no/such/dir\n");
-    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const wpe = r.result.data.checks.find(c => c.id === "wiki_path_exists");
@@ -73,7 +73,7 @@ describe("runDoctor", () => {
     const v = mkdtempSync(join(tmpdir(), "vault-"));
     writeFileSync(join(v, "SCHEMA.md"), "# Schema\n");
     writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
-    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const vs = r.result.data.checks.find(c => c.id === "vault_structure");
@@ -85,7 +85,7 @@ describe("runDoctor", () => {
     const h = home();
     const v = fullVault();
     writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
-    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "/path/to/cli.js", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "/path/to/cli.js", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const cli = r.result.data.checks.find(c => c.id === "cli_on_path");
@@ -99,7 +99,7 @@ describe("runDoctor", () => {
   it("envValue override is used for wiki_path_set resolution", async () => {
     const h = home();
     const v = fullVault();
-    const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const wp = r.result.data.checks.find(c => c.id === "wiki_path_set");
@@ -107,12 +107,38 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 7 checks", async () => {
+  it("always returns exactly 8 checks", async () => {
     const h = home();
-    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"] });
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(7);
+      expect(r.result.data.checks).toHaveLength(8);
+    }
+  });
+
+  it("npm_update check passes when no cache exists", async () => {
+    const h = home();
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const npmUpdate = r.result.data.checks.find(c => c.id === "npm_update");
+      expect(npmUpdate?.status).toBe("pass");
+      expect(npmUpdate?.detail).toContain("no cache yet");
+    }
+  });
+
+  it("npm_update check warns when cache shows newer version available", async () => {
+    const h = home();
+    writeFileSync(
+      join(h, ".skillwiki", ".update-cache.json"),
+      JSON.stringify({ lastCheck: Date.now(), latestVersion: "0.2.0-beta.99", currentVersion: "0.2.0-beta.15" })
+    );
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const npmUpdate = r.result.data.checks.find(c => c.id === "npm_update");
+      expect(npmUpdate?.status).toBe("warn");
+      expect(npmUpdate?.detail).toContain("update available");
     }
   });
 });

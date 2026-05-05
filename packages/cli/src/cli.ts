@@ -26,7 +26,9 @@ import { runArchive } from "./commands/archive.js";
 import { runDrift } from "./commands/drift.js";
 import { runDedup } from "./commands/dedup.js";
 import { runMigrateCitations } from "./commands/migrate-citations.js";
+import { runUpdate } from "./commands/update.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
+import { triggerAutoUpdate } from "./utils/auto-update.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -235,7 +237,8 @@ program
   .action(async () => emit(await runDoctor({
     home: process.env.HOME ?? "",
     envValue: process.env.WIKI_PATH,
-    argv: process.argv
+    argv: process.argv,
+    currentVersion: pkg.version,
   })));
 
 // archive
@@ -278,6 +281,19 @@ program
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runMigrateCitations({ vault: v.vault, dryRun: !!opts.dryRun }));
   });
+
+// update
+program
+  .command("update")
+  .description("update skillwiki CLI to the latest version")
+  .option("--tag <tag>", "npm dist-tag", "beta")
+  .action(async (opts) => emit(await runUpdate({
+    home: process.env.HOME ?? "",
+    distTag: opts.tag,
+  })));
+
+// Background auto-update check (non-blocking, 24h cache)
+triggerAutoUpdate(process.env.HOME ?? "", pkg.version);
 
 program.parseAsync(process.argv).catch((e) => {
   process.stdout.write(JSON.stringify({ ok: false, error: "INTERNAL", detail: { message: String(e) } }) + "\n");

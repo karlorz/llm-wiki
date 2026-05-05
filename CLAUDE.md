@@ -62,5 +62,5 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 ## Current counts (2026-05-05)
 
 - 14 SKILL.md files in `packages/skills/`
-- 26 CLI subcommands in `packages/cli/src/commands/`
-- 27 test files in `packages/cli/test/commands/`
+- 27 CLI subcommands in `packages/cli/src/commands/`
+- 28 test files in `packages/cli/test/commands/`
