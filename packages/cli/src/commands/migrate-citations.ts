@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
-import { extractCitationMarkers, hasSourcesFooter } from "../parsers/citations.js";
+import { extractCitationMarkers } from "../parsers/citations.js";
 
 export interface MigrateCitationsInput {
   vault: string;
@@ -132,14 +132,16 @@ export async function runMigrateCitations(input: MigrateCitationsInput): Promise
     const markers = extractCitationMarkers(body);
     if (markers.length === 0) { unchanged++; continue; }
 
-    const bodyWithoutFooter = removeExistingFooter(body);
-    const migratedBody = moveMarkersToParagraphEnd(bodyWithoutFooter);
-
+    // Derive unique targets from the original markers (moveMarkersToParagraphEnd
+    // preserves all markers — only their positions change).
     const seen = new Set<string>();
     const uniqueTargets: string[] = [];
-    for (const m of extractCitationMarkers(migratedBody)) {
+    for (const m of markers) {
       if (!seen.has(m.target)) { seen.add(m.target); uniqueTargets.push(m.target); }
     }
+
+    const bodyWithoutFooter = removeExistingFooter(body);
+    const migratedBody = moveMarkersToParagraphEnd(bodyWithoutFooter);
 
     const newFooter = buildSourcesFooter(uniqueTargets);
     const newFm = reorderSourcesFm(rawFrontmatter, uniqueTargets);

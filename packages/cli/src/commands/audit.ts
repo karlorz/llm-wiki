@@ -45,8 +45,8 @@ export async function runAudit(input: AuditInput): Promise<{ exitCode: number; r
   if (footerMatch) {
     const footerTargets = new Set<string>();
     const footerRe = /\^\[(raw\/[^\]]+)\]/g;
-    let fm: RegExpExecArray | null;
-    while ((fm = footerRe.exec(footerMatch[1])) !== null) footerTargets.add(fm[1]);
+    let mm: RegExpExecArray | null;
+    while ((mm = footerRe.exec(footerMatch[1])) !== null) footerTargets.add(mm[1]);
 
     const bodyTargets = new Set(resolved.map(m => m.target));
     const missing_from_footer = [...bodyTargets].filter(t => !footerTargets.has(t));
