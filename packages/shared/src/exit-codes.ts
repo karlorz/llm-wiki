@@ -31,7 +31,8 @@ export const ExitCode = {
   ARCHIVE_TARGET_NOT_FOUND: 30,
   ARCHIVE_ALREADY_ARCHIVED: 31,
   DRIFT_DETECTED: 32,
-  RAW_DEDUP_DETECTED: 33
+  RAW_DEDUP_DETECTED: 33,
+  MIGRATION_APPLIED: 34
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -69,7 +70,8 @@ const NAMES: Record<number, string> = {
   30: "ARCHIVE_TARGET_NOT_FOUND",
   31: "ARCHIVE_ALREADY_ARCHIVED",
   32: "DRIFT_DETECTED",
-  33: "RAW_DEDUP_DETECTED"
+  33: "RAW_DEDUP_DETECTED",
+  34: "MIGRATION_APPLIED"
 };
 
 export function exitCodeName(code: number): string {
