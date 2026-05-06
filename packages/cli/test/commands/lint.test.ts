@@ -171,4 +171,29 @@ Content.
       expect(warningKinds).toContain("duplicate_frontmatter");
     }
   });
+
+  it("warns on missing_overview for pages without ## Overview", async () => {
+    const v = vault();
+    // Page with sections but no Overview — over 60 body lines so it's not a page_structure duplicate
+    const body = Array.from({ length: 20 }, (_, i) => `## Section ${i + 1}\n\nContent for section ${i + 1}.\n`).join("\n");
+    writeFileSync(join(v, "concepts", "no-overview.md"), FM(["model"]) + body);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[no-overview]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(22);
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).toContain("missing_overview");
+    }
+  });
+
+  it("does not flag missing_overview for pages with ## Overview", async () => {
+    const v = vault();
+    writeFileSync(join(v, "concepts", "has-overview.md"), FM(["model"]) + "## Overview\n\nContent.\n\n## Related\n\n- [[x]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[has-overview]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).not.toContain("missing_overview");
+    }
+  });
 });

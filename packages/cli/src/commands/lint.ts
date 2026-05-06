@@ -49,7 +49,7 @@ export interface LintOutput {
 }
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "tag_not_in_taxonomy"] as const;
-const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter"] as const;
+const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "missing_overview"] as const;
 const INFO_ORDER = ["bridges", "low_confidence_single_source", "page_structure", "topic_map_recommended"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
@@ -112,6 +112,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     const orphanedPages: string[] = [];
     const structFlags: string[] = [];
     const dupFrontmatter: string[] = [];
+    const noOverview: string[] = [];
     for (const page of scan.data.typedKnowledge) {
       const text = await readPage(page);
       const split = splitFrontmatter(text);
@@ -122,13 +123,13 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       if (hasOrphanedCitations(body)) orphanedPages.push(page.relPath);
 
       const bodyLines = body.split("\n").filter(l => l.trim().length > 0).length;
+      const hasOverview = /^## Overview/m.test(body);
+      if (!hasOverview) noOverview.push(page.relPath);
       if (bodyLines < STRUCT_MIN_BODY_LINES) {
-        const hasOverview = /^## Overview/m.test(body);
         const hasRelated = /^## (Related|Relationships)/m.test(body);
         const sectionCount = (body.match(/^## /gm) ?? []).length;
-        if (!hasOverview || !hasRelated || sectionCount < STRUCT_MIN_SECTIONS) {
+        if (!hasRelated || sectionCount < STRUCT_MIN_SECTIONS) {
           const reasons: string[] = [];
-          if (!hasOverview) reasons.push("no Overview");
           if (!hasRelated) reasons.push("no Related or Relationships");
           if (sectionCount < STRUCT_MIN_SECTIONS) reasons.push(`only ${sectionCount} sections`);
           structFlags.push(`${page.relPath}: ${bodyLines} lines, ${reasons.join(", ")}`);
@@ -139,6 +140,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     if (orphanedPages.length > 0) buckets.orphaned_citations = orphanedPages;
     if (structFlags.length > 0) buckets.page_structure = structFlags;
     if (dupFrontmatter.length > 0) buckets.duplicate_frontmatter = dupFrontmatter;
+    if (noOverview.length > 0) buckets.missing_overview = noOverview;
   }
 
   const errorOut: Bucket[] = ERROR_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);
