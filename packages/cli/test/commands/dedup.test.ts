@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runDedup } from "../../src/commands/dedup.js";
@@ -11,6 +11,7 @@ function makeVault(): string {
   const dir = mkdtempSync(join(tmpdir(), "vault-"));
   writeFileSync(join(dir, "SCHEMA.md"), "# Vault Schema\n");
   mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+  mkdirSync(join(dir, "concepts"), { recursive: true });
   return dir;
 }
 
@@ -82,6 +83,47 @@ no hash`);
     expect(r.exitCode).toBe(33);
     if (r.result.ok) {
       expect(r.result.data.duplicates.length).toBe(2);
+    }
+  });
+
+  it("apply rewires citations and removes duplicates", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "canonical.md"), rawFile(HASH_A, "original"));
+    writeFileSync(join(dir, "raw", "articles", "dup.md"), rawFile(HASH_A, "duplicate"));
+    writeFileSync(join(dir, "concepts", "page.md"), `---
+title: Test
+type: concept
+tags: [model]
+sources:
+  - "^[raw/articles/dup.md]"
+---
+
+Content citing duplicate.^[raw/articles/dup.md]
+`);
+    const r = await runDedup({ vault: dir, apply: true });
+    expect(r.exitCode).toBe(36); // DEDUP_APPLIED
+    if (r.result.ok) {
+      expect(r.result.data.rewired).toContain("concepts/page.md");
+      expect(r.result.data.removed).toContain("raw/articles/dup.md");
+    }
+    // Duplicate raw file deleted
+    expect(existsSync(join(dir, "raw", "articles", "dup.md"))).toBe(false);
+    // Canonical raw file preserved
+    expect(existsSync(join(dir, "raw", "articles", "canonical.md"))).toBe(true);
+    // Citations rewired
+    const pageContent = readFileSync(join(dir, "concepts", "page.md"), "utf-8");
+    expect(pageContent).toContain("^[raw/articles/canonical.md]");
+    expect(pageContent).not.toContain("^[raw/articles/dup.md]");
+  });
+
+  it("apply exits OK when no duplicates", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "a.md"), rawFile(HASH_A, "alpha"));
+    const r = await runDedup({ vault: dir, apply: true });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.rewired).toEqual([]);
+      expect(r.result.data.removed).toEqual([]);
     }
   });
 });

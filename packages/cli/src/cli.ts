@@ -292,11 +292,12 @@ program
 program
   .command("dedup [vault]")
   .description("detect duplicate raw sources by sha256")
+  .option("--apply", "rewire citations and remove duplicate raw files", false)
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runDedup({ vault: v.vault }));
+    else emit(await runDedup({ vault: v.vault, apply: opts.apply }));
   });
 
 // migrate-citations

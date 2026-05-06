@@ -33,7 +33,8 @@ export const ExitCode = {
   DRIFT_DETECTED: 32,
   RAW_DEDUP_DETECTED: 33,
   MIGRATION_APPLIED: 34,
-  UNKNOWN_WIKI_PROFILE: 35
+  UNKNOWN_WIKI_PROFILE: 35,
+  DEDUP_APPLIED: 36
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -73,7 +74,8 @@ const NAMES: Record<number, string> = {
   32: "DRIFT_DETECTED",
   33: "RAW_DEDUP_DETECTED",
   34: "MIGRATION_APPLIED",
-  35: "UNKNOWN_WIKI_PROFILE"
+  35: "UNKNOWN_WIKI_PROFILE",
+  36: "DEDUP_APPLIED"
 };
 
 export function exitCodeName(code: number): string {
