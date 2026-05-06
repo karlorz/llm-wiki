@@ -262,6 +262,7 @@ program
     envValue: process.env.WIKI_PATH,
     argv: process.argv,
     currentVersion: pkg.version,
+    cwd: process.cwd(),
   })));
 
 // archive
