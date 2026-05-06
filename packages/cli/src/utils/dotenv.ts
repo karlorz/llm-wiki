@@ -16,8 +16,7 @@ export function isValidWikiProfileKey(key: string): boolean {
 }
 
 export function isProfileKey(key: string): boolean {
-  return PROFILE_PATH_RE.test(key) || PROFILE_LANG_RE.test(key) || PROFILE_DEFAULT_RE.test(key)
-    || key === "WIKI_DEFAULT";
+  return PROFILE_PATH_RE.test(key) || PROFILE_LANG_RE.test(key) || PROFILE_DEFAULT_RE.test(key);
 }
 
 export function profileKey(name: string, suffix: "PATH" | "LANG"): string {
