@@ -61,9 +61,9 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 - **New** specs and plans go into work items via `proj-work` → `projects/llm-wiki/work/YYYY-MM-DD-{slug}/spec.md` or `plan.md`. The `history/{specs,plans}/` folder is **archive-only** for superseded historical documents — do not write new work there. Do not recreate `docs/superpowers/`.
 - The dev-loop commands (`~/.claude/commands/dev-loop.md`, `dev-loop-research.md`) drive the PRD+skillwiki workflow. Their shared prompt lives in user memory at `~/.claude/projects/.../memory/dev-loop-prompt.md`.
 
-## Current counts (2026-05-05)
+## Current counts (2026-05-06)
 
 - 14 SKILL.md files in `packages/skills/`
 - 28 CLI subcommands in `packages/cli/src/commands/`
 - 29 test files in `packages/cli/test/commands/`
-- Lint buckets: 4 error, 8 warning, 3 info (incl. `page_structure`, `duplicate_frontmatter`, `missing_overview`)
+- Lint buckets: 4 error, 10 warning, 3 info (incl. `page_structure`, `duplicate_frontmatter`, `missing_overview`)
