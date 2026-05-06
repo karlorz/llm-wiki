@@ -42,4 +42,14 @@ describe("install", () => {
     const r = await runInstall({ skillsRoot, target, dryRun: false });
     expect(r.exitCode).toBe(0);
   });
+
+  it("installs bin/skillwiki wrapper when present", async () => {
+    const skillsRoot = fakeSkillsDir();
+    mkdirSync(join(skillsRoot, "bin"), { recursive: true });
+    writeFileSync(join(skillsRoot, "bin", "skillwiki"), "#!/usr/bin/env bash\nexec npx -y skillwiki@beta \"$@\"");
+    const target = mkdtempSync(join(tmpdir(), "tgt-"));
+    const r = await runInstall({ skillsRoot, target, dryRun: false });
+    expect(r.exitCode).toBe(0);
+    expect(existsSync(join(target, "bin", "skillwiki"))).toBe(true);
+  });
 });

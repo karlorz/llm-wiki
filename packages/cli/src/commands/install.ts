@@ -44,6 +44,21 @@ export async function runInstall(input: InstallInput): Promise<{ exitCode: numbe
     if (r.data.backupPath) backed_up.push(r.data.backupPath);
   }
 
+  // Deploy bin/skillwiki wrapper if present
+  const binSrc = join(input.skillsRoot, "bin", "skillwiki");
+  try {
+    await stat(binSrc);
+    const binDst = join(input.target, "bin", "skillwiki");
+    if (!input.dryRun) {
+      const r = await atomicCopyWithBackup(binSrc, binDst);
+      if (!r.ok) return { exitCode: ExitCode.ATOMIC_COPY_FAILED, result: r };
+      installed.push(binDst);
+      if (r.data.backupPath) backed_up.push(r.data.backupPath);
+    } else {
+      installed.push(binDst);
+    }
+  } catch { /* no bin wrapper — skip silently */ }
+
   const manifest_path = join(input.target, "wiki-manifest.json");
   if (!input.dryRun) await writeManifest(manifest_path, { installed, backed_up });
   const hintLines = [
