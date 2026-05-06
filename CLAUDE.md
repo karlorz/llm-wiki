@@ -21,7 +21,7 @@ This repo ships the `skillwiki` CLI and 14 prompt-only SKILL.md files.
 
 Three scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 
-- **`e2e-local.sh`** — builds from source, runs all CLI commands locally (95 assertions). No network required.
+- **`e2e-local.sh`** — builds from source, runs all CLI commands locally (108 assertions). No network required.
 - **`e2e-remote.sh`** — upgrades skillwiki on sg01 via `npm install -g skillwiki@beta`, then runs the full CLI suite over SSH (48 assertions).
 - **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 14 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
 

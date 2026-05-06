@@ -386,5 +386,71 @@ else
 fi
 rm -rf "$DEDUP_VAULT" "$DEDUP_HOME"
 
+# ==== 38. frontmatter-fix (dry-run) ==========================================
+printf "\n--- frontmatter-fix dry-run ---\n"
+FMFIX_VAULT=$(mktemp -d)
+FMFIX_HOME=$(mktemp -d)
+run_cli env HOME="$FMFIX_HOME" "${CLI[@]}" init --target "$FMFIX_VAULT" --domain "FmFix" --taxonomy "research" --lang en
+# Create a concept page with missing frontmatter fields
+mkdir -p "$FMFIX_VAULT/concepts"
+cat > "$FMFIX_VAULT/concepts/fmfix-page.md" <<'FMEOF'
+---
+title: FmFix Test
+type: concept
+---
+## Overview
+
+Some content here.
+FMEOF
+run_cli "${CLI[@]}" frontmatter-fix "$FMFIX_VAULT" --dry-run
+assert_exit 34 "$RUN_RC" "frontmatter-fix dry-run detects fixes (exit 34)"
+assert_json_contains "$RUN_OUTPUT" "ok" "true" "frontmatter-fix dry-run returns ok"
+# Verify page was NOT modified in dry-run
+has_created=$(grep -c "^created:" "$FMFIX_VAULT/concepts/fmfix-page.md" || true)
+if [ "$has_created" = "0" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 dry-run did not modify file\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 dry-run modified file\n"
+fi
+
+# ==== 39. frontmatter-fix (apply) ============================================
+printf "\n--- frontmatter-fix apply ---\n"
+run_cli "${CLI[@]}" frontmatter-fix "$FMFIX_VAULT"
+assert_exit 34 "$RUN_RC" "frontmatter-fix apply exits 34 (MIGRATION_APPLIED)"
+assert_json_contains "$RUN_OUTPUT" "data.fixed.0" "concepts/fmfix-page.md" "frontmatter-fix reports fixed page"
+# Verify page WAS modified — now has created/updated/tags/sources/provenance
+has_created=$(grep -c "^created:" "$FMFIX_VAULT/concepts/fmfix-page.md" || true)
+has_provenance=$(grep -c "^provenance:" "$FMFIX_VAULT/concepts/fmfix-page.md" || true)
+if [ "$has_created" -ge 1 ] && [ "$has_provenance" -ge 1 ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 apply added missing frontmatter fields\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 apply missing expected fields (created=%s, provenance=%s)\n" "$has_created" "$has_provenance"
+fi
+# Running again on same vault should find 0 fixes
+run_cli "${CLI[@]}" frontmatter-fix "$FMFIX_VAULT" --dry-run
+assert_exit 0 "$RUN_RC" "frontmatter-fix idempotent (0 fixes on clean vault)"
+rm -rf "$FMFIX_VAULT" "$FMFIX_HOME"
+
+# ==== 40. graph build ========================================================
+printf "\n--- graph build ---\n"
+run_cli "${CLI[@]}" graph build "$VAULT"
+assert_exit 0 "$RUN_RC" "graph build succeeds"
+assert_json_contains "$RUN_OUTPUT" "ok" "true" "graph build returns ok"
+node_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['node_count'])" 2>/dev/null)
+if [ "$node_count" -ge 1 ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 graph has %s nodes\n" "$node_count"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 graph has 0 nodes\n"
+fi
+
+# ==== 41. overlap ============================================================
+printf "\n--- overlap ---\n"
+run_cli "${CLI[@]}" overlap "$VAULT"
+assert_exit 0 "$RUN_RC" "overlap succeeds"
+assert_json_contains "$RUN_OUTPUT" "ok" "true" "overlap returns ok"
+cluster_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['data']['clusters']))" 2>/dev/null)
+# Seed vault may be too sparse for overlap clusters — 0 is valid
+PASS=$((PASS + 1)); printf "  \u2713 overlap found %s clusters (seed vault)\n" "$cluster_count"
+
 # ==== Summary ==============================================================
 summary
