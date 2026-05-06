@@ -106,6 +106,21 @@ describe("runLint", () => {
     }
   });
 
+  it("warns on orphaned citations after Sources section", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    // Citation marker after blank line in Sources section = orphaned
+    const body = "Body cites X. ^[raw/articles/x.md]\n\n## Sources\n- ^[raw/articles/x.md]\n\n\n^[raw/articles/x.md]\n";
+    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + body);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(22);
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).toContain("orphaned_citations");
+    }
+  });
+
   it("flags thin pages missing structural sections as page_structure", async () => {
     const v = vault();
     // Page with no Overview, no Related, only 1 section — under 60 lines

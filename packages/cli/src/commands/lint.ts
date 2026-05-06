@@ -11,7 +11,7 @@ import { runIndexLinkFormat } from "./index-link-format.js";
 import { runDedup } from "./dedup.js";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
-import { isLegacyCitationStyle } from "../parsers/citations.js";
+import { isLegacyCitationStyle, hasOrphanedCitations } from "../parsers/citations.js";
 
 const STRUCT_MIN_BODY_LINES = 60;
 const STRUCT_MIN_SECTIONS = 3;
@@ -33,7 +33,7 @@ export interface LintOutput {
 }
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "tag_not_in_taxonomy"] as const;
-const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans", "legacy_citation_style"] as const;
+const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans", "legacy_citation_style", "orphaned_citations"] as const;
 const INFO_ORDER = ["bridges", "low_confidence_single_source", "page_structure", "topic_map_recommended"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
@@ -93,6 +93,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   const scan = await scanVault(input.vault);
   if (scan.ok) {
     const legacyPages: string[] = [];
+    const orphanedPages: string[] = [];
     const structFlags: string[] = [];
     for (const page of scan.data.typedKnowledge) {
       const text = await readPage(page);
@@ -100,6 +101,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       if (!split.ok) continue;
       const body = split.data.body;
       if (isLegacyCitationStyle(body)) legacyPages.push(page.relPath);
+      if (hasOrphanedCitations(body)) orphanedPages.push(page.relPath);
 
       const bodyLines = body.split("\n").filter(l => l.trim().length > 0).length;
       if (bodyLines < STRUCT_MIN_BODY_LINES) {
@@ -116,6 +118,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       }
     }
     if (legacyPages.length > 0) buckets.legacy_citation_style = legacyPages;
+    if (orphanedPages.length > 0) buckets.orphaned_citations = orphanedPages;
     if (structFlags.length > 0) buckets.page_structure = structFlags;
   }
 

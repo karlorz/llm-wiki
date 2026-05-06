@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractCitationMarkers, hasSourcesFooter, isLegacyCitationStyle, extractParagraphEndCitations } from "../../src/parsers/citations.js";
+import { extractCitationMarkers, hasSourcesFooter, isLegacyCitationStyle, extractParagraphEndCitations, hasOrphanedCitations } from "../../src/parsers/citations.js";
 
 describe("extractCitationMarkers", () => {
   it("finds ^[raw/...] markers", () => {
@@ -68,5 +68,35 @@ describe("extractParagraphEndCitations", () => {
   it("ignores markers inside code fences", () => {
     const body = "```\nBody. ^[raw/x.md]\n```\n\nReal. ^[raw/y.md]\n";
     expect(extractParagraphEndCitations(body)).toEqual(["raw/y.md"]);
+  });
+});
+
+describe("hasOrphanedCitations", () => {
+  it("returns false for no markers", () => {
+    expect(hasOrphanedCitations("Plain body text.\n\n## Sources\n")).toBe(false);
+  });
+  it("returns false for valid Sources section", () => {
+    const body = "Body cites X. ^[raw/x.md]\n\n## Sources\n- ^[raw/x.md]\n";
+    expect(hasOrphanedCitations(body)).toBe(false);
+  });
+  it("returns true for marker after blank line in Sources", () => {
+    const body = "Body.\n\n## Sources\n- ^[raw/x.md]\n\n\n^[raw/x.md]\n";
+    expect(hasOrphanedCitations(body)).toBe(true);
+  });
+  it("returns true for marker after non-list content in Sources", () => {
+    const body = "Body.\n\n## Sources\n- ^[raw/x.md]\nSome text\n^[raw/y.md]\n";
+    expect(hasOrphanedCitations(body)).toBe(true);
+  });
+  it("returns false when no Sources section", () => {
+    const body = "Body. ^[raw/x.md]\n";
+    expect(hasOrphanedCitations(body)).toBe(false);
+  });
+  it("returns false for multiple valid list items", () => {
+    const body = "Body.\n\n## Sources\n- ^[raw/x.md]\n- ^[raw/y.md]\n- ^[raw/z.md]\n";
+    expect(hasOrphanedCitations(body)).toBe(false);
+  });
+  it("ignores markers inside code fences", () => {
+    const body = "Body.\n\n## Sources\n- ^[raw/x.md]\n\n```\n^[raw/y.md]\n```\n";
+    expect(hasOrphanedCitations(body)).toBe(false);
   });
 });
