@@ -6,6 +6,7 @@ export interface PathInput {
   envValue: string | undefined;
   home: string;
   initTime: boolean;
+  wiki?: string;
   explain?: boolean;
 }
 export interface PathOutput {
@@ -23,8 +24,11 @@ export async function runPath(input: PathInput): Promise<{ exitCode: number; res
     return { exitCode: ExitCode.OK, result: ok({ path: r.path, source: r.source, ...(r.chain ? { chain: r.chain } : {}), humanHint: `${r.path} (via ${r.source})` }) };
   }
   const r = await resolveRuntimePath({
-    flag: input.flag, envValue: input.envValue, home: input.home, explain: input.explain
+    flag: input.flag, envValue: input.envValue, home: input.home, wiki: input.wiki, explain: input.explain
   });
-  if (!r.ok) return { exitCode: ExitCode.NO_VAULT_CONFIGURED, result: r };
+  if (!r.ok) {
+    const exitCode = r.error === "UNKNOWN_WIKI_PROFILE" ? ExitCode.UNKNOWN_WIKI_PROFILE : ExitCode.NO_VAULT_CONFIGURED;
+    return { exitCode, result: r };
+  }
   return { exitCode: ExitCode.OK, result: ok({ path: r.data.path, source: r.data.source, ...(r.data.chain ? { chain: r.data.chain } : {}), humanHint: `${r.data.path} (via ${r.data.source})` }) };
 }

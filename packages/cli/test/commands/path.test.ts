@@ -51,3 +51,36 @@ describe("runPath", () => {
     }
   });
 });
+
+describe("runPath with --wiki", () => {
+  it("resolves named profile path", async () => {
+    const h = home();
+    writeFileSync(join(h, ".skillwiki", ".env"),
+      "WIKI_PATH=/default/vault\nWIKI_FINANCE_PATH=/finance/vault\n");
+    const r = await runPath({
+      flag: undefined,
+      envValue: undefined,
+      home: h,
+      initTime: false,
+      wiki: "finance"
+    });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.path).toBe("/finance/vault");
+      expect(r.result.data.source).toBe("wiki-profile");
+    }
+  });
+
+  it("returns exit 35 for unknown profile", async () => {
+    const h = home();
+    writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/default\n");
+    const r = await runPath({
+      flag: undefined,
+      envValue: undefined,
+      home: h,
+      initTime: false,
+      wiki: "nonexistent"
+    });
+    expect(r.exitCode).toBe(35);
+  });
+});

@@ -52,16 +52,19 @@ program
   .description("graph subcommands")
   .command("build <vault>")
   .option("--out <path>", "graph output path", ".skillwiki/graph.json")
+  .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => emit(await runGraphBuild({ vault, out: opts.out })));
 
 program.command("overlap <vault>").action(async (vault) => emit(await runOverlap({ vault })));
 
 program
   .command("orphans [vault]")
-  .action(async (vault) => emit(await runOrphans({
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => emit(await runOrphans({
     vault,
     envValue: process.env.WIKI_PATH,
-    home: process.env.HOME ?? ""
+    home: process.env.HOME ?? "",
+    wiki: opts.wiki
   })));
 
 program.command("audit <file>").action(async (file) => emit(await runAudit({ file })));
@@ -80,6 +83,7 @@ program
   .command("path")
   .option("--vault <dir>", "explicit vault override (runtime)")
   .option("--target <dir>", "explicit target override (init-time)")
+  .option("--wiki <name>", "wiki profile name")
   .option("--init-time", "use init-time chain instead of runtime", false)
   .option("--explain", "include resolution chain in output", false)
   .action(async (opts) => {
@@ -90,6 +94,7 @@ program
       envValue: process.env.WIKI_PATH,
       home: process.env.HOME ?? "",
       initTime,
+      wiki: opts.wiki,
       explain: !!opts.explain
     }));
   });
@@ -133,40 +138,52 @@ program
     }));
   });
 
-async function resolveVaultArg(arg: string | undefined): Promise<{ ok: true; vault: string } | { ok: false; exitCode: number; payload: any }> {
+async function resolveVaultArg(arg: string | undefined, wiki?: string): Promise<{ ok: true; vault: string } | { ok: false; exitCode: number; payload: any }> {
   if (arg) return { ok: true, vault: arg };
   const r = await resolveRuntimePath({
     flag: undefined,
     envValue: process.env.WIKI_PATH,
-    home: process.env.HOME ?? ""
+    wikiEnv: process.env.WIKI,
+    home: process.env.HOME ?? "",
+    wiki
   });
-  if (!r.ok) return { ok: false, exitCode: 25, payload: r };
+  if (!r.ok) {
+    const exitCode = r.error === "UNKNOWN_WIKI_PROFILE" ? 35 : 25;
+    return { ok: false, exitCode, payload: r };
+  }
   return { ok: true, vault: r.data.path };
 }
 
-program.command("links [vault]").action(async (vault) => {
-  const v = await resolveVaultArg(vault);
-  if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-  else emit(await runLinks({ vault: v.vault }));
-});
+program.command("links [vault]")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runLinks({ vault: v.vault }));
+  });
 
-program.command("tag-audit [vault]").action(async (vault) => {
-  const v = await resolveVaultArg(vault);
-  if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-  else emit(await runTagAudit({ vault: v.vault }));
-});
+program.command("tag-audit [vault]")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runTagAudit({ vault: v.vault }));
+  });
 
-program.command("index-check [vault]").action(async (vault) => {
-  const v = await resolveVaultArg(vault);
-  if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-  else emit(await runIndexCheck({ vault: v.vault }));
-});
+program.command("index-check [vault]")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runIndexCheck({ vault: v.vault }));
+  });
 
 program
   .command("stale [vault]")
   .option("--days <n>", "staleness threshold in days", (s) => parseInt(s, 10), 90)
+  .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
-    const v = await resolveVaultArg(vault);
+    const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runStale({ vault: v.vault, days: opts.days }));
   });
@@ -174,8 +191,9 @@ program
 program
   .command("pagesize [vault]")
   .option("--lines <n>", "max body lines", (s) => parseInt(s, 10), 200)
+  .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
-    const v = await resolveVaultArg(vault);
+    const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runPagesize({ vault: v.vault, lines: opts.lines }));
   });
@@ -184,8 +202,9 @@ program
   .command("log-rotate [vault]")
   .option("--threshold <n>", "entry count threshold", (s) => parseInt(s, 10), 500)
   .option("--apply", "actually rotate", false)
+  .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
-    const v = await resolveVaultArg(vault);
+    const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runLogRotate({ vault: v.vault, threshold: opts.threshold, apply: !!opts.apply }));
   });
@@ -195,8 +214,9 @@ program
   .option("--days <n>", "stale threshold", (s) => parseInt(s, 10), 90)
   .option("--lines <n>", "pagesize threshold", (s) => parseInt(s, 10), 200)
   .option("--log-threshold <n>", "log rotation threshold", (s) => parseInt(s, 10), 500)
+  .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
-    const v = await resolveVaultArg(vault);
+    const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runLint({
       vault: v.vault,
@@ -246,8 +266,9 @@ program
 program
   .command("archive <page> [vault]")
   .description("archive a typed-knowledge page")
-  .action(async (page, vault) => {
-    const v = await resolveVaultArg(vault);
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (page, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runArchive({ vault: v.vault, page }));
   });
@@ -256,8 +277,9 @@ program
 program
   .command("drift [vault]")
   .description("detect content drift in raw sources")
-  .action(async (vault) => {
-    const v = await resolveVaultArg(vault);
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runDrift({ vault: v.vault }));
   });
@@ -266,8 +288,9 @@ program
 program
   .command("dedup [vault]")
   .description("detect duplicate raw sources by sha256")
-  .action(async (vault) => {
-    const v = await resolveVaultArg(vault);
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runDedup({ vault: v.vault }));
   });
@@ -277,8 +300,9 @@ program
   .command("migrate-citations [vault]")
   .description("migrate ^[raw/...] markers to paragraph-end citations")
   .option("--dry-run", "preview changes without writing", false)
+  .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
-    const v = await resolveVaultArg(vault);
+    const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runMigrateCitations({ vault: v.vault, dryRun: !!opts.dryRun }));
   });

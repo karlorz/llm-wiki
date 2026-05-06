@@ -4,7 +4,7 @@ import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 
-export interface OrphansInput { vault: string | undefined; envValue?: string; home?: string }
+export interface OrphansInput { vault: string | undefined; envValue?: string; home?: string; wiki?: string }
 export interface OrphansOutput {
   orphans: string[];
   bridges: Array<{ path: string; connects: string[] }>;
@@ -16,7 +16,7 @@ export async function runOrphans(input: OrphansInput): Promise<{ exitCode: numbe
   if (input.vault) {
     vault = input.vault;
   } else {
-    const r = await resolveRuntimePath({ flag: undefined, envValue: input.envValue, home: input.home ?? "" });
+    const r = await resolveRuntimePath({ flag: undefined, envValue: input.envValue, home: input.home ?? "", wiki: input.wiki });
     if (!r.ok) return { exitCode: ExitCode.NO_VAULT_CONFIGURED, result: r };
     vault = r.data.path;
   }
