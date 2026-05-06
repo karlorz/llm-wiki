@@ -112,7 +112,7 @@ describe("runDoctor", () => {
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(9);
+      expect(r.result.data.checks).toHaveLength(10);
     }
   });
 
@@ -180,5 +180,17 @@ describe("runDoctor", () => {
       expect(drift?.detail).toContain("Plugin v0.2.0-beta.99");
       expect(drift?.detail).toContain("CLI v0.2.0-beta.15");
     }
+  });
+
+  it("reports profiles when configured", async () => {
+    const h = mkdtempSync(join(tmpdir(), "home-"));
+    mkdirSync(join(h, ".skillwiki"), { recursive: true });
+    writeFileSync(join(h, ".skillwiki", ".env"),
+      "WIKI_PATH=/default\nWIKI_DEFAULT=finance\nWIKI_FINANCE_PATH=/finance\n");
+    const r = await runDoctor({ home: h, envValue: "/default", argv: ["node", "cli.js"], currentVersion: "1.0.0" });
+    const profileCheck = r.result.ok && r.result.data.checks.find(c => c.id === "wiki_profiles");
+    expect(profileCheck).toBeDefined();
+    expect(profileCheck!.status).toBe("pass");
+    expect(profileCheck!.detail).toContain("finance");
   });
 });

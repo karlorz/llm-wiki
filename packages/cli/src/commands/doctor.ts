@@ -152,6 +152,23 @@ function checkPluginVersionDrift(home: string, currentVersion: string): CheckRes
   }
 }
 
+async function checkProfiles(home: string): Promise<CheckResult> {
+  const map = await parseDotenvFile(configPath(home));
+  const profiles: string[] = [];
+  for (const key of Object.keys(map)) {
+    if (key.startsWith("WIKI_") && key.endsWith("_PATH") && key !== "WIKI_PATH") {
+      const name = key.slice(5, -5).toLowerCase().replace(/_/g, "-");
+      profiles.push(name);
+    }
+  }
+  if (profiles.length === 0) {
+    return check("pass", "wiki_profiles", "Wiki profiles", "No named profiles configured");
+  }
+  const defaultProfile = map["WIKI_DEFAULT"] ?? "(none)";
+  return check("pass", "wiki_profiles", "Wiki profiles",
+    `${profiles.length} profile(s): ${profiles.join(", ")}; default: ${defaultProfile}`);
+}
+
 function findSkillMd(dir: string): string[] {
   const results: string[] = [];
   let entries;
@@ -178,6 +195,7 @@ export async function runDoctor(
   checks.push(checkNodeVersion());
   checks.push(checkCliOnPath(input.argv));
   checks.push(await checkConfigFile(input.home));
+  checks.push(await checkProfiles(input.home));
 
   const resolved = await resolveRuntimePath({ flag: undefined, envValue: input.envValue, home: input.home });
   if (resolved.ok) {
