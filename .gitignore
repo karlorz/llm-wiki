@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .skillwiki/
+.claude/dev-loop.config.md
+.claude/scheduled_tasks.lock
+.claude/worktrees/
 *.tsbuildinfo
 coverage/
 *.bak
