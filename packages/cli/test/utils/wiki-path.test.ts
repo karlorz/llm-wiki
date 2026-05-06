@@ -130,3 +130,89 @@ describe("profileKey", () => {
     expect(profileKey("crypto-alpha", "LANG")).toBe("WIKI_CRYPTO_ALPHA_LANG");
   });
 });
+
+describe("resolveRuntimePath with profiles", () => {
+  it("resolves named profile via --wiki flag", async () => {
+    const home = newHome();
+    writeFileSync(join(home, ".skillwiki", ".env"),
+      "WIKI_PATH=/default/vault\nWIKI_FINANCE_PATH=/finance/vault\n");
+    const r = await resolveRuntimePath({ flag: "/default/vault", envValue: undefined, home, wiki: "finance" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.data.path).toBe("/finance/vault");
+  });
+
+  it("returns UNKNOWN_WIKI_PROFILE when profile not found", async () => {
+    const home = newHome();
+    writeFileSync(join(home, ".skillwiki", ".env"), "WIKI_PATH=/default/vault\n");
+    const r = await resolveRuntimePath({ flag: "/x", envValue: undefined, home, wiki: "nonexistent" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("UNKNOWN_WIKI_PROFILE");
+  });
+
+  it("--wiki flag takes precedence over WIKI_DEFAULT", async () => {
+    const home = newHome();
+    writeFileSync(join(home, ".skillwiki", ".env"),
+      "WIKI_DEFAULT=finance\nWIKI_PATH=/default\nWIKI_FINANCE_PATH=/finance\nWIKI_CRYPTO_PATH=/crypto\n");
+    const r = await resolveRuntimePath({ flag: "/x", envValue: undefined, home, wiki: "crypto" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.data.path).toBe("/crypto");
+  });
+
+  it("WIKI_DEFAULT selects profile when no --wiki flag", async () => {
+    const home = newHome();
+    writeFileSync(join(home, ".skillwiki", ".env"),
+      "WIKI_DEFAULT=finance\nWIKI_PATH=/default\nWIKI_FINANCE_PATH=/finance\n");
+    const r = await resolveRuntimePath({ flag: "/x", envValue: undefined, home });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.data.path).toBe("/finance");
+  });
+
+  it("WIKI_DEFAULT=unknown returns UNKNOWN_WIKI_PROFILE", async () => {
+    const home = newHome();
+    writeFileSync(join(home, ".skillwiki", ".env"),
+      "WIKI_DEFAULT=bogus\nWIKI_PATH=/default\n");
+    const r = await resolveRuntimePath({ flag: "/x", envValue: undefined, home });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("UNKNOWN_WIKI_PROFILE");
+  });
+});
+
+describe("resolveRuntimePath with project-local config", () => {
+  it("project-local ./skillwiki/.env overrides user-global", async () => {
+    const home = newHome();
+    writeFileSync(join(home, ".skillwiki", ".env"), "WIKI_PATH=/global/vault\n");
+    const cwd = mkdtempSync(join(tmpdir(), "cwd-"));
+    mkdirSync(join(cwd, ".skillwiki"), { recursive: true });
+    writeFileSync(join(cwd, ".skillwiki", ".env"), "WIKI_PATH=/project/vault\n");
+    const r = await resolveRuntimePath({ flag: undefined, envValue: undefined, home, cwd });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.data.path).toBe("/project/vault");
+      expect(r.data.source).toBe("project-dotenv");
+    }
+  });
+
+  it("--wiki flag takes precedence over project-local", async () => {
+    const home = newHome();
+    writeFileSync(join(home, ".skillwiki", ".env"),
+      "WIKI_PATH=/global\nWIKI_FINANCE_PATH=/finance\n");
+    const cwd = mkdtempSync(join(tmpdir(), "cwd-"));
+    mkdirSync(join(cwd, ".skillwiki"), { recursive: true });
+    writeFileSync(join(cwd, ".skillwiki", ".env"), "WIKI_PATH=/project\n");
+    const r = await resolveRuntimePath({ flag: undefined, envValue: undefined, home, cwd, wiki: "finance" });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.data.path).toBe("/finance");
+  });
+});
+
+describe("resolveInitTimePath with project-local config", () => {
+  it("project-local overrides default ~/wiki fallback", async () => {
+    const home = newHome();
+    const cwd = mkdtempSync(join(tmpdir(), "cwd-"));
+    mkdirSync(join(cwd, ".skillwiki"), { recursive: true });
+    writeFileSync(join(cwd, ".skillwiki", ".env"), "WIKI_PATH=/project/vault\n");
+    const r = await resolveInitTimePath({ flag: undefined, envValue: undefined, home, cwd });
+    expect(r.path).toBe("/project/vault");
+    expect(r.source).toBe("project-dotenv");
+  });
+});
