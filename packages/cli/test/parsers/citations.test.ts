@@ -60,6 +60,15 @@ describe("isLegacyCitationStyle", () => {
     const body = "Use `^[raw/x.md]` for citations.\n\n## Sources\n- ^[raw/y.md]\n";
     expect(isLegacyCitationStyle(body)).toBe(false);
   });
+  it("returns false when inline code near ## Sources (backtick bug)", () => {
+    // Regression: inline code stripping used to eat the ## Sources header
+    const body = "Exit code is 22 (warnings). `--human` flag shows output. ^[raw/x.md]\n\n## Sources\n- ^[raw/x.md]\n";
+    expect(isLegacyCitationStyle(body)).toBe(false);
+  });
+  it("returns true when truly missing ## Sources even with inline code", () => {
+    const body = "Use `--flag` for output. ^[raw/x.md]\n";
+    expect(isLegacyCitationStyle(body)).toBe(true);
+  });
 });
 
 describe("extractParagraphEndCitations", () => {

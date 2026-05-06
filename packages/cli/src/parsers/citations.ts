@@ -8,6 +8,11 @@ function stripFences(body: string): string {
   return body.replace(FENCE, "").replace(INLINE_CODE, "");
 }
 
+/** Strip only fenced code blocks (```), preserving inline code. */
+function stripFencedBlocks(body: string): string {
+  return body.replace(FENCE, "");
+}
+
 export function extractCitationMarkers(body: string): CitationMarker[] {
   const stripped = stripFences(body);
   const out: CitationMarker[] = [];
@@ -19,13 +24,18 @@ export function extractCitationMarkers(body: string): CitationMarker[] {
 }
 
 export function hasSourcesFooter(body: string): boolean {
-  return /^## Sources\s*$/m.test(stripFences(body));
+  // Strip fenced blocks only — inline code must be preserved so that
+  // backtick-wrapped text near ## Sources doesn't eat the header line.
+  return /^## Sources\s*$/m.test(stripFencedBlocks(body));
 }
 
 export function isLegacyCitationStyle(body: string): boolean {
   const markers = extractCitationMarkers(body);
   if (markers.length === 0) return false;
 
+  // Check for Sources footer on the ORIGINAL body (backticks intact).
+  // Using stripFences here caused false positives when backtick-wrapped
+  // text appeared near the ## Sources header.
   if (!hasSourcesFooter(body)) return true;
 
   const lines = stripFences(body).split("\n");
