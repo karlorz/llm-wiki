@@ -5,6 +5,25 @@ export const CONFIG_KEYS = ["WIKI_PATH", "WIKI_LANG"] as const;
 export type ConfigKey = typeof CONFIG_KEYS[number];
 const _whitelist = new Set<string>(CONFIG_KEYS);
 
+// Profile key validation: WIKI_{NAME}_PATH or WIKI_{NAME}_LANG where NAME is A-Z0-9_, max 32 chars
+const PROFILE_PATH_RE = /^WIKI_([A-Z][A-Z0-9_]{0,31})_PATH$/;
+const PROFILE_LANG_RE = /^WIKI_([A-Z][A-Z0-9_]{0,31})_LANG$/;
+const PROFILE_DEFAULT_RE = /^WIKI_DEFAULT$/;
+
+export function isValidWikiProfileKey(key: string): boolean {
+  if (key === "WIKI_PATH" || key === "WIKI_LANG") return false;
+  return PROFILE_PATH_RE.test(key) || PROFILE_LANG_RE.test(key) || PROFILE_DEFAULT_RE.test(key);
+}
+
+export function isProfileKey(key: string): boolean {
+  return PROFILE_PATH_RE.test(key) || PROFILE_LANG_RE.test(key) || PROFILE_DEFAULT_RE.test(key)
+    || key === "WIKI_DEFAULT";
+}
+
+export function profileKey(name: string, suffix: "PATH" | "LANG"): string {
+  return `WIKI_${name.toUpperCase().replace(/-/g, "_").replace(/[^A-Z0-9_]/g, "")}_${suffix}`;
+}
+
 export type DotenvMap = Partial<Record<ConfigKey, string>>;
 
 export function parseDotenvText(text: string): DotenvMap {
@@ -16,7 +35,7 @@ export function parseDotenvText(text: string): DotenvMap {
     if (eq <= 0) continue;
     const key = line.slice(0, eq).trim();
     const value = line.slice(eq + 1).trim();
-    if (!_whitelist.has(key)) continue;
+    if (!_whitelist.has(key) && !isValidWikiProfileKey(key)) continue;
     if (value.length === 0) continue;
     (out as Record<string, string>)[key] = value;
   }

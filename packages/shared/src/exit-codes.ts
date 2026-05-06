@@ -32,7 +32,8 @@ export const ExitCode = {
   ARCHIVE_ALREADY_ARCHIVED: 31,
   DRIFT_DETECTED: 32,
   RAW_DEDUP_DETECTED: 33,
-  MIGRATION_APPLIED: 34
+  MIGRATION_APPLIED: 34,
+  UNKNOWN_WIKI_PROFILE: 35
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -71,7 +72,8 @@ const NAMES: Record<number, string> = {
   31: "ARCHIVE_ALREADY_ARCHIVED",
   32: "DRIFT_DETECTED",
   33: "RAW_DEDUP_DETECTED",
-  34: "MIGRATION_APPLIED"
+  34: "MIGRATION_APPLIED",
+  35: "UNKNOWN_WIKI_PROFILE"
 };
 
 export function exitCodeName(code: number): string {

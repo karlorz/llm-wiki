@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveInitTimePath, resolveRuntimePath } from "../../src/utils/wiki-path.js";
+import { isValidWikiProfileKey, isProfileKey, profileKey } from "../../src/utils/dotenv.js";
 
 function newHome(): string {
   const h = mkdtempSync(join(tmpdir(), "home-"));
@@ -75,5 +76,57 @@ describe("resolveRuntimePath", () => {
       expect(Array.isArray(r.data.chain)).toBe(true);
       expect(r.data.chain!.map(c => c.source)).toEqual(["flag", "env", "skillwiki-dotenv"]);
     }
+  });
+});
+
+describe("isValidWikiProfileKey", () => {
+  it("accepts WIKI_FINANCE_PATH", () => {
+    expect(isValidWikiProfileKey("WIKI_FINANCE_PATH")).toBe(true);
+  });
+  it("accepts WIKI_CRYPTO_ALPHA_LANG", () => {
+    expect(isValidWikiProfileKey("WIKI_CRYPTO_ALPHA_LANG")).toBe(true);
+  });
+  it("accepts WIKI_DEFAULT", () => {
+    expect(isValidWikiProfileKey("WIKI_DEFAULT")).toBe(true);
+  });
+  it("rejects WIKI_PATH", () => {
+    expect(isValidWikiProfileKey("WIKI_PATH")).toBe(false);
+  });
+  it("rejects WIKI_LANG", () => {
+    expect(isValidWikiProfileKey("WIKI_LANG")).toBe(false);
+  });
+  it("rejects BOGUS", () => {
+    expect(isValidWikiProfileKey("BOGUS")).toBe(false);
+  });
+  it("rejects WIKI__PATH (empty name)", () => {
+    expect(isValidWikiProfileKey("WIKI__PATH")).toBe(false);
+  });
+  it("rejects name longer than 32 chars", () => {
+    const longName = "WIKI_" + "A".repeat(33) + "_PATH";
+    expect(isValidWikiProfileKey(longName)).toBe(false);
+  });
+});
+
+describe("isProfileKey", () => {
+  it("returns true for WIKI_FINANCE_PATH", () => {
+    expect(isProfileKey("WIKI_FINANCE_PATH")).toBe(true);
+  });
+  it("returns true for WIKI_DEFAULT", () => {
+    expect(isProfileKey("WIKI_DEFAULT")).toBe(true);
+  });
+  it("returns false for WIKI_PATH", () => {
+    expect(isProfileKey("WIKI_PATH")).toBe(false);
+  });
+  it("returns false for WIKI_LANG", () => {
+    expect(isProfileKey("WIKI_LANG")).toBe(false);
+  });
+});
+
+describe("profileKey", () => {
+  it("builds path key from lowercase name", () => {
+    expect(profileKey("finance", "PATH")).toBe("WIKI_FINANCE_PATH");
+  });
+  it("builds lang key from lowercase name", () => {
+    expect(profileKey("crypto-alpha", "LANG")).toBe("WIKI_CRYPTO_ALPHA_LANG");
   });
 });
