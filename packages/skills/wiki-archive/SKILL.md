@@ -24,7 +24,8 @@ Standard four reads (SCHEMA, index, log, project context if applicable).
 1. Identify the target page. Confirm with the user which page to archive (show full relPath).
 2. Run `skillwiki archive <page> [vault]`. Read the JSON output.
 3. Verify with `skillwiki index-check [vault]` — confirm no ghost entries remain.
-4. Append a `log.md` entry: `## [{date}] archive | {relPath} → _archive/{subdir}/`.
+4. Run `skillwiki lint [vault]` — check for broken wikilinks from other pages that still reference the archived page. If found, update those pages to point to the replacement or remove the stale link.
+5. Append a `log.md` entry: `## [{date}] archive | {relPath} → _archive/{subdir}/`.
 
 ## Reversibility
 
