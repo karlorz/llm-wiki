@@ -107,12 +107,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 9 checks", async () => {
+  it("always returns exactly 10 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(10);
+      expect(r.result.data.checks).toHaveLength(11);
     }
   });
 
@@ -192,5 +192,35 @@ describe("runDoctor", () => {
     expect(profileCheck).toBeDefined();
     expect(profileCheck!.status).toBe("pass");
     expect(profileCheck!.detail).toContain("finance");
+  });
+
+  it("reports project-local override when present", async () => {
+    const h = home();
+    const v = fullVault();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const cwd = mkdtempSync(join(tmpdir(), "cwd-"));
+    mkdirSync(join(cwd, ".skillwiki"), { recursive: true });
+    writeFileSync(join(cwd, ".skillwiki", ".env"), "WIKI_PATH=/project/vault\n");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15", cwd });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const proj = r.result.data.checks.find(c => c.id === "project_local");
+      expect(proj).toBeDefined();
+      expect(proj!.status).toBe("pass");
+      expect(proj!.detail).toContain("Found");
+    }
+  });
+
+  it("reports no project-local override when absent", async () => {
+    const h = home();
+    const v = fullVault();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const proj = r.result.data.checks.find(c => c.id === "project_local");
+      expect(proj).toBeDefined();
+      expect(proj!.detail).toContain("None");
+    }
   });
 });

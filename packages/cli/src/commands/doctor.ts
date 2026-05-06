@@ -28,6 +28,7 @@ export interface DoctorInput {
   envValue: string | undefined;
   argv: string[];
   currentVersion: string;
+  cwd?: string;
 }
 
 function check(status: CheckStatus, id: string, label: string, detail: string): CheckResult {
@@ -169,6 +170,15 @@ async function checkProfiles(home: string): Promise<CheckResult> {
     `${profiles.length} profile(s): ${profiles.join(", ")}; default: ${defaultProfile}`);
 }
 
+async function checkProjectLocalOverride(cwd?: string): Promise<CheckResult> {
+  const dir = cwd ?? process.cwd();
+  const envPath = join(dir, ".skillwiki", ".env");
+  if (existsSync(envPath)) {
+    return check("pass", "project_local", "Project-local config", `Found: ${envPath}`);
+  }
+  return check("pass", "project_local", "Project-local config", "None");
+}
+
 function findSkillMd(dir: string): string[] {
   const results: string[] = [];
   let entries;
@@ -196,6 +206,7 @@ export async function runDoctor(
   checks.push(checkCliOnPath(input.argv));
   checks.push(await checkConfigFile(input.home));
   checks.push(await checkProfiles(input.home));
+  checks.push(await checkProjectLocalOverride(input.cwd));
 
   const resolved = await resolveRuntimePath({ flag: undefined, envValue: input.envValue, home: input.home });
   if (resolved.ok) {
