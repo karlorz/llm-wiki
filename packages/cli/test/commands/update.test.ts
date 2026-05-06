@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runUpdate } from "../../src/commands/update.js";
 import { cachePath } from "../../src/utils/auto-update.js";
 
@@ -13,6 +14,11 @@ vi.mock("node:child_process", () => ({
 import { execSync } from "node:child_process";
 const mockExec = execSync as unknown as ReturnType<typeof vi.fn>;
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const currentVersion = JSON.parse(
+  readFileSync(join(__dirname, "../../package.json"), "utf8")
+).version;
+
 function home(): string {
   const h = mkdtempSync(join(tmpdir(), "update-home-"));
   mkdirSync(join(h, ".skillwiki"), { recursive: true });
@@ -22,7 +28,7 @@ function home(): string {
 describe("runUpdate", () => {
   it("reports already latest when versions match", async () => {
     const h = home();
-    mockExec.mockReturnValueOnce("0.2.0-beta.15\n"); // npm view returns current version
+    mockExec.mockReturnValueOnce(`${currentVersion}\n`); // npm view returns current version
 
     const r = await runUpdate({ home: h, distTag: "beta" });
     expect(r.exitCode).toBe(0);
@@ -80,11 +86,11 @@ describe("runUpdate", () => {
 
   it("writes update cache even when already latest", async () => {
     const h = home();
-    mockExec.mockReturnValueOnce("0.2.0-beta.15\n");
+    mockExec.mockReturnValueOnce(`${currentVersion}\n`);
 
     await runUpdate({ home: h, distTag: "beta" });
     const cache = JSON.parse(readFileSync(cachePath(h), "utf8"));
-    expect(cache.latestVersion).toBe("0.2.0-beta.15");
+    expect(cache.latestVersion).toBe(currentVersion);
     expect(cache.updateAppliedAt).toBeUndefined();
   });
 });
