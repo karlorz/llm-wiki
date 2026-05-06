@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# skillwiki CLI wrapper — delegates to npx so the CLI is available
+# automatically when this plugin is enabled (Claude Code adds bin/ to PATH).
+set -euo pipefail
+exec npx -y skillwiki@beta "$@"
