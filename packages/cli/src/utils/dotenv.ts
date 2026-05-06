@@ -23,7 +23,7 @@ export function profileKey(name: string, suffix: "PATH" | "LANG"): string {
   return `WIKI_${name.toUpperCase().replace(/-/g, "_").replace(/[^A-Z0-9_]/g, "")}_${suffix}`;
 }
 
-export type DotenvMap = Partial<Record<ConfigKey, string>>;
+export type DotenvMap = Partial<Record<ConfigKey | string, string>>;
 
 export function parseDotenvText(text: string): DotenvMap {
   const out: DotenvMap = {};

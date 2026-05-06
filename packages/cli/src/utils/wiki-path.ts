@@ -94,8 +94,20 @@ export async function resolveRuntimePath(input: RuntimePathInput): Promise<Resul
   // 2. --wiki <name> → explicit profile
   const wikiName = input.wiki;
   if (wikiName !== undefined && wikiName.length > 0) {
+    // "default" is an alias for the unnamed WIKI_PATH key
+    if (wikiName.toLowerCase() === "default") {
+      const path = swGlobal.WIKI_PATH;
+      if (path !== undefined) {
+        if (input.explain) chain.push({ source: "wiki-profile", matched: true, value: path });
+        return ok({ path, source: "skillwiki-dotenv", ...(input.explain ? { chain } : {}) });
+      }
+      if (input.explain) chain.push({ source: "wiki-profile", matched: false });
+      return err("UNKNOWN_WIKI_PROFILE", {
+        message: `Wiki profile "default" not found. Set it with: skillwiki config set wiki.path <dir>`
+      });
+    }
     const key = profileKey(wikiName, "PATH");
-    const path = (swGlobal as Record<string, string | undefined>)[key];
+    const path = swGlobal[key];
     if (path !== undefined) {
       if (input.explain) chain.push({ source: "wiki-profile", matched: true, value: path });
       return ok({ path, source: "wiki-profile", ...(input.explain ? { chain } : {}) });
@@ -109,7 +121,7 @@ export async function resolveRuntimePath(input: RuntimePathInput): Promise<Resul
   // 3. $WIKI env var → profile name lookup
   if (input.wikiEnv !== undefined && input.wikiEnv.length > 0) {
     const key = profileKey(input.wikiEnv, "PATH");
-    const path = (swGlobal as Record<string, string | undefined>)[key];
+    const path = swGlobal[key];
     if (path !== undefined) {
       if (input.explain) chain.push({ source: "wiki-profile", matched: true, value: path });
       return ok({ path, source: "wiki-profile", ...(input.explain ? { chain } : {}) });
@@ -139,10 +151,10 @@ export async function resolveRuntimePath(input: RuntimePathInput): Promise<Resul
   }
 
   // 6. WIKI_DEFAULT → profile lookup
-  const defaultProfile = (swGlobal as Record<string, string | undefined>)["WIKI_DEFAULT"];
+  const defaultProfile = swGlobal["WIKI_DEFAULT"];
   if (defaultProfile !== undefined) {
     const key = profileKey(defaultProfile, "PATH");
-    const path = (swGlobal as Record<string, string | undefined>)[key];
+    const path = swGlobal[key];
     if (path !== undefined) {
       if (input.explain) chain.push({ source: "wiki-default", matched: true, value: path });
       return ok({ path, source: "wiki-default", ...(input.explain ? { chain } : {}) });

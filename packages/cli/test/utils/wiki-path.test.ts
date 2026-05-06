@@ -193,6 +193,34 @@ describe("resolveRuntimePath with profiles", () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.data.path).toBe("/finance/vault");
   });
+
+  it("--wiki default resolves to WIKI_PATH", async () => {
+    const home = newHome();
+    writeFileSync(join(home, ".skillwiki", ".env"), "WIKI_PATH=/default/vault\nWIKI_FINANCE_PATH=/finance/vault\n");
+    const r = await resolveRuntimePath({ flag: undefined, envValue: undefined, home, wiki: "default" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.data.path).toBe("/default/vault");
+      expect(r.data.source).toBe("skillwiki-dotenv");
+    }
+  });
+
+  it("$WIKI env var with nonexistent profile returns UNKNOWN_WIKI_PROFILE", async () => {
+    const home = newHome();
+    writeFileSync(join(home, ".skillwiki", ".env"), "WIKI_PATH=/default\n");
+    const r = await resolveRuntimePath({ flag: undefined, envValue: undefined, wikiEnv: "nonexistent", home });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("UNKNOWN_WIKI_PROFILE");
+  });
+
+  it("$WIKI env var takes precedence over $WIKI_PATH", async () => {
+    const home = newHome();
+    writeFileSync(join(home, ".skillwiki", ".env"),
+      "WIKI_PATH=/default/vault\nWIKI_FINANCE_PATH=/finance/vault\n");
+    const r = await resolveRuntimePath({ flag: undefined, envValue: "/env/path", wikiEnv: "finance", home });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.data.path).toBe("/finance/vault");
+  });
 });
 
 describe("resolveRuntimePath with project-local config", () => {
