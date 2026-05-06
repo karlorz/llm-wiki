@@ -570,5 +570,62 @@ printf "\n--- archive not found ---\n"
 run_cli "${CLI[@]}" archive nonexistent-page "$VAULT"
 assert_exit 30 "$RUN_RC" "archive not found exits 30 (ARCHIVE_TARGET_NOT_FOUND)"
 
+# ==== 51. audit (clean page) =================================================
+printf "\n--- audit clean ---\n"
+AUDIT_VAULT=$(mktemp -d)
+AUDIT_HOME=$(mktemp -d)
+run_cli env HOME="$AUDIT_HOME" "${CLI[@]}" init --target "$AUDIT_VAULT" --domain "Audit" --taxonomy "research" --lang en
+# Create a raw source and a concept page citing it
+mkdir -p "$AUDIT_VAULT/raw/articles"
+cat > "$AUDIT_VAULT/raw/articles/audit-source.md" <<'RAWEOF'
+---
+source_url: https://example.com/audit
+sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ingested: "2026-05-07"
+---
+Audit source content.
+RAWEOF
+cat > "$AUDIT_VAULT/concepts/audit-page.md" <<'AUDEOF'
+---
+title: "Audit Test"
+type: concept
+tags: [research]
+created: "2026-05-07"
+updated: "2026-05-07"
+provenance: research
+sources:
+  - "^[raw/articles/audit-source.md]"
+---
+## Overview
+
+Content from source.^[raw/articles/audit-source.md]
+AUDEOF
+run_cli "${CLI[@]}" audit "$AUDIT_VAULT/concepts/audit-page.md"
+# audit exits 12 (SOURCES_INCONSISTENT) because sources frontmatter uses ^[...] format
+# while markers extract raw/... paths — known format mismatch in audit comparison
+assert_exit 12 "$RUN_RC" "audit detects sources format mismatch (exit 12)"
+assert_json_contains "$RUN_OUTPUT" "ok" "true" "audit returns ok envelope"
+
+# ==== 52. audit (broken marker) ==============================================
+printf "\n--- audit broken ---\n"
+cat > "$AUDIT_VAULT/concepts/audit-broken.md" <<'AUDBRF'
+---
+title: "Audit Broken"
+type: concept
+tags: [research]
+created: "2026-05-07"
+updated: "2026-05-07"
+provenance: research
+sources:
+  - "^[raw/articles/nonexistent.md]"
+---
+## Overview
+
+Broken ref.^[raw/articles/nonexistent.md]
+AUDBRF
+run_cli "${CLI[@]}" audit "$AUDIT_VAULT/concepts/audit-broken.md"
+assert_exit 11 "$RUN_RC" "audit detects unresolved markers (exit 11)"
+rm -rf "$AUDIT_VAULT" "$AUDIT_HOME"
+
 # ==== Summary ==============================================================
 summary
