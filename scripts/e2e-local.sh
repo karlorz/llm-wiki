@@ -21,6 +21,7 @@ INSTALL_TARGET=""
 cleanup() {
   rm -rf "$VAULT" "$TEMP_HOME"
   [ -n "$INSTALL_TARGET" ] && rm -rf "$INSTALL_TARGET"
+  [ -n "${CRYPTO_VAULT:-}" ] && rm -rf "$CRYPTO_VAULT"
   HOME="$REAL_HOME"
 }
 trap cleanup EXIT
@@ -256,6 +257,66 @@ if printf '%s' "$RUN_OUTPUT" | grep -q 'pass.*warn.*error'; then
   PASS=$((PASS + 1)); printf "  \u2713 doctor --human shows summary line\n"
 else
   FAIL=$((FAIL + 1)); printf "  \u2717 doctor --human missing summary line\n"
+fi
+
+# ==== 28. config set profile key =================================================
+printf "\n--- config set wiki.finance.path ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config set WIKI_FINANCE_PATH /finance/vault
+assert_exit 0 "$RUN_RC" "config set profile key succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.key" "WIKI_FINANCE_PATH" "config set returns profile key"
+
+# ==== 29. config get profile key =================================================
+printf "\n--- config get wiki.finance.path ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config get WIKI_FINANCE_PATH
+assert_exit 0 "$RUN_RC" "config get profile key succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.value" "/finance/vault" "config get returns profile value"
+
+# ==== 30. config set WIKI_DEFAULT ================================================
+printf "\n--- config set WIKI_DEFAULT ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config set WIKI_DEFAULT finance
+assert_exit 0 "$RUN_RC" "config set WIKI_DEFAULT succeeds"
+
+# ==== 31. config list --profiles ================================================
+printf "\n--- config list --profiles ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config list --profiles
+assert_exit 0 "$RUN_RC" "config list --profiles succeeds"
+assert_json_contains "$RUN_OUTPUT" "ok" "true" "config list --profiles returns ok"
+
+# ==== 32. path --wiki resolves profile ===========================================
+printf "\n--- path --wiki finance ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" path --wiki finance --explain
+assert_exit 0 "$RUN_RC" "path --wiki finance succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.source" "wiki-profile" "path source is wiki-profile"
+assert_json_contains "$RUN_OUTPUT" "data.path" "/finance/vault" "path resolves to finance vault"
+
+# ==== 33. path --wiki unknown returns exit 35 ====================================
+printf "\n--- path --wiki unknown ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" path --wiki nonexistent
+assert_exit 35 "$RUN_RC" "path --wiki nonexistent returns exit 35"
+
+# ==== 34. WIKI_DEFAULT selects active profile ====================================
+printf "\n--- path (WIKI_DEFAULT=finance) ---\n"
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" path --explain
+assert_exit 0 "$RUN_RC" "path with WIKI_DEFAULT succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.source" "wiki-default" "path source is wiki-default"
+assert_json_contains "$RUN_OUTPUT" "data.path" "/finance/vault" "path resolves default profile"
+
+# ==== 35. init --profile =========================================================
+printf "\n--- init --profile crypto ---\n"
+CRYPTO_VAULT=$(mktemp -d)
+run_cli env HOME="$TEMP_HOME" "${CLI[@]}" init \
+  --target "$CRYPTO_VAULT" \
+  --domain "Crypto" \
+  --taxonomy "research" \
+  --lang en \
+  --profile crypto
+assert_exit 0 "$RUN_RC" "init --profile succeeds"
+# Verify WIKI_CRYPTO_PATH was written
+crypto_path=$(grep 'WIKI_CRYPTO_PATH' "$TEMP_HOME/.skillwiki/.env" | cut -d= -f2)
+if [ "$crypto_path" = "$CRYPTO_VAULT" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 WIKI_CRYPTO_PATH written correctly\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 WIKI_CRYPTO_PATH not found or wrong\n"
 fi
 
 # ==== Summary ===============================================================
