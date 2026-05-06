@@ -120,6 +120,7 @@ program
   .option("--lang <code>", "output language (BCP 47 or alias)")
   .option("--force", "override existing target / env conflict", false)
   .option("--no-env", "skip writing ~/.skillwiki/.env")
+  .option("--profile <name>", "write as named wiki profile instead of WIKI_PATH")
   .action(async (opts) => {
     const templates = new URL("../templates/", import.meta.url).pathname;
     const taxonomy = typeof opts.taxonomy === "string"
@@ -134,7 +135,8 @@ program
       taxonomy,
       lang: opts.lang,
       force: !!opts.force,
-      noEnv: opts.env === false
+      noEnv: opts.env === false,
+      profile: opts.profile
     }));
   });
 

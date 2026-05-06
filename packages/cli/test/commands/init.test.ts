@@ -329,6 +329,39 @@ Finance and markets knowledge base — HK/Asia, US, commodities.
     expect(schema).toContain("- commodity");
   });
 
+  it("--profile writes WIKI_{NAME}_PATH instead of WIKI_PATH", async () => {
+    const h = home();
+    const target = vault();
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "Finance", taxonomy: undefined, lang: undefined, force: false,
+      profile: "finance"
+    });
+    expect(r.exitCode).toBe(0);
+    const env = readFileSync(join(h, ".skillwiki", ".env"), "utf8");
+    expect(env).toContain(`WIKI_FINANCE_PATH=${target}`);
+    expect(env).toContain("WIKI_FINANCE_LANG=en");
+    expect(env).toContain("WIKI_DEFAULT=finance");
+    expect(env).not.toMatch(/^WIKI_PATH=/m);
+    expect(env).not.toMatch(/^WIKI_LANG=/m);
+  });
+
+  it("--profile does not trigger ENV_WRITE_CONFLICT with existing WIKI_PATH", async () => {
+    const h = home();
+    const target = vault();
+    writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/other/path\nWIKI_LANG=en\n");
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: undefined, force: false,
+      profile: "work"
+    });
+    expect(r.exitCode).toBe(0);
+    const env = readFileSync(join(h, ".skillwiki", ".env"), "utf8");
+    expect(env).toContain(`WIKI_WORK_PATH=${target}`);
+    expect(env).toContain("WIKI_DEFAULT=work");
+    expect(env).toContain("WIKI_PATH=/other/path");
+  });
+
   it("--domain flag overrides old domain when both provided", async () => {
     const h = home();
     const target = tmp();

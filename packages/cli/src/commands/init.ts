@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { resolveInitTimePath } from "../utils/wiki-path.js";
 import { resolveLang } from "../utils/lang.js";
-import { parseDotenvText, writeDotenv } from "../utils/dotenv.js";
+import { parseDotenvText, writeDotenv, profileKey, type DotenvMap } from "../utils/dotenv.js";
 import { extractTaxonomy } from "../parsers/taxonomy.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 
@@ -27,6 +27,7 @@ export interface InitInput {
   lang: string | undefined;
   force: boolean;
   noEnv?: boolean;
+  profile?: string;
 }
 
 export interface InitOutput {
@@ -95,13 +96,13 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   try { existingEnvRaw = await readFile(envPath, "utf8"); } catch { /* new file */ }
   const existingEnv = parseDotenvText(existingEnvRaw);
   const swDotenvHadPath = existingEnv.WIKI_PATH !== undefined;
-  if (existingEnv.WIKI_PATH !== undefined && existingEnv.WIKI_PATH !== target && !input.force) {
+  if (!input.profile && existingEnv.WIKI_PATH !== undefined && existingEnv.WIKI_PATH !== target && !input.force) {
     return {
       exitCode: ExitCode.ENV_WRITE_CONFLICT,
       result: err("ENV_WRITE_CONFLICT", { key: "WIKI_PATH", existing: existingEnv.WIKI_PATH, attempted: target })
     };
   }
-  if (existingEnv.WIKI_LANG !== undefined && existingEnv.WIKI_LANG !== canonicalLang && !input.force) {
+  if (!input.profile && existingEnv.WIKI_LANG !== undefined && existingEnv.WIKI_LANG !== canonicalLang && !input.force) {
     return {
       exitCode: ExitCode.ENV_WRITE_CONFLICT,
       result: err("ENV_WRITE_CONFLICT", { key: "WIKI_LANG", existing: existingEnv.WIKI_LANG, attempted: canonicalLang })
@@ -197,7 +198,16 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   let envWritten = "";
   if (!skipEnv) {
     try {
-      await writeDotenv(envPath, { WIKI_PATH: target, WIKI_LANG: canonicalLang }, existingEnvRaw);
+      const envEntries: DotenvMap = {};
+      if (input.profile) {
+        envEntries[profileKey(input.profile, "PATH")] = target;
+        envEntries[profileKey(input.profile, "LANG")] = canonicalLang;
+        envEntries["WIKI_DEFAULT"] = input.profile;
+      } else {
+        envEntries["WIKI_PATH"] = target;
+        envEntries["WIKI_LANG"] = canonicalLang;
+      }
+      await writeDotenv(envPath, envEntries, existingEnvRaw);
       envWritten = envPath;
     } catch (e) {
       return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: envPath, message: String(e) }) };
