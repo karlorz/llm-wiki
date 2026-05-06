@@ -319,5 +319,72 @@ else
   FAIL=$((FAIL + 1)); printf "  \u2717 WIKI_CRYPTO_PATH not found or wrong\n"
 fi
 
-# ==== Summary ===============================================================
+# ==== 36. dedup (detect) =====================================================
+printf "\n--- dedup detect ---\n"
+DEDUP_VAULT=$(mktemp -d)
+DEDUP_HOME=$(mktemp -d)
+run_cli env HOME="$DEDUP_HOME" "${CLI[@]}" init --target "$DEDUP_VAULT" --domain "Dedup" --taxonomy "research" --lang en
+mkdir -p "$DEDUP_VAULT/raw/articles" "$DEDUP_VAULT/concepts"
+# Two raw files with identical sha256
+cat > "$DEDUP_VAULT/raw/articles/aaa-orig.md" <<'RAWEOF'
+---
+type: raw
+sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+ingested: "2026-05-06"
+---
+Content here.
+RAWEOF
+cp "$DEDUP_VAULT/raw/articles/aaa-orig.md" "$DEDUP_VAULT/raw/articles/aaa-dup.md"
+# Concept page citing both files so rewiring is exercised regardless of scan order
+cat > "$DEDUP_VAULT/concepts/test-page.md" <<'CONCEPTEOF'
+---
+title: Test
+type: concept
+tags: [research]
+sources:
+  - "^[raw/articles/aaa-orig.md]"
+  - "^[raw/articles/aaa-dup.md]"
+---
+
+Details from orig.^[raw/articles/aaa-orig.md] More from dup.^[raw/articles/aaa-dup.md]
+CONCEPTEOF
+run_cli "${CLI[@]}" dedup "$DEDUP_VAULT"
+assert_exit 33 "$RUN_RC" "dedup detects duplicates (exit 33)"
+# Verify duplicate array has entries
+dup_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d['data']['duplicates']))" 2>/dev/null)
+if [ "$dup_count" = "1" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 dedup reports 1 duplicate group\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 dedup reports %s groups, expected 1\n" "$dup_count"
+fi
+
+# ==== 37. dedup --apply =====================================================
+printf "\n--- dedup apply ---\n"
+run_cli "${CLI[@]}" dedup "$DEDUP_VAULT" --apply
+assert_exit 36 "$RUN_RC" "dedup --apply succeeds (exit 36)"
+# Verify removed count via JSON — exactly 1 duplicate file should be removed
+removed_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d['data']['removed']))" 2>/dev/null)
+if [ "$removed_count" = "1" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 dedup apply removed 1 file\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 dedup apply removed %s files, expected 1\n" "$removed_count"
+fi
+# Verify only one raw file remains (the canonical)
+raw_remaining=$(find "$DEDUP_VAULT/raw/articles" -name "aaa-*.md" | wc -l | tr -d ' ')
+if [ "$raw_remaining" = "1" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 only 1 raw file remains after dedup\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 %s raw files remain, expected 1\n" "$raw_remaining"
+fi
+# Verify page citations now all point to one file (no mixed references)
+canonical=$(find "$DEDUP_VAULT/raw/articles" -name "aaa-*.md" -exec basename {} .md \;)
+page_body=$(cat "$DEDUP_VAULT/concepts/test-page.md")
+if printf '%s' "$page_body" | grep -q "\^\[raw/articles/${canonical}.md\]"; then
+  PASS=$((PASS + 1)); printf "  \u2713 citations point to canonical file %s\n" "$canonical"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 citations not pointing to canonical\n"
+fi
+rm -rf "$DEDUP_VAULT" "$DEDUP_HOME"
+
+# ==== Summary ==============================================================
 summary
