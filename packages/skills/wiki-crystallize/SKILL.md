@@ -22,7 +22,7 @@ Standard four reads. If cwd is inside `projects/{slug}/`, also read project READ
 1. Identify type: entity / concept / comparison / query / summary.
 2. Set `provenance:`. Default `research`. If in project context: `project` with `provenance_projects: ["[[slug]]"]`.
 3. Compose the page with citations pre-attached. Reuse existing `raw/` sources where possible.
-4. `npx skillwiki validate <page>`. If non-zero, STOP.
+4. `skillwiki validate <page>`. If non-zero, STOP.
 5. Apply writes: page → `index.md` → `log.md`.
 
 ## Stop conditions

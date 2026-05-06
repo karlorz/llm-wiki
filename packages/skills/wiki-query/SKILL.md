@@ -20,8 +20,8 @@ Standard four reads (SCHEMA, index, log, project context if applicable).
 ## Steps
 0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`.
 1. **Determine scope.** Ask the user once if ambiguous: vault | current project | project+concepts.
-2. **Refresh graph.** If `.skillwiki/graph.json` is missing or older than 24h: `npx skillwiki graph build <vault>`.
-3. **Compute overlap.** `npx skillwiki overlap <vault>`.
+2. **Refresh graph.** If `.skillwiki/graph.json` is missing or older than 24h: `skillwiki graph build <vault>`.
+3. **Compute overlap.** `skillwiki overlap <vault>`.
 4. **Score candidates** in prompt using the 4 signals:
    - Direct wikilink: 3.0×
    - Source overlap: 4.0× (read from overlap output)

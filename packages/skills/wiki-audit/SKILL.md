@@ -19,7 +19,7 @@ Standard four reads.
 
 ## Steps
 0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`.
-1. `npx skillwiki audit <page>`. Read the JSON report.
+1. `skillwiki audit <page>`. Read the JSON report.
 2. Reason over the report:
    - For each unresolved marker: suggest ingesting the missing source or correcting the path.
    - For each `unused_sources` entry: suggest adding a body marker or removing from `sources:`.

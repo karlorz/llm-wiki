@@ -23,11 +23,11 @@ Run `skillwiki lang` at the start. Generate page-body prose, narrative sections,
 
 ## Steps (in order — N6, N7, N8)
 0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`. Use the resolved vault path for all writes; use the canonical language for all generated prose.
-1. **Guard.** For each URL: run `npx skillwiki fetch-guard <url>`. If exit ≠ 0, STOP and surface the error. Do not retry.
+1. **Guard.** For each URL: run `skillwiki fetch-guard <url>`. If exit ≠ 0, STOP and surface the error. Do not retry.
 2. **Fetch.** Use `web_fetch` (or read local file) under Layer 2 controls (the CLI Layer 2 fetcher applies in tests; in skill runtime use `web_fetch` directly and treat any error as STOP).
-3. **Hash.** Write the raw file (frontmatter + body). Run `npx skillwiki hash <raw-file>` and embed the result in raw frontmatter `sha256:`.
+3. **Hash.** Write the raw file (frontmatter + body). Run `skillwiki hash <raw-file>` and embed the result in raw frontmatter `sha256:`.
 4. **Generate page(s).** Compose typed-knowledge page(s) with citations pre-attached (`^[raw/...]` markers).
-5. **Validate.** For each generated page: run `npx skillwiki validate <page>`. If exit ≠ 0, STOP — do not write index/log.
+5. **Validate.** For each generated page: run `skillwiki validate <page>`. If exit ≠ 0, STOP — do not write index/log.
 6. **Apply writes in order.** raw → page(s) → `index.md` → `log.md`.
 7. **Confidence flag.** If only one source is cited, set `confidence: low`.
 

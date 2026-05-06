@@ -31,7 +31,7 @@ When reading retros as source material:
 2. **Step 2 — Generate.** Compose the vault concept page with
    `provenance: project` and
    `provenance_projects: ["[[slug]]"]`. Validate with
-   `npx skillwiki validate`.
+   `skillwiki validate`.
 3. **Backlink.** Set `promoted_to: "[[concept-slug]]"` on the source
    compound entry. For retro-sourced distillation, skip backlink (log.md
    entries are append-only) and instead add `sources:` citing the vault

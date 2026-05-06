@@ -16,7 +16,7 @@ Standard four + project context (project README, last ~5 work logs).
 1. Determine `kind:` (feature | issue | refactor | decision) and slug.
 2. Create folder `projects/{slug}/work/YYYY-MM-DD-{work-slug}/`.
 3. Override default output paths for any nested skill: `spec.md`, `plan.md`, and `log.md` are written here, not at vault root.
-4. Validate work-item frontmatter via `npx skillwiki validate <spec.md>`. If non-zero, STOP.
+4. Validate work-item frontmatter via `skillwiki validate <spec.md>`. If non-zero, STOP.
 5. Manage status transitions: `planned` → `in-progress` → `completed` (set `completed:` date) or `abandoned`.
 6. Append vault `log.md` entry on creation and on each status transition.
 
