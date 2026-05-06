@@ -101,6 +101,75 @@ describe("runConfigList", () => {
   });
 });
 
+describe("profile key config", () => {
+  it("config set WIKI_FINANCE_PATH writes profile key", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "WIKI_FINANCE_PATH", value: "/fin/vault", home: h });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.key).toBe("WIKI_FINANCE_PATH");
+      expect(r.result.data.value).toBe("/fin/vault");
+    }
+    const text = readFileSync(join(h, ".skillwiki", ".env"), "utf8");
+    expect(text).toContain("WIKI_FINANCE_PATH=/fin/vault");
+  });
+
+  it("config get WIKI_FINANCE_PATH reads profile value", async () => {
+    const h = home();
+    writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_FINANCE_PATH=/fin/vault\n");
+    const r = await runConfigGet({ key: "WIKI_FINANCE_PATH", home: h });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.value).toBe("/fin/vault");
+    }
+  });
+
+  it("config set WIKI_DEFAULT writes default selector", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "WIKI_DEFAULT", value: "finance", home: h });
+    expect(r.exitCode).toBe(0);
+    const text = readFileSync(join(h, ".skillwiki", ".env"), "utf8");
+    expect(text).toContain("WIKI_DEFAULT=finance");
+  });
+
+  it("config list includes profile keys", async () => {
+    const h = home();
+    writeFileSync(join(h, ".skillwiki", ".env"),
+      "WIKI_PATH=/default\nWIKI_FINANCE_PATH=/finance\nWIKI_DEFAULT=finance\n");
+    const r = await runConfigList({ home: h });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      const keys = r.result.data.entries.map(e => e.key);
+      expect(keys).toContain("WIKI_FINANCE_PATH");
+      expect(keys).toContain("WIKI_DEFAULT");
+    }
+  });
+
+  it("config list --profiles returns profile summary", async () => {
+    const h = home();
+    writeFileSync(join(h, ".skillwiki", ".env"),
+      "WIKI_PATH=/default\nWIKI_FINANCE_PATH=/finance\nWIKI_CRYPTO_PATH=/crypto\nWIKI_DEFAULT=finance\n");
+    const r = await runConfigList({ home: h, profiles: true });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.profiles).toEqual([
+        { name: "crypto", path: "/crypto", isDefault: false },
+        { name: "finance", path: "/finance", isDefault: true },
+      ]);
+    }
+  });
+
+  it("config list --profiles returns empty when none configured", async () => {
+    const h = home();
+    writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/default\n");
+    const r = await runConfigList({ home: h, profiles: true });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.profiles).toEqual([]);
+    }
+  });
+});
+
 describe("runConfigPath", () => {
   it("returns path and exists=true when file present", async () => {
     const h = home();

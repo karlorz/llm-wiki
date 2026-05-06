@@ -2,10 +2,10 @@ import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { parseDotenvFile, parseDotenvText, writeDotenv, type DotenvMap, CONFIG_KEYS, type ConfigKey } from "../utils/dotenv.js";
+import { parseDotenvFile, parseDotenvText, writeDotenv, type DotenvMap, CONFIG_KEYS, type ConfigKey, isValidWikiProfileKey } from "../utils/dotenv.js";
 
 function validateKey(key: string): key is ConfigKey {
-  return (CONFIG_KEYS as readonly string[]).includes(key);
+  return (CONFIG_KEYS as readonly string[]).includes(key) || isValidWikiProfileKey(key);
 }
 
 export function configPath(home: string): string {
@@ -66,9 +66,11 @@ export async function runConfigSet(
 
 export interface ConfigListInput {
   home: string;
+  profiles?: boolean;
 }
 export interface ConfigListOutput {
   entries: Array<{ key: string; value: string }>;
+  profiles?: Array<{ name: string; path: string; isDefault: boolean }>;
   humanHint: string;
 }
 
@@ -77,7 +79,26 @@ export async function runConfigList(
 ): Promise<{ exitCode: number; result: Result<ConfigListOutput> }> {
   const map = await parseDotenvFile(configPath(input.home));
   const entries = Object.entries(map).map(([key, value]) => ({ key, value: value ?? "" }));
-  return { exitCode: ExitCode.OK, result: ok({ entries, humanHint: entries.map(e => `${e.key}=${e.value}`).join("\n") }) };
+
+  let profiles: Array<{ name: string; path: string; isDefault: boolean }> | undefined;
+  if (input.profiles) {
+    const defaultProfile = map["WIKI_DEFAULT"];
+    profiles = [];
+    for (const key of Object.keys(map)) {
+      const m = key.match(/^WIKI_([A-Z][A-Z0-9_]{0,31})_PATH$/);
+      if (m && key !== "WIKI_PATH") {
+        const name = m[1].toLowerCase().replace(/_/g, "-");
+        profiles.push({ name, path: map[key] ?? "", isDefault: name === defaultProfile });
+      }
+    }
+    profiles.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  const hint = profiles
+    ? profiles.map(p => `${p.isDefault ? "* " : "  "}${p.name} → ${p.path}`).join("\n") || "(no profiles)"
+    : entries.map(e => `${e.key}=${e.value}`).join("\n");
+
+  return { exitCode: ExitCode.OK, result: ok({ entries, profiles, humanHint: hint }) };
 }
 
 export interface ConfigPathInput {

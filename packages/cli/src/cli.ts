@@ -222,8 +222,9 @@ configCmd
 
 configCmd
   .command("list")
+  .option("--profiles", "show wiki profiles summary", false)
   .description("list all config key=value pairs")
-  .action(async () => emit(await runConfigList({ home: process.env.HOME ?? "" })));
+  .action(async (opts) => emit(await runConfigList({ home: process.env.HOME ?? "", profiles: !!opts.profiles })));
 
 configCmd
   .command("path")
