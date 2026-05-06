@@ -26,6 +26,7 @@ import { runArchive } from "./commands/archive.js";
 import { runDrift } from "./commands/drift.js";
 import { runDedup } from "./commands/dedup.js";
 import { runMigrateCitations } from "./commands/migrate-citations.js";
+import { runFrontmatterFix } from "./commands/frontmatter-fix.js";
 import { runUpdate } from "./commands/update.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 import { triggerAutoUpdate } from "./utils/auto-update.js";
@@ -308,6 +309,18 @@ program
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runMigrateCitations({ vault: v.vault, dryRun: !!opts.dryRun }));
+  });
+
+// frontmatter-fix
+program
+  .command("frontmatter-fix [vault]")
+  .description("fix common frontmatter issues on typed-knowledge pages")
+  .option("--dry-run", "preview changes without writing", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runFrontmatterFix({ vault: v.vault, dryRun: !!opts.dryRun }));
   });
 
 // update
