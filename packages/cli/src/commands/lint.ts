@@ -49,8 +49,8 @@ export interface LintOutput {
 }
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "tag_not_in_taxonomy"] as const;
-const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "missing_overview"] as const;
-const INFO_ORDER = ["bridges", "low_confidence_single_source", "page_structure", "topic_map_recommended"] as const;
+const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "missing_overview"] as const;
+const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
   const buckets: Record<string, unknown[]> = {};

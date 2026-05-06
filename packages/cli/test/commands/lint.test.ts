@@ -196,4 +196,16 @@ Content.
       expect(warningKinds).not.toContain("missing_overview");
     }
   });
+
+  it("warns on orphan pages with no wikilinks", async () => {
+    const v = vault();
+    // orphan.md has no wikilinks at all → isolated node in the graph
+    writeFileSync(join(v, "concepts", "orphan.md"), FM(["model"]) + "## Overview\n\nNo wikilinks at all.\n\n## Details\n\nJust content.\n\n## Related\n\nNo links.\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[orphan]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).toContain("orphans");
+    }
+  });
 });
