@@ -88,3 +88,15 @@ Run `skillwiki doctor` to diagnose setup issues. Run `skillwiki config list` to 
 For longer-running project work, use `proj-init` → `proj-work` → `proj-distill` / `proj-decide`.
 
 Maintenance: **Archive** (`wiki-archive`) superseded pages, **Drift** (`wiki-reingest`) to detect stale sources, **Adapter** (`wiki-adapter-prd`) for foreign PRD format ingestion.
+
+## Multi-Wiki Profiles
+
+skillwiki supports named wiki profiles for working with multiple vaults. Set `WIKI_DEFAULT` to control which wiki all skills target by default.
+
+**Manage profiles:**
+- `skillwiki config set wiki.<name>.path <dir>` — register a profile
+- `skillwiki config set default <name>` — set active profile
+- `skillwiki config list --profiles` — list all profiles
+- `skillwiki --wiki <name> lint` — override per-command
+
+**Project-local override:** Place a `./skillwiki/.env` in a project root to bind that project to a specific wiki. Skills will use it automatically when running from that directory.
