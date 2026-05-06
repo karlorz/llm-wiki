@@ -104,12 +104,12 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       const bodyLines = body.split("\n").filter(l => l.trim().length > 0).length;
       if (bodyLines < STRUCT_MIN_BODY_LINES) {
         const hasOverview = /^## Overview/m.test(body);
-        const hasRelated = /^## Related/m.test(body);
+        const hasRelated = /^## (Related|Relationships)/m.test(body);
         const sectionCount = (body.match(/^## /gm) ?? []).length;
         if (!hasOverview || !hasRelated || sectionCount < STRUCT_MIN_SECTIONS) {
           const reasons: string[] = [];
           if (!hasOverview) reasons.push("no Overview");
-          if (!hasRelated) reasons.push("no Related");
+          if (!hasRelated) reasons.push("no Related or Relationships");
           if (sectionCount < STRUCT_MIN_SECTIONS) reasons.push(`only ${sectionCount} sections`);
           structFlags.push(`${page.relPath}: ${bodyLines} lines, ${reasons.join(", ")}`);
         }

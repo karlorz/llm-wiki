@@ -118,4 +118,15 @@ describe("runLint", () => {
       expect(infoKinds).toContain("page_structure");
     }
   });
+
+  it("accepts ## Relationships as alias for ## Related", async () => {
+    const v = vault();
+    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "## Overview\n\nContent.\n\n## Details\n\nMore.\n\n## Relationships\n\n- [[beta]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).not.toContain("page_structure");
+    }
+  });
 });
