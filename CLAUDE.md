@@ -31,6 +31,7 @@ Three scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 - Subcommand implementations: `packages/cli/src/commands/<name>.ts`.
 - SKILL.md files: `packages/skills/<skill-name>/SKILL.md`.
 - Templates: `packages/cli/templates/`.
+- CLI wrapper: `packages/skills/bin/skillwiki` (npx delegation for plugin PATH injection).
 - Claude plugin manifest: `packages/skills/.claude-plugin/plugin.json`.
 - Claude marketplace manifest: `.claude-plugin/marketplace.json` (repo root). Skill discovery is driven by `plugin.json`'s `"skills": "./"` field; `marketplace.json` points the plugin source at `./packages/skills`.
 - Version bump: `npm run bump <version>` — syncs version across all 6 manifests (`scripts/bump-version.sh`).
@@ -39,8 +40,8 @@ Three scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 
 The skills ship through two independent channels — keep both working:
 
-1. **Claude Code plugin** — `/plugin marketplace add karlorz/llm-wiki` then `/plugin install skillwiki@llm-wiki`. Discovery is driven by `packages/skills/.claude-plugin/plugin.json` with a SessionStart hook that auto-injects the `using-skillwiki` onboarding skill.
-2. **npm CLI installer** — `npx skillwiki install` copies SKILL.md files into `~/.claude/skills/` via the `install` subcommand (see `packages/cli/src/commands/install.ts`).
+1. **Claude Code plugin** — `/plugin marketplace add karlorz/llm-wiki` then `/plugin install skillwiki@llm-wiki`. Discovery is driven by `packages/skills/.claude-plugin/plugin.json` with a SessionStart hook that auto-injects the `using-skillwiki` onboarding skill. The `bin/skillwiki` npx wrapper is auto-injected into PATH when the plugin is enabled.
+2. **npm CLI installer** — `npx skillwiki install` copies SKILL.md files and the `bin/skillwiki` wrapper into `~/.claude/skills/` via the `install` subcommand (see `packages/cli/src/commands/install.ts`).
 
 Changing the layout under `packages/skills/<skill>/` requires updating BOTH `packages/skills/.claude-plugin/plugin.json` AND the `install` subcommand's directory scan.
 
@@ -65,4 +66,4 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 - 14 SKILL.md files in `packages/skills/`
 - 27 CLI subcommands in `packages/cli/src/commands/`
 - 28 test files in `packages/cli/test/commands/`
-- Lint buckets: 4 error, 9 warning, 4 info (incl. `page_structure`, `duplicate_frontmatter`)
+- Lint buckets: 4 error, 10 warning, 4 info (incl. `page_structure`, `duplicate_frontmatter`, `missing_overview`)
