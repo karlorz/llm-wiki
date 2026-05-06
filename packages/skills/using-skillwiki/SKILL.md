@@ -100,3 +100,23 @@ skillwiki supports named wiki profiles for working with multiple vaults. Set `WI
 - `skillwiki --wiki <name> lint` — override per-command
 
 **Project-local override:** Place a `./skillwiki/.env` in a project root to bind that project to a specific wiki. Skills will use it automatically when running from that directory.
+
+## PRD Bridge — Redirect Spec/Plan Output to Vault
+
+When skillwiki is installed, **all spec and plan documents must land in the vault**, not in repo-local directories like `docs/superpowers/`. This applies to any PRD/design skill (superpowers:brainstorming, superpowers:writing-plans, CodeStable, AIDE, Hermes, etc.).
+
+**Rule:** Before a PRD skill writes a spec or plan file, redirect its save path:
+1. Resolve the vault path: `skillwiki path`
+2. If the cwd is inside a project (check for `projects/{slug}/` via `skillwiki path --init-time` or look for `./skillwiki/.env`), use that project's work directory
+3. Create or locate the work item via `proj-work`, which emits redirect paths for `spec.md` and `plan.md`
+4. Pass those vault paths to the PRD skill as its save location
+
+**Concrete overrides for superpowers:**
+- `superpowers:brainstorming` step 6: override `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` → vault work-item `spec.md` path from `proj-work`
+- `superpowers:writing-plans` header: override `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md` → vault work-item `plan.md` path from `proj-work`
+
+Both skills say "User preferences for spec location override this default" — the vault work-item path IS the override.
+
+**If no project context exists** (standalone vault, not inside a project), save specs/plans directly under the vault root with the PRD skill's default naming, e.g. `<vault>/specs/YYYY-MM-DD-<slug>.md`.
+
+**Never create `docs/superpowers/` in any repo.**
