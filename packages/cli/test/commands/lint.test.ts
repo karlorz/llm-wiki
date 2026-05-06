@@ -144,4 +144,31 @@ describe("runLint", () => {
       expect(infoKinds).not.toContain("page_structure");
     }
   });
+
+  it("warns on duplicate frontmatter blocks", async () => {
+    const v = vault();
+    // Page with two frontmatter blocks (e.g., from a bad edit that prepended a new block)
+    const dup = `---
+title: first
+type: concept
+tags: [model]
+---
+title: second
+type: concept
+tags: [model]
+---
+
+## Overview
+
+Content.
+`;
+    writeFileSync(join(v, "concepts", "dup.md"), dup);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[dup]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(22);
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).toContain("duplicate_frontmatter");
+    }
+  });
 });

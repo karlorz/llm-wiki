@@ -16,6 +16,22 @@ import { isLegacyCitationStyle, hasOrphanedCitations } from "../parsers/citation
 const STRUCT_MIN_BODY_LINES = 60;
 const STRUCT_MIN_SECTIONS = 3;
 
+/** Detect a second frontmatter block in the body (e.g. from a bad edit that prepended a new block). */
+function hasDuplicateFrontmatter(body: string): boolean {
+  if (/^---\r?\n/.test(body)) return true;
+  // After splitFrontmatter, a second block's opening --- was consumed as the first block's closing ---.
+  // So the body starts with the second block's YAML content, followed by its closing ---.
+  // Match: a line with a YAML key (word:) then a --- line within the first 20 lines.
+  const lines = body.split(/\r?\n/);
+  const limit = Math.min(lines.length, 20);
+  let seenYamlKey = false;
+  for (let i = 0; i < limit; i++) {
+    if (/^\w[\w-]*:/.test(lines[i]!.trim())) seenYamlKey = true;
+    if (seenYamlKey && lines[i]!.trim() === "---") return true;
+  }
+  return false;
+}
+
 export interface LintInput {
   vault: string;
   source?: string;
@@ -33,7 +49,7 @@ export interface LintOutput {
 }
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "tag_not_in_taxonomy"] as const;
-const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans", "legacy_citation_style", "orphaned_citations"] as const;
+const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "contested", "orphans", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter"] as const;
 const INFO_ORDER = ["bridges", "low_confidence_single_source", "page_structure", "topic_map_recommended"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
@@ -95,11 +111,13 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     const legacyPages: string[] = [];
     const orphanedPages: string[] = [];
     const structFlags: string[] = [];
+    const dupFrontmatter: string[] = [];
     for (const page of scan.data.typedKnowledge) {
       const text = await readPage(page);
       const split = splitFrontmatter(text);
       if (!split.ok) continue;
       const body = split.data.body;
+      if (hasDuplicateFrontmatter(body)) dupFrontmatter.push(page.relPath);
       if (isLegacyCitationStyle(body)) legacyPages.push(page.relPath);
       if (hasOrphanedCitations(body)) orphanedPages.push(page.relPath);
 
@@ -120,6 +138,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     if (legacyPages.length > 0) buckets.legacy_citation_style = legacyPages;
     if (orphanedPages.length > 0) buckets.orphaned_citations = orphanedPages;
     if (structFlags.length > 0) buckets.page_structure = structFlags;
+    if (dupFrontmatter.length > 0) buckets.duplicate_frontmatter = dupFrontmatter;
   }
 
   const errorOut: Bucket[] = ERROR_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);
