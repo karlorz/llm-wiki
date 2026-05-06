@@ -33,6 +33,7 @@ Three scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 - Templates: `packages/cli/templates/`.
 - Claude plugin manifest: `packages/skills/.claude-plugin/plugin.json`.
 - Claude marketplace manifest: `.claude-plugin/marketplace.json` (repo root). Skill discovery is driven by `plugin.json`'s `"skills": "./"` field; `marketplace.json` points the plugin source at `./packages/skills`.
+- Version bump: `npm run bump <version>` — syncs version across all 6 manifests (`scripts/bump-version.sh`).
 
 ## Distribution channels
 

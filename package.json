@@ -1,7 +1,7 @@
 {
   "name": "skillwiki-monorepo",
   "private": true,
-  "version": "0.2.0-beta.16",
+  "version": "0.2.0-beta.17",
   "workspaces": [
     "packages/shared",
     "packages/cli",
@@ -11,6 +11,7 @@
     "build": "npm run -ws --if-present build",
     "test": "npm run -ws --if-present test",
     "lint": "npm run -ws --if-present lint",
+    "bump": "bash scripts/bump-version.sh",
     "clean": "rm -rf packages/*/dist packages/*/.tsbuildinfo"
   },
   "engines": {
