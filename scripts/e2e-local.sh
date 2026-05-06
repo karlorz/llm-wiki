@@ -452,5 +452,82 @@ cluster_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "import sys,json; print(l
 # Seed vault may be too sparse for overlap clusters — 0 is valid
 PASS=$((PASS + 1)); printf "  \u2713 overlap found %s clusters (seed vault)\n" "$cluster_count"
 
+# ==== 42. validate (valid file) ==============================================
+printf "\n--- validate valid ---\n"
+VALIDATE_TMP=$(mktemp -d)
+cat > "$VALIDATE_TMP/concept.md" <<'VALEOF'
+---
+title: "Test"
+type: concept
+tags: [research]
+created: "2026-05-06"
+updated: "2026-05-06"
+provenance: research
+sources:
+  - "^[raw/articles/test.md]"
+---
+## Overview
+
+Test content.
+VALEOF
+run_cli "${CLI[@]}" validate "$VALIDATE_TMP/concept.md"
+assert_exit 0 "$RUN_RC" "validate valid file succeeds"
+assert_json_contains "$RUN_OUTPUT" "data.valid" "true" "validate reports valid"
+
+# ==== 43. validate (invalid file) ============================================
+printf "\n--- validate invalid ---\n"
+cat > "$VALIDATE_TMP/invalid.md" <<'INVALEOF'
+---
+title: "Bad"
+type: concept
+tags: [research]
+created: "2026-05-06"
+updated: "2026-05-06"
+provenance: research
+sources: []
+---
+## Overview
+
+Missing sources.
+INVALEOF
+run_cli "${CLI[@]}" validate "$VALIDATE_TMP/invalid.md"
+assert_exit 7 "$RUN_RC" "validate rejects invalid frontmatter (exit 7)"
+assert_json_contains "$RUN_OUTPUT" "data.valid" "false" "validate reports invalid"
+rm -rf "$VALIDATE_TMP"
+
+# ==== 44. validate (missing file) ============================================
+printf "\n--- validate missing ---\n"
+run_cli "${CLI[@]}" validate "/no/such/file.md"
+assert_exit 2 "$RUN_RC" "validate missing file exits 2 (FILE_NOT_FOUND)"
+
+# ==== 45. hash ===============================================================
+printf "\n--- hash ---\n"
+run_cli "${CLI[@]}" hash "$VAULT/SCHEMA.md"
+assert_exit 0 "$RUN_RC" "hash succeeds"
+assert_json_contains "$RUN_OUTPUT" "ok" "true" "hash returns ok"
+# sha256 should be 64 hex chars
+hash_len=$(printf '%s' "$RUN_OUTPUT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)['data']['sha256']))" 2>/dev/null)
+if [ "$hash_len" = "64" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 hash returns 64-char sha256\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 hash sha256 length is %s, expected 64\n" "$hash_len"
+fi
+
+# ==== 46. fetch-guard (allowed) ==============================================
+printf "\n--- fetch-guard allowed ---\n"
+run_cli "${CLI[@]}" fetch-guard "https://example.com/article"
+assert_exit 0 "$RUN_RC" "fetch-guard allows https"
+assert_json_contains "$RUN_OUTPUT" "data.allowed" "true" "fetch-guard returns allowed"
+
+# ==== 47. fetch-guard (blocked host) =========================================
+printf "\n--- fetch-guard blocked ---\n"
+run_cli "${CLI[@]}" fetch-guard "https://metadata.google.internal/computeMetadata/v1/"
+assert_exit 5 "$RUN_RC" "fetch-guard blocks metadata host (exit 5)"
+
+# ==== 48. fetch-guard (bad scheme) ===========================================
+printf "\n--- fetch-guard bad scheme ---\n"
+run_cli "${CLI[@]}" fetch-guard "http://example.com/insecure"
+assert_exit 4 "$RUN_RC" "fetch-guard rejects http (exit 4)"
+
 # ==== Summary ==============================================================
 summary
