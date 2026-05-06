@@ -13,6 +13,10 @@ describe("extractCitationMarkers", () => {
     const body = "```\n^[raw/x.md]\n```\n^[raw/y.md]\n";
     expect(extractCitationMarkers(body).map(m => m.target)).toEqual(["raw/y.md"]);
   });
+  it("ignores markers inside inline code spans", () => {
+    const body = "Use `^[raw/x.md]` for citations. ^[raw/y.md]\n";
+    expect(extractCitationMarkers(body).map(m => m.target)).toEqual(["raw/y.md"]);
+  });
   it("returns empty array when none", () => {
     expect(extractCitationMarkers("plain body")).toEqual([]);
   });
@@ -51,6 +55,10 @@ describe("isLegacyCitationStyle", () => {
   it("returns true when markers are on their own line with footer", () => {
     const body = "Body cites X.\n^[raw/x.md]\n\n## Sources\n- ^[raw/x.md]\n";
     expect(isLegacyCitationStyle(body)).toBe(true);
+  });
+  it("ignores markers inside inline code spans", () => {
+    const body = "Use `^[raw/x.md]` for citations.\n\n## Sources\n- ^[raw/y.md]\n";
+    expect(isLegacyCitationStyle(body)).toBe(false);
   });
 });
 

@@ -1,10 +1,11 @@
 const FENCE = /```[\s\S]*?```/g;
+const INLINE_CODE = /`[^`\n]+`/g;
 const MARKER_RE = /\^\[(raw\/[^\]]+)\]/g;
 
 export interface CitationMarker { marker: string; target: string; }
 
 function stripFences(body: string): string {
-  return body.replace(FENCE, "");
+  return body.replace(FENCE, "").replace(INLINE_CODE, "");
 }
 
 export function extractCitationMarkers(body: string): CitationMarker[] {
