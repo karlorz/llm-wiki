@@ -37,4 +37,15 @@ describe("audit", () => {
       expect(r.result.data.footer_consistency!.extra_in_footer).toEqual([]);
     }
   });
+
+  it("normalizes ^[...] format in sources frontmatter", async () => {
+    // Sources frontmatter uses ^[raw/...] but markers extract raw/... paths
+    // Audit should strip the ^[...] wrapper before comparing
+    const r = await runAudit({ file: F("concepts/caret-sources.md") });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.sources_consistency.unused_sources).toEqual([]);
+      expect(r.result.data.sources_consistency.missing_from_sources).toEqual([]);
+    }
+  });
 });

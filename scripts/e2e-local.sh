@@ -601,10 +601,8 @@ sources:
 Content from source.^[raw/articles/audit-source.md]
 AUDEOF
 run_cli "${CLI[@]}" audit "$AUDIT_VAULT/concepts/audit-page.md"
-# audit exits 12 (SOURCES_INCONSISTENT) because sources frontmatter uses ^[...] format
-# while markers extract raw/... paths — known format mismatch in audit comparison
-assert_exit 12 "$RUN_RC" "audit detects sources format mismatch (exit 12)"
-assert_json_contains "$RUN_OUTPUT" "ok" "true" "audit returns ok envelope"
+assert_exit 0 "$RUN_RC" "audit clean page succeeds"
+assert_json_contains "$RUN_OUTPUT" "ok" "true" "audit returns ok"
 
 # ==== 52. audit (broken marker) ==============================================
 printf "\n--- audit broken ---\n"

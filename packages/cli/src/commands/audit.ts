@@ -32,7 +32,8 @@ export async function runAudit(input: AuditInput): Promise<{ exitCode: number; r
     catch { return { ...m, resolved: false }; }
   }));
 
-  const sources = (fm.data.sources as string[] | undefined) ?? [];
+  const sources = ((fm.data.sources as string[] | undefined) ?? [])
+    .map(s => s.replace(/^\^\[/, "").replace(/\]$/, ""));
   const referenced = new Set(resolved.map(m => m.target));
   const unused_sources = sources.filter(s => !referenced.has(s));
   const missing_from_sources = [...referenced].filter(t => !sources.includes(t));
