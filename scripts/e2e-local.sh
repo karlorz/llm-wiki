@@ -529,5 +529,46 @@ printf "\n--- fetch-guard bad scheme ---\n"
 run_cli "${CLI[@]}" fetch-guard "http://example.com/insecure"
 assert_exit 4 "$RUN_RC" "fetch-guard rejects http (exit 4)"
 
+# ==== 49. archive ============================================================
+printf "\n--- archive ---\n"
+ARCH_VAULT=$(mktemp -d)
+ARCH_HOME=$(mktemp -d)
+run_cli env HOME="$ARCH_HOME" "${CLI[@]}" init --target "$ARCH_VAULT" --domain "Archive" --taxonomy "research" --lang en
+mkdir -p "$ARCH_VAULT/concepts"
+cat > "$ARCH_VAULT/concepts/to-archive.md" <<'ARCHEOF'
+---
+title: "To Archive"
+type: concept
+tags: [research]
+created: "2026-05-06"
+updated: "2026-05-06"
+provenance: research
+sources: []
+---
+## Overview
+
+Will be archived.
+ARCHEOF
+# Add to index so archive can remove it
+printf '\n- [[to-archive]]\n' >> "$ARCH_VAULT/index.md"
+run_cli "${CLI[@]}" archive to-archive "$ARCH_VAULT"
+assert_exit 0 "$RUN_RC" "archive succeeds"
+assert_json_contains "$RUN_OUTPUT" "ok" "true" "archive returns ok"
+assert_json_contains "$RUN_OUTPUT" "data.archived_from" "concepts/to-archive.md" "archive reports source"
+assert_json_contains "$RUN_OUTPUT" "data.archived_to" "_archive/concepts/to-archive.md" "archive reports destination"
+assert_json_contains "$RUN_OUTPUT" "data.index_updated" "true" "archive updated index"
+# Verify file moved
+if [ -f "$ARCH_VAULT/_archive/concepts/to-archive.md" ] && [ ! -f "$ARCH_VAULT/concepts/to-archive.md" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 archived file moved to _archive\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 archived file not in expected location\n"
+fi
+rm -rf "$ARCH_VAULT" "$ARCH_HOME"
+
+# ==== 50. archive (not found) ================================================
+printf "\n--- archive not found ---\n"
+run_cli "${CLI[@]}" archive nonexistent-page "$VAULT"
+assert_exit 30 "$RUN_RC" "archive not found exits 30 (ARCHIVE_TARGET_NOT_FOUND)"
+
 # ==== Summary ==============================================================
 summary
