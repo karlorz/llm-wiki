@@ -26,7 +26,10 @@ export async function runOrphans(input: OrphansInput): Promise<{ exitCode: numbe
 
   const slugToPath: Record<string, string> = {};
   for (const p of scan.data.typedKnowledge) {
-    slugToPath[p.relPath.replace(/\.md$/, "").split("/").pop()!] = p.relPath;
+    const rel = p.relPath.replace(/\.md$/, "");
+    slugToPath[rel] = p.relPath;
+    const filename = rel.split("/").pop()!;
+    if (!(filename in slugToPath)) slugToPath[filename] = p.relPath;
   }
   const adj: Record<string, Set<string>> = {};
   for (const p of scan.data.typedKnowledge) adj[p.relPath] = new Set();
@@ -36,7 +39,7 @@ export async function runOrphans(input: OrphansInput): Promise<{ exitCode: numbe
     const split = splitFrontmatter(text);
     const body = split.ok ? split.data.body : text;
     for (const slug of extractBodyWikilinks(body)) {
-      const tgt = slugToPath[slug.split("/").pop()!];
+      const tgt = slugToPath[slug] ?? slugToPath[slug.split("/").pop()!];
       if (tgt) {
         adj[p.relPath].add(tgt);
         adj[tgt].add(p.relPath);

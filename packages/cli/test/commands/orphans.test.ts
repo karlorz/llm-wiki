@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runOrphans } from "../../src/commands/orphans.js";
@@ -13,6 +13,20 @@ describe("orphans", () => {
     if (r.result.ok) {
       expect(Array.isArray(r.result.data.orphans)).toBe(true);
       expect(Array.isArray(r.result.data.bridges)).toBe(true);
+    }
+  });
+
+  it("resolves full-path wikilinks over filename-only collisions", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "orphan-col-"));
+    mkdirSync(join(dir, "entities"), { recursive: true });
+    mkdirSync(join(dir, "concepts"), { recursive: true });
+    writeFileSync(join(dir, "SCHEMA.md"), "# schema\n");
+    writeFileSync(join(dir, "entities", "shared-name.md"), "---\ntitle: E\n---\n## Overview\n\nSee [[concepts/shared-name]].\n");
+    writeFileSync(join(dir, "concepts", "shared-name.md"), "---\ntitle: C\n---\n## Overview\n\nSee [[entities/shared-name]].\n");
+    const r = await runOrphans({ vault: dir });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.orphans).toEqual([]);
     }
   });
 });
