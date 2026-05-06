@@ -17,7 +17,10 @@ export async function runOrphans(input: OrphansInput): Promise<{ exitCode: numbe
     vault = input.vault;
   } else {
     const r = await resolveRuntimePath({ flag: undefined, envValue: input.envValue, home: input.home ?? "", wiki: input.wiki });
-    if (!r.ok) return { exitCode: ExitCode.NO_VAULT_CONFIGURED, result: r };
+    if (!r.ok) {
+      const exitCode = r.error === "UNKNOWN_WIKI_PROFILE" ? ExitCode.UNKNOWN_WIKI_PROFILE : ExitCode.NO_VAULT_CONFIGURED;
+      return { exitCode, result: r };
+    }
     vault = r.data.path;
   }
 
