@@ -283,11 +283,12 @@ program
   .command("drift [vault]")
   .description("detect content drift in raw sources")
   .option("--apply", "update sha256 in drifted sources")
+  .option("--new <date>", "list raw files ingested on/after this date (YYYY-MM-DD)")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runDrift({ vault: v.vault, apply: opts.apply }));
+    else emit(await runDrift({ vault: v.vault, apply: opts.apply, newSince: opts.new }));
   });
 
 // dedup

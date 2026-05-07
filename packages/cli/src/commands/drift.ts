@@ -10,6 +10,7 @@ const FETCH_OPTS: FetchOptions = { timeoutMs: 10000, maxBytes: 5_000_000, maxRed
 export interface DriftInput {
   vault: string;
   apply?: boolean;
+  newSince?: string;
   fetchFn?: (url: string, opts: FetchOptions) => Promise<Result<{ body: string }>>;
 }
 
@@ -18,8 +19,9 @@ export interface DriftSource {
   source_url: string;
   stored_sha256: string;
   current_sha256: string | null;
-  status: "drifted" | "fetch_failed" | "unchanged" | "updated";
+  status: "drifted" | "fetch_failed" | "unchanged" | "updated" | "new";
   fetch_error?: string;
+  ingested?: string;
 }
 
 export interface DriftOutput {
@@ -27,6 +29,7 @@ export interface DriftOutput {
   drifted: DriftSource[];
   fetch_failed: DriftSource[];
   updated: DriftSource[];
+  newFiles: DriftSource[];
   unchanged: number;
   humanHint: string;
 }
@@ -38,12 +41,29 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
   const results: DriftSource[] = [];
+  const newResults: DriftSource[] = [];
 
   for (const raw of scan.data.raw) {
     const text = await readPage(raw);
     const split = splitFrontmatter(text);
     if (!split.ok) continue;
     const { rawFrontmatter, body } = split.data;
+
+    const ingestedMatch = rawFrontmatter.match(/^ingested:\s*(.+)$/m);
+    const ingestedRaw = ingestedMatch?.[1]?.trim() ?? "";
+    const ingested = ingestedRaw.replace(/^["']|["']$/g, "");
+
+    // --new: report raw files ingested on/after the given date
+    if (input.newSince && ingested && ingested >= input.newSince) {
+      newResults.push({
+        raw_path: raw.relPath,
+        source_url: "",
+        stored_sha256: "",
+        current_sha256: null,
+        status: "new",
+        ingested,
+      });
+    }
 
     const sourceUrlMatch = rawFrontmatter.match(/^source_url:\s*(.+)$/m);
     const storedHashMatch = rawFrontmatter.match(/^sha256:\s*([a-f0-9]+)$/m);
@@ -100,12 +120,13 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
   const exitCode = drifted.length > 0 ? ExitCode.DRIFT_DETECTED : ExitCode.OK;
 
   const hintLines: string[] = [`scanned: ${results.length}, unchanged: ${unchanged}`];
+  if (newResults.length > 0) hintLines.push(`new: ${newResults.length}`, ...newResults.map(n => `  ${n.raw_path} (ingested: ${n.ingested})`));
   if (drifted.length > 0) hintLines.push(`drifted: ${drifted.length}`, ...drifted.map(d => `  ${d.raw_path}`));
   if (fetchFailed.length > 0) hintLines.push(`fetch_failed: ${fetchFailed.length}`, ...fetchFailed.map(f => `  ${f.raw_path}: ${f.fetch_error}`));
   if (updated.length > 0) hintLines.push(`updated: ${updated.length}`, ...updated.map(u => `  ${u.raw_path}`));
 
   return {
     exitCode,
-    result: ok({ scanned: results.length, drifted, fetch_failed: fetchFailed, updated, unchanged, humanHint: hintLines.join("\n") }),
+    result: ok({ scanned: results.length, drifted, fetch_failed: fetchFailed, updated, newFiles: newResults, unchanged, humanHint: hintLines.join("\n") }),
   };
 }

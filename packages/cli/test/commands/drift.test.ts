@@ -132,4 +132,46 @@ body`);
       expect(r.result.data.unchanged).toBe(1);
     }
   });
+
+  it("--new lists raw files ingested on/after given date", async () => {
+    const dir = makeVault();
+    mkdirSync(join(dir, "raw", "transcripts"), { recursive: true });
+    writeFileSync(join(dir, "raw", "transcripts", "new.md"), `---
+source_url:
+ingested: "2026-05-07"
+sha256:
+---
+
+new capture`);
+    writeFileSync(join(dir, "raw", "articles", "old.md"), `---
+source_url:
+ingested: "2026-05-05"
+sha256:
+---
+
+old article`);
+    const r = await runDrift({ vault: dir, newSince: "2026-05-07" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.newFiles.length).toBe(1);
+      expect(r.result.data.newFiles[0].raw_path).toBe("raw/transcripts/new.md");
+      expect(r.result.data.newFiles[0].ingested).toBe("2026-05-07");
+    }
+  });
+
+  it("--new with no matching files returns empty list", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "old.md"), `---
+source_url:
+ingested: "2026-05-01"
+sha256:
+---
+
+old`);
+    const r = await runDrift({ vault: dir, newSince: "2026-05-07" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.newFiles.length).toBe(0);
+    }
+  });
 });
