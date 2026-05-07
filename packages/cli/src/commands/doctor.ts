@@ -97,7 +97,7 @@ function checkVaultStructure(resolvedPath: string | undefined): CheckResult {
   if (missing.length === 0) {
     return check("pass", "vault_structure", "Vault structure valid", "All required files and directories present");
   }
-  return check("error", "vault_structure", "Vault structure valid", `Missing: ${missing.join(", ")}`);
+  return check("warn", "vault_structure", "Vault structure valid", `Missing: ${missing.join(", ")} — run \`skillwiki init\` to add CodeWiki structure`);
 }
 
 function checkSkillsInstalled(home: string): CheckResult {

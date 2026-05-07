@@ -68,7 +68,7 @@ describe("runDoctor", () => {
     }
   });
 
-  it("vault missing subdirs gives error for vault_structure", async () => {
+  it("vault missing subdirs gives warn for vault_structure", async () => {
     const h = home();
     const v = mkdtempSync(join(tmpdir(), "vault-"));
     writeFileSync(join(v, "SCHEMA.md"), "# Schema\n");
@@ -77,7 +77,7 @@ describe("runDoctor", () => {
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const vs = r.result.data.checks.find(c => c.id === "vault_structure");
-      expect(vs?.status).toBe("error");
+      expect(vs?.status).toBe("warn");
     }
   });
 
