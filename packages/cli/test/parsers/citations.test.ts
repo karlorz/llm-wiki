@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractCitationMarkers, hasSourcesFooter, isLegacyCitationStyle, extractParagraphEndCitations, hasOrphanedCitations } from "../../src/parsers/citations.js";
+import { extractCitationMarkers, hasSourcesFooter, isLegacyCitationStyle, extractParagraphEndCitations, hasOrphanedCitations, hasWikilinkCitations } from "../../src/parsers/citations.js";
 
 describe("extractCitationMarkers", () => {
   it("finds ^[raw/...] markers", () => {
@@ -115,5 +115,20 @@ describe("hasOrphanedCitations", () => {
   it("ignores markers inside code fences", () => {
     const body = "Body.\n\n## Sources\n- ^[raw/x.md]\n\n```\n^[raw/y.md]\n```\n";
     expect(hasOrphanedCitations(body)).toBe(false);
+  });
+});
+
+describe("hasWikilinkCitations", () => {
+  it("returns true for [[raw/...]] wikilinks in body", () => {
+    expect(hasWikilinkCitations("Cites source [[raw/articles/foo.md]].\n")).toBe(true);
+  });
+  it("returns false for ^[raw/...] citations", () => {
+    expect(hasWikilinkCitations("Cites source. ^[raw/articles/foo.md]\n")).toBe(false);
+  });
+  it("returns false for plain text", () => {
+    expect(hasWikilinkCitations("Plain body text.\n")).toBe(false);
+  });
+  it("ignores [[raw/...]] inside code fences", () => {
+    expect(hasWikilinkCitations("```\n[[raw/articles/foo.md]]\n```\n")).toBe(false);
   });
 });

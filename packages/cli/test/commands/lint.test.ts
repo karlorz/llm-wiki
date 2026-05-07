@@ -273,4 +273,29 @@ Content.
       expect(infoKinds).not.toContain("frontmatter_wikilink");
     }
   });
+
+  it("flags [[raw/...]] wikilinks as wikilink_citation", async () => {
+    const v = vault();
+    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "## Overview\n\nCites source [[raw/articles/x.md]].\n\n## Related\n\n- [[beta]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).toContain("wikilink_citation");
+      const bucket = r.result.data.by_severity.info.find(b => b.kind === "wikilink_citation");
+      expect(bucket!.items.length).toBe(1);
+    }
+  });
+
+  it("does not flag ^[raw/...] citations as wikilink_citation", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "## Overview\n\nCites source. ^[raw/articles/x.md]\n\n## Sources\n\n- ^[raw/articles/x.md]\n\n## Related\n\n- [[beta]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).not.toContain("wikilink_citation");
+    }
+  });
 });

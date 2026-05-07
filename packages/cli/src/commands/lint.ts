@@ -11,7 +11,7 @@ import { runIndexLinkFormat } from "./index-link-format.js";
 import { runDedup } from "./dedup.js";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
-import { isLegacyCitationStyle, hasOrphanedCitations } from "../parsers/citations.js";
+import { isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations } from "../parsers/citations.js";
 import { buildSlugMap } from "../utils/slug.js";
 
 const STRUCT_MIN_BODY_LINES = 60;
@@ -51,7 +51,7 @@ export interface LintOutput {
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "tag_not_in_taxonomy"] as const;
 const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "missing_overview"] as const;
-const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink"] as const;
+const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
   const buckets: Record<string, unknown[]> = {};
@@ -117,6 +117,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     const dupFrontmatter: string[] = [];
     const noOverview: string[] = [];
     const fmWikilinkFlags: string[] = [];
+    const wikilinkCitationFlags: string[] = [];
     for (const page of scan.data.typedKnowledge) {
       const text = await readPage(page);
       const split = splitFrontmatter(text);
@@ -126,6 +127,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       if (hasDuplicateFrontmatter(body)) dupFrontmatter.push(page.relPath);
       if (isLegacyCitationStyle(body)) legacyPages.push(page.relPath);
       if (hasOrphanedCitations(body)) orphanedPages.push(page.relPath);
+      if (hasWikilinkCitations(body)) wikilinkCitationFlags.push(page.relPath);
       // Frontmatter wikilink resolution check
       const fmLinks = rawFm.match(/\[\[([^\[\]|]+)(?:\|[^\[\]]*)?\]\]/g) ?? [];
       for (const link of fmLinks) {
@@ -156,6 +158,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     if (dupFrontmatter.length > 0) buckets.duplicate_frontmatter = dupFrontmatter;
     if (noOverview.length > 0) buckets.missing_overview = noOverview;
     if (fmWikilinkFlags.length > 0) buckets.frontmatter_wikilink = fmWikilinkFlags;
+    if (wikilinkCitationFlags.length > 0) buckets.wikilink_citation = wikilinkCitationFlags;
   }
 
   const errorOut: Bucket[] = ERROR_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);

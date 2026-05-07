@@ -133,6 +133,12 @@ export function hasOrphanedCitations(body: string): boolean {
   return false;
 }
 
+/** Detect [[raw/...]] wikilinks in body text — should be ^[raw/...] citations instead. */
+export function hasWikilinkCitations(body: string): boolean {
+  const stripped = stripFences(body);
+  return /\[\[raw\/[^\]]+\]\]/.test(stripped);
+}
+
 export function extractParagraphEndCitations(body: string): string[] {
   const lines = stripFences(body).split("\n");
   const targets: string[] = [];
