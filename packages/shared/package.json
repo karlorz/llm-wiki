@@ -1,10 +1,7 @@
 {
   "name": "@skillwiki/shared",
-<<<<<<< Updated upstream
   "version": "0.2.1-beta.1",
-=======
   "version": "0.2.1-beta.1",
->>>>>>> Stashed changes
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
