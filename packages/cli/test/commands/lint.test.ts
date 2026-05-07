@@ -298,4 +298,65 @@ Content.
       expect(infoKinds).not.toContain("wikilink_citation");
     }
   });
+
+  describe("--fix", () => {
+    it("fixes legacy_citation_style by moving inline markers to ## Sources", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      const body = "Some claim about X. ^[raw/articles/x.md]\nAnother claim. ^[raw/articles/y.md]\n";
+      writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + body);
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
+      if (r.result.ok) {
+        expect(r.result.data.fixed).toContain("concepts/alpha.md");
+        expect(r.result.data.unresolved).toHaveLength(0);
+      }
+      // Re-lint without fix — should no longer flag legacy_citation_style
+      const r2 = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r2.result.ok) {
+        const warningKinds = r2.result.data.by_severity.warning.map(b => b.kind);
+        expect(warningKinds).not.toContain("legacy_citation_style");
+      }
+      // File should now have ## Sources section
+      const content = require("fs").readFileSync(join(v, "concepts", "alpha.md"), "utf8");
+      expect(content).toContain("## Sources");
+      expect(content).toContain("- ^[raw/articles/x.md]");
+      expect(content).toContain("- ^[raw/articles/y.md]");
+      // Inline markers should be removed from body
+      expect(content).not.toMatch(/Some claim about X\.\s*\^\[raw/);
+      expect(content).not.toMatch(/Another claim\.\s*\^\[raw/);
+    });
+
+    it("appends to existing ## Sources section", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      // Inline marker on its own line (not at paragraph end) triggers legacy_citation_style
+      // even with an existing ## Sources section
+      const body = "Some claim about X.\n^[raw/articles/x.md]\n\n## Sources\n\n- ^[raw/articles/y.md]\n";
+      writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + body);
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
+      if (r.result.ok) {
+        expect(r.result.data.fixed).toContain("concepts/alpha.md");
+      }
+      const content = require("fs").readFileSync(join(v, "concepts", "alpha.md"), "utf8");
+      expect(content).toContain("- ^[raw/articles/y.md]");
+      expect(content).toContain("- ^[raw/articles/x.md]");
+    });
+
+    it("does not modify files when fix is not set", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      const body = "Some claim about X. ^[raw/articles/x.md]\n";
+      writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + body);
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r.result.ok) {
+        expect(r.result.data.fixed).toHaveLength(0);
+      }
+      // File should be unchanged
+      const content = require("fs").readFileSync(join(v, "concepts", "alpha.md"), "utf8");
+      expect(content).toContain("Some claim about X. ^[raw/articles/x.md]");
+    });
+  });
 });

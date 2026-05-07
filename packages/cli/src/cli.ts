@@ -218,6 +218,7 @@ program
   .option("--days <n>", "stale threshold", (s) => parseInt(s, 10), 90)
   .option("--lines <n>", "pagesize threshold", (s) => parseInt(s, 10), 200)
   .option("--log-threshold <n>", "log rotation threshold", (s) => parseInt(s, 10), 500)
+  .option("--fix", "auto-fix legacy_citation_style violations")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -227,7 +228,8 @@ program
       source: vault ? "flag" : undefined,
       days: opts.days,
       lines: opts.lines,
-      logThreshold: opts.logThreshold
+      logThreshold: opts.logThreshold,
+      fix: opts.fix ?? false
     }));
   });
 

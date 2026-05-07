@@ -1,4 +1,5 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
+import { readFile, writeFile } from "node:fs/promises";
 import { runLinks } from "./links.js";
 import { runTagAudit } from "./tag-audit.js";
 import { runIndexCheck } from "./index-check.js";
@@ -39,6 +40,7 @@ export interface LintInput {
   days: number;
   lines: number;
   logThreshold: number;
+  fix?: boolean;
 }
 
 interface Bucket { kind: string; items: unknown[] }
@@ -46,6 +48,8 @@ export interface LintOutput {
   vault: { path: string; source: string };
   summary: { errors: number; warnings: number; info: number };
   by_severity: { error: Bucket[]; warning: Bucket[]; info: Bucket[] };
+  fixed: string[];
+  unresolved: string[];
   humanHint: string;
 }
 
@@ -55,6 +59,8 @@ const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "front
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
   const buckets: Record<string, unknown[]> = {};
+  const fixed: string[] = [];
+  const unresolved: string[] = [];
 
   const links = await runLinks({ vault: input.vault });
   if (links.result.ok && links.result.data.broken.length > 0) buckets.broken_wikilinks = links.result.data.broken;
@@ -159,6 +165,103 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     if (noOverview.length > 0) buckets.missing_overview = noOverview;
     if (fmWikilinkFlags.length > 0) buckets.frontmatter_wikilink = fmWikilinkFlags;
     if (wikilinkCitationFlags.length > 0) buckets.wikilink_citation = wikilinkCitationFlags;
+
+    // --fix: auto-fix legacy_citation_style by moving inline ^[raw/...] to ## Sources
+    if (input.fix && legacyPages.length > 0) {
+      const FENCE_RE = /```[\s\S]*?```/g;
+      const INLINE_MARKER = /\^\[raw\/[^\]]+\]/g;
+      for (const relPath of legacyPages) {
+        try {
+          const absPath = `${input.vault}/${relPath}`;
+          const raw = await readFile(absPath, "utf8");
+          const split = splitFrontmatter(raw);
+          if (!split.ok) { unresolved.push(relPath); continue; }
+          const body = split.data.body;
+          const rawFm = split.data.rawFrontmatter;
+
+          // Strip fenced code blocks before scanning for inline markers
+          const stripped = body.replace(FENCE_RE, "");
+          const lines = stripped.split("\n");
+          const inlineMarkers: string[] = [];
+          let inSources = false;
+
+          for (const line of lines) {
+            if (/^## Sources\b/.test(line.trim())) { inSources = true; continue; }
+            if (inSources) continue;
+            for (const m of line.matchAll(INLINE_MARKER)) {
+              inlineMarkers.push(m[0]);
+            }
+          }
+
+          if (inlineMarkers.length === 0) { unresolved.push(relPath); continue; }
+
+          // Remove inline markers from body (only outside ## Sources)
+          const bodyLines = body.split("\n");
+          let inSrc = false;
+          const newBodyLines: string[] = [];
+          const seen = new Set<string>();
+
+          for (const line of bodyLines) {
+            if (/^## Sources\b/.test(line.trim())) { inSrc = true; newBodyLines.push(line); continue; }
+            if (inSrc) { newBodyLines.push(line); continue; }
+
+            // Check if line is a standalone marker (only a citation, no other text)
+            const lineWithoutMarkers = line.replace(INLINE_MARKER, "").trim();
+            if (lineWithoutMarkers.length === 0 && INLINE_MARKER.test(line)) {
+              // Skip this line entirely — marker will be added to ## Sources
+              continue;
+            }
+
+            // Remove citation markers trailing sentence-ending punctuation
+            let cleaned = line;
+            for (const marker of inlineMarkers) {
+              if (seen.has(marker)) continue;
+              const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+              // Marker after punctuation+space or punctuation at line end
+              const trailingRe = new RegExp(`([.!?]\\s*)${escapedMarker}`);
+              if (trailingRe.test(cleaned)) {
+                cleaned = cleaned.replace(trailingRe, "$1");
+                seen.add(marker);
+              }
+              // Marker alone on a portion of the line (e.g. "text. ^[raw/x.md] more text")
+              const midRe = new RegExp(`${escapedMarker}\\s*`);
+              if (!seen.has(marker) && midRe.test(cleaned)) {
+                cleaned = cleaned.replace(midRe, "");
+                seen.add(marker);
+              }
+            }
+            newBodyLines.push(cleaned);
+          }
+
+          let newBody = newBodyLines.join("\n");
+
+          // Build or append ## Sources section
+          const dedupedMarkers = [...new Set(inlineMarkers)];
+          const sourceLines = dedupedMarkers.map(m => `- ${m}`);
+          if (inSrc) {
+            // Append to existing Sources section
+            newBody = newBody.trimEnd() + "\n" + sourceLines.join("\n") + "\n";
+          } else {
+            // Add new Sources section
+            newBody = newBody.trimEnd() + "\n\n## Sources\n\n" + sourceLines.join("\n") + "\n";
+          }
+
+          const newContent = `---\n${rawFm}\n---\n${newBody}`;
+          await writeFile(absPath, newContent, "utf8");
+          fixed.push(relPath);
+        } catch {
+          unresolved.push(relPath);
+        }
+      }
+
+      // Re-scan: remove fixed pages from the bucket
+      if (fixed.length > 0) {
+        const fixedSet = new Set(fixed);
+        const remaining = legacyPages.filter(p => !fixedSet.has(p));
+        if (remaining.length > 0) buckets.legacy_citation_style = remaining;
+        else delete buckets.legacy_citation_style;
+      }
+    }
   }
 
   const errorOut: Bucket[] = ERROR_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);
@@ -191,6 +294,8 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       vault: { path: input.vault, source: input.source ?? "resolved" },
       summary,
       by_severity: { error: errorOut, warning: warningOut, info: infoOut },
+      fixed: fixed,
+      unresolved: unresolved,
       humanHint: hintLines.join("\n")
     })
   };
