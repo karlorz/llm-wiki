@@ -19,6 +19,8 @@ const VAULT_DIRS = [
 ];
 
 const ATTACHMENT_FOLDER = "raw/assets";
+const NEW_FILE_FOLDER = "raw/transcripts";
+const TEMPLATE_FOLDER = "_Templates";
 
 export interface InitInput {
   flag: string | undefined;
@@ -192,16 +194,16 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   if (err1) return err1;
 
   const errObsidian = await writeOrPreserve(".obsidian/app.json", async () => {
-    return JSON.stringify({ attachmentFolderPath: ATTACHMENT_FOLDER, newFileLocation: "folder", newFileFolderPath: "raw/transcripts" }, null, 2) + "\n";
+    return JSON.stringify({ attachmentFolderPath: ATTACHMENT_FOLDER, newFileLocation: "folder", newFileFolderPath: NEW_FILE_FOLDER }, null, 2) + "\n";
   });
   if (errObsidian) return errObsidian;
 
   const errTemplatesJson = await writeOrPreserve(".obsidian/templates.json", async () => {
-    return JSON.stringify({ folder: "_Templates" }, null, 2) + "\n";
+    return JSON.stringify({ folder: TEMPLATE_FOLDER }, null, 2) + "\n";
   });
   if (errTemplatesJson) return errTemplatesJson;
 
-  const errTemplate = await writeOrPreserve("_Templates/tpl-ad-hoc-capture.md", async () => {
+  const errTemplate = await writeOrPreserve(`${TEMPLATE_FOLDER}/tpl-ad-hoc-capture.md`, async () => {
     return [
       "---",
       "project: ",
@@ -266,7 +268,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       imported_from_hermes: importedFromHermes,
       discovered_tags,
       humanHint,
-      templates_created: created.includes("_Templates/tpl-ad-hoc-capture.md")
+      templates_created: created.includes(`${TEMPLATE_FOLDER}/tpl-ad-hoc-capture.md`)
     })
   };
 }
