@@ -55,6 +55,42 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 - **Updating plugin on test hosts:** the marketplace cache at `~/.claude/plugins/marketplaces/<name>/` does NOT auto-update. Run `git fetch origin && git reset --hard origin/dev` inside it, then `claude plugin uninstall skillwiki@llm-wiki && rm -rf ~/.claude/plugins/cache/llm-wiki && claude plugin install skillwiki@llm-wiki`.
 - **Shell command, not slash command:** use `claude plugin install` (no slash) from the terminal. The `/plugin` slash command only works inside an interactive Claude session.
 
+## Architecture: Three Layers
+
+The vault at `~/wiki` has three layers. No other top-level directories exist — extend Layer 2 via SCHEMA.md tag taxonomy if needed.
+
+```
+wiki/
+├── SCHEMA.md              # Conventions, structure rules, domain config
+├── index.md               # Sectioned content catalog with one-line summaries
+├── log.md                 # Chronological action log (append-only, rotated)
+│
+├── raw/                    # Layer 1: Immutable source material
+│   ├── articles/           #   Web articles, clippings, fetched URL content
+│   ├── papers/             #   PDFs, arxiv papers, long-form research
+│   ├── transcripts/        #   Meeting notes, interviews, ad-hoc captures
+│   └── assets/             #   Images, diagrams referenced by sources
+│
+├── entities/               # Layer 2: Typed knowledge — people, orgs, products, models
+├── concepts/               # Layer 2: Typed knowledge — topics, patterns, ideas
+├── comparisons/            # Layer 2: Typed knowledge — side-by-side analyses
+├── queries/                # Layer 2: Typed knowledge — filed query results
+├── meta/                   # Layer 2: Cross-project synthesis (must name ≥2 projects)
+│
+├── projects/               # Layer 3: Per-project lifecycle workspaces
+│   └── {slug}/
+│       ├── work/           #     Work items (spec + plan + retro per item)
+│       ├── compound/       #     Distilled lessons, patterns, gotchas
+│       ├── architecture/   #     ADRs and structural decisions
+│       └── history/        #     Archived specs/plans (write-once)
+│
+└── _archive/               # Superseded typed-knowledge pages (moved, not deleted)
+```
+
+- **Layer 1 — Raw (`raw/`):** Immutable after ingest. `raw/transcripts/` doubles as the ad-hoc capture point — meeting notes, quick ideas, and unprocessed drafts go here. **No `inbox/` directory.** Do not invent new top-level directories.
+- **Layer 2 — Typed Knowledge:** Agent-owned pages with `^[raw/...]` citation markers. Global scope — project association via `provenance_projects:` frontmatter, not directory nesting.
+- **Layer 3 — Project Workspaces:** Per-project lifecycle directories with `work/`, `compound/`, `architecture/`, and `history/`.
+
 ## Project vault
 
 - The vault at `~/wiki` is the canonical project knowledge base. All specs, plans, and retros land there via `skillwiki` skills.
