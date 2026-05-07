@@ -194,4 +194,38 @@ old`);
       expect(r.result.data.newFiles.length).toBe(0);
     }
   });
+
+  it("--new parses unquoted YAML ingested date", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "unquoted.md"), `---
+source_url:
+ingested: 2026-05-07
+sha256:
+---
+
+unquoted date`);
+    const r = await runDrift({ vault: dir, newSince: "2026-05-07" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.newFiles.length).toBe(1);
+      expect(r.result.data.newFiles[0].ingested).toBe("2026-05-07");
+    }
+  });
+
+  it("--new parses single-quoted YAML ingested date", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "single.md"), `---
+source_url:
+ingested: '2026-05-07'
+sha256:
+---
+
+single-quoted date`);
+    const r = await runDrift({ vault: dir, newSince: "2026-05-07" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.newFiles.length).toBe(1);
+      expect(r.result.data.newFiles[0].ingested).toBe("2026-05-07");
+    }
+  });
 });
