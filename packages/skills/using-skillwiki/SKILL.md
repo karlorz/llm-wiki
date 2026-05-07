@@ -55,6 +55,14 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 
 **No `inbox/` directory.** Ad-hoc captures go to `raw/transcripts/` or directly into a project work item via `proj-work`. Do not invent new top-level directories — extend Layer 2 via SCHEMA.md tag taxonomy if needed.
 
+### Ad-hoc capture: three entry points
+
+| Entry | When | What happens |
+|-------|------|-------------|
+| `/wiki-add-task <text>` | You're in a Claude session | Appends entry to `raw/transcripts/YYYY-MM-DD-ad-hoc-captures.md` |
+| Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create/edit any `.md` file in `raw/transcripts/` — dev-loop discovers it on next cycle |
+| Dev-loop discovery | Automatic, next cycle | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |
+
 ## Skill Map
 
 | Skill | When to Invoke |

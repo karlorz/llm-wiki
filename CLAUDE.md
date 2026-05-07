@@ -87,7 +87,10 @@ wiki/
 └── _archive/               # Superseded typed-knowledge pages (moved, not deleted)
 ```
 
-- **Layer 1 — Raw (`raw/`):** Immutable after ingest. `raw/transcripts/` doubles as the ad-hoc capture point — meeting notes, quick ideas, and unprocessed drafts go here. **No `inbox/` directory.** Do not invent new top-level directories.
+- **Layer 1 — Raw (`raw/`):** Immutable after ingest. `raw/transcripts/` doubles as the ad-hoc capture point — meeting notes, quick ideas, and unprocessed drafts go here. **No `inbox/` directory.** Do not invent new top-level directories. Three entry points for ad-hoc capture:
+  - `/wiki-add-task <text>` — from inside a Claude session, appends to `raw/transcripts/YYYY-MM-DD-ad-hoc-captures.md`
+  - **Filesystem drop** — create any `.md` file in `raw/transcripts/` when not in a Claude session (Obsidian, editor, sync); dev-loop discovers it on next cycle
+  - **Dev-loop discovery** — automatic scan of `raw/transcripts/` for new files, surfaces as claimable work
 - **Layer 2 — Typed Knowledge:** Agent-owned pages with `^[raw/...]` citation markers. Global scope — project association via `provenance_projects:` frontmatter, not directory nesting.
 - **Layer 3 — Project Workspaces:** Per-project lifecycle directories with `work/`, `compound/`, `architecture/`, and `history/`.
 

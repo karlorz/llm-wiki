@@ -1,15 +1,21 @@
 ---
 name: wiki-add-task
-description: Capture ad-hoc ideas, bugs, tasks, or notes into the vault without leaving the current workflow.
+description: Capture ad-hoc ideas, bugs, tasks, or notes into the vault via /wiki-add-task or filesystem drop.
 ---
 
 # wiki-add-task
 
-Quick-capture skill for ad-hoc ideas, bugs, tasks, and notes. Writes directly to `raw/transcripts/` — the vault's designated ad-hoc capture point (Layer 1). No new directories or inbox folders needed.
+Capture ad-hoc ideas, bugs, tasks, and notes into the vault. Three entry points depending on where you are:
+
+| Entry | When | What happens |
+|-------|------|-------------|
+| `/wiki-add-task <text>` | You're in a Claude session | Appends entry to `raw/transcripts/YYYY-MM-DD-ad-hoc-captures.md` |
+| Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create/edit any file in `raw/transcripts/` — dev-loop discovers it on next cycle |
+| Dev-loop discovery | Automatic, next cycle | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |
 
 ## When This Skill Activates
 
-- User wants to quickly jot down an idea, bug, task, or note without interrupting their current workflow.
+- User invokes `/wiki-add-task` with a description.
 - User says "add task", "capture this", "note this", "remember this", "log this idea", or similar.
 - User provides a short text description and optionally a type tag.
 
@@ -72,3 +78,27 @@ The `sha256` is computed over the body after the closing `---`. On each append, 
 - Modifying existing entries in the captures file — only append.
 - Creating a work item — this is capture-only. Use `proj-work` for full work items.
 - Writing to any Layer 2 or Layer 3 location. Captures are Layer 1 (raw).
+
+## Filesystem drop (offline capture)
+
+When you're not in a Claude session, drop files directly into `raw/transcripts/`:
+
+1. Create any `.md` file in `raw/transcripts/` — name it descriptively (e.g., `2026-05-07-idea-xyz.md`)
+2. Add raw frontmatter at the top:
+   ```yaml
+   ---
+   source_url:
+   ingested: YYYY-MM-DD
+   sha256:
+   ---
+   ```
+3. Write your idea/bug/task/note below the frontmatter
+
+No special format required — the dev-loop QUERY step will discover new files on the next cycle and surface them as claimable work. Mark the type with a heading like `## idea`, `## bug`, `## task`, or just write freeform.
+
+## Dev-loop discovery
+
+When the dev-loop QUERY step runs, it should scan `raw/transcripts/` for files with `ingested:` date newer than the last cycle. New files are surfaced as claimable work items. The agent then decides whether to:
+- Create a work item via `proj-work` (for tasks and bugs)
+- Ingest as a knowledge page via `wiki-ingest` (for ideas with sources)
+- Leave in place (for notes that don't need action yet)
