@@ -103,6 +103,6 @@ wiki/
 ## Current counts (2026-05-07)
 
 - 15 SKILL.md files in `packages/skills/`
-- 28 CLI subcommands in `packages/cli/src/commands/`
-- 29 test files in `packages/cli/test/commands/`
+- 29 CLI subcommands in `packages/cli/src/commands/`
+- 30 test files in `packages/cli/test/commands/`
 - Lint buckets: 4 error, 10 warning, 5 info (incl. `page_structure`, `duplicate_frontmatter`, `missing_overview`, `frontmatter_wikilink`, `wikilink_citation`)

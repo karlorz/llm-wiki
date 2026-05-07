@@ -28,6 +28,7 @@ import { runDedup } from "./commands/dedup.js";
 import { runMigrateCitations } from "./commands/migrate-citations.js";
 import { runFrontmatterFix } from "./commands/frontmatter-fix.js";
 import { runUpdate } from "./commands/update.js";
+import { runTranscripts } from "./commands/transcripts.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 import { triggerAutoUpdate } from "./utils/auto-update.js";
 
@@ -334,6 +335,18 @@ program
     home: process.env.HOME ?? "",
     distTag: opts.tag,
   })));
+
+// transcripts
+program
+  .command("transcripts [vault]")
+  .description("list transcript files in raw/transcripts/")
+  .option("--since <date>", "only files ingested on or after this date (YYYY-MM-DD)")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runTranscripts({ vault: v.vault, since: opts.since }));
+  });
 
 // Background auto-update check (non-blocking, 24h cache)
 triggerAutoUpdate(process.env.HOME ?? "", pkg.version);
