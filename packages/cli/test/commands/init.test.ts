@@ -42,6 +42,11 @@ describe("runInit", () => {
     expect(obsidianConfig.attachmentFolderPath).toBe("raw/assets");
     const templatesConfig = JSON.parse(readFileSync(join(target, ".obsidian", "templates.json"), "utf8"));
     expect(templatesConfig.folder).toBe("_Templates");
+    const template = readFileSync(join(target, "_Templates", "tpl-ad-hoc-capture.md"), "utf8");
+    expect(template).toContain("project:");
+    expect(template).toContain("tags: []");
+    expect(template).toContain("priority:");
+    expect(template).toContain("ingested: {{date:YYYY-MM-DD}}");
     const schema = readFileSync(join(target, "SCHEMA.md"), "utf8");
     expect(schema).toContain("AI safety");
     expect(schema).toContain("- research");

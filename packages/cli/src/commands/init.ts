@@ -200,6 +200,20 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   });
   if (errTemplatesJson) return errTemplatesJson;
 
+  const errTemplate = await writeOrPreserve("_Templates/tpl-ad-hoc-capture.md", async () => {
+    return [
+      "---",
+      "project: ",
+      "tags: []",
+      "priority: ",
+      "ingested: {{date:YYYY-MM-DD}}",
+      "---",
+      "",
+      ""
+    ].join("\n");
+  });
+  if (errTemplate) return errTemplate;
+
   const err2 = await writeOrPreserve("log.md", async () => {
     const tpl = await readFile(join(input.templates, "log.md"), "utf8");
     return tpl.replace(/\{\{INIT_DATE\}\}/g, today).replace("{{DOMAIN}}", domain).replace("{{WIKI_LANG}}", canonicalLang);
