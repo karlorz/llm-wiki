@@ -40,6 +40,8 @@ describe("runInit", () => {
     }
     const obsidianConfig = JSON.parse(readFileSync(join(target, ".obsidian", "app.json"), "utf8"));
     expect(obsidianConfig.attachmentFolderPath).toBe("raw/assets");
+    expect(obsidianConfig.newFileLocation).toBe("folder");
+    expect(obsidianConfig.newFileFolderPath).toBe("raw/transcripts");
     const templatesConfig = JSON.parse(readFileSync(join(target, ".obsidian", "templates.json"), "utf8"));
     expect(templatesConfig.folder).toBe("_Templates");
     const template = readFileSync(join(target, "_Templates", "tpl-ad-hoc-capture.md"), "utf8");

@@ -192,7 +192,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   if (err1) return err1;
 
   const errObsidian = await writeOrPreserve(".obsidian/app.json", async () => {
-    return JSON.stringify({ attachmentFolderPath: ATTACHMENT_FOLDER }, null, 2) + "\n";
+    return JSON.stringify({ attachmentFolderPath: ATTACHMENT_FOLDER, newFileLocation: "folder", newFileFolderPath: "raw/transcripts" }, null, 2) + "\n";
   });
   if (errObsidian) return errObsidian;
 
