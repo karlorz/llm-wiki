@@ -208,4 +208,69 @@ Content.
       expect(warningKinds).toContain("orphans");
     }
   });
+
+  it("flags broken wikilinks in frontmatter as frontmatter_wikilink", async () => {
+    const v = vault();
+    const fm = `---
+title: t
+type: concept
+tags: [model]
+sources: []
+provenance: project
+provenance_projects: ["[[nonexistent]]"]
+created: 2026-05-07
+updated: 2026-05-07
+---
+
+## Overview
+
+Content.
+
+## Related
+
+- [[alpha]]
+`;
+    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");
+    writeFileSync(join(v, "concepts", "badfm.md"), fm);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n- [[badfm]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(22); // info counts as LINT_HAS_WARNINGS
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).toContain("frontmatter_wikilink");
+      const fmBucket = r.result.data.by_severity.info.find(b => b.kind === "frontmatter_wikilink");
+      expect(fmBucket!.items.length).toBe(1);
+      expect(fmBucket!.items[0]).toContain("nonexistent");
+    }
+  });
+
+  it("does not flag valid wikilinks in frontmatter", async () => {
+    const v = vault();
+    const fm = (proj: string) => `---
+title: t
+type: concept
+tags: [model]
+sources: []
+provenance: project
+provenance_projects: ["[[${proj}]]"]
+created: 2026-05-07
+updated: 2026-05-07
+---
+
+## Overview
+
+Content.
+
+## Related
+
+- [[${proj}]]
+`;
+    writeFileSync(join(v, "concepts", "alpha.md"), fm("alpha"));
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).not.toContain("frontmatter_wikilink");
+    }
+  });
 });
