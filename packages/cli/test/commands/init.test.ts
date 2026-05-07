@@ -34,7 +34,8 @@ describe("runInit", () => {
       expect(r.result.data.imported_from_hermes).toBe(false);
     }
     for (const dir of ["raw/articles", "raw/papers", "raw/transcripts", "raw/assets",
-                        "entities", "concepts", "comparisons", "queries", "meta", "projects", ".obsidian"]) {
+                        "entities", "concepts", "comparisons", "queries", "meta", "projects",
+                        ".obsidian", "_Templates"]) {
       expect(statSync(join(target, dir)).isDirectory()).toBe(true);
     }
     const obsidianConfig = JSON.parse(readFileSync(join(target, ".obsidian", "app.json"), "utf8"));

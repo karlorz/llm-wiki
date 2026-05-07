@@ -15,7 +15,7 @@ const DEFAULT_TAXONOMY = [
 const VAULT_DIRS = [
   "raw/articles", "raw/papers", "raw/transcripts", "raw/assets",
   "entities", "concepts", "comparisons", "queries", "meta", "projects",
-  ".obsidian"
+  ".obsidian", "_Templates"
 ];
 
 const ATTACHMENT_FOLDER = "raw/assets";
