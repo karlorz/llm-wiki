@@ -15,12 +15,18 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  let relPath: string | undefined;
-  if (input.page.includes("/")) {
-    relPath = scan.data.typedKnowledge.find(p => p.relPath === input.page)?.relPath;
-  } else {
-    relPath = scan.data.typedKnowledge.find(p => p.relPath.replace(/\.md$/, "").split("/").pop() === input.page)?.relPath;
+  const lookup = (pages: { relPath: string }[]) => {
+    if (input.page.includes("/")) return pages.find(p => p.relPath === input.page)?.relPath;
+    return pages.find(p => p.relPath.replace(/\.md$/, "").split("/").pop() === input.page)?.relPath;
+  };
+
+  let relPath = lookup(scan.data.typedKnowledge);
+  let isRaw = false;
+  if (!relPath) {
+    relPath = lookup(scan.data.raw);
+    isRaw = relPath != null;
   }
+
   if (!relPath) return { exitCode: ExitCode.ARCHIVE_TARGET_NOT_FOUND, result: err("ARCHIVE_TARGET_NOT_FOUND", { page: input.page }) };
 
   if (relPath.startsWith("_archive/")) return { exitCode: ExitCode.ARCHIVE_ALREADY_ARCHIVED, result: err("ARCHIVE_ALREADY_ARCHIVED", { page: relPath }) };
@@ -29,18 +35,20 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
   await mkdir(dirname(join(input.vault, archivePath)), { recursive: true });
 
   let indexUpdated = false;
-  const indexPath = join(input.vault, "index.md");
-  try {
-    const idx = await readFile(indexPath, "utf8");
-    const slug = relPath.replace(/\.md$/, "").split("/").pop()!;
-    const originalLines = idx.split("\n");
-    const filtered = originalLines.filter(l => !l.includes(`[[${slug}]]`));
-    if (filtered.length !== originalLines.length) {
-      await writeFile(indexPath, filtered.join("\n"), "utf8");
-      indexUpdated = true;
+  if (!isRaw) {
+    const indexPath = join(input.vault, "index.md");
+    try {
+      const idx = await readFile(indexPath, "utf8");
+      const slug = relPath.replace(/\.md$/, "").split("/").pop()!;
+      const originalLines = idx.split("\n");
+      const filtered = originalLines.filter(l => !l.includes(`[[${slug}]]`));
+      if (filtered.length !== originalLines.length) {
+        await writeFile(indexPath, filtered.join("\n"), "utf8");
+        indexUpdated = true;
+      }
+    } catch (e: any) {
+      if (e?.code !== "ENOENT") throw e;
     }
-  } catch (e: any) {
-    if (e?.code !== "ENOENT") throw e;
   }
 
   await rename(join(input.vault, relPath), join(input.vault, archivePath));

@@ -17,6 +17,14 @@ updated: 2026-05-05
 
 content`;
 
+const RAW_FM = `---
+source_url: https://example.com
+ingested: "2026-05-07"
+sha256: abc123
+---
+
+raw content`;
+
 function makeVault(withIndex = false): string {
   const dir = mkdtempSync(join(tmpdir(), "vault-"));
   writeFileSync(join(dir, "SCHEMA.md"), "# Vault Schema\n");
@@ -69,5 +77,56 @@ describe("runArchive", () => {
   it("returns 9 for invalid vault", async () => {
     const r = await runArchive({ vault: "/nonexistent/path", page: "foo" });
     expect(r.exitCode).toBe(9);
+  });
+
+  it("archives a raw file to _archive/raw/ preserving subdirectory", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "raw", "articles", "foo.md"), RAW_FM);
+    const r = await runArchive({ vault: dir, page: "raw/articles/foo.md" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.archived_from).toBe("raw/articles/foo.md");
+      expect(r.result.data.archived_to).toBe("_archive/raw/articles/foo.md");
+      expect(r.result.data.index_updated).toBe(false);
+    }
+    expect(existsSync(join(dir, "raw", "articles", "foo.md"))).toBe(false);
+    expect(existsSync(join(dir, "_archive", "raw", "articles", "foo.md"))).toBe(true);
+  });
+
+  it("archives a raw file by filename only", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "raw", "articles", "bar.md"), RAW_FM);
+    const r = await runArchive({ vault: dir, page: "bar" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.archived_from).toBe("raw/articles/bar.md");
+      expect(r.result.data.archived_to).toBe("_archive/raw/articles/bar.md");
+      expect(r.result.data.index_updated).toBe(false);
+    }
+    expect(existsSync(join(dir, "raw", "articles", "bar.md"))).toBe(false);
+    expect(existsSync(join(dir, "_archive", "raw", "articles", "bar.md"))).toBe(true);
+  });
+
+  it("returns 30 for raw file not found", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw"), { recursive: true });
+    const r = await runArchive({ vault: dir, page: "raw/articles/nope.md" });
+    expect(r.exitCode).toBe(30);
+  });
+
+  it("prefers typed-knowledge over raw when slug matches both", async () => {
+    const dir = makeVault(true);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "concepts", "alpha.md"), FM);
+    writeFileSync(join(dir, "raw", "articles", "alpha.md"), RAW_FM);
+    const r = await runArchive({ vault: dir, page: "alpha" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.archived_from).toBe("concepts/alpha.md");
+      expect(r.result.data.archived_to).toBe("_archive/concepts/alpha.md");
+    }
+    expect(existsSync(join(dir, "raw", "articles", "alpha.md"))).toBe(true);
   });
 });
