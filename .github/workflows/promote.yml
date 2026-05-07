@@ -1,0 +1,27 @@
+name: promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to promote to latest (e.g., 0.2.0-beta.33)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          registry-url: https://registry.npmjs.org
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Promote to latest
+        run: npm dist-tag add skillwiki@${{ inputs.version }} latest
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
