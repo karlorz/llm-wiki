@@ -40,6 +40,8 @@ describe("runInit", () => {
     }
     const obsidianConfig = JSON.parse(readFileSync(join(target, ".obsidian", "app.json"), "utf8"));
     expect(obsidianConfig.attachmentFolderPath).toBe("raw/assets");
+    const templatesConfig = JSON.parse(readFileSync(join(target, ".obsidian", "templates.json"), "utf8"));
+    expect(templatesConfig.folder).toBe("_Templates");
     const schema = readFileSync(join(target, "SCHEMA.md"), "utf8");
     expect(schema).toContain("AI safety");
     expect(schema).toContain("- research");

@@ -195,6 +195,11 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   });
   if (errObsidian) return errObsidian;
 
+  const errTemplatesJson = await writeOrPreserve(".obsidian/templates.json", async () => {
+    return JSON.stringify({ folder: "_Templates" }, null, 2) + "\n";
+  });
+  if (errTemplatesJson) return errTemplatesJson;
+
   const err2 = await writeOrPreserve("log.md", async () => {
     const tpl = await readFile(join(input.templates, "log.md"), "utf8");
     return tpl.replace(/\{\{INIT_DATE\}\}/g, today).replace("{{DOMAIN}}", domain).replace("{{WIKI_LANG}}", canonicalLang);
