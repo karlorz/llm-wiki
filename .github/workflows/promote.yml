@@ -4,24 +4,32 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to promote to latest (e.g., 0.2.0-beta.33)'
+        description: 'Stable version to promote (e.g., 0.2.0)'
         required: true
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   promote:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22.x
-          registry-url: https://registry.npmjs.org
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Promote to latest
-        run: npm dist-tag add skillwiki@${{ inputs.version }} latest
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          cache: npm
+      - run: npm ci
+      - name: Bump all manifests
+        run: bash scripts/bump-version.sh ${{ inputs.version }}
+      - name: Commit and tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: release v${{ inputs.version }}"
+          git tag "v${{ inputs.version }}"
+          git push origin HEAD --tags
