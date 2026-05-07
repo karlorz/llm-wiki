@@ -159,6 +159,26 @@ old article`);
     }
   });
 
+  it("skips source_url without http/https scheme", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "internal.md"), `---
+source_url: plan:2026-05-02-llm-wiki-skill
+sha256: ${STORED_HASH}
+ingested: "2026-05-02"
+---
+
+vault-internal plan`);
+    const r = await runDrift({
+      vault: dir,
+      fetchFn: async () => err("FETCH_FAILED", { message: "should not be called" }),
+    });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.fetch_failed.length).toBe(0);
+      expect(r.result.data.scanned).toBe(0);
+    }
+  });
+
   it("--new with no matching files returns empty list", async () => {
     const dir = makeVault();
     writeFileSync(join(dir, "raw", "articles", "old.md"), `---

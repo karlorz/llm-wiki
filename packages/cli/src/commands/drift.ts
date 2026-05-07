@@ -72,6 +72,9 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
     const sourceUrl = sourceUrlMatch[1]!.trim();
     const storedHash = storedHashMatch[1]!;
 
+    // Skip source_urls that aren't HTTP — vault-internal refs aren't fetchable
+    if (!sourceUrl.startsWith("http://") && !sourceUrl.startsWith("https://")) continue;
+
     const resp = await doFetch(sourceUrl, FETCH_OPTS);
     if (!resp.ok) {
       results.push({
