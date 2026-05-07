@@ -108,7 +108,8 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
 
   // Citation style + page structure check
   const scan = await scanVault(input.vault);
-  const slugs = scan.ok ? buildSlugMap(scan.data.typedKnowledge) : new Map<string, string>();
+  const allPages = scan.ok ? [...scan.data.typedKnowledge, ...scan.data.raw, ...scan.data.workItems, ...scan.data.compound] : [];
+  const slugs = scan.ok ? buildSlugMap(allPages) : new Map<string, string>();
   if (scan.ok) {
     const legacyPages: string[] = [];
     const orphanedPages: string[] = [];
@@ -129,7 +130,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       const fmLinks = rawFm.match(/\[\[([^\[\]|]+)(?:\|[^\[\]]*)?\]\]/g) ?? [];
       for (const link of fmLinks) {
         const target = link.replace(/^\[\[/, "").replace(/(?:\|[^\[\]]*)?\]\]$/, "").trim();
-        const tail = target.split("/").pop()!;
+        const tail = target.split("/").pop()!.replace(/\.md$/, "");
         if (!slugs.has(tail.toLowerCase())) {
           fmWikilinkFlags.push(`${page.relPath}: [[${target}]] does not resolve`);
         }

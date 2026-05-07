@@ -14,7 +14,8 @@ export async function runLinks(input: LinksInput): Promise<{ exitCode: number; r
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  const slugs = buildSlugMap(scan.data.typedKnowledge);
+  const allPages = [...scan.data.typedKnowledge, ...scan.data.raw, ...scan.data.workItems, ...scan.data.compound];
+  const slugs = buildSlugMap(allPages);
 
   const broken: LinksOutput["broken"] = [];
   for (const p of scan.data.typedKnowledge) {
@@ -23,7 +24,7 @@ export async function runLinks(input: LinksInput): Promise<{ exitCode: number; r
     const body = split.ok ? split.data.body : text;
     const lines = body.split("\n");
     for (const slug of extractBodyWikilinks(body)) {
-      const tail = slug.split("/").pop()!;
+      const tail = slug.split("/").pop()!.replace(/\.md$/, "");
       if (!slugs.has(tail.toLowerCase())) {
         const line = lines.findIndex(l => l.includes(`[[${slug}`));
         broken.push({ page: p.relPath, slug, line: line >= 0 ? line + 1 : 0 });
