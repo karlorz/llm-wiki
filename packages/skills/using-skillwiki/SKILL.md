@@ -20,6 +20,7 @@ Invoke a skillwiki skill when the user:
 - Wants a health check or lint on their vault
 - Mentions crystallizing a session into a note
 - Talks about project workspaces, ADRs, or distillation
+- Wants to quickly capture an idea, bug, task, or note without interrupting their workflow
 - Wants to archive or clean up old vault pages
 - Needs to detect source drift or re-ingest updated content
 - Has a spec/plan in a non-skillwiki format (CodeStable, RFC, AIDE)
@@ -66,6 +67,7 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 | `wiki-audit` | Verify raw provenance references and source frontmatter integrity |
 | `wiki-archive` | Archive a typed-knowledge page — move to `_archive/`, remove from index |
 | `wiki-reingest` | Detect drift in raw sources (sha256 comparison) and re-ingest updated content |
+| `wiki-add-task` | Quick-capture ideas, bugs, tasks, notes into `raw/transcripts/` without leaving the current workflow |
 | `wiki-adapter-prd` | Map foreign PRD formats (CodeStable, RFC, AIDE, Hermes) into vault pages |
 | `proj-init` | Bootstrap a project workspace (README, requirements, architecture) |
 | `proj-work` | Open or run a work item under a project's work/ directory |
