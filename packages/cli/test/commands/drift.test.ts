@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runDrift } from "../../src/commands/drift.js";
@@ -91,5 +91,45 @@ body`);
   it("returns 9 for invalid vault", async () => {
     const r = await runDrift({ vault: "/nonexistent" });
     expect(r.exitCode).toBe(9);
+  });
+
+  it("--apply updates sha256 in drifted source", async () => {
+    const dir = makeVault();
+    const srcPath = join(dir, "raw", "articles", "src.md");
+    writeFileSync(srcPath, RAW_FM_TEMPLATE("https://example.com/a", STORED_HASH));
+    const newBody = "changed content here";
+    const expectedHash = "c4ae4d7e52cf8b8b2d1e0a8a3c5e7d9f0b2a4c6d8e0f2a4b6c8d0e2f4a6b8c0d"; // placeholder
+    const r = await runDrift({
+      vault: dir,
+      apply: true,
+      fetchFn: async () => ok({ body: newBody }),
+    });
+    // Exit 0 because drift was fixed via --apply
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.updated.length).toBe(1);
+      expect(r.result.data.updated[0].status).toBe("updated");
+    }
+    // Verify file was updated with new sha256
+    const updated = readFileSync(srcPath, "utf8");
+    expect(updated).toMatch(/^sha256: [a-f0-9]{64}$/m);
+    expect(updated).not.toContain(STORED_HASH);
+  });
+
+  it("--apply does not modify unchanged sources", async () => {
+    const dir = makeVault();
+    const matchingHash = "d8c281f1829771acffd8bf707720f0aed9f0c22c9c4aac2f34e06413044a0043";
+    const srcPath = join(dir, "raw", "articles", "src.md");
+    writeFileSync(srcPath, RAW_FM_TEMPLATE("https://example.com/a", matchingHash));
+    const r = await runDrift({
+      vault: dir,
+      apply: true,
+      fetchFn: async () => ok({ body: "body content here" }),
+    });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.updated.length).toBe(0);
+      expect(r.result.data.unchanged).toBe(1);
+    }
   });
 });
