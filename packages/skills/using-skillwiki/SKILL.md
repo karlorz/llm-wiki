@@ -27,15 +27,15 @@ Invoke a skillwiki skill when the user:
 
 ## Vault Structure
 
-A skillwiki vault has two layers:
+A skillwiki vault has three layers. The canonical architecture lives in `SCHEMA.md` at the vault root — read it before creating any new directories.
 
-**Layer 1 — Raw (`raw/`):** Immutable source material. Never modify after ingest.
+**Layer 1 — Raw (`raw/`):** Immutable source material. Never modify after ingest. `raw/transcripts/` doubles as the ad-hoc capture point for meeting notes and unprocessed ideas.
 
 ```
 raw/
 ├── articles/    # Web articles, clippings
 ├── papers/      # PDFs, arxiv papers
-├── transcripts/ # Meeting notes, interviews
+├── transcripts/ # Meeting notes, interviews, ad-hoc captures
 └── assets/      # Images, diagrams referenced by sources
 ```
 
@@ -48,7 +48,11 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 ---
 ```
 
-**Layer 2 — Agent-owned pages:** `entities/`, `concepts/`, `comparisons/`, `queries/`, `meta/`, `projects/`. Citations use `^[raw/articles/source-file.md]` markers at paragraph-end.
+**Layer 2 — Typed Knowledge:** `entities/`, `concepts/`, `comparisons/`, `queries/`, `meta/`. Agent-owned pages with `^[raw/...]` citation markers at paragraph-end. Global scope — project association via `provenance_projects:` frontmatter, not directory nesting.
+
+**Layer 3 — Project Workspaces (`projects/{slug}/`):** Per-project lifecycle directories with `work/` (spec + plan + retro), `compound/` (distilled lessons/patterns), `architecture/` (ADRs), and `history/` (archived specs/plans).
+
+**No `inbox/` directory.** Ad-hoc captures go to `raw/transcripts/` or directly into a project work item via `proj-work`. Do not invent new top-level directories — extend Layer 2 via SCHEMA.md tag taxonomy if needed.
 
 ## Skill Map
 
