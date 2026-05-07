@@ -59,9 +59,9 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 
 - The vault at `~/wiki` is the canonical project knowledge base. All specs, plans, and retros land there via `skillwiki` skills.
 - **New** specs and plans go into work items via `proj-work` → `projects/llm-wiki/work/YYYY-MM-DD-{slug}/spec.md` or `plan.md`. The `history/{specs,plans}/` folder is **archive-only** for superseded historical documents — do not write new work there. Do not recreate `docs/superpowers/`.
-- The dev-loop skill (`dev-loop:1.0.0`) drives the PRD+skillwiki workflow. It reads project config from `.claude/dev-loop.config.md`. Legacy commands are archived at `~/.claude/commands/_archive/2026-05-07/`.
+- The dev-loop skill (`dev-loop:1.1.0`) drives the PRD+skillwiki workflow. It reads project config from `.claude/dev-loop.config.md`. Legacy commands are archived at `~/.claude/commands/_archive/2026-05-07/`.
 
-## Current counts (2026-05-06)
+## Current counts (2026-05-07)
 
 - 14 SKILL.md files in `packages/skills/`
 - 28 CLI subcommands in `packages/cli/src/commands/`
