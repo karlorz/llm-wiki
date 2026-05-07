@@ -45,6 +45,7 @@ export interface InitOutput {
   imported_from_hermes: boolean;
   discovered_tags: number;
   humanHint: string;
+  templates_created: boolean;
 }
 
 function extractDomainFromSchema(text: string): string {
@@ -264,7 +265,8 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       env_skipped: skipEnv,
       imported_from_hermes: importedFromHermes,
       discovered_tags,
-      humanHint
+      humanHint,
+      templates_created: created.includes("_Templates/tpl-ad-hoc-capture.md")
     })
   };
 }
