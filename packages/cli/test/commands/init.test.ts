@@ -34,9 +34,11 @@ describe("runInit", () => {
       expect(r.result.data.imported_from_hermes).toBe(false);
     }
     for (const dir of ["raw/articles", "raw/papers", "raw/transcripts", "raw/assets",
-                        "entities", "concepts", "comparisons", "queries", "meta", "projects"]) {
+                        "entities", "concepts", "comparisons", "queries", "meta", "projects", ".obsidian"]) {
       expect(statSync(join(target, dir)).isDirectory()).toBe(true);
     }
+    const obsidianConfig = JSON.parse(readFileSync(join(target, ".obsidian", "app.json"), "utf8"));
+    expect(obsidianConfig.attachmentFolderPath).toBe("raw/assets");
     const schema = readFileSync(join(target, "SCHEMA.md"), "utf8");
     expect(schema).toContain("AI safety");
     expect(schema).toContain("- research");

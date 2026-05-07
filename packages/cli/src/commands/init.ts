@@ -14,8 +14,11 @@ const DEFAULT_TAXONOMY = [
 
 const VAULT_DIRS = [
   "raw/articles", "raw/papers", "raw/transcripts", "raw/assets",
-  "entities", "concepts", "comparisons", "queries", "meta", "projects"
+  "entities", "concepts", "comparisons", "queries", "meta", "projects",
+  ".obsidian"
 ];
+
+const ATTACHMENT_FOLDER = "raw/assets";
 
 export interface InitInput {
   flag: string | undefined;
@@ -186,6 +189,11 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
     return tpl.replace("{{INIT_DATE}}", today);
   });
   if (err1) return err1;
+
+  const errObsidian = await writeOrPreserve(".obsidian/app.json", async () => {
+    return JSON.stringify({ attachmentFolderPath: ATTACHMENT_FOLDER }, null, 2) + "\n";
+  });
+  if (errObsidian) return errObsidian;
 
   const err2 = await writeOrPreserve("log.md", async () => {
     const tpl = await readFile(join(input.templates, "log.md"), "utf8");
