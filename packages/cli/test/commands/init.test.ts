@@ -15,16 +15,9 @@ function home(): string {
 
 function tmp(): string { return mkdtempSync(join(tmpdir(), "init-")); }
 
-/** Create a vault target outside /tmp/ so isTempPath does not skip env writes.
- *  CI runners use /tmp/ for tmpdir(); placing the vault under HOME
- *  (e.g. /home/runner on Linux, /Users/runner on macOS) avoids the
- *  /tmp/ prefix check while staying in a world-writable location. */
-function vault(): string {
-  const home = process.env.HOME || "/root";
-  const base = join(home, "skillwiki-tests");
-  mkdirSync(base, { recursive: true });
-  return mkdtempSync(join(base, "vault-"));
-}
+/** Create a vault target in the system temp dir.
+ *  The isTempPath heuristic was removed — vaults under /tmp/ now write .env normally. */
+function vault(): string { return tmp(); }
 
 describe("runInit", () => {
   it("creates the vault tree, SCHEMA.md, index.md, log.md and writes both env keys", async () => {
@@ -224,7 +217,7 @@ describe("runInit", () => {
     expect(() => statSync(join(h, ".skillwiki", ".env"))).toThrow();
   });
 
-  it("skips env write when target is under /tmp", async () => {
+  it("writes env file when target is under /tmp (no implicit skip)", async () => {
     const h = home();
     const target = "/tmp/skillwiki-test-" + Date.now();
     mkdirSync(target, { recursive: true });
@@ -234,8 +227,8 @@ describe("runInit", () => {
     });
     expect(r.exitCode).toBe(0);
     if (r.result.ok) {
-      expect(r.result.data.env_written).toBe("");
-      expect(r.result.data.env_skipped).toBe(true);
+      expect(r.result.data.env_written).toBe(join(h, ".skillwiki", ".env"));
+      expect(r.result.data.env_skipped).toBe(false);
     }
   });
 

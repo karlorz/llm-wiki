@@ -193,8 +193,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   });
   if (err2) return err2;
 
-  const isTempPath = target.startsWith("/tmp/") || target === "/tmp" || target.startsWith("/var/tmp/") || target === "/var/tmp" || target.startsWith("/private/tmp/");
-  const skipEnv = !!input.noEnv || isTempPath;
+  const skipEnv = !!input.noEnv;
   let envWritten = "";
   if (!skipEnv) {
     try {

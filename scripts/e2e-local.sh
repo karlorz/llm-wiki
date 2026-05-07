@@ -35,7 +35,7 @@ CLI=(node "$REPO_ROOT/packages/cli/dist/cli.js")
 
 # ==== 1. init ===============================================================
 printf "\n--- init ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" init \
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" init \
   --target "$VAULT" \
   --domain "E2E Test" \
   --taxonomy "research,concept,tool" \
@@ -151,14 +151,14 @@ assert_file_exists "$INSTALL_TARGET/wiki-manifest.json" "install writes manifest
 
 # ==== 16. config path ========================================================
 printf "\n--- config path ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config path
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" config path
 assert_exit 0 "$RUN_RC" "config path succeeds"
 assert_json_contains "$RUN_OUTPUT" "data.path" "$TEMP_HOME/.skillwiki/.env" "config path returns correct path"
 assert_json_contains "$RUN_OUTPUT" "data.exists" "true" "config path reports exists"
 
 # ==== 17. config set =========================================================
 printf "\n--- config set ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config set WIKI_LANG ja
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" config set WIKI_LANG ja
 assert_exit 0 "$RUN_RC" "config set succeeds"
 assert_json_contains "$RUN_OUTPUT" "data.key"     "WIKI_LANG" "config set returns key"
 assert_json_contains "$RUN_OUTPUT" "data.value"   "ja"        "config set returns value"
@@ -166,7 +166,7 @@ assert_json_contains "$RUN_OUTPUT" "data.written" "true"      "config set confir
 
 # ==== 18. config get =========================================================
 printf "\n--- config get ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config get WIKI_LANG
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" config get WIKI_LANG
 assert_exit 0 "$RUN_RC" "config get succeeds"
 assert_json_contains "$RUN_OUTPUT" "data.key"   "WIKI_LANG" "config get returns key"
 assert_json_contains "$RUN_OUTPUT" "data.value" "ja"        "config get returns value"
@@ -175,32 +175,32 @@ assert_json_contains "$RUN_OUTPUT" "data.value" "ja"        "config get returns 
 printf "\n--- config get unset key ---\n"
 # Use a fresh HOME with no config to test unset key
 FRESH_HOME=$(mktemp -d)
-run_cli env HOME="$FRESH_HOME" "${CLI[@]}" config get WIKI_LANG
+run_cli env -u WIKI_PATH -u WIKI HOME="$FRESH_HOME" "${CLI[@]}" config get WIKI_LANG
 assert_exit 0 "$RUN_RC" "config get unset key exits 0"
 assert_json_contains "$RUN_OUTPUT" "data.value" "" "config get returns empty for unset"
 rm -rf "$FRESH_HOME"
 
 # ==== 20. config list ========================================================
 printf "\n--- config list ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config list
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" config list
 assert_exit 0 "$RUN_RC" "config list succeeds"
 assert_json_contains "$RUN_OUTPUT" "ok" "true" "config list returns ok"
 
 # ==== 21. config set invalid key =============================================
 printf "\n--- config set invalid key ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config set BOGUS value
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" config set BOGUS value
 assert_exit 26 "$RUN_RC" "config set rejects invalid key (exit 26)"
 assert_json_contains "$RUN_OUTPUT" "ok" "false" "config set invalid returns error"
 assert_json_contains "$RUN_OUTPUT" "error" "INVALID_CONFIG_KEY" "config set invalid returns error code"
 
 # ==== 22. config get invalid key =============================================
 printf "\n--- config get invalid key ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config get BOGUS
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" config get BOGUS
 assert_exit 26 "$RUN_RC" "config get rejects invalid key (exit 26)"
 
 # ==== 23. config --human =====================================================
 printf "\n--- config --human ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" --human config list
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" --human config list
 assert_exit 0 "$RUN_RC" "config list --human exit 0"
 # --human should print KEY=VALUE lines, not JSON
 if printf '%s' "$RUN_OUTPUT" | grep -q '"ok"'; then
@@ -210,12 +210,12 @@ else
 fi
 
 # ==== 24. config --human path ================================================
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" --human config path
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" --human config path
 assert_exit 0 "$RUN_RC" "config path --human exit 0"
 
 # ==== 25. doctor (valid vault, warns from cli_on_path) ========================
 printf "\n--- doctor (valid vault) ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" doctor
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" doctor
 # Running via `node cli.js` triggers cli_on_path=warn, so exit is 28 not 0
 assert_exit 28 "$RUN_RC" "doctor exits 28 (warn from dev-mode cli_on_path)"
 assert_json_contains "$RUN_OUTPUT" "ok"                "true" "doctor returns ok"
@@ -238,14 +238,14 @@ printf "\n--- doctor (errors) ---\n"
 ERR_HOME=$(mktemp -d)
 mkdir -p "$ERR_HOME/.skillwiki"
 printf 'WIKI_PATH=/no/such/path\n' > "$ERR_HOME/.skillwiki/.env"
-run_cli env HOME="$ERR_HOME" "${CLI[@]}" doctor
+run_cli env -u WIKI_PATH -u WIKI HOME="$ERR_HOME" "${CLI[@]}" doctor
 assert_exit 29 "$RUN_RC" "doctor exits 29 (has errors)"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "2" "doctor reports 2 errors (wiki_path_exists + vault_structure)"
 rm -rf "$ERR_HOME"
 
 # ==== 27. doctor --human (exit code unchanged per N2) ========================
 printf "\n--- doctor --human ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" --human doctor
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" --human doctor
 assert_exit 28 "$RUN_RC" "doctor --human exit matches JSON exit (N2)"
 if printf '%s' "$RUN_OUTPUT" | grep -q '"ok"'; then
   FAIL=$((FAIL + 1)); printf "  \u2717 doctor --human produced JSON\n"
@@ -261,42 +261,42 @@ fi
 
 # ==== 28. config set profile key =================================================
 printf "\n--- config set wiki.finance.path ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config set WIKI_FINANCE_PATH /finance/vault
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" config set WIKI_FINANCE_PATH /finance/vault
 assert_exit 0 "$RUN_RC" "config set profile key succeeds"
 assert_json_contains "$RUN_OUTPUT" "data.key" "WIKI_FINANCE_PATH" "config set returns profile key"
 
 # ==== 29. config get profile key =================================================
 printf "\n--- config get wiki.finance.path ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config get WIKI_FINANCE_PATH
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" config get WIKI_FINANCE_PATH
 assert_exit 0 "$RUN_RC" "config get profile key succeeds"
 assert_json_contains "$RUN_OUTPUT" "data.value" "/finance/vault" "config get returns profile value"
 
 # ==== 30. config set WIKI_DEFAULT ================================================
 printf "\n--- config set WIKI_DEFAULT ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config set WIKI_DEFAULT finance
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" config set WIKI_DEFAULT finance
 assert_exit 0 "$RUN_RC" "config set WIKI_DEFAULT succeeds"
 
 # ==== 31. config list --profiles ================================================
 printf "\n--- config list --profiles ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" config list --profiles
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" config list --profiles
 assert_exit 0 "$RUN_RC" "config list --profiles succeeds"
 assert_json_contains "$RUN_OUTPUT" "ok" "true" "config list --profiles returns ok"
 
 # ==== 32. path --wiki resolves profile ===========================================
 printf "\n--- path --wiki finance ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" path --wiki finance --explain
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" path --wiki finance --explain
 assert_exit 0 "$RUN_RC" "path --wiki finance succeeds"
 assert_json_contains "$RUN_OUTPUT" "data.source" "wiki-profile" "path source is wiki-profile"
 assert_json_contains "$RUN_OUTPUT" "data.path" "/finance/vault" "path resolves to finance vault"
 
 # ==== 33. path --wiki unknown returns exit 35 ====================================
 printf "\n--- path --wiki unknown ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" path --wiki nonexistent
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" path --wiki nonexistent
 assert_exit 35 "$RUN_RC" "path --wiki nonexistent returns exit 35"
 
 # ==== 34. WIKI_DEFAULT selects active profile ====================================
 printf "\n--- path (WIKI_DEFAULT=finance) ---\n"
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" path --explain
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" path --explain
 assert_exit 0 "$RUN_RC" "path with WIKI_DEFAULT succeeds"
 assert_json_contains "$RUN_OUTPUT" "data.source" "wiki-default" "path source is wiki-default"
 assert_json_contains "$RUN_OUTPUT" "data.path" "/finance/vault" "path resolves default profile"
@@ -304,7 +304,7 @@ assert_json_contains "$RUN_OUTPUT" "data.path" "/finance/vault" "path resolves d
 # ==== 35. init --profile =========================================================
 printf "\n--- init --profile crypto ---\n"
 CRYPTO_VAULT=$(mktemp -d)
-run_cli env HOME="$TEMP_HOME" "${CLI[@]}" init \
+run_cli env -u WIKI_PATH -u WIKI HOME="$TEMP_HOME" "${CLI[@]}" init \
   --target "$CRYPTO_VAULT" \
   --domain "Crypto" \
   --taxonomy "research" \
@@ -323,7 +323,7 @@ fi
 printf "\n--- dedup detect ---\n"
 DEDUP_VAULT=$(mktemp -d)
 DEDUP_HOME=$(mktemp -d)
-run_cli env HOME="$DEDUP_HOME" "${CLI[@]}" init --target "$DEDUP_VAULT" --domain "Dedup" --taxonomy "research" --lang en
+run_cli env -u WIKI_PATH -u WIKI HOME="$DEDUP_HOME" "${CLI[@]}" init --target "$DEDUP_VAULT" --domain "Dedup" --taxonomy "research" --lang en
 mkdir -p "$DEDUP_VAULT/raw/articles" "$DEDUP_VAULT/concepts"
 # Two raw files with identical sha256
 cat > "$DEDUP_VAULT/raw/articles/aaa-orig.md" <<'RAWEOF'
@@ -390,7 +390,7 @@ rm -rf "$DEDUP_VAULT" "$DEDUP_HOME"
 printf "\n--- frontmatter-fix dry-run ---\n"
 FMFIX_VAULT=$(mktemp -d)
 FMFIX_HOME=$(mktemp -d)
-run_cli env HOME="$FMFIX_HOME" "${CLI[@]}" init --target "$FMFIX_VAULT" --domain "FmFix" --taxonomy "research" --lang en
+run_cli env -u WIKI_PATH -u WIKI HOME="$FMFIX_HOME" "${CLI[@]}" init --target "$FMFIX_VAULT" --domain "FmFix" --taxonomy "research" --lang en
 # Create a concept page with missing frontmatter fields
 mkdir -p "$FMFIX_VAULT/concepts"
 cat > "$FMFIX_VAULT/concepts/fmfix-page.md" <<'FMEOF'
@@ -533,7 +533,7 @@ assert_exit 4 "$RUN_RC" "fetch-guard rejects http (exit 4)"
 printf "\n--- archive ---\n"
 ARCH_VAULT=$(mktemp -d)
 ARCH_HOME=$(mktemp -d)
-run_cli env HOME="$ARCH_HOME" "${CLI[@]}" init --target "$ARCH_VAULT" --domain "Archive" --taxonomy "research" --lang en
+run_cli env -u WIKI_PATH -u WIKI HOME="$ARCH_HOME" "${CLI[@]}" init --target "$ARCH_VAULT" --domain "Archive" --taxonomy "research" --lang en
 mkdir -p "$ARCH_VAULT/concepts"
 cat > "$ARCH_VAULT/concepts/to-archive.md" <<'ARCHEOF'
 ---
@@ -574,7 +574,7 @@ assert_exit 30 "$RUN_RC" "archive not found exits 30 (ARCHIVE_TARGET_NOT_FOUND)"
 printf "\n--- audit clean ---\n"
 AUDIT_VAULT=$(mktemp -d)
 AUDIT_HOME=$(mktemp -d)
-run_cli env HOME="$AUDIT_HOME" "${CLI[@]}" init --target "$AUDIT_VAULT" --domain "Audit" --taxonomy "research" --lang en
+run_cli env -u WIKI_PATH -u WIKI HOME="$AUDIT_HOME" "${CLI[@]}" init --target "$AUDIT_VAULT" --domain "Audit" --taxonomy "research" --lang en
 # Create a raw source and a concept page citing it
 mkdir -p "$AUDIT_VAULT/raw/articles"
 cat > "$AUDIT_VAULT/raw/articles/audit-source.md" <<'RAWEOF'
