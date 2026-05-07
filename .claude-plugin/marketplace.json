@@ -6,13 +6,21 @@
   },
   "metadata": {
     "description": "Single-plugin marketplace for skillwiki — project-aware Karpathy-style knowledge base for Claude Code.",
-    "version": "0.2.0"
+<<<<<<< Updated upstream
+    "version": "0.2.1-beta.1"
+=======
+    "version": "0.2.1-beta.1"
+>>>>>>> Stashed changes
   },
   "plugins": [
     {
       "name": "skillwiki",
       "description": "11 prompt-only skills (wiki-*, proj-*, using-skillwiki) backed by the deterministic skillwiki CLI.",
-      "version": "0.2.0",
+<<<<<<< Updated upstream
+      "version": "0.2.1-beta.1",
+=======
+      "version": "0.2.1-beta.1",
+>>>>>>> Stashed changes
       "source": "./packages/skills",
       "strict": true,
       "author": {

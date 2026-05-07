@@ -1,5 +1,5 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
@@ -7,6 +7,7 @@ import { parseDotenvFile } from "../utils/dotenv.js";
 import { configPath } from "./config.js";
 import { latestFromCache } from "../utils/auto-update.js";
 import { semverGt } from "../utils/semver.js";
+import { findPlugin } from "../utils/plugin-registry.js";
 
 export type CheckStatus = "pass" | "warn" | "error";
 
@@ -101,15 +102,21 @@ function checkVaultStructure(resolvedPath: string | undefined): CheckResult {
 }
 
 function checkSkillsInstalled(home: string): CheckResult {
+  const plugin = findPlugin(home);
+  if (plugin) {
+    const found = findSkillMd(plugin.installPath);
+    if (found.length > 0) {
+      return check("pass", "skills_installed", "Skills installed", `${found.length} SKILL.md file(s) found (plugin v${plugin.version})`);
+    }
+  }
   const skillsDir = join(home, ".claude", "skills");
-  if (!existsSync(skillsDir)) {
-    return check("warn", "skills_installed", "Skills installed", `${skillsDir} not found`);
+  if (existsSync(skillsDir)) {
+    const found = findSkillMd(skillsDir);
+    if (found.length > 0) {
+      return check("pass", "skills_installed", "Skills installed", `${found.length} SKILL.md file(s) found (CLI install)`);
+    }
   }
-  const found = findSkillMd(skillsDir);
-  if (found.length > 0) {
-    return check("pass", "skills_installed", "Skills installed", `${found.length} SKILL.md file(s) found`);
-  }
-  return check("warn", "skills_installed", "Skills installed", "No SKILL.md files found in ~/.claude/skills/");
+  return check("warn", "skills_installed", "Skills installed", "No SKILL.md files found");
 }
 
 function checkNpmUpdate(home: string, currentVersion: string): CheckResult {
@@ -124,33 +131,24 @@ function checkNpmUpdate(home: string, currentVersion: string): CheckResult {
 }
 
 function checkPluginVersionDrift(home: string, currentVersion: string): CheckResult {
-  const pluginJsonPath = join(home, ".claude", "plugins", "cache", "llm-wiki", "plugin.json");
-  if (!existsSync(pluginJsonPath)) {
-    return check("pass", "plugin_version_drift", "Plugin/CLI version", "Plugin cache not found — plugin not installed");
+  const plugin = findPlugin(home);
+  if (!plugin) {
+    return check("pass", "plugin_version_drift", "Plugin/CLI version", "Plugin not installed — CLI only");
   }
-  try {
-    const content = readFileSync(pluginJsonPath, { encoding: "utf8" });
-    const pluginData = JSON.parse(content) as { version?: string };
-    const pluginVersion = pluginData.version;
-    if (!pluginVersion) {
-      return check("pass", "plugin_version_drift", "Plugin/CLI version", "Plugin version not found in cache");
-    }
-    if (pluginVersion === currentVersion) {
-      return check("pass", "plugin_version_drift", "Plugin/CLI version", `Both at v${currentVersion}`);
-    }
-    // Versions differ — warn
-    const updateCmd = semverGt(pluginVersion, currentVersion)
-      ? "npm install -g skillwiki@beta"
-      : "claude plugin update skillwiki@llm-wiki";
-    return check(
-      "warn",
-      "plugin_version_drift",
-      "Plugin/CLI version",
-      `Plugin v${pluginVersion} ≠ CLI v${currentVersion} — run \`${updateCmd}\``
-    );
-  } catch {
-    return check("pass", "plugin_version_drift", "Plugin/CLI version", "Could not read plugin cache");
+  const pluginVersion = plugin.version;
+  if (pluginVersion === currentVersion) {
+    return check("pass", "plugin_version_drift", "Plugin/CLI version", `Both at v${currentVersion}`);
   }
+  // Versions differ — warn
+  const updateCmd = semverGt(pluginVersion, currentVersion)
+    ? "npm install -g skillwiki@beta"
+    : "claude plugin update skillwiki@llm-wiki";
+  return check(
+    "warn",
+    "plugin_version_drift",
+    "Plugin/CLI version",
+    `Plugin v${pluginVersion} ≠ CLI v${currentVersion} — run \`${updateCmd}\``
+  );
 }
 
 async function checkProfiles(home: string): Promise<CheckResult> {

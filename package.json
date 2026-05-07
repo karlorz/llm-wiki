@@ -1,7 +1,11 @@
 {
   "name": "skillwiki-monorepo",
   "private": true,
-  "version": "0.2.0",
+<<<<<<< Updated upstream
+  "version": "0.2.1-beta.1",
+=======
+  "version": "0.2.1-beta.1",
+>>>>>>> Stashed changes
   "workspaces": [
     "packages/shared",
     "packages/cli",

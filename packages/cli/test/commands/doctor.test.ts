@@ -12,6 +12,33 @@ function home(): string {
   return h;
 }
 
+function homeWithPlugin(version: string): string {
+  const h = mkdtempSync(join(tmpdir(), "home-"));
+  mkdirSync(join(h, ".skillwiki"), { recursive: true });
+  // Create plugin cache directory with SKILL.md files
+  const pluginDir = join(h, ".claude", "plugins", "cache", "llm-wiki", "skillwiki", version);
+  mkdirSync(join(pluginDir, "using-skillwiki"), { recursive: true });
+  writeFileSync(join(pluginDir, "using-skillwiki", "SKILL.md"), "# Using Skillwiki\n");
+  mkdirSync(join(pluginDir, "wiki-init"), { recursive: true });
+  writeFileSync(join(pluginDir, "wiki-init", "SKILL.md"), "# Wiki Init\n");
+  // Create installed_plugins.json
+  const registryPath = join(h, ".claude", "plugins", "installed_plugins.json");
+  mkdirSync(join(h, ".claude", "plugins"), { recursive: true });
+  writeFileSync(registryPath, JSON.stringify({
+    version: 2,
+    plugins: {
+      "skillwiki@llm-wiki": [{
+        scope: "user",
+        installPath: pluginDir,
+        version,
+        installedAt: "2026-05-06T02:47:57.953Z",
+        lastUpdated: "2026-05-07T06:14:46.874Z",
+      }],
+    },
+  }));
+  return h;
+}
+
 const SCHEMA = `# Vault Schema\n\n## Tag Taxonomy\n\n\`\`\`yaml\ntaxonomy:\n  - model\n\`\`\`\n`;
 
 function fullVault(): string {
@@ -142,22 +169,19 @@ describe("runDoctor", () => {
     }
   });
 
-  it("plugin_version_drift check passes when no plugin cache", async () => {
+  it("plugin_version_drift check passes when no plugin installed", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
       expect(drift?.status).toBe("pass");
-      expect(drift?.detail).toContain("Plugin cache not found");
+      expect(drift?.detail).toContain("CLI only");
     }
   });
 
   it("plugin_version_drift check passes when versions match", async () => {
-    const h = home();
-    const pluginDir = join(h, ".claude", "plugins", "cache", "llm-wiki");
-    mkdirSync(pluginDir, { recursive: true });
-    writeFileSync(join(pluginDir, "plugin.json"), JSON.stringify({ version: "0.2.0-beta.15" }));
+    const h = homeWithPlugin("0.2.0-beta.15");
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
@@ -168,10 +192,7 @@ describe("runDoctor", () => {
   });
 
   it("plugin_version_drift check warns when versions differ", async () => {
-    const h = home();
-    const pluginDir = join(h, ".claude", "plugins", "cache", "llm-wiki");
-    mkdirSync(pluginDir, { recursive: true });
-    writeFileSync(join(pluginDir, "plugin.json"), JSON.stringify({ version: "0.2.0-beta.99" }));
+    const h = homeWithPlugin("0.2.0-beta.99");
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
@@ -179,6 +200,17 @@ describe("runDoctor", () => {
       expect(drift?.status).toBe("warn");
       expect(drift?.detail).toContain("Plugin v0.2.0-beta.99");
       expect(drift?.detail).toContain("CLI v0.2.0-beta.15");
+    }
+  });
+
+  it("skills_installed passes when plugin skills found", async () => {
+    const h = homeWithPlugin("0.2.0-beta.15");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const skills = r.result.data.checks.find(c => c.id === "skills_installed");
+      expect(skills?.status).toBe("pass");
+      expect(skills?.detail).toContain("plugin v0.2.0-beta.15");
     }
   });
 

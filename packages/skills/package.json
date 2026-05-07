@@ -1,6 +1,10 @@
 {
   "name": "@skillwiki/skills",
-  "version": "0.2.0",
+<<<<<<< Updated upstream
+  "version": "0.2.1-beta.1",
+=======
+  "version": "0.2.1-beta.1",
+>>>>>>> Stashed changes
   "private": true,
   "files": [
     "wiki-*",

@@ -1,6 +1,10 @@
 {
   "name": "skillwiki",
-  "version": "0.2.0",
+<<<<<<< Updated upstream
+  "version": "0.2.1-beta.1",
+=======
+  "version": "0.2.1-beta.1",
+>>>>>>> Stashed changes
   "type": "module",
   "bin": {
     "skillwiki": "dist/cli.js"
