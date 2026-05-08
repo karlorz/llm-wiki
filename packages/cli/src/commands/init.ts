@@ -102,13 +102,18 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   try { existingEnvRaw = await readFile(envPath, "utf8"); } catch { /* new file */ }
   const existingEnv = parseDotenvText(existingEnvRaw);
   const swDotenvHadPath = existingEnv.WIKI_PATH !== undefined;
-  if (!input.profile && existingEnv.WIKI_PATH !== undefined && existingEnv.WIKI_PATH !== target && !input.force) {
+  // When --target is explicit (flag is set), the user is choosing a specific vault location
+  // without intending to change their default config — skip env conflict checks.
+  // Also skip when --no-env is set (no env writes will happen anyway).
+  const explicitTarget = !!input.flag;
+  const skipConflictCheck = explicitTarget || !!input.noEnv;
+  if (!input.profile && !skipConflictCheck && existingEnv.WIKI_PATH !== undefined && existingEnv.WIKI_PATH !== target && !input.force) {
     return {
       exitCode: ExitCode.ENV_WRITE_CONFLICT,
       result: err("ENV_WRITE_CONFLICT", { key: "WIKI_PATH", existing: existingEnv.WIKI_PATH, attempted: target })
     };
   }
-  if (!input.profile && existingEnv.WIKI_LANG !== undefined && existingEnv.WIKI_LANG !== canonicalLang && !input.force) {
+  if (!input.profile && !skipConflictCheck && existingEnv.WIKI_LANG !== undefined && existingEnv.WIKI_LANG !== canonicalLang && !input.force) {
     return {
       exitCode: ExitCode.ENV_WRITE_CONFLICT,
       result: err("ENV_WRITE_CONFLICT", { key: "WIKI_LANG", existing: existingEnv.WIKI_LANG, attempted: canonicalLang })
@@ -223,7 +228,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   });
   if (err2) return err2;
 
-  const skipEnv = !!input.noEnv;
+  const skipEnv = !!input.noEnv || (explicitTarget && !input.profile && swDotenvHadPath && !input.force);
   let envWritten = "";
   if (!skipEnv) {
     try {

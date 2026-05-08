@@ -137,7 +137,7 @@ describe("runInit", () => {
     if (r.result.ok) expect(r.result.data.imported_from_hermes).toBe(false);
   });
 
-  it("ENV_WRITE_CONFLICT (24) when ~/.skillwiki/.env already binds a different WIKI_PATH", async () => {
+  it("explicit --target skips ENV_WRITE_CONFLICT for WIKI_PATH, env write skipped", async () => {
     const h = home();
     const target = tmp();
     writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/different/path\n");
@@ -145,16 +145,48 @@ describe("runInit", () => {
       flag: target, envValue: undefined, home: h, templates: TEMPLATES,
       domain: "X", taxonomy: undefined, lang: undefined, force: false
     });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.env_skipped).toBe(true);
+    }
+    const env = readFileSync(join(h, ".skillwiki", ".env"), "utf8");
+    expect(env).toContain("WIKI_PATH=/different/path");
+  });
+
+  it("ENV_WRITE_CONFLICT (24) when WIKI_PATH differs and no explicit --target", async () => {
+    const h = home();
+    const target = tmp();
+    writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/different/path\n");
+    const r = await runInit({
+      flag: undefined, envValue: target, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: undefined, force: false
+    });
     expect(r.exitCode).toBe(24);
     if (!r.result.ok) expect(r.result.error).toBe("ENV_WRITE_CONFLICT");
   });
 
-  it("ENV_WRITE_CONFLICT (24) when ~/.skillwiki/.env already binds a different WIKI_LANG", async () => {
+  it("explicit --target skips ENV_WRITE_CONFLICT for WIKI_LANG, env write skipped", async () => {
     const h = home();
     const target = tmp();
     writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${target}\nWIKI_LANG=zh-Hant\n`);
     const r = await runInit({
       flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: "ja", force: false
+    });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.env_skipped).toBe(true);
+    }
+    const env = readFileSync(join(h, ".skillwiki", ".env"), "utf8");
+    expect(env).toContain("WIKI_LANG=zh-Hant");
+  });
+
+  it("ENV_WRITE_CONFLICT (24) when WIKI_LANG differs and no explicit --target", async () => {
+    const h = home();
+    const target = tmp();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${target}\nWIKI_LANG=zh-Hant\n`);
+    const r = await runInit({
+      flag: undefined, envValue: target, home: h, templates: TEMPLATES,
       domain: "X", taxonomy: undefined, lang: "ja", force: false
     });
     expect(r.exitCode).toBe(24);
