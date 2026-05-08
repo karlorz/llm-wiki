@@ -139,12 +139,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 14 checks", async () => {
+  it("always returns exactly 15 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(14);
+      expect(r.result.data.checks).toHaveLength(15);
     }
   });
 
@@ -291,6 +291,33 @@ describe("runDoctor", () => {
       expect(sync?.status).toBe("pass");
       expect(sync?.detail).toContain("Last push:");
       expect(sync?.detail).toContain("day(s) ago");
+    }
+  });
+
+  it("dsstore_clean passes when no .DS_Store in raw/", async () => {
+    const h = home();
+    const v = fullVault();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const ds = r.result.data.checks.find(c => c.id === "dsstore_clean");
+      expect(ds?.status).toBe("pass");
+      expect(ds?.detail).toContain("No .DS_Store files found");
+    }
+  });
+
+  it("dsstore_clean warns when .DS_Store in raw/", async () => {
+    const h = home();
+    const v = fullVault();
+    writeFileSync(join(v, "raw", ".DS_Store"), "fake");
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const ds = r.result.data.checks.find(c => c.id === "dsstore_clean");
+      expect(ds?.status).toBe("warn");
+      expect(ds?.detail).toContain(".DS_Store file(s) found");
     }
   });
 });

@@ -221,6 +221,32 @@ function checkObsidianTemplates(resolvedPath: string | undefined): CheckResult {
   return check("warn", "obsidian_templates", "Obsidian templates", `Missing: ${missing.join(", ")} — run \`skillwiki init\` to create`);
 }
 
+function checkDotStoreClean(resolvedPath: string | undefined): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("error", "dsstore_clean", "No .DS_Store in raw/", "Cannot check — WIKI_PATH not resolved");
+  }
+  const rawDir = join(resolvedPath, "raw");
+  if (!existsSync(rawDir)) {
+    return check("pass", "dsstore_clean", "No .DS_Store in raw/", "raw/ directory not found — check skipped");
+  }
+  const found: string[] = [];
+  (function walk(dir: string, rel: string): void {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.name === ".DS_Store") {
+        found.push(rel ? `${rel}/.DS_Store` : ".DS_Store");
+      } else if (entry.isDirectory()) {
+        walk(join(dir, entry.name), rel ? `${rel}/${entry.name}` : entry.name);
+      }
+    }
+  })(rawDir, "");
+  if (found.length === 0) {
+    return check("pass", "dsstore_clean", "No .DS_Store in raw/", "No .DS_Store files found");
+  }
+  return check("warn", "dsstore_clean", "No .DS_Store in raw/", `${found.length} .DS_Store file(s) found — remove with: find ${rawDir} -name .DS_Store -delete`);
+}
+
 function checkSyncLastPush(resolvedPath: string | undefined): CheckResult {
   if (resolvedPath === undefined) {
     return check("error", "sync_last_push", "Vault sync recency", "Cannot check — WIKI_PATH not resolved");
@@ -299,6 +325,7 @@ export async function runDoctor(
   checks.push(checkObsidianTemplates(resolvedPath));
   checks.push(checkVaultGitRemote(resolvedPath));
   checks.push(checkSyncLastPush(resolvedPath));
+  checks.push(checkDotStoreClean(resolvedPath));
   checks.push(checkSkillsInstalled(input.home, input.cwd));
   checks.push(checkNpmUpdate(input.home, input.currentVersion));
   checks.push(checkPluginVersionDrift(input.home, input.currentVersion));

@@ -43,6 +43,8 @@ import { runStatus } from "./commands/status.js";
 import { runSeed } from "./commands/seed.js";
 import { runCanvasGenerate } from "./commands/canvas.js";
 import { runQuery } from "./commands/query.js";
+import { runIndexLinkFormat } from "./commands/index-link-format.js";
+import { runTopicMapCheck } from "./commands/topic-map-check.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 import { triggerAutoUpdate } from "./utils/auto-update.js";
 import { parseDotenvFile } from "./utils/dotenv.js";
@@ -253,6 +255,25 @@ program.command("index-check [vault]")
     else emit(await runIndexCheck({ vault: v.vault }));
   });
 
+program.command("index-link-format [vault]")
+  .description("check index.md for markdown links that should be wikilinks")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runIndexLinkFormat({ vault: v.vault }));
+  });
+
+program.command("topic-map-check [vault]")
+  .description("check whether a topic map page is recommended based on page count")
+  .option("--threshold <n>", "page count threshold", (s) => parseInt(s, 10), 200)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runTopicMapCheck({ vault: v.vault, threshold: opts.threshold }));
+  });
+
 program
   .command("stale [vault]")
   .description("identify stale transcripts and incomplete work items")
@@ -349,6 +370,8 @@ program
 program
   .command("status [vault]")
   .description("output vault diagnostics")
+  .option("--human", "render terminal-readable output instead of JSON")
+  .option("--json", "output as JSON (default)")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
