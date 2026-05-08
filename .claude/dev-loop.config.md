@@ -16,6 +16,16 @@ phase: 3
 slug: llm-wiki
 vault: ~/wiki
 release_branch: dev
+knowledge_layer: skillwiki
+
+# Knowledge backend registry — explicit declaration for BACKEND_CAPS resolution
+# When absent, dev-loop derives BACKEND_CAPS from knowledge_layer + vault (backward-compatible)
+knowledge_backends:
+  skillwiki:
+    vault: ~/wiki
+    cli_entry: npx tsx packages/cli/src/cli.ts  # local dev override
+  none:
+    work_dir: .claude/dev-loop-work/
 ```
 
 ## Code layout
