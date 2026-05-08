@@ -554,11 +554,11 @@ backupCmd
     const dotenv = await parseDotenvFile(configPath(home));
     emit(await runBackupSync({
       vault: v.vault,
-      bucket: opts.bucket ?? dotenv.get("BACKUP_BUCKET") ?? "",
-      endpoint: opts.endpoint ?? dotenv.get("BACKUP_ENDPOINT") ?? "",
-      region: opts.region ?? dotenv.get("BACKUP_REGION") ?? "us-east-1",
-      accessKeyId: dotenv.get("BACKUP_ACCESS_KEY_ID") ?? "",
-      secretAccessKey: dotenv.get("BACKUP_SECRET_ACCESS_KEY") ?? "",
+      bucket: opts.bucket ?? dotenv["BACKUP_BUCKET"] ?? "",
+      endpoint: opts.endpoint ?? dotenv["BACKUP_ENDPOINT"] ?? "",
+      region: opts.region ?? dotenv["BACKUP_REGION"] ?? "us-east-1",
+      accessKeyId: dotenv["BACKUP_ACCESS_KEY_ID"] ?? "",
+      secretAccessKey: dotenv["BACKUP_SECRET_ACCESS_KEY"] ?? "",
       dryRun: opts.dryRun,
       prune: opts.prune,
     }));
@@ -579,11 +579,11 @@ backupCmd
     const dotenv = await parseDotenvFile(configPath(home));
     emit(await runBackupRestore({
       vault: v.vault,
-      bucket: opts.bucket ?? dotenv.get("BACKUP_BUCKET") ?? "",
-      endpoint: opts.endpoint ?? dotenv.get("BACKUP_ENDPOINT") ?? "",
-      region: opts.region ?? dotenv.get("BACKUP_REGION") ?? "us-east-1",
-      accessKeyId: dotenv.get("BACKUP_ACCESS_KEY_ID") ?? "",
-      secretAccessKey: dotenv.get("BACKUP_SECRET_ACCESS_KEY") ?? "",
+      bucket: opts.bucket ?? dotenv["BACKUP_BUCKET"] ?? "",
+      endpoint: opts.endpoint ?? dotenv["BACKUP_ENDPOINT"] ?? "",
+      region: opts.region ?? dotenv["BACKUP_REGION"] ?? "us-east-1",
+      accessKeyId: dotenv["BACKUP_ACCESS_KEY_ID"] ?? "",
+      secretAccessKey: dotenv["BACKUP_SECRET_ACCESS_KEY"] ?? "",
       target: opts.target,
     }));
   });
