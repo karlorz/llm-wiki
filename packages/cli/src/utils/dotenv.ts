@@ -1,7 +1,11 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
-export const CONFIG_KEYS = ["WIKI_PATH", "WIKI_LANG"] as const;
+export const CONFIG_KEYS = [
+  "WIKI_PATH", "WIKI_LANG",
+  "BACKUP_ENDPOINT", "BACKUP_BUCKET", "BACKUP_REGION",
+  "BACKUP_ACCESS_KEY_ID", "BACKUP_SECRET_ACCESS_KEY",
+] as const;
 export type ConfigKey = typeof CONFIG_KEYS[number];
 const _whitelist = new Set<string>(CONFIG_KEYS);
 
