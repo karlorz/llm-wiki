@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
 import { Command } from "commander";
 import type { Result } from "@skillwiki/shared";
+import { ExitCode } from "@skillwiki/shared";
 import { printJson, printHuman } from "./utils/output.js";
+import { getDeprecatedWarnings } from "./utils/deprecation.js";
 import { runHash } from "./commands/hash.js";
 import { runFetchGuard } from "./commands/fetch-guard.js";
 import { runValidate } from "./commands/validate.js";
@@ -30,8 +32,20 @@ import { runFrontmatterFix } from "./commands/frontmatter-fix.js";
 import { runUpdate } from "./commands/update.js";
 import { runTranscripts } from "./commands/transcripts.js";
 import { runProjectIndex } from "./commands/project-index.js";
+import { runCompound, runCompoundList, runCompoundDelete } from "./commands/compound.js";
+import { runObserve } from "./commands/observe.js";
+import { runIngest } from "./commands/ingest.js";
+import { runTagSync } from "./commands/tag-sync.js";
+import { runSyncStatus, runSyncPush, runSyncPull } from "./commands/sync.js";
+import { runBackupSync, runBackupRestore } from "./commands/backup.js";
+import { runStatus } from "./commands/status.js";
+import { runSeed } from "./commands/seed.js";
+import { runCanvasGenerate } from "./commands/canvas.js";
+import { runQuery } from "./commands/query.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 import { triggerAutoUpdate } from "./utils/auto-update.js";
+import { parseDotenvFile } from "./utils/dotenv.js";
+import { configPath } from "./commands/config.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
@@ -44,11 +58,25 @@ function emit<T>(r: { exitCode: number; result: Result<T> }): never {
   process.exit(r.exitCode);
 }
 
-program.command("hash <file>").action(async (file) => emit(await runHash({ file })));
+program.command("hash <file>").description("compute SHA-256 hash of a vault page body").action(async (file) => emit(await runHash({ file })));
 
-program.command("fetch-guard <url>").action(async (url) => emit(await runFetchGuard({ url })));
+program.command("fetch-guard <url>").description("check if a URL passes fetch guard rules and sanitize secrets").action(async (url) => emit(await runFetchGuard({ url })));
 
-program.command("validate <file>").action(async (file) => emit(await runValidate({ file })));
+program
+  .command("validate <file>")
+  .description("validate vault page frontmatter against its detected schema")
+  .option("--apply", "auto-update vault index.md and log.md after successful validation", false)
+  .option("--vault <dir>", "vault root directory (required with --apply)")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (file, opts) => {
+    let vault: string | undefined;
+    if (opts.apply) {
+      const v = await resolveVaultArg(opts.vault, opts.wiki);
+      if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+      else vault = v.vault;
+    }
+    emit(await runValidate({ file, apply: !!opts.apply, vault }));
+  });
 
 program
   .command("graph")
@@ -58,10 +86,43 @@ program
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => emit(await runGraphBuild({ vault, out: opts.out })));
 
-program.command("overlap <vault>").action(async (vault) => emit(await runOverlap({ vault })));
+const canvasCmd = program.command("canvas").description("manage Obsidian canvas files");
+
+canvasCmd
+  .command("generate [vault]")
+  .description("generate .canvas from graph.json")
+  .option("--graph-path <path>", "explicit path to graph.json")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runCanvasGenerate({ vault: v.vault, graphPath: opts.graphPath }));
+  });
+
+program
+  .command("overlap [vault]")
+  .description("detect typed-knowledge pages that share the same raw sources")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runOverlap({ vault: v.vault }));
+  });
+
+program
+  .command("query <text> [vault]")
+  .description("score and rank vault pages by relevance to a query")
+  .option("--limit <n>", "max results to return", (s) => parseInt(s, 10), 10)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (text, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runQuery({ text, vault: v.vault, limit: opts.limit }));
+  });
 
 program
   .command("orphans [vault]")
+  .description("find pages not referenced by any other page")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => emit(await runOrphans({
     vault,
@@ -70,10 +131,11 @@ program
     wiki: opts.wiki
   })));
 
-program.command("audit <file>").action(async (file) => emit(await runAudit({ file })));
+program.command("audit <file>").description("audit citation markers and source provenance for a vault page").action(async (file) => emit(await runAudit({ file })));
 
 program
   .command("install")
+  .description("install skillwiki SKILL.md files into ~/.claude/skills/")
   .option("--target <dir>", "target install directory", `${process.env.HOME ?? ""}/.claude/skills/`)
   .option("--dry-run", "preview only", false)
   .option("--skills-root <dir>", "source skills directory (defaults to packaged)")
@@ -85,6 +147,7 @@ program
 
 program
   .command("path")
+  .description("show the resolved vault path")
   .option("--vault <dir>", "explicit vault override (runtime)")
   .option("--target <dir>", "explicit target override (init-time)")
   .option("--wiki <name>", "wiki profile name")
@@ -105,6 +168,7 @@ program
 
 program
   .command("lang")
+  .description("get or set the vault language")
   .option("--lang <code>", "explicit language override")
   .option("--explain", "include resolution chain in output", false)
   .action(async (opts) => {
@@ -118,6 +182,7 @@ program
 
 program
   .command("init")
+  .description("bootstrap a new vault with SCHEMA.md, index.md, log.md")
   .option("--target <dir>", "explicit target directory")
   .requiredOption("--domain <text>", "knowledge domain seed")
   .option("--taxonomy <csv>", "comma-separated tag list")
@@ -161,6 +226,7 @@ async function resolveVaultArg(arg: string | undefined, wiki?: string): Promise<
 }
 
 program.command("links [vault]")
+  .description("check wikilink integrity across the vault")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -169,6 +235,7 @@ program.command("links [vault]")
   });
 
 program.command("tag-audit [vault]")
+  .description("audit tag taxonomy consistency")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -177,6 +244,7 @@ program.command("tag-audit [vault]")
   });
 
 program.command("index-check [vault]")
+  .description("verify index.md entries match actual vault pages")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -186,16 +254,19 @@ program.command("index-check [vault]")
 
 program
   .command("stale [vault]")
-  .option("--days <n>", "staleness threshold in days", (s) => parseInt(s, 10), 90)
+  .description("identify stale transcripts and incomplete work items")
+  .option("--archive", "move stale items to _archive/", false)
+  .option("--days <n>", "staleness threshold in days", (s) => parseInt(s, 10), 3)
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runStale({ vault: v.vault, days: opts.days }));
+    else emit(await runStale({ vault: v.vault, days: opts.days, archive: !!opts.archive }));
   });
 
 program
   .command("pagesize [vault]")
+  .description("report page sizes and flag oversized pages")
   .option("--lines <n>", "max body lines", (s) => parseInt(s, 10), 200)
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
@@ -206,6 +277,7 @@ program
 
 program
   .command("log-rotate [vault]")
+  .description("rotate or trim the vault log file")
   .option("--threshold <n>", "entry count threshold", (s) => parseInt(s, 10), 500)
   .option("--apply", "actually rotate", false)
   .option("--wiki <name>", "wiki profile name")
@@ -217,6 +289,7 @@ program
 
 program
   .command("lint [vault]")
+  .description("run all vault health checks")
   .option("--days <n>", "stale threshold", (s) => parseInt(s, 10), 90)
   .option("--lines <n>", "pagesize threshold", (s) => parseInt(s, 10), 200)
   .option("--log-threshold <n>", "log rotation threshold", (s) => parseInt(s, 10), 500)
@@ -270,6 +343,21 @@ program
     currentVersion: pkg.version,
     cwd: process.cwd(),
   })));
+
+// status
+program
+  .command("status [vault]")
+  .description("output vault diagnostics")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runStatus({
+      vault: v.vault,
+      home: process.env.HOME ?? "",
+      langEnvValue: process.env.WIKI_LANG,
+    }));
+  });
 
 // archive
 program
@@ -365,10 +453,205 @@ program
     else emit(await runProjectIndex({ vault: v.vault, slug, apply: !!opts.apply }));
   });
 
+// compound — grouped under a parent command
+const compoundCmd = program.command("compound").description("manage project compound entries");
+
+compoundCmd
+  .command("promote [vault]")
+  .description("promote retros with Generalize?: yes to compound entries")
+  .requiredOption("--project <slug>", "project slug (e.g., llm-wiki)")
+  .option("--dry-run", "preview promotions without writing files", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runCompound({ vault: v.vault, project: opts.project, dryRun: !!opts.dryRun }));
+  });
+
+compoundCmd
+  .command("list [vault]")
+  .description("list compound entries for a project")
+  .requiredOption("--project <slug>", "project slug (e.g., llm-wiki)")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runCompoundList({ vault: v.vault, project: opts.project }));
+  });
+
+compoundCmd
+  .command("delete <entry> [vault]")
+  .description("delete a compound entry and regenerate knowledge index")
+  .requiredOption("--project <slug>", "project slug (e.g., llm-wiki)")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (entry, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runCompoundDelete({ vault: v.vault, project: opts.project, entry }));
+  });
+
+// tag-sync
+program
+  .command("tag-sync [vault]")
+  .description("mirror frontmatter enum values to nested Obsidian tags")
+  .option("--dry-run", "preview changes without writing", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runTagSync({ vault: v.vault, dryRun: !!opts.dryRun }));
+  });
+
+// sync — grouped under a parent command
+const syncCmd = program.command("sync").description("manage vault sync");
+
+syncCmd
+  .command("status [vault]")
+  .description("check vault git sync status")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(runSyncStatus({ vault: v.vault }));
+  });
+
+syncCmd
+  .command("push [vault]")
+  .description("lint, commit, and push vault changes to remote")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runSyncPush({ vault: v.vault }));
+  });
+
+syncCmd
+  .command("pull [vault]")
+  .description("pull remote vault changes and lint")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runSyncPull({ vault: v.vault }));
+  });
+
+// backup — grouped under a parent command
+const backupCmd = program.command("backup").description("manage S3-compatible remote backup");
+
+backupCmd
+  .command("sync [vault]")
+  .description("sync vault to S3-compatible remote backup")
+  .option("--dry-run", "list actions without executing")
+  .option("--bucket <name>", "S3 bucket name")
+  .option("--endpoint <url>", "S3 endpoint URL")
+  .option("--region <region>", "S3 region", "us-east-1")
+  .option("--prune", "delete orphaned S3 objects not in vault", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
+    const dotenv = await parseDotenvFile(configPath(home));
+    emit(await runBackupSync({
+      vault: v.vault,
+      bucket: opts.bucket ?? dotenv.get("BACKUP_BUCKET") ?? "",
+      endpoint: opts.endpoint ?? dotenv.get("BACKUP_ENDPOINT") ?? "",
+      region: opts.region ?? dotenv.get("BACKUP_REGION") ?? "us-east-1",
+      accessKeyId: dotenv.get("BACKUP_ACCESS_KEY_ID") ?? "",
+      secretAccessKey: dotenv.get("BACKUP_SECRET_ACCESS_KEY") ?? "",
+      dryRun: opts.dryRun,
+      prune: opts.prune,
+    }));
+  });
+
+backupCmd
+  .command("restore [vault]")
+  .description("restore vault from S3-compatible remote backup")
+  .option("--bucket <name>", "S3 bucket name")
+  .option("--endpoint <url>", "S3 endpoint URL")
+  .option("--region <region>", "S3 region", "us-east-1")
+  .option("--target <dir>", "restore target directory (defaults to vault)")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
+    const dotenv = await parseDotenvFile(configPath(home));
+    emit(await runBackupRestore({
+      vault: v.vault,
+      bucket: opts.bucket ?? dotenv.get("BACKUP_BUCKET") ?? "",
+      endpoint: opts.endpoint ?? dotenv.get("BACKUP_ENDPOINT") ?? "",
+      region: opts.region ?? dotenv.get("BACKUP_REGION") ?? "us-east-1",
+      accessKeyId: dotenv.get("BACKUP_ACCESS_KEY_ID") ?? "",
+      secretAccessKey: dotenv.get("BACKUP_SECRET_ACCESS_KEY") ?? "",
+      target: opts.target,
+    }));
+  });
+
+// seed
+program
+  .command("seed [vault]")
+  .description("populate a vault with example content")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runSeed({ vault: v.vault }));
+  });
+
+// observe
+program
+  .command("observe [vault]")
+  .description("create a raw transcript observation entry")
+  .requiredOption("--text <text>", "observation text")
+  .option("--kind <kind>", "observation kind (note|bug|task|idea|session-log)", "note")
+  .option("--project <slug>", "associated project slug")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runObserve({
+      vault: v.vault,
+      text: opts.text,
+      kind: opts.kind,
+      project: opts.project
+    }));
+  });
+
+// ingest
+program
+  .command("ingest <source>")
+  .description("ingest a source URL or local file into the vault")
+  .requiredOption("--vault <path>", "vault root directory")
+  .requiredOption("--type <type>", "typed-knowledge type (entity|concept|comparison|query)")
+  .requiredOption("--title <title>", "page title")
+  .option("--tags <csv>", "comma-separated tags")
+  .option("--provenance <provenance>", "provenance (research|project)")
+  .option("--dry-run", "preview without writing files", false)
+  .action(async (source, opts) => {
+    const tags = typeof opts.tags === "string"
+      ? opts.tags.split(",").map((s: string) => s.trim()).filter((s: string) => s.length > 0)
+      : [];
+    emit(await runIngest({
+      source,
+      vault: opts.vault,
+      type: opts.type,
+      title: opts.title,
+      tags,
+      provenance: opts.provenance,
+      dryRun: !!opts.dryRun,
+    }));
+  });
+
+// Emit deprecation warnings for any installed skills marked deprecated
+for (const w of getDeprecatedWarnings(process.env.HOME ?? "")) {
+  process.stderr.write(w + "\n");
+}
+
 // Background auto-update check (non-blocking, 24h cache)
 triggerAutoUpdate(process.env.HOME ?? "", pkg.version);
 
 program.parseAsync(process.argv).catch((e) => {
   process.stdout.write(JSON.stringify({ ok: false, error: "INTERNAL", detail: { message: String(e) } }) + "\n");
-  process.exit(1);
+  process.exit(ExitCode.INTERNAL_ERROR);
 });
