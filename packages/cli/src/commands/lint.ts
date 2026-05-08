@@ -237,11 +237,20 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
 
           // Build or append ## Sources section
           const dedupedMarkers = [...new Set(inlineMarkers)];
-          const sourceLines = dedupedMarkers.map(m => `- ${m}`);
           if (inSrc) {
-            // Append to existing Sources section
-            newBody = newBody.trimEnd() + "\n" + sourceLines.join("\n") + "\n";
+            // Dedup against existing Sources entries before appending
+            const existingSources = new Set(
+              body.split("\n")
+                .filter(l => /^- \^\[raw\//.test(l.trim()))
+                .map(l => l.trim().replace(/^- /, ""))
+            );
+            const newMarkers = dedupedMarkers.filter(m => !existingSources.has(m));
+            const sourceLines = newMarkers.map(m => `- ${m}`);
+            if (sourceLines.length > 0) {
+              newBody = newBody.trimEnd() + "\n" + sourceLines.join("\n") + "\n";
+            }
           } else {
+            const sourceLines = dedupedMarkers.map(m => `- ${m}`);
             // Add new Sources section
             newBody = newBody.trimEnd() + "\n\n## Sources\n\n" + sourceLines.join("\n") + "\n";
           }

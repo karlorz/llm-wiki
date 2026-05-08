@@ -17,4 +17,10 @@ describe("detectSchema", () => {
   it("returns null for unknown shapes", () => {
     expect(detectSchema({ random: 1 }).schema).toBe(null);
   });
+  it("detects meta by `type: 'meta'`", () => {
+    expect(detectSchema({ type: "meta", tags: ["x"] }).schema).toBe("meta");
+  });
+  it("does not confuse meta with typed-knowledge (no sources)", () => {
+    expect(detectSchema({ type: "meta", tags: ["x"] }).schema).toBe("meta");
+  });
 });

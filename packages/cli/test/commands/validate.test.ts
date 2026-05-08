@@ -32,4 +32,13 @@ describe("validate", () => {
     const r = await runValidate({ file: "/no/such/file" });
     expect(r.exitCode).toBe(2);
   });
+
+  it("returns valid=true for a meta page with ≥2 provenance_projects", async () => {
+    const r = await runValidate({ file: F("valid-meta.md") });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.valid).toBe(true);
+      expect(r.result.data.schema).toBe("meta");
+    }
+  });
 });

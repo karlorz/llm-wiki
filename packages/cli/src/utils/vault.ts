@@ -11,7 +11,7 @@ export interface VaultScan {
   compound: VaultPage[];
 }
 
-const TYPED_DIRS = ["entities", "concepts", "comparisons", "queries"];
+const TYPED_DIRS = ["entities", "concepts", "comparisons", "queries", "meta"];
 
 export async function scanVault(root: string): Promise<Result<VaultScan>> {
   try {

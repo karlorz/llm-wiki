@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import {
   ok, err, ExitCode,
-  TypedKnowledgeSchema, RawSourceSchema, WorkItemSchema, CompoundSchema,
+  TypedKnowledgeSchema, RawSourceSchema, WorkItemSchema, CompoundSchema, MetaSchema,
   detectSchema, type SchemaName, type Result
 } from "@skillwiki/shared";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
@@ -18,7 +18,8 @@ const SCHEMAS = {
   "typed-knowledge": TypedKnowledgeSchema,
   "raw": RawSourceSchema,
   "work-item": WorkItemSchema,
-  "compound": CompoundSchema
+  "compound": CompoundSchema,
+  "meta": MetaSchema
 } as const;
 
 export async function runValidate(input: ValidateInput): Promise<{ exitCode: number; result: Result<ValidateOutput> }> {

@@ -91,13 +91,33 @@ export const CompoundSchema = z.object({
 
 export type Compound = z.infer<typeof CompoundSchema>;
 
-export type SchemaName = "typed-knowledge" | "raw" | "work-item" | "compound";
+export const MetaSchema = z.object({
+  title: z.string().min(1),
+  aliases: z.array(z.string()).optional(),
+  created: isoDate,
+  updated: isoDate,
+  type: z.literal("meta"),
+  tags: z.array(z.string()),
+  confidence: z.enum(["high", "medium", "low"]).optional(),
+  provenance: z.enum(["research", "project", "mixed"]).optional(),
+  provenance_projects: z.array(wikilink).min(2, "meta pages must reference ≥2 projects")
+}).superRefine((v, ctx) => {
+  if (v.provenance && v.provenance !== "research" && (!v.provenance_projects || v.provenance_projects.length === 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["provenance_projects"], message: "required when provenance != research" });
+  }
+});
+
+export type Meta = z.infer<typeof MetaSchema>;
+
+export type SchemaName = "typed-knowledge" | "raw" | "work-item" | "compound" | "meta";
 
 export function detectSchema(fm: Record<string, unknown>): { schema: SchemaName | null } {
   const COMPOUND_TYPES = new Set(["lesson", "pattern", "antipattern", "gotcha"]);
 
   // Check compound first (has project + known compound type)
   if (typeof fm.type === "string" && COMPOUND_TYPES.has(fm.type) && "project" in fm) return { schema: "compound" };
+  // Meta pages (type=meta, cross-project synthesis)
+  if (fm.type === "meta") return { schema: "meta" };
   // Then typed-knowledge (has type + sources — let Zod validate the specific type value)
   if ("type" in fm && "sources" in fm) return { schema: "typed-knowledge" };
   // Raw sources
