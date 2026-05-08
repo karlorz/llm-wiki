@@ -135,4 +135,37 @@ describe("runSeed", () => {
       expect(r.result.data.humanHint).toContain("skipped (already exist):");
     }
   });
+
+  it("creates entity page with aliases frontmatter", async () => {
+    tmpDir = await makeVault();
+    await runSeed({ vault: tmpDir });
+    const content = await readFile(join(tmpDir, "entities", "example-project.md"), "utf8");
+    expect(content).toContain("aliases: [example-project]");
+  });
+
+  it("creates concept page with Related section linking to entity", async () => {
+    tmpDir = await makeVault();
+    await runSeed({ vault: tmpDir });
+    const content = await readFile(join(tmpDir, "concepts", "example-concept.md"), "utf8");
+    expect(content).toContain("[[example-project]]");
+    expect(content).toContain("## Related");
+  });
+
+  it("raw source page contains immutability notice", async () => {
+    tmpDir = await makeVault();
+    await runSeed({ vault: tmpDir });
+    const content = await readFile(join(tmpDir, "raw", "articles", "example-source.md"), "utf8");
+    expect(content).toContain("never edit");
+  });
+
+  it("created + skipped counts equal total example pages", async () => {
+    tmpDir = await makeVault();
+    const r = await runSeed({ vault: tmpDir });
+    expect(r.exitCode).toBe(ExitCode.OK);
+    if (r.result.ok) {
+      const total = r.result.data.created.length + r.result.data.skipped.length;
+      // 3 example pages: entities/example-project.md, concepts/example-concept.md, raw/articles/example-source.md
+      expect(total).toBe(3);
+    }
+  });
 });

@@ -291,4 +291,66 @@ Content here.
     expect(content).toContain("^[raw/test1.md]");
     expect(content).toContain("^[raw/test2.md]");
   });
+
+  it("mirrors confidence medium value", async () => {
+    const page = `---
+title: Medium Confidence
+created: 2026-05-09
+updated: 2026-05-09
+type: concept
+tags: [test]
+confidence: medium
+---
+
+Content.
+`;
+    tmpDir = await makeVault({ "concepts/med.md": page });
+    const r = await runTagSync({ vault: tmpDir, dryRun: false });
+    expect(r.exitCode).toBe(ExitCode.MIGRATION_APPLIED);
+    const content = await readFile(join(tmpDir, "concepts", "med.md"), "utf8");
+    expect(content).toContain("confidence/medium");
+  });
+
+  it("mirrors confidence low value", async () => {
+    const page = `---
+title: Low Confidence
+created: 2026-05-09
+updated: 2026-05-09
+type: concept
+tags: [test]
+confidence: low
+---
+
+Content.
+`;
+    tmpDir = await makeVault({ "concepts/low.md": page });
+    const r = await runTagSync({ vault: tmpDir, dryRun: false });
+    expect(r.exitCode).toBe(ExitCode.MIGRATION_APPLIED);
+    const content = await readFile(join(tmpDir, "concepts", "low.md"), "utf8");
+    expect(content).toContain("confidence/low");
+  });
+
+  it("includes humanHint with counts and dry run indicator", async () => {
+    tmpDir = await makeVault({ "concepts/test.md": PAGE_WITH_PROVENANCE });
+    const r = await runTagSync({ vault: tmpDir, dryRun: true });
+    expect(r.exitCode).toBe(ExitCode.MIGRATION_APPLIED);
+    if (r.result.ok) {
+      expect(r.result.data.humanHint).toContain("synced: 1");
+      expect(r.result.data.humanHint).toContain("dry run");
+    }
+  });
+
+  it("returns OK with zero synced for vault with no typed-knowledge pages", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "vault-"));
+    await writeFile(join(tmpDir, "SCHEMA.md"), "# Vault Schema\n", "utf8");
+    await mkdir(join(tmpDir, "raw"), { recursive: true });
+    // No entities, concepts, etc.
+
+    const r = await runTagSync({ vault: tmpDir, dryRun: false });
+    expect(r.exitCode).toBe(ExitCode.OK);
+    if (r.result.ok) {
+      expect(r.result.data.synced).toEqual([]);
+      expect(r.result.data.unchanged).toBe(0);
+    }
+  });
 });

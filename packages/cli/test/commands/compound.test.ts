@@ -458,6 +458,68 @@ describe("runCompoundPromote", () => {
     expect(files).toHaveLength(1);
     expect(files[0]).toBe(`${longName}.md`);
   });
+
+  it("includes humanHint with scanned, promoted, and skipped counts", async () => {
+    tmpDir = await makeVault(LOG_MIXED);
+    const r = await runCompound({ vault: tmpDir, project: "test-proj" });
+    expect(r.exitCode).toBe(39);
+    if (r.result.ok) {
+      expect(r.result.data.humanHint).toContain("scanned: 3");
+      expect(r.result.data.humanHint).toContain("promoted: 2");
+      expect(r.result.data.humanHint).toContain("skipped (Generalize?: no): 1");
+    }
+  });
+
+  it("sets confidence to medium in promoted compound files", async () => {
+    tmpDir = await makeVault(LOG_SINGLE_YES);
+    const r = await runCompound({ vault: tmpDir, project: "test-proj" });
+    expect(r.exitCode).toBe(39);
+    const compoundDir = join(tmpDir, "projects", "test-proj", "compound");
+    const content = await readFile(join(compoundDir, "test-cycle.md"), "utf8");
+    expect(content).toContain("confidence: medium");
+  });
+
+  it("extracts tags from Generalize? parenthetical content", async () => {
+    const logWithTags = `# Log
+
+## [2026-05-08] retro | loop cycle: tagged-compound
+
+- Friction:       Something broke
+- Miss:           Something missed
+- Improve:        Should do better
+- Generalize?:    yes (drift detection)
+- ClaudeMd?:      no
+- WorkflowShift?: no
+
+`;
+    tmpDir = await makeVault(logWithTags);
+    const r = await runCompound({ vault: tmpDir, project: "test-proj" });
+    expect(r.exitCode).toBe(39);
+    const compoundDir = join(tmpDir, "projects", "test-proj", "compound");
+    const content = await readFile(join(compoundDir, "tagged-compound.md"), "utf8");
+    expect(content).toContain("tags: [drift, detection]");
+  });
+
+  it("defaults to dev-loop tag when no parenthetical in Generalize", async () => {
+    const logNoParens = `# Log
+
+## [2026-05-08] retro | loop cycle: no-parens
+
+- Friction:       Something broke
+- Miss:           Something missed
+- Improve:        Should do better
+- Generalize?:    yes
+- ClaudeMd?:      no
+- WorkflowShift?: no
+
+`;
+    tmpDir = await makeVault(logNoParens);
+    const r = await runCompound({ vault: tmpDir, project: "test-proj" });
+    expect(r.exitCode).toBe(39);
+    const compoundDir = join(tmpDir, "projects", "test-proj", "compound");
+    const content = await readFile(join(compoundDir, "no-parens.md"), "utf8");
+    expect(content).toContain("tags: [dev-loop]");
+  });
 });
 
 describe("runCompoundList", () => {

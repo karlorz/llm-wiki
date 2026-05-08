@@ -205,4 +205,58 @@ describe("runObserve", () => {
     const expectedHash = hashBody(body);
     expect(sha256).toBe(expectedHash);
   });
+
+  it("accepts task as a valid kind", async () => {
+    const dir = makeVault();
+    const r = await runObserve({ vault: dir, text: "need to fix config", kind: "task" });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+
+    const fullPath = join(dir, r.result.data.path);
+    const content = readFileSync(fullPath, "utf8");
+    expect(content).toContain("kind: task");
+  });
+
+  it("accepts idea as a valid kind", async () => {
+    const dir = makeVault();
+    const r = await runObserve({ vault: dir, text: "new approach for caching", kind: "idea" });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+
+    const fullPath = join(dir, r.result.data.path);
+    const content = readFileSync(fullPath, "utf8");
+    expect(content).toContain("kind: idea");
+  });
+
+  it("accepts session-log as a valid kind", async () => {
+    const dir = makeVault();
+    const r = await runObserve({ vault: dir, text: "session started", kind: "session-log" });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+
+    const fullPath = join(dir, r.result.data.path);
+    const content = readFileSync(fullPath, "utf8");
+    expect(content).toContain("kind: session-log");
+  });
+
+  it("generates humanHint with relative path and truncated sha256", async () => {
+    const dir = makeVault();
+    const r = await runObserve({ vault: dir, text: "hint check observation" });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+
+    const hint = r.result.data.humanHint;
+    expect(hint).toContain("raw/transcripts/");
+    expect(hint).toContain("...");  // sha256 is truncated in hint
+  });
+
+  it("produces untitled slug when text has only special characters", async () => {
+    const dir = makeVault();
+    const r = await runObserve({ vault: dir, text: "@#$%^&" });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+
+    const fileName = r.result.data.path.split("/").pop()!;
+    expect(fileName).toContain("observation-untitled");
+  });
 });

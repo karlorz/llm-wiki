@@ -212,4 +212,53 @@ describe("runStatus", () => {
       expect(r.result.data.vault_path).toBe(v);
     }
   });
+
+  it("returns zero total_pages for empty vault", async () => {
+    const h = makeHome();
+    const v = makeVault();
+    // No pages added
+
+    const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.total_pages).toBe(0);
+      expect(r.result.data.page_counts.entities).toBe(0);
+      expect(r.result.data.page_counts.concepts).toBe(0);
+    }
+  });
+
+  it("humanHint includes all category lines", async () => {
+    const h = makeHome();
+    const v = makeVault();
+    writeFileSync(join(v, "entities", "a.md"), "---\ntitle: a\n---\nbody");
+
+    const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.humanHint).toContain("entities:");
+      expect(r.result.data.humanHint).toContain("concepts:");
+      expect(r.result.data.humanHint).toContain("comparisons:");
+      expect(r.result.data.humanHint).toContain("queries:");
+      expect(r.result.data.humanHint).toContain("raw:");
+      expect(r.result.data.humanHint).toContain("compound:");
+    }
+  });
+
+  it("counts pages correctly across all categories", async () => {
+    const h = makeHome();
+    const v = makeVault();
+    writeFileSync(join(v, "entities", "e1.md"), "---\ntitle: e1\n---\nbody");
+    writeFileSync(join(v, "entities", "e2.md"), "---\ntitle: e2\n---\nbody");
+    writeFileSync(join(v, "concepts", "c1.md"), "---\ntitle: c1\n---\nbody");
+    writeFileSync(join(v, "raw", "articles", "r1.md"), "---\ntitle: r1\n---\nbody");
+
+    const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.page_counts.entities).toBe(2);
+      expect(r.result.data.page_counts.concepts).toBe(1);
+      expect(r.result.data.page_counts.raw_articles).toBe(1);
+      expect(r.result.data.total_pages).toBe(4);
+    }
+  });
 });

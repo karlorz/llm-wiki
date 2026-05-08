@@ -228,4 +228,116 @@ describe("query", () => {
       expect(yResult).toBeDefined();
     }
   });
+
+  it("boosts entity type for non-conceptual queries", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    mkdirSync(join(v, "entities"), { recursive: true });
+    writeFileSync(
+      join(v, "concepts", "alpha.md"),
+      "---\ntitle: Alpha\ntype: concept\ncreated: 2026-05-09\nupdated: 2026-05-09\ntags: []\n---\nAlpha content.\n",
+    );
+    writeFileSync(
+      join(v, "entities", "alpha.md"),
+      "---\ntitle: Alpha\ntype: entity\ncreated: 2026-05-09\nupdated: 2026-05-09\ntags: []\n---\nAlpha entity content.\n",
+    );
+    // Non-conceptual query: no concept indicators → entity gets 0.5 affinity boost
+    const r = await runQuery({ text: "alpha", vault: v });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      // Both should appear since both match "alpha" but entity gets type affinity
+      const concept = r.result.data.results.find((p) => p.path === "concepts/alpha.md");
+      const entity = r.result.data.results.find((p) => p.path === "entities/alpha.md");
+      expect(concept).toBeDefined();
+      expect(entity).toBeDefined();
+      // Entity should have a higher score due to type affinity for non-concept query
+      expect(entity!.score).toBeGreaterThan(concept!.score);
+    }
+  });
+
+  it("produces humanHint listing each result with score", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    writeFileSync(
+      join(v, "concepts", "searchable.md"),
+      "---\ntitle: Searchable\ntype: concept\ncreated: 2026-05-09\nupdated: 2026-05-09\ntags: []\n---\nContent about searchable things.\n",
+    );
+
+    const r = await runQuery({ text: "searchable", vault: v });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.humanHint).toContain("concepts/searchable.md");
+      expect(r.result.data.humanHint).toContain("score:");
+    }
+  });
+
+  it("scores title match higher than body match", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    writeFileSync(
+      join(v, "concepts", "zing.md"),
+      "---\ntitle: Zing\ntype: concept\ncreated: 2026-05-09\nupdated: 2026-05-09\ntags: []\n---\nGeneric body.\n",
+    );
+    writeFileSync(
+      join(v, "concepts", "other.md"),
+      "---\ntitle: Other\ntype: concept\ncreated: 2026-05-09\nupdated: 2026-05-09\ntags: []\n---\nZing is mentioned in the body.\n",
+    );
+
+    const r = await runQuery({ text: "zing", vault: v });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      const zing = r.result.data.results.find((p) => p.path === "concepts/zing.md");
+      const other = r.result.data.results.find((p) => p.path === "concepts/other.md");
+      expect(zing).toBeDefined();
+      expect(other).toBeDefined();
+      expect(zing!.score).toBeGreaterThan(other!.score);
+    }
+  });
+
+  it("multi-term query matches pages containing all terms with higher score", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    writeFileSync(
+      join(v, "concepts", "both.md"),
+      "---\ntitle: Vector Search\ntype: concept\ncreated: 2026-05-09\nupdated: 2026-05-09\ntags: [retrieval]\n---\nVector search combines embeddings and retrieval.\n",
+    );
+    writeFileSync(
+      join(v, "concepts", "partial.md"),
+      "---\ntitle: Embeddings Only\ntype: concept\ncreated: 2026-05-09\nupdated: 2026-05-09\ntags: []\n---\nJust vector content.\n",
+    );
+
+    const r = await runQuery({ text: "vector search", vault: v });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      const both = r.result.data.results.find((p) => p.path === "concepts/both.md");
+      const partial = r.result.data.results.find((p) => p.path === "concepts/partial.md");
+      expect(both).toBeDefined();
+      if (partial) {
+        expect(both!.score).toBeGreaterThan(partial.score);
+      }
+    }
+  });
+
+  it("uses default limit of 10 when not specified", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    // Create more than 10 pages all matching "test"
+    for (let i = 0; i < 12; i++) {
+      writeFileSync(
+        join(v, "concepts", `test-${i}.md`),
+        `---\ntitle: Test ${i}\ntype: concept\ncreated: 2026-05-09\nupdated: 2026-05-09\ntags: []\n---\nTest content ${i}.\n`,
+      );
+    }
+
+    const r = await runQuery({ text: "test", vault: v });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.results.length).toBeLessThanOrEqual(10);
+    }
+  });
 });
