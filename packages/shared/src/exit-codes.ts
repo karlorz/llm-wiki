@@ -1,5 +1,6 @@
 export const ExitCode = {
   OK: 0,
+  INTERNAL_ERROR: 1 as const,
   FILE_NOT_FOUND: 2,
   MISSING_CLOSING_DELIMITER: 3,
   SCHEME_REJECTED: 4,
@@ -36,13 +37,21 @@ export const ExitCode = {
   UNKNOWN_WIKI_PROFILE: 35,
   DEDUP_APPLIED: 36,
   PROJECT_NOT_FOUND: 37,
-  SYMLINK_FAILED: 38
+  SYMLINK_FAILED: 38,
+  COMPOUND_PROMOTED: 39,
+  SKILL_VERSION_MISMATCH: 40,
+  INGEST_VALIDATION_FAILED: 41,
+  SYNC_PUSH_FAILED: 42,
+  SYNC_PULL_FAILED: 43,
+  BACKUP_SYNC_FAILED: 44,
+  BACKUP_RESTORE_CONFLICTS: 45
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
 
 const NAMES: Record<number, string> = {
   0: "OK",
+  1: "INTERNAL_ERROR",
   2: "FILE_NOT_FOUND",
   3: "MISSING_CLOSING_DELIMITER",
   4: "SCHEME_REJECTED",
@@ -79,7 +88,14 @@ const NAMES: Record<number, string> = {
   35: "UNKNOWN_WIKI_PROFILE",
   36: "DEDUP_APPLIED",
   37: "PROJECT_NOT_FOUND",
-  38: "SYMLINK_FAILED"
+  38: "SYMLINK_FAILED",
+  39: "COMPOUND_PROMOTED",
+  40: "SKILL_VERSION_MISMATCH",
+  41: "INGEST_VALIDATION_FAILED",
+  42: "SYNC_PUSH_FAILED",
+  43: "SYNC_PULL_FAILED",
+  44: "BACKUP_SYNC_FAILED",
+  45: "BACKUP_RESTORE_CONFLICTS"
 };
 
 export function exitCodeName(code: number): string {
