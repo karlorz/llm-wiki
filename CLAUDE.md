@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This repo ships the `skillwiki` CLI and 15 prompt-only SKILL.md files.
+This repo ships the `skillwiki` CLI and 17 prompt-only SKILL.md files.
 
 ## Working in this repo
 
@@ -19,11 +19,14 @@ This repo ships the `skillwiki` CLI and 15 prompt-only SKILL.md files.
 
 ## E2E test suite
 
-Three scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
+Four scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 
+- **`verify-manifests.sh`** — validates manifest consistency: version sync across 6 files, skill count in descriptions matches actual, every skill dir has SKILL.md. Runs as a CI gate before build.
 - **`e2e-local.sh`** — builds from source, runs all CLI commands locally (130 assertions). No network required.
 - **`e2e-remote.sh`** — upgrades skillwiki on sg01 via `npm install -g skillwiki@beta`, then runs the full CLI suite over SSH (48 assertions).
-- **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 14 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
+- **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 17 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
+
+Assertion counts are approximate — they include loop-expanded iterations (e.g., a `for` loop over 10 skills produces 10 runtime assertions from 1 source line). Hard Rule 15: counts are not a contract; only exit code matters.
 
 ## Where things live
 
@@ -51,7 +54,7 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 - **Pushing to `dev` = releasing the plugin.** There is no version pinning or channel tag (`@beta`) for Claude Code plugins. Every push to the default branch (`dev`) is what users get on `plugin install`.
 - **Version gate:** `/plugin update` only detects changes when the `version` field in `plugin.json` is bumped. New commits without a version bump are ignored.
 - **npm is a separate channel:** `npm publish --tag beta` gives CLI users a beta track independent of the plugin channel.
-- **Always run `e2e-plugin.sh` before pushing to `dev`** — there is no publish gate.
+- **Always run `e2e-plugin.sh` before pushing to `dev`** — CI runs it automatically when SSH secrets are configured, but run it locally too if you can.
 - **Updating plugin on test hosts:** the marketplace cache at `~/.claude/plugins/marketplaces/<name>/` does NOT auto-update. Run `git fetch origin && git reset --hard origin/dev` inside it, then `claude plugin uninstall skillwiki@llm-wiki && rm -rf ~/.claude/plugins/cache/llm-wiki && claude plugin install skillwiki@llm-wiki`.
 - **Shell command, not slash command:** use `claude plugin install` (no slash) from the terminal. The `/plugin` slash command only works inside an interactive Claude session.
 
@@ -98,11 +101,27 @@ wiki/
 
 - The vault at `~/wiki` is the canonical project knowledge base. All specs, plans, and retros land there via `skillwiki` skills.
 - **New** specs and plans go into work items via `proj-work` → `projects/llm-wiki/work/YYYY-MM-DD-{slug}/spec.md` or `plan.md`. The `history/{specs,plans}/` folder is **archive-only** for superseded historical documents — do not write new work there. Do not recreate `docs/superpowers/`.
-- The dev-loop skill (`dev-loop:1.1.0`) drives the PRD+skillwiki workflow. It reads project config from `.claude/dev-loop.config.md`. Legacy commands are archived at `~/.claude/commands/_archive/2026-05-07/`.
+- The dev-loop skill (`dev-loop:1.4.0`) drives the PRD+skillwiki workflow. It reads project config from `.claude/dev-loop.config.md`. Legacy commands are archived at `~/.claude/commands/_archive/2026-05-07/`.
 
-## Current counts (2026-05-08)
+## CI gates
 
-- 15 SKILL.md files in `packages/skills/`
-- 30 CLI subcommands in `packages/cli/src/commands/`
-- 31 test files in `packages/cli/test/commands/`
-- Lint buckets: 4 error, 10 warning, 5 info (incl. `page_structure`, `duplicate_frontmatter`, `missing_overview`, `frontmatter_wikilink`, `wikilink_citation`)
+CI runs three validation stages before allowing merge:
+
+1. **verify-manifests** — version sync, skill count, SKILL.md presence (no build needed, runs first)
+2. **build-and-test** — unit tests across 3 platforms + install --dry-run smoke
+3. **e2e-local** — full CLI E2E against built binary
+4. **e2e-plugin** — plugin channel E2E on sg01 (only when `SSH_PRIVATE_KEY` secret is set; skipped for fork PRs)
+
+Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift early.
+
+## Current counts (2026-05-09)
+
+- 17 SKILL.md files in `packages/skills/`
+- 45 CLI subcommands (40 source files in `packages/cli/src/commands/`)
+- 71 test files (42 commands, 14 utils, 4 parsers, 9 shared, 2 integration, 1 skills, 1 smoke)
+- 709 tests passing
+- Lint buckets: 5 error, 13 warning, 5 info (incl. `page_structure`, `duplicate_frontmatter`, `missing_overview`, `frontmatter_wikilink`, `wikilink_citation`, `broken_sources`, `work_item_health`, `compound_refs`, `orphaned_project_pages`)
+- SKILL.md frontmatter: `name`, `version`, `description` (required); `deprecated` (optional)
+- Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`
+- New exit codes: `BACKUP_SYNC_FAILED (44)`, `BACKUP_RESTORE_CONFLICTS (45)`
+- New config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`
