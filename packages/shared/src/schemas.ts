@@ -13,7 +13,7 @@ export const TypedKnowledgeSchema = z.object({
   aliases: z.array(z.string()).optional(),
   created: isoDate,
   updated: isoDate,
-  type: z.enum(["entity", "concept", "comparison", "query", "summary"]),
+  type: z.enum(["entity", "concept", "comparison", "query"]),
   tags: z.array(z.string()),
   sources: z.array(z.string()).min(1),
   confidence: z.enum(["high", "medium", "low"]).optional(),

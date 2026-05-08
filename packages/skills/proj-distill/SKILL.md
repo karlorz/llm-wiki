@@ -1,4 +1,5 @@
 ---
+version: 0.2.1
 name: proj-distill
 description: 2-step distillation (E4) — analyze project compound entry, then generate a vault concept page with provenance.
 ---

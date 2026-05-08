@@ -14,6 +14,9 @@
 ## Queries
 <!-- queries listed here -->
 
+## Summaries
+<!-- summaries listed here -->
+
 ## Projects
 <!-- registered projects listed here -->
 

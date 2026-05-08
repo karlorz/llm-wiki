@@ -1,4 +1,5 @@
 ---
+version: 0.2.1
 name: wiki-archive
 description: Archive a superseded typed-knowledge page. Moves page to _archive/, removes from index.md, logs the action.
 ---

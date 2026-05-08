@@ -1,4 +1,5 @@
 ---
+version: 0.2.1
 name: wiki-crystallize
 description: Distill the current working session into a typed-knowledge page with provenance.
 ---

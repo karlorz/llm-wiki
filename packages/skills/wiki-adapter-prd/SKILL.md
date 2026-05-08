@@ -1,4 +1,5 @@
 ---
+version: 0.2.1
 name: wiki-adapter-prd
 description: Map foreign PRD formats (CodeStable, RFCs, structured markdown) into skillwiki raw + typed-knowledge pages.
 ---

@@ -6,7 +6,25 @@ on:
   pull_request:
 
 jobs:
+  verify-manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Validate manifest consistency
+        run: bash scripts/verify-manifests.sh
+      - name: Verify plugin.json version bumped on dev
+        if: github.ref == 'refs/heads/dev'
+        run: |
+          if git diff HEAD~1 --name-only | grep -q 'packages/skills/.claude-plugin/plugin.json'; then
+            echo "plugin.json version changed — OK"
+          else
+            echo "::warning::Push to dev without plugin.json version bump — /plugin update won't detect changes"
+          fi
+
   build-and-test:
+    needs: verify-manifests
     strategy:
       fail-fast: false
       matrix:
@@ -41,3 +59,18 @@ jobs:
       - run: npm run -w skillwiki build
       - name: Run e2e-local
         run: bash scripts/e2e-local.sh
+
+  e2e-plugin:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H sg01 >> ~/.ssh/known_hosts 2>/dev/null || true
+      - name: Run e2e-plugin
+        run: bash scripts/e2e-plugin.sh

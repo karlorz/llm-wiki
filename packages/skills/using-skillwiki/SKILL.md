@@ -1,4 +1,5 @@
 ---
+version: 0.2.1
 name: using-skillwiki
 description: Invoke at session start or when knowledge-base tasks arise — maps all wiki-*/proj-* skills and teaches the skillwiki CLI workflow
 ---
@@ -25,6 +26,8 @@ Invoke a skillwiki skill when the user:
 - Needs to detect source drift or re-ingest updated content
 - Has a spec/plan in a non-skillwiki format (CodeStable, RFC, AIDE)
 - Asks about their skillwiki configuration or setup health
+- Wants to sync vault changes to/from a git remote
+- Wants to visualize the vault graph as an Obsidian Canvas
 
 ## Vault Structure
 
@@ -59,7 +62,7 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 
 | Entry | When | What happens |
 |-------|------|-------------|
-| `/wiki-add-task <text>` | You're in a Claude session | Appends entry to `raw/transcripts/YYYY-MM-DD-ad-hoc-captures.md` |
+| `/wiki-add-task <text>` | You're in a Claude session | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with ad-hoc capture frontmatter |
 | Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create/edit any `.md` file in `raw/transcripts/` — dev-loop discovers it on next cycle |
 | Dev-loop discovery | Automatic, next cycle | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |
 
@@ -80,13 +83,15 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 | `proj-init` | Bootstrap a project workspace (README, requirements, architecture) |
 | `proj-work` | Open or run a work item under a project's work/ directory |
 | `proj-distill` | Distill project compound entries into vault concept pages |
+| `wiki-sync` | Safely sync vault git repository — push/pull with lint guards and conflict resolution |
+| `wiki-canvas` | Generate Obsidian Canvas visualization from vault graph data |
 | `proj-decide` | Write an Architectural Decision Record (ADR) |
 
 ## CLI Backbone
 
 All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, and linting. Skills invoke it via Bash for the mechanical parts and use Claude for the creative parts.
 
-Key CLI subcommands: `init`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `graph build`, `archive`, `drift`.
+Key CLI subcommands: `init`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `graph build`, `archive`, `drift`, `compound`, `tag-sync`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
 
 Run `skillwiki doctor` to diagnose setup issues. Run `skillwiki config list` to see current configuration.
 

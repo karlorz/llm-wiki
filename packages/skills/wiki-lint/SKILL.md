@@ -1,4 +1,5 @@
 ---
+version: 0.2.1
 name: wiki-lint
 description: Vault health check via the umbrella `skillwiki lint` subcommand. Read-only by default; rotation requires explicit user consent.
 ---

@@ -1,4 +1,5 @@
 ---
+version: 0.2.1
 name: wiki-query
 description: Search the vault and synthesize an answer with E2 4-signal ranking. Optional file to queries/ or comparisons/.
 ---

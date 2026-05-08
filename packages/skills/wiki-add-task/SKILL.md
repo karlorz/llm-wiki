@@ -1,6 +1,7 @@
 ---
+version: 0.2.1
 name: wiki-add-task
-description: Capture ad-hoc ideas, bugs, tasks, or notes into the vault via /wiki-add-task or filesystem drop.
+description: Capture ad-hoc ideas, bugs, tasks, or notes into the vault with ad-hoc capture frontmatter and descriptive filenames.
 ---
 
 # wiki-add-task
@@ -9,7 +10,7 @@ Capture ad-hoc ideas, bugs, tasks, and notes into the vault. Three entry points 
 
 | Entry | When | What happens |
 |-------|------|-------------|
-| `/wiki-add-task <text>` | You're in a Claude session | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with raw-valid frontmatter |
+| `/wiki-add-task <text>` | You're in a Claude session | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with ad-hoc capture frontmatter |
 | Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create any `.md` file in `raw/transcripts/` using the vault template — dev-loop discovers it on next cycle |
 | Dev-loop discovery | Automatic, next cycle | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |
 
@@ -30,14 +31,12 @@ Run `skillwiki lang` at the start. Entry prose and `--human` summaries use the r
    - `text` — the idea/bug/task/note content (required)
    - `type` — one of: `idea`, `bug`, `task`, `note` (default: `idea`)
    - `project` — optional project slug to cross-reference (e.g., `llm-wiki`)
-2. **Build filename.** Derive a short slug from the text (lowercase, hyphenated, max 8 words). The capture file is `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md`. Each capture gets its own file — never append to an existing file.
-3. **Write frontmatter.** Create the file with raw-source frontmatter:
+2. **Build filename.** Derive a slug from the first ~6 words of the text (lowercased, hyphens for spaces, non-alphanumeric stripped). The capture file is `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md`. Each capture gets its own file — never append to an existing file.
+3. **Write frontmatter.** Create the file with ad-hoc capture frontmatter:
    ```yaml
    ---
    source_url:
    ingested: YYYY-MM-DD
-   ingested_by: manual
-   sha256:
    kind: {type}
    project: "[[{slug}]]"
    ---
@@ -45,8 +44,8 @@ Run `skillwiki lang` at the start. Entry prose and `--human` summaries use the r
    - Set `kind` to the parsed type (`idea`, `bug`, `task`, `note`).
    - If a `project` slug was provided, set `project: "[[slug]]"`.
    - If no project, omit the `project` field entirely.
-   - Leave `sha256` empty for now — step 5 fills it in.
    - `source_url` is null (these are locally originated captures).
+   - No `sha256` — ad-hoc captures are mutable working notes, not immutable sources.
 4. **Write body.** Below the frontmatter, write:
    ```markdown
    # {type}: {text}
@@ -54,14 +53,13 @@ Run `skillwiki lang` at the start. Entry prose and `--human` summaries use the r
    {text}
    ```
    Use the resolved output language for any prose. The type label and frontmatter stay English.
-5. **Compute and write sha256.** Run `skillwiki hash <file>` to get the SHA-256 of the body. Update the `sha256:` field in the frontmatter with the computed value. This makes the file validate as a raw source.
-6. **Cross-reference (optional).** If a `project` slug was provided:
+5. **Cross-reference (optional).** If a `project` slug was provided:
    - Check that `projects/{slug}/` exists in the vault.
    - Append a one-line reference to the project's compound notes:
      `- [YYYY-MM-DD] capture: [text (first 60 chars)] → raw/transcripts/YYYY-MM-DD-{type}-{slug}.md`
    - Do NOT create a full work item (that's `proj-work`'s job).
-7. **Update log.md.** Append: `## [YYYY-MM-DD] capture | [type]: [text (first 60 chars)]`
-8. **Confirm to user.** Report what was captured and where. Suggest next steps:
+6. **Update log.md.** Append: `## [YYYY-MM-DD] capture | [type]: [text (first 60 chars)]`
+7. **Confirm to user.** Report what was captured and where. Suggest next steps:
    - If `type: idea` → "Consider ingesting related sources to develop this idea."
    - If `type: bug` → "Use proj-work to create a bug-fix work item."
    - If `type: task` → "Use proj-work to track this task through the dev loop."
@@ -69,14 +67,12 @@ Run `skillwiki lang` at the start. Entry prose and `--human` summaries use the r
 
 ## Capture file format
 
-Each capture is a standalone raw source file with valid frontmatter:
+Each capture is a standalone file with ad-hoc capture frontmatter:
 
 ```yaml
 ---
 source_url:
 ingested: 2026-05-08
-ingested_by: manual
-sha256: <64-char hex computed over body>
 kind: idea
 project: "[[llm-wiki]]"
 ---
@@ -89,6 +85,8 @@ Fix the template mismatch between wiki-add-task and the vault template.
 The `kind` field uses the capture type and must be one of: `idea`, `bug`, `task`, `note` (plus the existing `postmortem`, `session-log`, `meeting-notes`, `other` for non-capture raw sources).
 
 The `project` and `kind` fields can be set independently — they do not require `work_item`. The `work_item` field is only used when the raw source is directly tied to a project work item (set by `proj-work`).
+
+Ad-hoc captures omit `sha256` — they are mutable working notes, not immutable sources. The `sha256` field is reserved for ingested raw sources that require integrity verification.
 
 ## Stop conditions
 
@@ -108,9 +106,8 @@ The `project` and `kind` fields can be set independently — they do not require
 When you're not in a Claude session, drop files directly into `raw/transcripts/`:
 
 1. Create a `.md` file in `raw/transcripts/` — name it descriptively (e.g., `2026-05-08-idea-fix-template.md`)
-2. Use the vault template at `_Templates/tpl-ad-hoc-capture.md` for frontmatter scaffolding
+2. Use ad-hoc capture frontmatter: `source_url:`, `ingested:`, `kind:`, and optionally `project:`
 3. Write your idea/bug/task/note below the frontmatter
-4. Run `skillwiki hash <file>` when you're back in a session to fill in sha256
 
 No special format required — the dev-loop QUERY step will discover new files on the next cycle and surface them as claimable work. Mark the type with a heading like `## idea`, `## bug`, `## task`, or just write freeform.
 
