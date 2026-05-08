@@ -77,9 +77,10 @@ program
   .option("--target <dir>", "target install directory", `${process.env.HOME ?? ""}/.claude/skills/`)
   .option("--dry-run", "preview only", false)
   .option("--skills-root <dir>", "source skills directory (defaults to packaged)")
+  .option("--symlink", "create symlinks instead of copies (dev mode — edits to source are immediately visible)", false)
   .action(async (opts) => {
     const skillsRoot = opts.skillsRoot ?? new URL("../skills/", import.meta.url).pathname;
-    emit(await runInstall({ skillsRoot, target: opts.target, dryRun: !!opts.dryRun }));
+    emit(await runInstall({ skillsRoot, target: opts.target, dryRun: !!opts.dryRun, symlink: !!opts.symlink }));
   });
 
 program

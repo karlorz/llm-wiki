@@ -1,5 +1,5 @@
-import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, stat, symlink, unlink, mkdir } from "node:fs/promises";
+import { join, resolve, dirname } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { atomicCopyWithBackup, writeManifest } from "../utils/install-fs.js";
 
@@ -7,12 +7,25 @@ export interface InstallInput {
   skillsRoot: string;   // path to packages/skills
   target: string;       // ~/.claude/skills/
   dryRun: boolean;
+  symlink: boolean;     // create symlinks instead of copies (dev mode)
 }
 export interface InstallOutput {
   installed: string[];
   backed_up: string[];
   manifest_path: string;
   humanHint: string;
+}
+
+async function createSymlink(src: string, dst: string): Promise<Result<{ linked: true }>> {
+  await mkdir(dirname(dst), { recursive: true });
+  // Remove existing file/symlink at dst
+  try { await unlink(dst); } catch { /* not present */ }
+  try {
+    await symlink(resolve(src), dst);
+  } catch (e) {
+    return err("SYMLINK_FAILED", { message: String(e) });
+  }
+  return ok({ linked: true });
 }
 
 export async function runInstall(input: InstallInput): Promise<{ exitCode: number; result: Result<InstallOutput> }> {
@@ -38,10 +51,16 @@ export async function runInstall(input: InstallInput): Promise<{ exitCode: numbe
       return { exitCode: ExitCode.PREFLIGHT_FAILED, result: err("PREFLIGHT_FAILED", { missing: src }) };
     }
     if (input.dryRun) { installed.push(dst); continue; }
-    const r = await atomicCopyWithBackup(src, dst);
-    if (!r.ok) return { exitCode: ExitCode.ATOMIC_COPY_FAILED, result: r };
-    installed.push(dst);
-    if (r.data.backupPath) backed_up.push(r.data.backupPath);
+    if (input.symlink) {
+      const r = await createSymlink(src, dst);
+      if (!r.ok) return { exitCode: ExitCode.SYMLINK_FAILED, result: r };
+      installed.push(dst);
+    } else {
+      const r = await atomicCopyWithBackup(src, dst);
+      if (!r.ok) return { exitCode: ExitCode.ATOMIC_COPY_FAILED, result: r };
+      installed.push(dst);
+      if (r.data.backupPath) backed_up.push(r.data.backupPath);
+    }
   }
 
   // Deploy bin/skillwiki wrapper if present
@@ -50,19 +69,26 @@ export async function runInstall(input: InstallInput): Promise<{ exitCode: numbe
     await stat(binSrc);
     const binDst = join(input.target, "bin", "skillwiki");
     if (!input.dryRun) {
-      const r = await atomicCopyWithBackup(binSrc, binDst);
-      if (!r.ok) return { exitCode: ExitCode.ATOMIC_COPY_FAILED, result: r };
-      installed.push(binDst);
-      if (r.data.backupPath) backed_up.push(r.data.backupPath);
+      if (input.symlink) {
+        const r = await createSymlink(binSrc, binDst);
+        if (!r.ok) return { exitCode: ExitCode.SYMLINK_FAILED, result: r };
+        installed.push(binDst);
+      } else {
+        const r = await atomicCopyWithBackup(binSrc, binDst);
+        if (!r.ok) return { exitCode: ExitCode.ATOMIC_COPY_FAILED, result: r };
+        installed.push(binDst);
+        if (r.data.backupPath) backed_up.push(r.data.backupPath);
+      }
     } else {
       installed.push(binDst);
     }
   } catch { /* no bin wrapper — skip silently */ }
 
   const manifest_path = join(input.target, "wiki-manifest.json");
-  if (!input.dryRun) await writeManifest(manifest_path, { installed, backed_up });
+  if (!input.dryRun) await writeManifest(manifest_path, { installed, backed_up, symlink: input.symlink || undefined });
+  const mode = input.symlink ? "symlink (dev mode)" : "copy";
   const hintLines = [
-    `installed: ${installed.length}`,
+    `installed: ${installed.length} (${mode})`,
     input.dryRun ? "(dry run)" : `backed up: ${backed_up.length}`,
     `manifest: ${manifest_path}`,
   ];

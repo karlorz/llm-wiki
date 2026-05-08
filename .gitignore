@@ -3,6 +3,7 @@ dist/
 .skillwiki/
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+.claude/dev-loop-work/
 *.tsbuildinfo
 coverage/
 *.bak

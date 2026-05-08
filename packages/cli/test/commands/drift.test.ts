@@ -98,7 +98,6 @@ body`);
     const srcPath = join(dir, "raw", "articles", "src.md");
     writeFileSync(srcPath, RAW_FM_TEMPLATE("https://example.com/a", STORED_HASH));
     const newBody = "changed content here";
-    const expectedHash = "c4ae4d7e52cf8b8b2d1e0a8a3c5e7d9f0b2a4c6d8e0f2a4b6c8d0e2f4a6b8c0d"; // placeholder
     const r = await runDrift({
       vault: dir,
       apply: true,

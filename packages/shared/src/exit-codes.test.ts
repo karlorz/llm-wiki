@@ -32,6 +32,7 @@ describe("exit-codes", () => {
     expect(ExitCode.ARCHIVE_ALREADY_ARCHIVED).toBe(31);
     expect(ExitCode.DRIFT_DETECTED).toBe(32);
     expect(ExitCode.RAW_DEDUP_DETECTED).toBe(33);
+    expect(ExitCode.SYMLINK_FAILED).toBe(38);
   });
 
   it("exposes a stable name for every code (non-empty, unique)", () => {

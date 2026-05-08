@@ -35,7 +35,8 @@ export const ExitCode = {
   MIGRATION_APPLIED: 34,
   UNKNOWN_WIKI_PROFILE: 35,
   DEDUP_APPLIED: 36,
-  PROJECT_NOT_FOUND: 37
+  PROJECT_NOT_FOUND: 37,
+  SYMLINK_FAILED: 38
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -77,7 +78,8 @@ const NAMES: Record<number, string> = {
   34: "MIGRATION_APPLIED",
   35: "UNKNOWN_WIKI_PROFILE",
   36: "DEDUP_APPLIED",
-  37: "PROJECT_NOT_FOUND"
+  37: "PROJECT_NOT_FOUND",
+  38: "SYMLINK_FAILED"
 };
 
 export function exitCodeName(code: number): string {
