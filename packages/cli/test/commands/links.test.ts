@@ -68,4 +68,64 @@ describe("runLinks", () => {
     expect(r.result.ok).toBe(true);
     if (r.result.ok) expect(r.result.data.broken).toHaveLength(0);
   });
+
+  it("handles pages with no wikilinks", async () => {
+    const v = vault();
+    writeFileSync(join(v, "concepts", "solo.md"), FM + "Just plain text, no links here.\n");
+    const r = await runLinks({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) expect(r.result.data.broken).toEqual([]);
+  });
+
+  it("detects wikilinks in heading and list contexts", async () => {
+    const v = vault();
+    writeFileSync(join(v, "concepts", "alpha.md"), FM + "## See [[beta]]\n- [[gamma]] description\n");
+    writeFileSync(join(v, "concepts", "beta.md"), FM + "Content.\n");
+    writeFileSync(join(v, "concepts", "gamma.md"), FM + "Content.\n");
+    const r = await runLinks({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) expect(r.result.data.broken).toEqual([]);
+  });
+
+  it("detects broken wikilink in page with unclosed frontmatter", async () => {
+    const v = vault();
+    writeFileSync(join(v, "concepts", "unclosed.md"), `---
+title: Unclosed
+type: concept
+
+See [[missing-page]].
+`);
+    const r = await runLinks({ vault: v });
+    expect(r.exitCode).toBe(16);
+    if (r.result.ok) {
+      expect(r.result.data.broken.length).toBe(1);
+      expect(r.result.data.broken[0].slug).toBe("missing-page");
+    }
+  });
+
+  it("reports line 0 for broken wikilink with spaces around slug", async () => {
+    const v = vault();
+    writeFileSync(join(v, "concepts", "alpha.md"), FM + "See [[ ghost ]].\n");
+    const r = await runLinks({ vault: v });
+    expect(r.exitCode).toBe(16);
+    if (r.result.ok) {
+      expect(r.result.data.broken.length).toBe(1);
+      expect(r.result.data.broken[0].slug).toBe("ghost");
+      expect(r.result.data.broken[0].line).toBe(0);
+    }
+  });
+
+  it("reports multiple broken wikilinks across pages", async () => {
+    const v = vault();
+    writeFileSync(join(v, "concepts", "alpha.md"), FM + "See [[missing-a]].\n");
+    writeFileSync(join(v, "concepts", "beta.md"), FM + "See [[missing-b]].\n");
+    const r = await runLinks({ vault: v });
+    expect(r.exitCode).toBe(16);
+    if (r.result.ok) {
+      expect(r.result.data.broken.length).toBe(2);
+      const slugs = r.result.data.broken.map(b => b.slug);
+      expect(slugs).toContain("missing-a");
+      expect(slugs).toContain("missing-b");
+    }
+  });
 });

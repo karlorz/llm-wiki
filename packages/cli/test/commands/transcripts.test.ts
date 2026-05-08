@@ -74,4 +74,75 @@ describe("runTranscripts", () => {
       expect(r.result.data.transcripts.length).toBe(1);
     }
   });
+
+  it("filters transcripts by date prefix via --since", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "transcripts", "2026-04-28-old.md"), TRANSCRIPT_FM("2026-04-28"));
+    writeFileSync(join(dir, "raw", "transcripts", "2026-05-01-mid.md"), TRANSCRIPT_FM("2026-05-01"));
+    writeFileSync(join(dir, "raw", "transcripts", "2026-05-07-recent.md"), TRANSCRIPT_FM("2026-05-07"));
+    const r = await runTranscripts({ vault: dir, since: "2026-05-01" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.transcripts.length).toBe(2);
+      expect(r.result.data.transcripts[0].file).toBe("raw/transcripts/2026-05-01-mid.md");
+      expect(r.result.data.transcripts[1].file).toBe("raw/transcripts/2026-05-07-recent.md");
+    }
+  });
+
+  it("returns empty list for vault with only SCHEMA.md", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vault-"));
+    writeFileSync(join(dir, "SCHEMA.md"), "# Vault Schema\n");
+    const r = await runTranscripts({ vault: dir });
+    expect(r.exitCode).toBe(9);
+    expect(r.result.ok).toBe(false);
+  });
+
+  it("skips transcript with invalid frontmatter", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "transcripts", "2026-05-07-bad.md"), `---
+source_url:
+ingested: 2026-05-07
+
+no closing delimiter`);
+    writeFileSync(join(dir, "raw", "transcripts", "2026-05-06-good.md"), TRANSCRIPT_FM("2026-05-06"));
+    const r = await runTranscripts({ vault: dir });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.transcripts.length).toBe(1);
+      expect(r.result.data.transcripts[0].file).toBe("raw/transcripts/2026-05-06-good.md");
+    }
+  });
+
+  it("defaults ingested to empty string when non-string type", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "transcripts", "numeric.md"), `---
+source_url:
+ingested: 20260507
+sha256:
+---
+
+numeric ingested`);
+    const r = await runTranscripts({ vault: dir });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.transcripts.length).toBe(1);
+      expect(r.result.data.transcripts[0].ingested).toBe("");
+    }
+  });
+
+  it("includes transcript with empty ingested when --since is set", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "transcripts", "no-date.md"), `---
+source_url:
+sha256:
+---
+
+no ingested date`);
+    const r = await runTranscripts({ vault: dir, since: "2026-05-01" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.transcripts.length).toBe(1);
+      expect(r.result.data.transcripts[0].ingested).toBe("");
+    }
+  });
 });

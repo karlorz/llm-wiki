@@ -274,6 +274,317 @@ Content.
     }
   });
 
+  it("flags broken_sources when sources: entry points to non-existent raw file", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    const fm = `---
+title: t
+type: concept
+tags: [model]
+sources:
+  - "^[raw/articles/missing.md]"
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+## Overview
+
+Content.
+
+## Related
+
+- [[x]]
+`;
+    writeFileSync(join(v, "concepts", "badsrc.md"), fm);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[badsrc]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(23);
+    if (r.result.ok) {
+      const errorKinds = r.result.data.by_severity.error.map(b => b.kind);
+      expect(errorKinds).toContain("broken_sources");
+      const bucket = r.result.data.by_severity.error.find(b => b.kind === "broken_sources");
+      expect(bucket!.items.length).toBe(1);
+      expect(bucket!.items[0]).toContain("raw/articles/missing.md");
+    }
+  });
+
+  it("flags broken_sources with inline sources array format", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "concepts", "inlinesrc.md"), FM(["model"]).replace("sources: []", "sources: [raw/articles/gone.md]") + "## Overview\n\nContent.\n\n## Related\n\n- [[x]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[inlinesrc]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(23);
+    if (r.result.ok) {
+      const errorKinds = r.result.data.by_severity.error.map(b => b.kind);
+      expect(errorKinds).toContain("broken_sources");
+    }
+  });
+
+  it("does not flag broken_sources when sources: entry resolves to existing raw file", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
+    const fm = `---
+title: t
+type: concept
+tags: [model]
+sources:
+  - "^[raw/articles/x.md]"
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+## Overview
+
+Content.
+
+## Related
+
+- [[x]]
+`;
+    writeFileSync(join(v, "concepts", "goodsrc.md"), fm);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[goodsrc]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const errorKinds = r.result.data.by_severity.error.map(b => b.kind);
+      expect(errorKinds).not.toContain("broken_sources");
+    }
+  });
+
+  it("does not flag broken_sources when source entry omits .md extension but file exists", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    // File exists as raw/articles/x.md but sources entry omits .md
+    writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
+    const fm = `---
+title: t
+type: concept
+tags: [model]
+sources:
+  - "^[raw/articles/x]"
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+## Overview
+
+Content.
+
+## Related
+
+- [[x]]
+`;
+    writeFileSync(join(v, "concepts", "noext.md"), fm);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[noext]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const errorKinds = r.result.data.by_severity.error.map(b => b.kind);
+      expect(errorKinds).not.toContain("broken_sources");
+    }
+  });
+
+  it("warns on work item with spec but no plan after 24h", async () => {
+    const v = vault();
+    const workDir = join(v, "projects", "test", "work", "2026-05-01-stale-item");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), `---
+title: Stale item
+status: open
+created: 2026-05-01
+---
+
+## Overview
+
+A stale work item.
+`);
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(22);
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).toContain("work_item_health");
+      const bucket = r.result.data.by_severity.warning.find(b => b.kind === "work_item_health");
+      expect(bucket!.items.length).toBe(1);
+      expect(bucket!.items[0]).toContain("has spec but no plan after 24h");
+    }
+  });
+
+  it("does not warn on work item with spec and plan", async () => {
+    const v = vault();
+    const workDir = join(v, "projects", "test", "work", "2026-05-01-complete-item");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), `---
+title: Complete item
+status: open
+created: 2026-05-01
+---
+
+## Overview
+
+A work item with a plan.
+`);
+    writeFileSync(join(workDir, "plan.md"), `---
+title: Complete item plan
+created: 2026-05-02
+---
+
+## Plan
+
+Do the work.
+`);
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).not.toContain("work_item_health");
+    }
+  });
+
+  it("warns on work item with in-progress status but no started date", async () => {
+    const v = vault();
+    const workDir = join(v, "projects", "test", "work", "2026-05-08-no-start");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), `---
+title: No start date
+status: in-progress
+created: 2026-05-08
+---
+
+## Overview
+
+An item in progress without a started date.
+`);
+    writeFileSync(join(workDir, "plan.md"), `---
+title: No start date plan
+created: 2026-05-08
+---
+
+## Plan
+
+Do the work.
+`);
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(22);
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).toContain("work_item_health");
+      const bucket = r.result.data.by_severity.warning.find(b => b.kind === "work_item_health");
+      expect(bucket!.items.some(i => String(i).includes("in-progress without started date"))).toBe(true);
+    }
+  });
+
+  it("does not warn on in-progress work item with started date", async () => {
+    const v = vault();
+    const workDir = join(v, "projects", "test", "work", "2026-05-08-has-start");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), `---
+title: Has start date
+status: in-progress
+started: 2026-05-08
+created: 2026-05-08
+---
+
+## Overview
+
+An item in progress with a started date.
+`);
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).not.toContain("work_item_health");
+    }
+  });
+
+  it("flags orphaned_project_pages when page claims project but knowledge.md omits it", async () => {
+    const v = vault();
+    mkdirSync(join(v, "projects", "test-proj"), { recursive: true });
+    // knowledge.md exists but does not reference concepts/orphaned.md
+    writeFileSync(join(v, "projects", "test-proj", "knowledge.md"), "# Knowledge Index: test-proj\n\nNo entries.\n");
+    const fm = `---
+title: Orphaned Page
+type: concept
+tags: [model]
+sources: []
+provenance: project
+provenance_projects: ["[[test-proj]]"]
+created: 2026-05-08
+updated: 2026-05-08
+---
+
+## Overview
+
+An orphaned page.
+`;
+    writeFileSync(join(v, "concepts", "orphaned.md"), fm);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[orphaned]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).toContain("orphaned_project_pages");
+      const bucket = r.result.data.by_severity.warning.find(b => b.kind === "orphaned_project_pages");
+      expect(bucket!.items.length).toBe(1);
+      expect(bucket!.items[0]).toBe("concepts/orphaned.md: not in projects/test-proj/knowledge.md");
+    }
+  });
+
+  it("does not flag orphaned_project_pages when knowledge.md lists the page", async () => {
+    const v = vault();
+    mkdirSync(join(v, "projects", "test-proj"), { recursive: true });
+    writeFileSync(join(v, "projects", "test-proj", "knowledge.md"), "# Knowledge Index: test-proj\n\n## concept\n\n- [[concepts/linked]] — Linked Page\n");
+    const fm = `---
+title: Linked Page
+type: concept
+tags: [model]
+sources: []
+provenance: project
+provenance_projects: ["[[test-proj]]"]
+created: 2026-05-08
+updated: 2026-05-08
+---
+
+## Overview
+
+A properly linked page.
+`;
+    writeFileSync(join(v, "concepts", "linked.md"), fm);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[linked]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).not.toContain("orphaned_project_pages");
+    }
+  });
+
+  it("does not flag orphaned_project_pages when project has no knowledge.md", async () => {
+    const v = vault();
+    mkdirSync(join(v, "projects", "no-index"), { recursive: true });
+    // No knowledge.md created — not an orphan, just not indexed yet
+    const fm = `---
+title: Unindexed Page
+type: concept
+tags: [model]
+sources: []
+provenance: project
+provenance_projects: ["[[no-index]]"]
+created: 2026-05-08
+updated: 2026-05-08
+---
+
+## Overview
+
+Not yet indexed.
+`;
+    writeFileSync(join(v, "concepts", "unindexed.md"), fm);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[unindexed]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).not.toContain("orphaned_project_pages");
+    }
+  });
+
   it("flags [[raw/...]] wikilinks as wikilink_citation", async () => {
     const v = vault();
     writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "## Overview\n\nCites source [[raw/articles/x.md]].\n\n## Related\n\n- [[beta]]\n");
@@ -342,6 +653,81 @@ Content.
       const content = require("fs").readFileSync(join(v, "concepts", "alpha.md"), "utf8");
       expect(content).toContain("- ^[raw/articles/y.md]");
       expect(content).toContain("- ^[raw/articles/x.md]");
+    });
+
+    it("fixes missing_overview by inserting ## Overview stub after frontmatter", async () => {
+      const v = vault();
+      writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "Just a body with no overview.\n");
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
+      if (r.result.ok) {
+        expect(r.result.data.fixed).toContain("concepts/alpha.md");
+      }
+      // Re-lint without fix — should no longer flag missing_overview
+      const r2 = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r2.result.ok) {
+        const warningKinds = r2.result.data.by_severity.warning.map(b => b.kind);
+        expect(warningKinds).not.toContain("missing_overview");
+      }
+      // File should now have ## Overview after frontmatter
+      const content = require("fs").readFileSync(join(v, "concepts", "alpha.md"), "utf8");
+      expect(content).toContain("## Overview\n\nt\n\nJust a body with no overview.");
+    });
+
+    it("fixes missing_overview using title from frontmatter", async () => {
+      const v = vault();
+      const fm = `---
+title: My Special Title
+type: concept
+tags: [model]
+sources: []
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+Some body text.
+`;
+      writeFileSync(join(v, "concepts", "titled.md"), fm);
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[titled]]\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
+      if (r.result.ok) {
+        expect(r.result.data.fixed).toContain("concepts/titled.md");
+      }
+      const content = require("fs").readFileSync(join(v, "concepts", "titled.md"), "utf8");
+      expect(content).toContain("## Overview\n\nMy Special Title\n\nSome body text.");
+    });
+
+    it("fixes wikilink_citation by adding citations to existing ## Sources section", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      writeFileSync(join(v, "raw", "articles", "y.md"), "Raw content");
+      const body = "## Overview\n\nCites source [[raw/articles/x.md]].\n\n## Sources\n\n- ^[raw/articles/y.md]\n\n## Related\n\n- [[beta]]\n";
+      writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + body);
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
+      if (r.result.ok) {
+        expect(r.result.data.fixed).toContain("concepts/alpha.md");
+      }
+      const content = require("fs").readFileSync(join(v, "concepts", "alpha.md"), "utf8");
+      expect(content).toContain("- ^[raw/articles/y.md]");
+      expect(content).toContain("- ^[raw/articles/x.md]");
+      expect(content).not.toContain("[[raw/");
+    });
+
+    it("fixes wikilink_citation by creating ## Sources section when missing", async () => {
+      const v = vault();
+      const body = "## Overview\n\nCites source [[raw/articles/x.md]].\n\n## Related\n\n- [[beta]]\n";
+      writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + body);
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
+      if (r.result.ok) {
+        expect(r.result.data.fixed).toContain("concepts/alpha.md");
+      }
+      const content = require("fs").readFileSync(join(v, "concepts", "alpha.md"), "utf8");
+      expect(content).toContain("## Sources");
+      expect(content).toContain("- ^[raw/articles/x.md]");
+      expect(content).not.toContain("[[raw/");
     });
 
     it("does not modify files when fix is not set", async () => {

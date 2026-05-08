@@ -48,4 +48,25 @@ describe("extractTaxonomy", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toBe("INVALID_FRONTMATTER");
   });
+
+  it("returns INVALID_FRONTMATTER when YAML parses to a non-object (scalar value)", () => {
+    const scalar = `## Tag Taxonomy\n\n\`\`\`yaml\njust-a-string\n\`\`\`\n`;
+    const r = extractTaxonomy(scalar);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("INVALID_FRONTMATTER");
+  });
+
+  it("returns INVALID_FRONTMATTER when taxonomy key is missing or not an array", () => {
+    const noKey = `## Tag Taxonomy\n\n\`\`\`yaml\nother:\n  - x\n\`\`\`\n`;
+    const r = extractTaxonomy(noKey);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("INVALID_FRONTMATTER");
+  });
+
+  it("returns INVALID_FRONTMATTER when taxonomy contains non-string items", () => {
+    const mixed = `## Tag Taxonomy\n\n\`\`\`yaml\ntaxonomy:\n  - valid\n  - 123\n\`\`\`\n`;
+    const r = extractTaxonomy(mixed);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("INVALID_FRONTMATTER");
+  });
 });

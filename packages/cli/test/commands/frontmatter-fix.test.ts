@@ -79,4 +79,25 @@ describe("frontmatter-fix", () => {
     const after = await import("node:fs").then(m => m.readFileSync(join(v, "concepts", "dry.md"), "utf8"));
     expect(after).toBe(before);
   });
+
+  it("handles page with no frontmatter", async () => {
+    writeFileSync(join(v, "concepts", "no-fm.md"), "# Hello\n\nSome text.\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[no-fm]]\n");
+    const r = await runFrontmatterFix({ vault: v, dryRun: false });
+    if (r.result.ok) {
+      expect(r.result.data.skipped).toHaveLength(0);
+      expect(r.result.data.fixed).toContain("concepts/no-fm.md");
+    }
+  });
+
+  it("handles page with empty frontmatter", async () => {
+    // ---\n--- cannot be split (no \n before closing ---), so page is skipped
+    writeFileSync(join(v, "concepts", "empty-fm.md"), "---\n---\nSome body text.\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[empty-fm]]\n");
+    const r = await runFrontmatterFix({ vault: v, dryRun: false });
+    if (r.result.ok) {
+      expect(r.result.data.skipped).toContain("concepts/empty-fm.md");
+      expect(r.result.data.fixed).not.toContain("concepts/empty-fm.md");
+    }
+  });
 });

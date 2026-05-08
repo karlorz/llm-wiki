@@ -126,4 +126,40 @@ Content citing duplicate.^[raw/articles/dup.md]
       expect(r.result.data.removed).toEqual([]);
     }
   });
+
+  it("skips raw file with sha256 of wrong length", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "a.md"), rawFile(HASH_A, "alpha"));
+    writeFileSync(join(dir, "raw", "articles", "short.md"), `---
+type: raw
+sha256: abc123
+ingested: "2026-05-05"
+---
+
+short hash`);
+    const r = await runDedup({ vault: dir });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.scanned).toBe(1);
+      expect(r.result.data.duplicates.length).toBe(0);
+    }
+  });
+
+  it("skips raw file where sha256 is not a string type", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "a.md"), rawFile(HASH_A, "alpha"));
+    writeFileSync(join(dir, "raw", "articles", "numeric.md"), `---
+type: raw
+sha256: 999
+ingested: "2026-05-05"
+---
+
+numeric hash`);
+    const r = await runDedup({ vault: dir });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.scanned).toBe(1);
+      expect(r.result.data.duplicates.length).toBe(0);
+    }
+  });
 });

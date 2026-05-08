@@ -53,6 +53,30 @@ describe("runIndexCheck", () => {
     }
   });
 
+  it("compound pages are not flagged as missing_from_index", async () => {
+    const dir = v();
+    mkdirSync(join(dir, "projects", "myproj", "compound"), { recursive: true });
+    writeFileSync(join(dir, "projects", "myproj", "compound", "lesson-learned.md"), FM);
+    writeFileSync(join(dir, "index.md"), `# Index\n`);
+    const r = await runIndexCheck({ vault: dir });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.missing_from_index).toHaveLength(0);
+    }
+  });
+
+  it("compound page in index.md is not a ghost entry", async () => {
+    const dir = v();
+    mkdirSync(join(dir, "projects", "myproj", "compound"), { recursive: true });
+    writeFileSync(join(dir, "projects", "myproj", "compound", "lesson-learned.md"), FM);
+    writeFileSync(join(dir, "index.md"), `# Index\n\n- [[projects/myproj/compound/lesson-learned]] — a lesson\n`);
+    const r = await runIndexCheck({ vault: dir });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.ghost_entries).toHaveLength(0);
+    }
+  });
+
   it("matches index entries case-insensitively", async () => {
     const dir = v();
     writeFileSync(join(dir, "entities", "c929.md"), `---

@@ -43,4 +43,35 @@ describe("controlledFetch — Layer 2", () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.data.body).toBe("hello");
   });
+
+  it("returns FETCH_FAILED on non-abort network error", async () => {
+    globalThis.fetch = vi.fn(async () => { throw new TypeError("fetch failed"); }) as any;
+    const r = await controlledFetch("https://example.com/down", { timeoutMs: 1000, maxBytes: 1024, maxRedirects: 0 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("FETCH_FAILED");
+  });
+
+  it("returns FETCH_FAILED when redirect has no Location header", async () => {
+    globalThis.fetch = vi.fn(async () => new Response(null, { status: 301, headers: {} })) as any;
+    const r = await controlledFetch("https://example.com/badredir", { timeoutMs: 1000, maxBytes: 1024, maxRedirects: 5 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toBe("FETCH_FAILED");
+      expect(r.detail).toMatchObject({ reason: "redirect without Location" });
+    }
+  });
+
+  it("returns FETCH_FAILED when redirect count exceeds maxRedirects", async () => {
+    let calls = 0;
+    globalThis.fetch = vi.fn(async () => {
+      calls++;
+      return new Response(null, { status: 302, headers: { location: "https://example.com/loop" } });
+    }) as any;
+    const r = await controlledFetch("https://example.com/redir", { timeoutMs: 1000, maxBytes: 1024, maxRedirects: 1 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toBe("FETCH_FAILED");
+      expect(r.detail).toMatchObject({ reason: "too many redirects" });
+    }
+  });
 });

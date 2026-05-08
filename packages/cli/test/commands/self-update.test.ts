@@ -178,6 +178,42 @@ describe("runSelfUpdate", () => {
         expect(r.result.error).toBe("LINK_FAILED");
       }
     });
+
+    it("does not call npm commands when local source exists", async () => {
+      const h = home();
+      const sourceRoot = createLocalSource(h, "0.3.0-fake");
+      mockExec.mockReturnValueOnce(undefined); // npm run build
+      mockExec.mockReturnValueOnce(undefined); // npm link
+
+      await runSelfUpdate({ home: h, check: false, sourceRoot });
+
+      // Only build and link should be called, no npm view or npm install
+      expect(mockExec).toHaveBeenCalledTimes(2);
+      expect(mockExec).toHaveBeenCalledWith(
+        "npm run build -w packages/cli",
+        expect.any(Object),
+      );
+      expect(mockExec).toHaveBeenCalledWith(
+        "npm link ./packages/cli",
+        expect.any(Object),
+      );
+    });
+
+    it("returns 'unknown' version when reading local source version fails after build+link", async () => {
+      const h = home();
+      const root = join(h, "llm-wiki");
+      mkdirSync(join(root, "packages", "cli"), { recursive: true });
+      writeFileSync(join(root, "packages", "cli", "package.json"), "NOT VALID JSON");
+      mockExec.mockReturnValueOnce(undefined); // build
+      mockExec.mockReturnValueOnce(undefined); // link
+
+      const r = await runSelfUpdate({ home: h, check: false, sourceRoot: root });
+      expect(r.exitCode).toBe(0);
+      if (r.result.ok) {
+        expect(r.result.data.newVersion).toBe("unknown");
+        expect(r.result.data.humanHint).toContain("unknown");
+      }
+    });
   });
 
   // --- npm fallback ---
@@ -247,6 +283,20 @@ describe("runSelfUpdate", () => {
       if (!r.result.ok) {
         expect(r.result.error).toBe("INSTALL_FAILED");
       }
+    });
+
+    it("does not call npm install when already on latest beta", async () => {
+      const h = home();
+      mockExec.mockReturnValueOnce(`${currentVersion}\n`); // npm view only
+
+      await runSelfUpdate({ home: h, check: false, sourceRoot: "/nonexistent" });
+
+      // Only npm view should be called, no npm install
+      expect(mockExec).toHaveBeenCalledTimes(1);
+      expect(mockExec).toHaveBeenCalledWith(
+        "npm view skillwiki@beta version",
+        expect.any(Object),
+      );
     });
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -11,8 +11,15 @@ vi.mock("node:child_process", () => ({
   execSync: vi.fn(),
 }));
 
+// Mock the install module so refreshInstalledSkills gets a controlled result
+vi.mock("../../src/commands/install.js", () => ({
+  runInstall: vi.fn(),
+}));
+
 import { execSync } from "node:child_process";
+import { runInstall } from "../../src/commands/install.js";
 const mockExec = execSync as unknown as ReturnType<typeof vi.fn>;
+const mockInstall = runInstall as unknown as ReturnType<typeof vi.fn>;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const currentVersion = JSON.parse(
@@ -25,7 +32,37 @@ function home(): string {
   return h;
 }
 
+/** Convenience: mock runInstall returning a successful install with given version_warnings. */
+function mockInstallSuccess(version_warnings: string[] = []) {
+  mockInstall.mockResolvedValueOnce({
+    exitCode: 0,
+    result: {
+      ok: true as const,
+      data: {
+        installed: [],
+        backed_up: [],
+        manifest_path: "/fake/manifest",
+        version_warnings,
+        humanHint: "installed: 0",
+      },
+    },
+  });
+}
+
+/** Convenience: mock runInstall returning a failure. */
+function mockInstallFailure(error: string) {
+  mockInstall.mockResolvedValueOnce({
+    exitCode: 13,
+    result: { ok: false, error, detail: {} },
+  });
+}
+
 describe("runUpdate", () => {
+  beforeEach(() => {
+    mockExec.mockReset();
+    mockInstall.mockReset();
+  });
+
   it("reports already latest when versions match", async () => {
     const h = home();
     mockExec.mockReturnValueOnce(`${currentVersion}\n`); // npm view returns current version
@@ -36,6 +73,8 @@ describe("runUpdate", () => {
     if (r.result.ok) {
       expect(r.result.data.wasAlreadyLatest).toBe(true);
       expect(r.result.data.newVersion).toBeNull();
+      expect(r.result.data.version_warnings).toEqual([]);
+      expect(r.result.data.skills_refreshed).toBe(false);
     }
   });
 
@@ -43,6 +82,8 @@ describe("runUpdate", () => {
     const h = home();
     mockExec.mockReturnValueOnce("0.2.0-beta.16\n"); // npm view returns newer
     mockExec.mockReturnValueOnce(undefined); // npm install succeeds
+    mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n"); // npm root -g
+    mockInstallSuccess();
 
     const r = await runUpdate({ home: h, distTag: "beta" });
     expect(r.exitCode).toBe(0);
@@ -51,6 +92,7 @@ describe("runUpdate", () => {
       expect(r.result.data.wasAlreadyLatest).toBe(false);
       expect(r.result.data.newVersion).toBe("0.2.0-beta.16");
       expect(r.result.data.humanHint).toContain("0.2.0-beta.16");
+      expect(r.result.data.skills_refreshed).toBe(true);
     }
   });
 
@@ -77,11 +119,49 @@ describe("runUpdate", () => {
     const h = home();
     mockExec.mockReturnValueOnce("0.2.0-beta.16\n");
     mockExec.mockReturnValueOnce(undefined);
+    mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
+    mockInstallSuccess();
 
     await runUpdate({ home: h, distTag: "beta" });
     const cache = JSON.parse(readFileSync(cachePath(h), "utf8"));
     expect(cache.latestVersion).toBe("0.2.0-beta.16");
     expect(cache.updateAppliedAt).toBeDefined();
+  });
+
+  it("uses custom distTag in npm commands", async () => {
+    const h = home();
+    // Return a newer version for "latest" tag
+    mockExec.mockReturnValueOnce("0.3.0\n"); // npm view skillwiki@latest version
+    mockExec.mockReturnValueOnce(undefined); // npm install -g skillwiki@latest
+    mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n"); // npm root -g
+    mockInstallSuccess();
+
+    const r = await runUpdate({ home: h, distTag: "latest" });
+    expect(r.exitCode).toBe(0);
+    // Verify the custom tag was forwarded to both npm commands
+    expect(mockExec).toHaveBeenCalledWith(
+      expect.stringContaining("skillwiki@latest"),
+      expect.any(Object),
+    );
+  });
+
+  it("sets previousVersion to current version in both code paths", async () => {
+    const h = home();
+    // Already-latest path
+    mockExec.mockReturnValueOnce(`${currentVersion}\n`);
+    const r1 = await runUpdate({ home: h, distTag: "beta" });
+    if (r1.result.ok) {
+      expect(r1.result.data.previousVersion).toBe(currentVersion);
+    }
+    // Update path
+    mockExec.mockReturnValueOnce("0.2.0-beta.16\n");
+    mockExec.mockReturnValueOnce(undefined);
+    mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
+    mockInstallSuccess();
+    const r2 = await runUpdate({ home: h, distTag: "beta" });
+    if (r2.result.ok) {
+      expect(r2.result.data.previousVersion).toBe(currentVersion);
+    }
   });
 
   it("writes update cache even when already latest", async () => {
@@ -92,5 +172,150 @@ describe("runUpdate", () => {
     const cache = JSON.parse(readFileSync(cachePath(h), "utf8"));
     expect(cache.latestVersion).toBe(currentVersion);
     expect(cache.updateAppliedAt).toBeUndefined();
+  });
+
+  // --- New tests for version-aware skill refresh ---
+
+  it("calls runInstall with correct target after npm update", async () => {
+    const h = home();
+    mockExec.mockReturnValueOnce("0.2.0-beta.16\n"); // npm view
+    mockExec.mockReturnValueOnce(undefined); // npm install
+    mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n"); // npm root -g
+    mockInstallSuccess();
+
+    await runUpdate({ home: h, distTag: "beta" });
+
+    expect(mockInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skillsRoot: "/usr/local/lib/node_modules/skillwiki/skills",
+        target: join(h, ".claude", "skills"),
+        dryRun: false,
+        symlink: false,
+      }),
+    );
+  });
+
+  it("includes version_warnings from install in UpdateOutput", async () => {
+    const h = home();
+    mockExec.mockReturnValueOnce("0.2.0-beta.16\n");
+    mockExec.mockReturnValueOnce(undefined);
+    mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
+    mockInstallSuccess(["wiki-old: DEPRECATED — will be removed in a future release", "wiki-init: version changed 0.2.0 → 0.3.0"]);
+
+    const r = await runUpdate({ home: h, distTag: "beta" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.version_warnings).toHaveLength(2);
+      expect(r.result.data.version_warnings[0]).toContain("DEPRECATED");
+      expect(r.result.data.version_warnings[1]).toContain("version changed");
+      expect(r.result.data.skills_refreshed).toBe(true);
+    }
+  });
+
+  it("reports skills_refreshed false when npm root -g fails", async () => {
+    const h = home();
+    mockExec.mockReturnValueOnce("0.2.0-beta.16\n"); // npm view
+    mockExec.mockReturnValueOnce(undefined); // npm install
+    mockExec.mockImplementationOnce(() => { throw new Error("npm root failed"); }); // npm root -g
+
+    const r = await runUpdate({ home: h, distTag: "beta" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.skills_refreshed).toBe(false);
+      expect(r.result.data.version_warnings.length).toBeGreaterThan(0);
+      expect(r.result.data.version_warnings[0]).toContain("could not locate global skillwiki");
+    }
+  });
+
+  it("handles install refresh failure gracefully", async () => {
+    const h = home();
+    mockExec.mockReturnValueOnce("0.2.0-beta.16\n");
+    mockExec.mockReturnValueOnce(undefined);
+    mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
+    mockInstallFailure("PREFLIGHT_FAILED");
+
+    const r = await runUpdate({ home: h, distTag: "beta" });
+    expect(r.exitCode).toBe(0); // npm update itself succeeded
+    if (r.result.ok) {
+      expect(r.result.data.skills_refreshed).toBe(false);
+      expect(r.result.data.version_warnings.some(w => w.includes("skill refresh failed"))).toBe(true);
+    }
+  });
+
+  it("humanHint includes skill refresh info", async () => {
+    const h = home();
+    mockExec.mockReturnValueOnce("0.2.0-beta.16\n");
+    mockExec.mockReturnValueOnce(undefined);
+    mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
+    mockInstallSuccess();
+
+    const r = await runUpdate({ home: h, distTag: "beta" });
+    if (r.result.ok) {
+      expect(r.result.data.humanHint).toContain("skills refreshed: true");
+    }
+  });
+
+  it("humanHint includes version warnings count when present", async () => {
+    const h = home();
+    mockExec.mockReturnValueOnce("0.2.0-beta.16\n");
+    mockExec.mockReturnValueOnce(undefined);
+    mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
+    mockInstallSuccess(["wiki-init: version changed 0.2.0 → 0.3.0"]);
+
+    const r = await runUpdate({ home: h, distTag: "beta" });
+    if (r.result.ok) {
+      expect(r.result.data.humanHint).toContain("version warnings: 1");
+      expect(r.result.data.humanHint).toContain("version changed");
+    }
+  });
+
+  it("does not call runInstall when already latest", async () => {
+    const h = home();
+    mockExec.mockReturnValueOnce(`${currentVersion}\n`);
+
+    await runUpdate({ home: h, distTag: "beta" });
+
+    expect(mockInstall).not.toHaveBeenCalled();
+  });
+
+  it("defaults to beta distTag when not specified", async () => {
+    const h = home();
+    mockExec.mockReturnValueOnce(`${currentVersion}\n`); // npm view
+
+    await runUpdate({ home: h }); // no distTag
+
+    expect(mockExec).toHaveBeenCalledWith(
+      expect.stringContaining("skillwiki@beta"),
+      expect.any(Object),
+    );
+  });
+
+  it("does not call npm install when already on latest", async () => {
+    const h = home();
+    mockExec.mockReturnValueOnce(`${currentVersion}\n`); // npm view only
+
+    await runUpdate({ home: h, distTag: "beta" });
+
+    // Only npm view should be called, no npm install
+    expect(mockExec).toHaveBeenCalledTimes(1);
+    expect(mockExec).toHaveBeenCalledWith(
+      "npm view skillwiki@beta version",
+      expect.any(Object),
+    );
+  });
+
+  it("handles runInstall throwing an exception gracefully", async () => {
+    const h = home();
+    mockExec.mockReturnValueOnce("0.2.0-beta.16\n"); // npm view
+    mockExec.mockReturnValueOnce(undefined); // npm install
+    mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n"); // npm root -g
+    mockInstall.mockRejectedValueOnce(new Error("install crashed"));
+
+    const r = await runUpdate({ home: h, distTag: "beta" });
+    expect(r.exitCode).toBe(0); // npm update itself succeeded
+    if (r.result.ok) {
+      expect(r.result.data.skills_refreshed).toBe(false);
+      expect(r.result.data.version_warnings.some(w => w.includes("skill refresh error"))).toBe(true);
+    }
   });
 });

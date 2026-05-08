@@ -23,9 +23,10 @@ describe("runIndexLinkFormat", () => {
       const res = await runIndexLinkFormat({ vault });
       expect(res.exitCode).toBe(0);
       expect(res.result.ok).toBe(true);
-      expect(res.result.data!.markdown_links).toHaveLength(1);
-      expect(res.result.data!.markdown_links[0].line).toBe(3);
-      expect(res.result.data!.markdown_links[0].text).toContain("[Foo](concepts/foo.md)");
+      if (!res.result.ok) throw new Error("expected ok");
+      expect(res.result.data.markdown_links).toHaveLength(1);
+      expect(res.result.data.markdown_links[0].line).toBe(3);
+      expect(res.result.data.markdown_links[0].text).toContain("[Foo](concepts/foo.md)");
     } finally { rmSync(vault, { recursive: true, force: true }); }
   });
 
@@ -36,7 +37,8 @@ describe("runIndexLinkFormat", () => {
     try {
       const res = await runIndexLinkFormat({ vault });
       expect(res.result.ok).toBe(true);
-      expect(res.result.data!.markdown_links).toHaveLength(0);
+      if (!res.result.ok) throw new Error("expected ok");
+      expect(res.result.data.markdown_links).toHaveLength(0);
     } finally { rmSync(vault, { recursive: true, force: true }); }
   });
 
@@ -45,7 +47,51 @@ describe("runIndexLinkFormat", () => {
     try {
       const res = await runIndexLinkFormat({ vault });
       expect(res.result.ok).toBe(true);
-      expect(res.result.data!.markdown_links).toHaveLength(0);
+      if (!res.result.ok) throw new Error("expected ok");
+      expect(res.result.data.markdown_links).toHaveLength(0);
+    } finally { rmSync(vault, { recursive: true, force: true }); }
+  });
+
+  it("detects multiple markdown links with correct line numbers", async () => {
+    const vault = makeVault({
+      "index.md": "# Index\n## Concepts\n- [Foo](concepts/foo.md) — desc\n- [[concepts/bar]] — ok\n- [Baz](entities/baz.md) — another\n",
+    });
+    try {
+      const res = await runIndexLinkFormat({ vault });
+      expect(res.result.ok).toBe(true);
+      if (!res.result.ok) throw new Error("expected ok");
+      expect(res.result.data.markdown_links).toHaveLength(2);
+      expect(res.result.data.markdown_links[0].line).toBe(3);
+      expect(res.result.data.markdown_links[0].text).toContain("[Foo](concepts/foo.md)");
+      expect(res.result.data.markdown_links[1].line).toBe(5);
+      expect(res.result.data.markdown_links[1].text).toContain("[Baz](entities/baz.md)");
+    } finally { rmSync(vault, { recursive: true, force: true }); }
+  });
+
+  it("detects markdown link on a line that also has a wikilink", async () => {
+    const vault = makeVault({
+      "index.md": "# Index\n- [Foo](concepts/foo.md) and [[concepts/bar]] — mixed\n",
+    });
+    try {
+      const res = await runIndexLinkFormat({ vault });
+      expect(res.result.ok).toBe(true);
+      if (!res.result.ok) throw new Error("expected ok");
+      expect(res.result.data.markdown_links).toHaveLength(1);
+      expect(res.result.data.markdown_links[0].line).toBe(2);
+      expect(res.result.data.markdown_links[0].text).toContain("[Foo](concepts/foo.md)");
+    } finally { rmSync(vault, { recursive: true, force: true }); }
+  });
+
+  it("includes humanHint listing markdown links when found", async () => {
+    const vault = makeVault({
+      "index.md": "# Index\n- [Foo](concepts/foo.md)\n",
+    });
+    try {
+      const res = await runIndexLinkFormat({ vault });
+      expect(res.result.ok).toBe(true);
+      if (!res.result.ok) throw new Error("expected ok");
+      expect(res.result.data.humanHint).toContain("markdown links found: 1");
+      expect(res.result.data.humanHint).toContain("line 2");
     } finally { rmSync(vault, { recursive: true, force: true }); }
   });
 });

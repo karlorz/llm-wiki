@@ -49,4 +49,37 @@ describe("hash", () => {
     const r2 = await runHash({ file: p2 });
     if (r1.result.ok && r2.result.ok) expect(r1.result.data.sha256).not.toBe(r2.result.data.sha256);
   });
+
+  it("hashes a file with CRLF line endings", async () => {
+    const p = tmp("---\r\ntitle: x\r\n---\r\nhello");
+    const r = await runHash({ file: p });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      // CRLF frontmatter delimiters are handled; body "hello" extracts cleanly
+      expect(r.result.data.sha256).toBe("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+      expect(r.result.data.byte_count).toBe(5);
+    }
+  });
+
+  it("hashes an empty body", async () => {
+    const p = tmp("---\ntitle: x\n---\n");
+    const r = await runHash({ file: p });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.byte_count).toBe(0);
+      expect(r.result.data.sha256).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    }
+  });
+
+  it("differs from hash of body with trailing newline", async () => {
+    const p1 = tmp("---\ntitle: x\n---\nhello");
+    const p2 = tmp("---\ntitle: x\n---\nhello\n");
+    const r1 = await runHash({ file: p1 });
+    const r2 = await runHash({ file: p2 });
+    if (r1.result.ok && r2.result.ok) {
+      expect(r1.result.data.sha256).not.toBe(r2.result.data.sha256);
+      expect(r1.result.data.byte_count).toBe(5);
+      expect(r2.result.data.byte_count).toBe(6);
+    }
+  });
 });

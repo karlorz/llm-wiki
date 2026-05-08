@@ -38,4 +38,24 @@ describe("runLang", () => {
       expect(Array.isArray(r.result.data.chain)).toBe(true);
     }
   });
+
+  it("resolves 'zh-cn' alias to 'zh-Hans'", async () => {
+    const h = home();
+    const r = await runLang({ flag: "zh-cn", envValue: undefined, home: h });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.canonical).toBe("zh-Hans");
+      expect(r.result.data.source).toBe("flag");
+    }
+  });
+
+  it("passes through unrecognized language code without canonical normalization", async () => {
+    const h = home();
+    const r = await runLang({ flag: "xx", envValue: undefined, home: h });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.canonical).toBe("xx");
+      expect(r.result.data.source).toBe("flag");
+    }
+  });
 });

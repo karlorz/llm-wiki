@@ -227,4 +227,25 @@ single-quoted date`);
       expect(r.result.data.newFiles[0].ingested).toBe("2026-05-07");
     }
   });
+
+  it("skips files with refreshable: false", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "nonrefresh.md"), `---
+sha256: ${STORED_HASH}
+source_url: https://example.com/a
+ingested: "2026-05-05"
+refreshable: false
+---
+
+body content here`);
+    const r = await runDrift({
+      vault: dir,
+      fetchFn: async () => ok({ body: "changed content here" }),
+    });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.scanned).toBe(0);
+      expect(r.result.data.drifted.length).toBe(0);
+    }
+  });
 });

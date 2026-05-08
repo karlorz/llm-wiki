@@ -64,4 +64,69 @@ describe("runTopicMapCheck", () => {
     expect(r.exitCode).toBe(9);
     expect(r.result.ok).toBe(false);
   });
+
+  it("passes when all pages match their type directory", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vault-"));
+    writeFileSync(join(dir, "SCHEMA.md"), "# Vault Schema\n");
+    mkdirSync(join(dir, "concepts"), { recursive: true });
+    mkdirSync(join(dir, "entities"), { recursive: true });
+    const conceptFM = `---
+title: concept-page
+type: concept
+tags: []
+sources: []
+provenance: research
+created: 2026-05-04
+updated: 2026-05-04
+---
+
+concept content
+`;
+    const entityFM = `---
+title: entity-page
+type: entity
+tags: []
+sources: []
+provenance: research
+created: 2026-05-04
+updated: 2026-05-04
+---
+
+entity content
+`;
+    writeFileSync(join(dir, "concepts", "my-concept.md"), conceptFM);
+    writeFileSync(join(dir, "entities", "my-entity.md"), entityFM);
+    const r = await runTopicMapCheck({ vault: dir, threshold: 1 });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.page_count).toBe(2);
+      expect(r.result.data.recommended).toBe(true);
+    }
+  });
+
+  it("detects page in wrong type directory — entity frontmatter in concepts/", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vault-"));
+    writeFileSync(join(dir, "SCHEMA.md"), "# Vault Schema\n");
+    mkdirSync(join(dir, "concepts"), { recursive: true });
+    const misplacedFM = `---
+title: misplaced-entity
+type: entity
+tags: []
+sources: []
+provenance: research
+created: 2026-05-04
+updated: 2026-05-04
+---
+
+entity content in wrong dir
+`;
+    writeFileSync(join(dir, "concepts", "misplaced-entity.md"), misplacedFM);
+    const r = await runTopicMapCheck({ vault: dir, threshold: 1 });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      // Path-based scan still counts the page as typed knowledge
+      expect(r.result.data.page_count).toBe(1);
+      expect(r.result.data.recommended).toBe(true);
+    }
+  });
 });

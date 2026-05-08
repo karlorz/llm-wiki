@@ -36,4 +36,22 @@ describe("frontmatter", () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.data).toEqual({});
   });
+
+  it("returns empty object when YAML parses to an array", () => {
+    const r = extractFrontmatter("---\n- a\n- b\n---\nbody\n");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.data).toEqual({});
+  });
+
+  it("returns empty object when YAML parses to null", () => {
+    const r = extractFrontmatter("---\nnull\n---\nbody\n");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.data).toEqual({});
+  });
+
+  it("returns INVALID_FRONTMATTER on unparseable YAML", () => {
+    const r = extractFrontmatter("---\n: [bad\n---\nbody\n");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toBe("INVALID_FRONTMATTER");
+  });
 });

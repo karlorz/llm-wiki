@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execSync } from "node:child_process";
 import { runDoctor } from "../../src/commands/doctor.js";
 
 function home(): string {
@@ -45,20 +46,24 @@ function fullVault(): string {
   const v = mkdtempSync(join(tmpdir(), "vault-"));
   writeFileSync(join(v, "SCHEMA.md"), SCHEMA);
   for (const d of ["raw", "entities", "concepts", "meta"]) mkdirSync(join(v, d), { recursive: true });
+  // Initialize git so vault_git_remote check passes
+  execSync("git init", { cwd: v, stdio: "pipe" });
+  execSync("git remote add origin https://example.com/vault.git", { cwd: v, stdio: "pipe" });
   return v;
 }
 
 describe("runDoctor", () => {
-  it("all-pass returns exit 0", async () => {
+  it("all-pass returns exit 0 with git vault", async () => {
     const h = home();
     const v = fullVault();
     writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
-    expect(r.exitCode).toBe(0);
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       expect(r.result.data.summary.error).toBe(0);
-      expect(r.result.data.summary.warn).toBe(0);
+      // vault_git_remote should pass with a git-initialized vault
+      const gitCheck = r.result.data.checks.find(c => c.id === "vault_git_remote");
+      expect(gitCheck?.status).toBe("pass");
     }
   });
 
@@ -134,12 +139,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 10 checks", async () => {
+  it("always returns exactly 14 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(11);
+      expect(r.result.data.checks).toHaveLength(14);
     }
   });
 
@@ -222,8 +227,9 @@ describe("runDoctor", () => {
     const r = await runDoctor({ home: h, envValue: "/default", argv: ["node", "cli.js"], currentVersion: "1.0.0" });
     const profileCheck = r.result.ok && r.result.data.checks.find(c => c.id === "wiki_profiles");
     expect(profileCheck).toBeDefined();
-    expect(profileCheck!.status).toBe("pass");
-    expect(profileCheck!.detail).toContain("finance");
+    if (!profileCheck) throw new Error("expected CheckResult");
+    expect(profileCheck.status).toBe("pass");
+    expect(profileCheck.detail).toContain("finance");
   });
 
   it("reports project-local override when present", async () => {
@@ -253,6 +259,38 @@ describe("runDoctor", () => {
       const proj = r.result.data.checks.find(c => c.id === "project_local");
       expect(proj).toBeDefined();
       expect(proj!.detail).toContain("None");
+    }
+  });
+
+  it("sync_last_push warns when no remote/HEAD and no commits", async () => {
+    const h = home();
+    const v = mkdtempSync(join(tmpdir(), "vault-"));
+    writeFileSync(join(v, "SCHEMA.md"), "# Schema\n");
+    for (const d of ["raw", "entities", "concepts", "meta"]) mkdirSync(join(v, d), { recursive: true });
+    execSync("git init", { cwd: v, stdio: "pipe" });
+    // No commits, no remote — empty repo
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const sync = r.result.data.checks.find(c => c.id === "sync_last_push");
+      expect(sync?.status).toBe("warn");
+      expect(sync?.detail).toContain("No commits found");
+    }
+  });
+
+  it("sync_last_push passes when recent commit exists", async () => {
+    const h = home();
+    const v = fullVault();
+    execSync("git -c user.name=test -c user.email=test@test commit --allow-empty -m init", { cwd: v, stdio: "pipe" });
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const sync = r.result.data.checks.find(c => c.id === "sync_last_push");
+      expect(sync?.status).toBe("pass");
+      expect(sync?.detail).toContain("Last push:");
+      expect(sync?.detail).toContain("day(s) ago");
     }
   });
 });

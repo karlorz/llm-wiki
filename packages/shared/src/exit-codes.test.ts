@@ -4,6 +4,7 @@ import { ExitCode, exitCodeName } from "./exit-codes.js";
 describe("exit-codes", () => {
   it("declares every code from the spec Command Contracts table", () => {
     expect(ExitCode.OK).toBe(0);
+    expect(ExitCode.INTERNAL_ERROR).toBe(1);
     expect(ExitCode.FILE_NOT_FOUND).toBe(2);
     expect(ExitCode.MISSING_CLOSING_DELIMITER).toBe(3);
     expect(ExitCode.SCHEME_REJECTED).toBe(4);
@@ -28,11 +29,22 @@ describe("exit-codes", () => {
     expect(ExitCode.LINT_HAS_ERRORS).toBe(23);
     expect(ExitCode.ENV_WRITE_CONFLICT).toBe(24);
     expect(ExitCode.NO_VAULT_CONFIGURED).toBe(25);
+    expect(ExitCode.INVALID_CONFIG_KEY).toBe(26);
+    expect(ExitCode.CONFIG_WRITE_FAILED).toBe(27);
+    expect(ExitCode.DOCTOR_HAS_WARNINGS).toBe(28);
+    expect(ExitCode.DOCTOR_HAS_ERRORS).toBe(29);
     expect(ExitCode.ARCHIVE_TARGET_NOT_FOUND).toBe(30);
     expect(ExitCode.ARCHIVE_ALREADY_ARCHIVED).toBe(31);
     expect(ExitCode.DRIFT_DETECTED).toBe(32);
     expect(ExitCode.RAW_DEDUP_DETECTED).toBe(33);
+    expect(ExitCode.MIGRATION_APPLIED).toBe(34);
+    expect(ExitCode.UNKNOWN_WIKI_PROFILE).toBe(35);
+    expect(ExitCode.DEDUP_APPLIED).toBe(36);
+    expect(ExitCode.PROJECT_NOT_FOUND).toBe(37);
     expect(ExitCode.SYMLINK_FAILED).toBe(38);
+    expect(ExitCode.COMPOUND_PROMOTED).toBe(39);
+    expect(ExitCode.SKILL_VERSION_MISMATCH).toBe(40);
+    expect(ExitCode.INGEST_VALIDATION_FAILED).toBe(41);
   });
 
   it("exposes a stable name for every code (non-empty, unique)", () => {

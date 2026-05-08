@@ -91,6 +91,126 @@ describe("runProjectIndex", () => {
     }
   });
 
+  it("includes compound pages in the index", async () => {
+    const dir = makeVault("cmux");
+    mkdirSync(join(dir, "projects", "cmux", "compound"), { recursive: true });
+    writeFileSync(join(dir, "projects", "cmux", "compound", "routing-gotcha.md"), `---
+title: Routing Gotcha
+type: gotcha
+project: "[[cmux]]"
+created: 2026-05-09
+updated: 2026-05-09
+---
+
+# Routing Gotcha
+
+Watch out for trailing slashes.
+`);
+    writeFileSync(join(dir, "concepts", "cmux-routing.md"), CONCEPT_FM("cmux", "Routing Design"));
+
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: false });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.entries.length).toBe(2);
+      const gotcha = r.result.data.entries.find(e => e.type === "gotcha");
+      expect(gotcha).toBeDefined();
+      expect(gotcha!.page).toBe("projects/cmux/compound/routing-gotcha.md");
+      expect(gotcha!.title).toBe("Routing Gotcha");
+    }
+  });
+
+  it("writes compound entries to knowledge.md with --apply", async () => {
+    const dir = makeVault("cmux");
+    mkdirSync(join(dir, "projects", "cmux", "compound"), { recursive: true });
+    writeFileSync(join(dir, "projects", "cmux", "compound", "routing-pattern.md"), `---
+title: Routing Pattern
+type: pattern
+project: "[[cmux]]"
+created: 2026-05-09
+updated: 2026-05-09
+---
+
+# Routing Pattern
+
+Use hub pages.
+`);
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: true });
+    expect(r.exitCode).toBe(0);
+
+    const knowledge = readFileSync(join(dir, "projects", "cmux", "knowledge.md"), "utf8");
+    expect(knowledge).toContain("pattern");
+    expect(knowledge).toContain("Routing Pattern");
+    expect(knowledge).toContain("[[projects/cmux/compound/routing-pattern]]");
+  });
+
+  it("finds entity pages referencing the project", async () => {
+    const dir = makeVault("cmux");
+    writeFileSync(join(dir, "entities", "cmux-router.md"), `---
+title: CMUX Router
+created: 2026-05-08
+updated: 2026-05-08
+type: entity
+tags: [test]
+sources: [raw/test.md]
+provenance: project
+provenance_projects: ["[[cmux]]"]
+---
+
+# CMUX Router
+
+Entity description.
+`);
+    writeFileSync(join(dir, "concepts", "cmux-routing.md"), CONCEPT_FM("cmux", "Routing Design"));
+
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: false });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      // Entities sort before concepts
+      expect(r.result.data.entries.length).toBe(2);
+      expect(r.result.data.entries[0].type).toBe("entity");
+      expect(r.result.data.entries[0].page).toBe("entities/cmux-router.md");
+      expect(r.result.data.entries[1].type).toBe("concept");
+    }
+  });
+
+  it("reports existing index as up-to-date (not stale)", async () => {
+    const dir = makeVault("cmux");
+    mkdirSync(join(dir, "projects", "cmux", "compound"), { recursive: true });
+    writeFileSync(join(dir, "concepts", "cmux-routing.md"), CONCEPT_FM("cmux", "Routing Design"));
+    // First apply to create knowledge.md
+    await runProjectIndex({ vault: dir, slug: "cmux", apply: true });
+    // Second run should detect existing and NOT stale
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: false });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.existing).toBe(true);
+      expect(r.result.data.stale).toBe(false);
+    }
+  });
+
+  it("defaults compound type to 'compound' when type missing from frontmatter", async () => {
+    const dir = makeVault("cmux");
+    mkdirSync(join(dir, "projects", "cmux", "compound"), { recursive: true });
+    writeFileSync(join(dir, "projects", "cmux", "compound", "no-type.md"), `---
+title: No Type Entry
+project: "[[cmux]]"
+created: 2026-05-09
+updated: 2026-05-09
+---
+
+# No Type Entry
+
+Body text.
+`);
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: false });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.entries.length).toBe(1);
+      expect(r.result.data.entries[0].type).toBe("compound");
+      expect(r.result.data.entries[0].title).toBe("No Type Entry");
+    }
+  });
+
   it("returns empty entries when no pages reference the project", async () => {
     const dir = makeVault("empty-proj");
 

@@ -14,4 +14,17 @@ describe("wikilinks", () => {
   it("dedupes within a single body", () => {
     expect(extractBodyWikilinks("[[a]] and [[a]] again")).toEqual(["a"]);
   });
+
+  it("returns empty array when body has no wikilinks", () => {
+    expect(extractBodyWikilinks("just plain text\nno links here")).toEqual([]);
+  });
+
+  it("trims whitespace from wikilink targets", () => {
+    expect(extractBodyWikilinks("[[ foo ]] and [[bar ]]\n")).toEqual(["foo", "bar"]);
+  });
+
+  it("ignores wikilinks inside triple-backtick fenced code blocks", () => {
+    const body = "```\n[[inside-fence]]\n```\n[[outside]]\n";
+    expect(extractBodyWikilinks(body)).toEqual(["outside"]);
+  });
 });
