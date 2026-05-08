@@ -272,7 +272,7 @@ program
 // archive
 program
   .command("archive <page> [vault]")
-  .description("archive a typed-knowledge page")
+  .description("archive a typed-knowledge or raw page")
   .option("--wiki <name>", "wiki profile name")
   .action(async (page, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
