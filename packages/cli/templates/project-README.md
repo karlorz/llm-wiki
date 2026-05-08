@@ -12,3 +12,7 @@
 - `architecture/` — how it's designed (incl. ADRs).
 - `work/YYYY-MM-DD-{slug}/` — per-work-item folders containing `spec.md`, `plan.md`, `log.md`.
 - `compound/` — project-local concrete learnings.
+
+## Knowledge
+
+Run `skillwiki project-index {{slug}} --apply` to generate `knowledge.md` listing all Layer 2 pages that reference `[[{{slug}}]]` in their provenance_projects.

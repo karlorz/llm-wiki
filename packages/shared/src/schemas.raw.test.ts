@@ -22,11 +22,30 @@ describe("RawSourceSchema", () => {
     expect(() => RawSourceSchema.parse({ ...remote, sha256: "deadbeef" })).toThrow();
   });
 
-  it("requires kind/project/work_item together for project-originated", () => {
-    expect(() => RawSourceSchema.parse({ ...remote, source_url: null, project: "[[cmux]]" })).toThrow();
+  it("requires project+kind when work_item is set", () => {
+    expect(() => RawSourceSchema.parse({ ...remote, source_url: null, work_item: "[[2026-05-03-bug]]" })).toThrow();
   });
 
-  it("accepts a complete project-originated entry", () => {
+  it("accepts project+kind without work_item (ad-hoc capture)", () => {
+    const v = {
+      ...remote,
+      source_url: null,
+      project: "[[cmux]]",
+      kind: "idea"
+    };
+    expect(RawSourceSchema.parse(v)).toBeTruthy();
+  });
+
+  it("accepts kind without project (standalone capture)", () => {
+    const v = {
+      ...remote,
+      source_url: null,
+      kind: "bug"
+    };
+    expect(RawSourceSchema.parse(v)).toBeTruthy();
+  });
+
+  it("accepts a complete project-originated entry with work_item", () => {
     const v = {
       ...remote,
       source_url: null,
@@ -35,5 +54,11 @@ describe("RawSourceSchema", () => {
       kind: "postmortem"
     };
     expect(RawSourceSchema.parse(v)).toBeTruthy();
+  });
+
+  it("accepts all capture kind values", () => {
+    for (const kind of ["idea", "bug", "task", "note"] as const) {
+      expect(RawSourceSchema.parse({ ...remote, source_url: null, kind })).toBeTruthy();
+    }
   });
 });

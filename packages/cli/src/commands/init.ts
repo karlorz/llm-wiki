@@ -211,11 +211,11 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   const errTemplate = await writeOrPreserve(`${TEMPLATE_FOLDER}/tpl-ad-hoc-capture.md`, async () => {
     return [
       "---",
-      "project: ",
-      "tags: []",
-      "priority: ",
-      "created: {{date:YYYY-MM-DD}}T{{time:HH:mm}}",
-      "ingested: ",
+      "source_url:",
+      "ingested: {{date:YYYY-MM-DD}}",
+      "sha256:          # run: skillwiki hash <this-file>",
+      "kind:             # idea | bug | task | note | other",
+      "project:          # optional: \"[[slug]]\"",
       "---",
       "",
       ""

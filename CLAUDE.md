@@ -88,7 +88,7 @@ wiki/
 ```
 
 - **Layer 1 — Raw (`raw/`):** Immutable after ingest. `raw/transcripts/` doubles as the ad-hoc capture point — meeting notes, quick ideas, and unprocessed drafts go here. **No `inbox/` directory.** Do not invent new top-level directories. Three entry points for ad-hoc capture:
-  - `/wiki-add-task <text>` — from inside a Claude session, appends to `raw/transcripts/YYYY-MM-DD-ad-hoc-captures.md`
+  - `/wiki-add-task <text>` — from inside a Claude session, creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with raw-valid frontmatter
   - **Filesystem drop** — create any `.md` file in `raw/transcripts/` when not in a Claude session (Obsidian, editor, sync); dev-loop discovers it on next cycle
   - **Dev-loop discovery** — automatic scan of `raw/transcripts/` for new files, surfaces as claimable work
 - **Layer 2 — Typed Knowledge:** Agent-owned pages with `^[raw/...]` citation markers. Global scope — project association via `provenance_projects:` frontmatter, not directory nesting.
@@ -100,9 +100,9 @@ wiki/
 - **New** specs and plans go into work items via `proj-work` → `projects/llm-wiki/work/YYYY-MM-DD-{slug}/spec.md` or `plan.md`. The `history/{specs,plans}/` folder is **archive-only** for superseded historical documents — do not write new work there. Do not recreate `docs/superpowers/`.
 - The dev-loop skill (`dev-loop:1.1.0`) drives the PRD+skillwiki workflow. It reads project config from `.claude/dev-loop.config.md`. Legacy commands are archived at `~/.claude/commands/_archive/2026-05-07/`.
 
-## Current counts (2026-05-07)
+## Current counts (2026-05-08)
 
 - 15 SKILL.md files in `packages/skills/`
-- 29 CLI subcommands in `packages/cli/src/commands/`
-- 30 test files in `packages/cli/test/commands/`
+- 30 CLI subcommands in `packages/cli/src/commands/`
+- 31 test files in `packages/cli/test/commands/`
 - Lint buckets: 4 error, 10 warning, 5 info (incl. `page_structure`, `duplicate_frontmatter`, `missing_overview`, `frontmatter_wikilink`, `wikilink_citation`)

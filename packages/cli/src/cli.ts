@@ -29,6 +29,7 @@ import { runMigrateCitations } from "./commands/migrate-citations.js";
 import { runFrontmatterFix } from "./commands/frontmatter-fix.js";
 import { runUpdate } from "./commands/update.js";
 import { runTranscripts } from "./commands/transcripts.js";
+import { runProjectIndex } from "./commands/project-index.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 import { triggerAutoUpdate } from "./utils/auto-update.js";
 
@@ -349,6 +350,18 @@ program
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runTranscripts({ vault: v.vault, since: opts.since }));
+  });
+
+// project-index
+program
+  .command("project-index <slug> [vault]")
+  .description("generate a knowledge index for a project workspace")
+  .option("--apply", "write knowledge.md to the project directory", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (slug, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runProjectIndex({ vault: v.vault, slug, apply: !!opts.apply }));
   });
 
 // Background auto-update check (non-blocking, 24h cache)

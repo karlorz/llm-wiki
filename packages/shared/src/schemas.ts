@@ -40,12 +40,10 @@ export const RawSourceSchema = z.object({
   sha256: sha256Hex,
   project: wikilink.optional(),
   work_item: wikilink.optional(),
-  kind: z.enum(["postmortem", "session-log", "meeting-notes", "other"]).optional()
+  kind: z.enum(["postmortem", "session-log", "meeting-notes", "other", "idea", "bug", "task", "note"]).optional()
 }).superRefine((v, ctx) => {
-  const projectFields = [v.project, v.work_item, v.kind];
-  const present = projectFields.filter((x) => x !== undefined).length;
-  if (present !== 0 && present !== 3) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "project, work_item, kind must all be set together" });
+  if (v.work_item !== undefined && (v.project === undefined || v.kind === undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "project and kind are required when work_item is set" });
   }
 });
 
