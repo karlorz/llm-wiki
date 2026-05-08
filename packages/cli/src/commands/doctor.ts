@@ -101,7 +101,15 @@ function checkVaultStructure(resolvedPath: string | undefined): CheckResult {
   return check("warn", "vault_structure", "Vault structure valid", `Missing: ${missing.join(", ")} — run \`skillwiki init\` to add CodeWiki structure`);
 }
 
-function checkSkillsInstalled(home: string): CheckResult {
+function checkSkillsInstalled(home: string, cwd?: string): CheckResult {
+  // Check CWD source tree first (for dev/project runs)
+  const srcDir = cwd ? join(cwd, "packages", "skills") : undefined;
+  if (srcDir && existsSync(srcDir)) {
+    const found = findSkillMd(srcDir);
+    if (found.length > 0) {
+      return check("pass", "skills_installed", "Skills installed", `${found.length} SKILL.md file(s) found (source)`);
+    }
+  }
   const plugin = findPlugin(home);
   if (plugin) {
     const found = findSkillMd(plugin.installPath);
@@ -177,6 +185,78 @@ async function checkProjectLocalOverride(cwd?: string): Promise<CheckResult> {
   return check("pass", "project_local", "Project-local config", "None");
 }
 
+function checkVaultGitRemote(resolvedPath: string | undefined): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("error", "vault_git_remote", "Vault git remote", "Cannot check — WIKI_PATH not resolved");
+  }
+  if (!existsSync(join(resolvedPath, ".git"))) {
+    return check("warn", "vault_git_remote", "Vault git remote", "Vault is not a git repository — sync features unavailable");
+  }
+  try {
+    const remote = execSync("git remote", { cwd: resolvedPath, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+    if (!remote) {
+      return check("warn", "vault_git_remote", "Vault git remote", "No remote configured — push/pull unavailable");
+    }
+    let branch = "(no commits yet)";
+    try {
+      branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: resolvedPath, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
+    } catch { /* empty repo — no HEAD yet */ }
+    return check("pass", "vault_git_remote", "Vault git remote", `Remote: ${remote.split("\n")[0]}, branch: ${branch}`);
+  } catch {
+    return check("warn", "vault_git_remote", "Vault git remote", "Could not read git remote info");
+  }
+}
+
+function checkObsidianTemplates(resolvedPath: string | undefined): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("error", "obsidian_templates", "Obsidian templates", "Cannot check — WIKI_PATH not resolved");
+  }
+  const missing: string[] = [];
+  if (!existsSync(join(resolvedPath, "_Templates"))) missing.push("_Templates/");
+  if (!existsSync(join(resolvedPath, ".obsidian", "templates.json"))) missing.push(".obsidian/templates.json");
+  if (!existsSync(join(resolvedPath, ".obsidian", "app.json"))) missing.push(".obsidian/app.json");
+  if (missing.length === 0) {
+    return check("pass", "obsidian_templates", "Obsidian templates", "Template folder and config present");
+  }
+  return check("warn", "obsidian_templates", "Obsidian templates", `Missing: ${missing.join(", ")} — run \`skillwiki init\` to create`);
+}
+
+function checkSyncLastPush(resolvedPath: string | undefined): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("error", "sync_last_push", "Vault sync recency", "Cannot check — WIKI_PATH not resolved");
+  }
+  if (!existsSync(join(resolvedPath, ".git"))) {
+    return check("pass", "sync_last_push", "Vault sync recency", "No git repo — sync check skipped");
+  }
+  let timestamp: number | undefined;
+  // Try origin/HEAD first (last pushed commit)
+  try {
+    const out = execSync("git log -1 --format=%ct origin/HEAD", {
+      cwd: resolvedPath, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    timestamp = parseInt(out, 10);
+  } catch {
+    // Fallback to last local commit
+    try {
+      const out = execSync("git log -1 --format=%ct HEAD", {
+        cwd: resolvedPath, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      timestamp = parseInt(out, 10);
+    } catch {
+      // No commits at all
+    }
+  }
+  if (timestamp === undefined || isNaN(timestamp)) {
+    return check("warn", "sync_last_push", "Vault sync recency", "No commits found — consider running `skillwiki sync status`");
+  }
+  const daysSince = Math.floor((Date.now() / 1000 - timestamp) / 86400);
+  const dateStr = new Date(timestamp * 1000).toISOString().slice(0, 10);
+  if (daysSince > 7) {
+    return check("warn", "sync_last_push", "Vault sync recency", `Last push was ${daysSince} days ago — consider running \`skillwiki sync status\``);
+  }
+  return check("pass", "sync_last_push", "Vault sync recency", `Last push: ${dateStr} (${daysSince} day(s) ago)`);
+}
+
 function findSkillMd(dir: string): string[] {
   const results: string[] = [];
   let entries;
@@ -216,7 +296,10 @@ export async function runDoctor(
 
   checks.push(checkWikiPathExists(resolvedPath));
   checks.push(checkVaultStructure(resolvedPath));
-  checks.push(checkSkillsInstalled(input.home));
+  checks.push(checkObsidianTemplates(resolvedPath));
+  checks.push(checkVaultGitRemote(resolvedPath));
+  checks.push(checkSyncLastPush(resolvedPath));
+  checks.push(checkSkillsInstalled(input.home, input.cwd));
   checks.push(checkNpmUpdate(input.home, input.currentVersion));
   checks.push(checkPluginVersionDrift(input.home, input.currentVersion));
 

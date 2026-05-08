@@ -43,6 +43,27 @@ export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitC
   const wikilinkPattern = `[[${slug}]]`;
   const entries: IndexEntry[] = [];
 
+  // Scan compound pages for this project
+  const compoundDir = join(input.vault, "projects", slug, "compound");
+  try {
+    const compoundFiles = await readdir(compoundDir, { withFileTypes: true });
+    for (const entry of compoundFiles) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const filePath = join(compoundDir, entry.name);
+      let text: string;
+      try { text = await readFile(filePath, "utf8"); } catch { continue; }
+
+      const fm = extractFrontmatter(text);
+      if (!fm.ok) continue;
+
+      entries.push({
+        page: `projects/${slug}/compound/${entry.name}`,
+        type: typeof fm.data.type === "string" ? fm.data.type : "compound",
+        title: typeof fm.data.title === "string" ? fm.data.title : entry.name.replace(/\.md$/, "")
+      });
+    }
+  } catch { /* no compound dir */ }
+
   // Scan Layer 2 pages for provenance_projects referencing this slug
   for (const dir of LAYER2_DIRS) {
     let files: Array<{ name: string; isFile: () => boolean }>;
@@ -65,14 +86,14 @@ export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitC
 
       entries.push({
         page: `${dir}/${entry.name}`,
-        type: fm.data.type ?? dir.slice(0, -1), // singularize dir name
-        title: fm.data.title ?? entry.name.replace(/\.md$/, "")
+        type: typeof fm.data.type === "string" ? fm.data.type : dir.slice(0, -1),
+        title: typeof fm.data.title === "string" ? fm.data.title : entry.name.replace(/\.md$/, "")
       });
     }
   }
 
   // Sort: entities first, then concepts, then rest; within group by title
-  const typeOrder: Record<string, number> = { entity: 0, concept: 1, comparison: 2, query: 3, summary: 4, meta: 5 };
+  const typeOrder: Record<string, number> = { entity: 0, concept: 1, comparison: 2, query: 3, summary: 4, meta: 5, pattern: 6, gotcha: 7, lesson: 8, antipattern: 9, compound: 10 };
   entries.sort((a, b) => {
     const ta = typeOrder[a.type] ?? 99;
     const tb = typeOrder[b.type] ?? 99;

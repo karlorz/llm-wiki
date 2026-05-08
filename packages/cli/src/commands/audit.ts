@@ -3,6 +3,8 @@ import { dirname, resolve, join } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { extractCitationMarkers } from "../parsers/citations.js";
+import { scanVault, readPage } from "../utils/vault.js";
+import type { VaultPage } from "../utils/vault.js";
 
 export interface AuditInput { file: string }
 export interface AuditOutput {
@@ -84,4 +86,60 @@ async function findVaultRoot(start: string): Promise<string | null> {
     cur = parent;
   }
   return null;
+}
+
+// --- Compound reference validation ---
+
+export interface CompoundRefFinding {
+  compound: string;
+  work_item: string;
+  kind: "missing" | "cross_project";
+  detail: string;
+}
+
+function stripWikilink(s: string): string {
+  return s.replace(/^\[\[/, "").replace(/(?:\|[^\[\]]*)?\]\]$/, "").trim();
+}
+
+export async function validateCompoundReferences(vault: string): Promise<Result<CompoundRefFinding[]>> {
+  const scan = await scanVault(vault);
+  if (!scan.ok) return scan;
+
+  const slugToPage = new Map<string, VaultPage>();
+  const pathToPage = new Map<string, VaultPage>();
+  for (const p of scan.data.workItems) {
+    slugToPage.set(p.relPath.replace(/\.md$/, "").split("/").pop()!.toLowerCase(), p);
+    pathToPage.set(p.relPath, p);
+  }
+
+  const findings: CompoundRefFinding[] = [];
+  for (const cp of scan.data.compound) {
+    const text = await readPage(cp);
+    const fm = extractFrontmatter(text);
+    if (!fm.ok) continue;
+    const projectRaw = fm.data.project as string | undefined;
+    const workItems = fm.data.work_items as string[] | undefined;
+    if (!projectRaw || !workItems?.length) continue;
+    const projSlug = stripWikilink(String(projectRaw));
+
+    for (const wi of workItems) {
+      const target = stripWikilink(wi);
+      const withExt = target.endsWith(".md") ? target : target + ".md";
+      const resolved = pathToPage.get(withExt)
+        ?? slugToPage.get(target.split("/").pop()!.replace(/\.md$/, "").toLowerCase());
+
+      if (!resolved) {
+        findings.push({ compound: cp.relPath, work_item: wi, kind: "missing", detail: `no work item found for [[${target}]]` });
+        continue;
+      }
+      const wiFm = extractFrontmatter(await readPage(resolved));
+      if (wiFm.ok && wiFm.data.project) {
+        const wiProj = stripWikilink(String(wiFm.data.project));
+        if (wiProj !== projSlug) {
+          findings.push({ compound: cp.relPath, work_item: wi, kind: "cross_project", detail: `compound project [[${projSlug}]] != work_item project [[${wiProj}]]` });
+        }
+      }
+    }
+  }
+  return ok(findings);
 }

@@ -22,11 +22,19 @@ export async function atomicCopyWithBackup(src: string, dst: string): Promise<Re
   return ok({ copied: true, backupPath });
 }
 
+export interface SkillMeta {
+  name: string;
+  version?: string;
+  deprecated?: boolean;
+}
+
 export interface Manifest {
   installed: string[];
   backed_up: string[];
   installed_at?: string;
   version?: string;
+  symlink?: boolean;
+  skills?: Record<string, SkillMeta>;
 }
 
 export async function writeManifest(path: string, m: Manifest): Promise<void> {

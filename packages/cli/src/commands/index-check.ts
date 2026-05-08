@@ -23,14 +23,24 @@ export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode:
     const tail = s.split("/").pop()!;
     indexSlugsLower.set(tail.toLowerCase(), tail);
   }
+  // fileSlugs: all known pages (typed + compound) — used for ghost_entry resolution
   const fileSlugs = new Map<string, string>(); // slug -> relPath
+  // requiredSlugs: pages that MUST appear in root index.md — typed knowledge only;
+  // compound pages are indexed at the project level (knowledge.md), not root index.md
+  const requiredSlugs = new Map<string, string>(); // slug -> relPath
+
   for (const p of scan.data.typedKnowledge) {
+    const slug = p.relPath.replace(/\.md$/, "").split("/").pop()!;
+    fileSlugs.set(slug, p.relPath);
+    requiredSlugs.set(slug, p.relPath);
+  }
+  for (const p of scan.data.compound) {
     const slug = p.relPath.replace(/\.md$/, "").split("/").pop()!;
     fileSlugs.set(slug, p.relPath);
   }
 
   const missing_from_index: string[] = [];
-  for (const [slug, relPath] of fileSlugs.entries()) {
+  for (const [slug, relPath] of requiredSlugs.entries()) {
     if (!indexSlugsLower.has(slug.toLowerCase())) missing_from_index.push(relPath);
   }
   const fileSlugsLower = new Set([...fileSlugs.keys()].map(s => s.toLowerCase()));

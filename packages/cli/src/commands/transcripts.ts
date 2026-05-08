@@ -21,7 +21,7 @@ export interface TranscriptsOutput {
 
 export async function runTranscripts(input: TranscriptsInput): Promise<{ exitCode: number; result: Result<TranscriptsOutput> }> {
   const dir = join(input.vault, "raw", "transcripts");
-  let entries: Array<{ name: string }>;
+  let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
   } catch {
