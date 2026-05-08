@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { appendLastOp } from "../utils/last-op.js";
 import { controlledFetch, type FetchOptions } from "../utils/fetch.js";
 
 const FETCH_OPTS: FetchOptions = { timeoutMs: 10000, maxBytes: 5_000_000, maxRedirects: 5 };
@@ -75,6 +76,9 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
     // Skip source_urls that aren't HTTP — vault-internal refs aren't fetchable
     if (!sourceUrl.startsWith("http://") && !sourceUrl.startsWith("https://")) continue;
 
+    // Skip files marked as non-refreshable (e.g. non-deterministic upstream)
+    if (/^refreshable:\s*false\b/m.test(rawFrontmatter)) continue;
+
     const resp = await doFetch(sourceUrl, FETCH_OPTS);
     if (!resp.ok) {
       results.push({
@@ -127,6 +131,16 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
   if (drifted.length > 0) hintLines.push(`drifted: ${drifted.length}`, ...drifted.map(d => `  ${d.raw_path}`));
   if (fetchFailed.length > 0) hintLines.push(`fetch_failed: ${fetchFailed.length}`, ...fetchFailed.map(f => `  ${f.raw_path}: ${f.fetch_error}`));
   if (updated.length > 0) hintLines.push(`updated: ${updated.length}`, ...updated.map(u => `  ${u.raw_path}`));
+
+  // Append last-op for drift-apply mutations
+  if (input.apply && updated.length > 0) {
+    appendLastOp(input.vault, {
+      operation: "drift-apply",
+      summary: `updated ${updated.length} raw sources`,
+      files: updated.map(u => u.raw_path),
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   return {
     exitCode,

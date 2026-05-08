@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { appendLastOp } from "../utils/last-op.js";
 
 export interface FrontmatterFixInput {
   vault: string;
@@ -76,6 +77,15 @@ export async function runFrontmatterFix(input: FrontmatterFixInput): Promise<{ e
   if (skipped.length > 0) hintLines.push(`skipped (parse error): ${skipped.length}`);
   if (unchanged > 0) hintLines.push(`unchanged: ${unchanged}`);
   if (input.dryRun && fixed.length > 0) hintLines.push("(dry run — no files written)");
+
+  if (!input.dryRun && fixed.length > 0) {
+    appendLastOp(input.vault, {
+      operation: "frontmatter-fix",
+      summary: `normalized frontmatter on ${fixed.length} page(s)`,
+      files: fixed,
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   return {
     exitCode,

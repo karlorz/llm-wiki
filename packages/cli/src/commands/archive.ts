@@ -2,6 +2,7 @@ import { rename, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault } from "../utils/vault.js";
+import { appendLastOp } from "../utils/last-op.js";
 
 export interface ArchiveInput { vault: string; page: string }
 export interface ArchiveOutput {
@@ -52,6 +53,13 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
   }
 
   await rename(join(input.vault, relPath), join(input.vault, archivePath));
+
+  appendLastOp(input.vault, {
+    operation: "archive",
+    summary: `moved ${relPath} to ${archivePath}`,
+    files: [relPath],
+    timestamp: new Date().toISOString(),
+  });
 
   return { exitCode: ExitCode.OK, result: ok({ archived_from: relPath, archived_to: archivePath, index_updated: indexUpdated, humanHint: `${relPath} -> ${archivePath}${indexUpdated ? " (index updated)" : ""}` }) };
 }

@@ -1,17 +1,21 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { runLinks } from "./links.js";
 import { runTagAudit } from "./tag-audit.js";
 import { runIndexCheck } from "./index-check.js";
 import { runStale } from "./stale.js";
+import { appendLastOp } from "../utils/last-op.js";
 import { runPagesize } from "./pagesize.js";
 import { runLogRotate } from "./log-rotate.js";
 import { runOrphans } from "./orphans.js";
 import { runTopicMapCheck } from "./topic-map-check.js";
 import { runIndexLinkFormat } from "./index-link-format.js";
 import { runDedup } from "./dedup.js";
-import { scanVault, readPage } from "../utils/vault.js";
-import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { validateCompoundReferences } from "./audit.js";
+import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
+import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
 import { isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations } from "../parsers/citations.js";
 import { buildSlugMap } from "../utils/slug.js";
 
@@ -43,6 +47,27 @@ export interface LintInput {
   fix?: boolean;
 }
 
+/** Extract source entry strings from frontmatter, handling both inline and multi-line YAML formats. */
+function extractSourceEntries(rawFm: string): string[] {
+  const lines = rawFm.split(/\r?\n/);
+  const sourcesLineIdx = lines.findIndex(l => /^sources:/.test(l));
+  if (sourcesLineIdx === -1) return [];
+  const sourcesLine = lines[sourcesLineIdx]!.trim();
+  // Inline array: sources: [x, y] or sources: ["x", "y"]
+  const inlineMatch = sourcesLine.match(/^sources:\s*\[(.+)]\s*$/);
+  if (inlineMatch) {
+    return [...inlineMatch[1]!.matchAll(/"[^"]*"|'[^']*'|[^,\s]\S*/g)].map(m => m[0].replace(/,\s*$/, ""));
+  }
+  // Multi-line YAML list: sources: followed by "  - entry" lines
+  const entries: string[] = [];
+  for (let i = sourcesLineIdx + 1; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (!/^\s+- /.test(line)) break;
+    entries.push(line.replace(/^\s+- /, "").trim());
+  }
+  return entries;
+}
+
 interface Bucket { kind: string; items: unknown[] }
 export interface LintOutput {
   vault: { path: string; source: string };
@@ -53,8 +78,8 @@ export interface LintOutput {
   humanHint: string;
 }
 
-const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "tag_not_in_taxonomy"] as const;
-const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "missing_overview"] as const;
+const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "broken_sources", "tag_not_in_taxonomy"] as const;
+const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview"] as const;
 const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
@@ -87,8 +112,12 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     buckets.index_link_format = linkFmt.result.data.markdown_links;
   }
 
-  const stale = await runStale({ vault: input.vault, days: input.days });
-  if (stale.result.ok && stale.result.data.stale.length > 0) buckets.stale_page = stale.result.data.stale;
+  const staleResult = await runStale({ vault: input.vault, days: input.days });
+  if (staleResult.result.ok) {
+    const st = staleResult.result.data;
+    const staleList = [...st.stale_transcripts.map(t => t.path), ...st.incomplete_work_items.map(w => w.path), ...(st.done_work_items ?? []).map(w => w.path)];
+    if (staleList.length > 0) buckets.stale_page = staleList;
+  }
 
   const pagesize = await runPagesize({ vault: input.vault, lines: input.lines });
   if (pagesize.result.ok && pagesize.result.data.oversized.length > 0) buckets.page_too_large = pagesize.result.data.oversized;
@@ -112,6 +141,9 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   const dedup = await runDedup({ vault: input.vault });
   if (dedup.result.ok && dedup.result.data.duplicates.length > 0) buckets.raw_dedup = dedup.result.data.duplicates;
 
+  const compoundRefs = await validateCompoundReferences(input.vault);
+  if (compoundRefs.ok && compoundRefs.data.length > 0) buckets.compound_refs = compoundRefs.data;
+
   // Citation style + page structure check
   const scan = await scanVault(input.vault);
   const allPages = scan.ok ? [...scan.data.typedKnowledge, ...scan.data.raw, ...scan.data.workItems, ...scan.data.compound] : [];
@@ -124,6 +156,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     const noOverview: string[] = [];
     const fmWikilinkFlags: string[] = [];
     const wikilinkCitationFlags: string[] = [];
+    const brokenSourceFlags: string[] = [];
     for (const page of scan.data.typedKnowledge) {
       const text = await readPage(page);
       const split = splitFrontmatter(text);
@@ -134,6 +167,23 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       if (isLegacyCitationStyle(body)) legacyPages.push(page.relPath);
       if (hasOrphanedCitations(body)) orphanedPages.push(page.relPath);
       if (hasWikilinkCitations(body)) wikilinkCitationFlags.push(page.relPath);
+      // broken_sources: check sources: frontmatter entries resolve to files in raw/
+      const sourcesEntries = extractSourceEntries(rawFm);
+      for (const entry of sourcesEntries) {
+        // Strip citation markers ^[...] and surrounding quotes
+        let rawPath = entry.replace(/^"/, "").replace(/"$/, "").replace(/^'/, "").replace(/'$/, "");
+        rawPath = rawPath.replace(/^\^\[/, "").replace(/\]$/, "");
+        if (!rawPath.startsWith("raw/") && !rawPath.startsWith("_archive/raw/")) continue;
+        if (
+          !existsSync(join(input.vault, rawPath)) &&
+          !existsSync(join(input.vault, rawPath + ".md")) &&
+          !rawPath.startsWith("_archive/") &&
+          !existsSync(join(input.vault, "_archive", rawPath)) &&
+          !existsSync(join(input.vault, "_archive", rawPath + ".md"))
+        ) {
+          brokenSourceFlags.push(`${page.relPath}: ${rawPath}`);
+        }
+      }
       // Frontmatter wikilink resolution check
       const fmLinks = rawFm.match(/\[\[([^\[\]|]+)(?:\|[^\[\]]*)?\]\]/g) ?? [];
       for (const link of fmLinks) {
@@ -165,6 +215,68 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     if (noOverview.length > 0) buckets.missing_overview = noOverview;
     if (fmWikilinkFlags.length > 0) buckets.frontmatter_wikilink = fmWikilinkFlags;
     if (wikilinkCitationFlags.length > 0) buckets.wikilink_citation = wikilinkCitationFlags;
+    if (brokenSourceFlags.length > 0) buckets.broken_sources = brokenSourceFlags;
+
+    // Work item health check
+    const workItemHealth: string[] = [];
+    const workItemDirs = new Map<string, VaultPage[]>();
+    for (const page of scan.data.workItems) {
+      const dir = page.relPath.replace(/\/(spec|plan|log)\.md$/, "");
+      const pages = workItemDirs.get(dir) ?? [];
+      pages.push(page);
+      workItemDirs.set(dir, pages);
+    }
+    for (const [dir, pages] of workItemDirs) {
+      const hasSpec = pages.some(p => p.relPath.endsWith("/spec.md"));
+      const hasPlan = pages.some(p => p.relPath.endsWith("/plan.md"));
+      if (hasSpec && !hasPlan) {
+        const lastSegment = dir.split("/").pop()!;
+        const dateMatch = lastSegment.match(/^(\d{4}-\d{2}-\d{2})/);
+        if (dateMatch) {
+          const dirDate = Date.parse(dateMatch[1]!);
+          if (!isNaN(dirDate) && Date.now() - dirDate > 24 * 60 * 60 * 1000) {
+            workItemHealth.push(`${dir}/spec.md: has spec but no plan after 24h`);
+          }
+        }
+      }
+      for (const page of pages) {
+        if (!page.relPath.endsWith("/spec.md")) continue;
+        const text = await readPage(page);
+        const fm = extractFrontmatter(text);
+        if (fm.ok && fm.data.status === "in-progress" && !fm.data.started) {
+          workItemHealth.push(`${page.relPath}: in-progress without started date`);
+        }
+      }
+    }
+    if (workItemHealth.length > 0) buckets.work_item_health = workItemHealth;
+
+    // Orphaned project pages check: typed-knowledge page claims a project
+    // via provenance_projects but the project's knowledge.md doesn't list it back
+    const orphanedProjectPages: string[] = [];
+    for (const page of scan.data.typedKnowledge) {
+      const text = await readPage(page);
+      const fm = extractFrontmatter(text);
+      if (!fm.ok) continue;
+      const pp = fm.data.provenance_projects;
+      if (!Array.isArray(pp)) continue;
+      for (const entry of pp) {
+        const slugMatch = String(entry).match(/\[\[([^\]]+)\]\]/);
+        if (!slugMatch) continue;
+        const slug = slugMatch[1]!;
+        const knowledgePath = join(input.vault, "projects", slug, "knowledge.md");
+        if (!existsSync(knowledgePath)) continue;
+        const pageRef = page.relPath.replace(/\.md$/, "");
+        try {
+          const knowledgeContent = await readFile(knowledgePath, "utf8");
+          if (!knowledgeContent.includes(`[[${pageRef}]]`)) {
+            orphanedProjectPages.push(`${page.relPath}: not in projects/${slug}/knowledge.md`);
+          }
+        } catch {
+          // Can't read knowledge.md — skip
+        }
+      }
+    }
+    if (orphanedProjectPages.length > 0) buckets.orphaned_project_pages = orphanedProjectPages;
 
     // --fix: auto-fix legacy_citation_style by moving inline ^[raw/...] to ## Sources
     if (input.fix && legacyPages.length > 0) {
@@ -271,6 +383,127 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
         else delete buckets.legacy_citation_style;
       }
     }
+
+    // --fix: auto-fix missing_overview by inserting ## Overview stub after frontmatter
+    if (input.fix && noOverview.length > 0) {
+      for (const relPath of noOverview) {
+        try {
+          const absPath = `${input.vault}/${relPath}`;
+          const raw = await readFile(absPath, "utf8");
+          const split = splitFrontmatter(raw);
+          if (!split.ok) { unresolved.push(relPath); continue; }
+          const body = split.data.body;
+          const rawFm = split.data.rawFrontmatter;
+
+          // Extract title from frontmatter
+          const fm = extractFrontmatter(raw);
+          const title = fm.ok && typeof fm.data.title === "string" ? fm.data.title : "";
+
+          const overviewSection = `## Overview\n\n${title}`;
+          const trimmedBody = body.replace(/^\n+/, "");
+          const newContent = `---\n${rawFm}\n---\n\n${overviewSection}\n\n${trimmedBody}`;
+          await writeFile(absPath, newContent, "utf8");
+          fixed.push(relPath);
+        } catch {
+          unresolved.push(relPath);
+        }
+      }
+
+      // Re-scan: remove fixed pages from the bucket
+      const fixedBeforeOverview = fixed.length;
+      const fixedSet = new Set(fixed);
+      const remaining = noOverview.filter(p => !fixedSet.has(p));
+      if (remaining.length > 0) buckets.missing_overview = remaining;
+      else delete buckets.missing_overview;
+    }
+
+    // --fix: auto-fix wikilink_citation by removing [[raw/...]] and adding ^[raw/...] to ## Sources
+    if (input.fix && wikilinkCitationFlags.length > 0) {
+      const WIKILINK_RE = /\[\[raw\/([^\]|]+)(?:\|[^\]]*)?\]\]/g;
+      const FENCE_RE = /```[\s\S]*?```/g;
+      const wikilinkFixed: string[] = [];
+      for (const relPath of wikilinkCitationFlags) {
+        try {
+          const absPath = `${input.vault}/${relPath}`;
+          const raw = await readFile(absPath, "utf8");
+          const split = splitFrontmatter(raw);
+          if (!split.ok) { unresolved.push(relPath); continue; }
+          const body = split.data.body;
+          const rawFm = split.data.rawFrontmatter;
+
+          // Find [[raw/...]] wikilinks outside fenced code blocks
+          const stripped = body.replace(FENCE_RE, "");
+          const wikilinkMatches = [...stripped.matchAll(WIKILINK_RE)];
+          if (wikilinkMatches.length === 0) { unresolved.push(relPath); continue; }
+
+          // Collect raw paths from wikilinks (deduplicated)
+          const wikilinkPaths = [...new Set(wikilinkMatches.map(m => m[1]!))];
+
+          // Remove [[raw/...]] wikilinks from body lines (outside ## Sources)
+          const bodyLines = body.split("\n");
+          let inSrc = false;
+          const newBodyLines: string[] = [];
+          for (const line of bodyLines) {
+            if (/^## Sources\b/.test(line.trim())) { inSrc = true; newBodyLines.push(line); continue; }
+            if (inSrc) { newBodyLines.push(line); continue; }
+            let cleaned = line.replace(/\[\[raw\/[^\]|]+(?:\|[^\]]*)?\]\]/g, "");
+            cleaned = cleaned.replace(/\s+\./g, ".").replace(/\s{2,}/g, " ").replace(/\s+$/, "");
+            if (cleaned.length > 0 || line.trim().length === 0) {
+              newBodyLines.push(cleaned);
+            }
+          }
+
+          let newBody = newBodyLines.join("\n");
+
+          // Build citation markers from wikilink paths + sources frontmatter
+          const citationMarkers = wikilinkPaths.map(p => `^[raw/${p}]`);
+          const sourceEntries = extractSourceEntries(rawFm);
+          const fmMarkers: string[] = [];
+          for (const entry of sourceEntries) {
+            let rawPath = entry.replace(/^"/, "").replace(/"$/, "").replace(/^'/, "").replace(/'$/, "");
+            rawPath = rawPath.replace(/^\^\[/, "").replace(/\]$/, "");
+            if (rawPath.startsWith("raw/")) {
+              fmMarkers.push(`^[${rawPath}]`);
+            }
+          }
+          const allMarkers = [...new Set([...citationMarkers, ...fmMarkers])];
+
+          // Add to ## Sources section
+          const hasSourcesSection = /^## Sources\b/m.test(newBody);
+          if (hasSourcesSection) {
+            const existingSources = new Set(
+              newBody.split("\n")
+                .filter(l => /^- \^\[raw\//.test(l.trim()))
+                .map(l => l.trim().replace(/^- /, ""))
+            );
+            const newMarkers = allMarkers.filter(m => !existingSources.has(m));
+            const sourceLines = newMarkers.map(m => `- ${m}`);
+            if (sourceLines.length > 0) {
+              newBody = newBody.trimEnd() + "\n" + sourceLines.join("\n") + "\n";
+            }
+          } else {
+            const sourceLines = allMarkers.map(m => `- ${m}`);
+            newBody = newBody.trimEnd() + "\n\n## Sources\n\n" + sourceLines.join("\n") + "\n";
+          }
+
+          const newContent = `---\n${rawFm}\n---\n${newBody}`;
+          await writeFile(absPath, newContent, "utf8");
+          wikilinkFixed.push(relPath);
+        } catch {
+          unresolved.push(relPath);
+        }
+      }
+
+      fixed.push(...wikilinkFixed);
+
+      // Re-scan: remove fixed pages from the bucket
+      if (wikilinkFixed.length > 0) {
+        const fixedSet = new Set(wikilinkFixed);
+        const remaining = wikilinkCitationFlags.filter(p => !fixedSet.has(p));
+        if (remaining.length > 0) buckets.wikilink_citation = remaining;
+        else delete buckets.wikilink_citation;
+      }
+    }
   }
 
   const errorOut: Bucket[] = ERROR_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);
@@ -296,6 +529,15 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     hintLines.push(`  ${b.kind}: ${b.items.length}`);
   }
   if (hintLines.length === 0) hintLines.push("0 errors, 0 warnings, 0 info");
+
+  if (input.fix && fixed.length > 0) {
+    appendLastOp(input.vault, {
+      operation: "lint-fix",
+      summary: `fixed ${fixed.length} page(s)`,
+      files: fixed,
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   return {
     exitCode,

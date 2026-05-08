@@ -3,6 +3,7 @@ import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 import { extractCitationMarkers } from "../parsers/citations.js";
+import { appendLastOp } from "../utils/last-op.js";
 
 export interface MigrateCitationsInput {
   vault: string;
@@ -160,6 +161,15 @@ export async function runMigrateCitations(input: MigrateCitationsInput): Promise
   if (migrated.length > 0) hintLines.push(`migrated: ${migrated.length}`);
   if (skipped.length > 0) hintLines.push(`skipped (already clean): ${skipped.length}`);
   if (unchanged > 0) hintLines.push(`unchanged (no markers): ${unchanged}`);
+
+  if (!input.dryRun && migrated.length > 0) {
+    appendLastOp(input.vault, {
+      operation: "migrate-citations",
+      summary: `converted ${migrated.length} citation(s)`,
+      files: migrated,
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   return {
     exitCode,

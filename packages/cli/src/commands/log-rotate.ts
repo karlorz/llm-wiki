@@ -1,6 +1,7 @@
 import { readFile, rename, writeFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
+import { appendLastOp } from "../utils/last-op.js";
 
 const ENTRY_RE = /^## \[(\d{4})-\d{2}-\d{2}\]/gm;
 
@@ -48,6 +49,13 @@ export async function runLogRotate(input: LogRotateInput): Promise<{ exitCode: n
   } catch (e) {
     return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { message: String(e) }) };
   }
+
+  appendLastOp(input.vault, {
+    operation: "log-rotate",
+    summary: `rotated ${entries} entries to ${rotatedName}`,
+    files: ["log.md", rotatedName],
+    timestamp: new Date().toISOString(),
+  });
 
   return { exitCode: ExitCode.OK, result: ok({ entries, threshold: input.threshold, rotated: true, rotated_to: rotatedName, humanHint: `rotated ${entries} entries to ${rotatedName}` }) };
 }
