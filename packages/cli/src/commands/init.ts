@@ -214,7 +214,8 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       "project: ",
       "tags: []",
       "priority: ",
-      "ingested: {{date:YYYY-MM-DD}}",
+      "created: {{date:YYYY-MM-DD}}T{{time:HH:mm}}",
+      "ingested: ",
       "---",
       "",
       ""

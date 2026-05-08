@@ -48,7 +48,8 @@ describe("runInit", () => {
     expect(template).toContain("project:");
     expect(template).toContain("tags: []");
     expect(template).toContain("priority:");
-    expect(template).toContain("ingested: {{date:YYYY-MM-DD}}");
+    expect(template).toContain("created: {{date:YYYY-MM-DD}}T{{time:HH:mm}}");
+    expect(template).toContain("ingested: ");
     const schema = readFileSync(join(target, "SCHEMA.md"), "utf8");
     expect(schema).toContain("AI safety");
     expect(schema).toContain("- research");
