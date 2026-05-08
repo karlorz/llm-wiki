@@ -31,10 +31,10 @@ fi
 # ---- 1. Verify plugin installed with 11 skills ----
 printf "%s\n" "--- Plugin installation ---"
 SKILL_COUNT=$(ssh "$SSH_HOST" "find /root/.claude/plugins/cache/llm-wiki/skillwiki/ -name 'SKILL.md' 2>/dev/null | wc -l")
-if [ "$SKILL_COUNT" -eq 11 ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 plugin has 11 SKILL.md files\n"
+if [ "$SKILL_COUNT" -eq 15 ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 plugin has 15 SKILL.md files\n"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s SKILL.md files, expected 11\n" "$SKILL_COUNT"
+  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s SKILL.md files, expected 15\n" "$SKILL_COUNT"
 fi
 
 # Verify skill discovery via claude (10 CLI skills — using-skillwiki is hook-injected, not listed by /skills)
