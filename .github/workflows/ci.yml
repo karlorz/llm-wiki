@@ -1,7 +1,8 @@
 name: ci
 
 on:
-  push: { branches: [main] }
+  push:
+    branches: [main, dev]
   pull_request:
 
 jobs:
@@ -26,3 +27,17 @@ jobs:
         run: |
           node packages/cli/dist/cli.js install --dry-run --skills-root packages/skills --target ${{ runner.temp }}/skills-target
         shell: bash
+
+  e2e-local:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+      - run: npm ci
+      - run: npm run -w skillwiki build
+      - name: Run e2e-local
+        run: bash scripts/e2e-local.sh

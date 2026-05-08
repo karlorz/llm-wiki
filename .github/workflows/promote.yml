@@ -18,6 +18,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22.x
@@ -33,3 +34,19 @@ jobs:
           git commit -m "chore: release v${{ inputs.version }}"
           git tag "v${{ inputs.version }}"
           git push origin HEAD --tags
+      - name: Generate release notes
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            echo "## Changes since $PREV_TAG" > /tmp/release-notes.md
+            echo "" >> /tmp/release-notes.md
+            git log --oneline "${PREV_TAG}..HEAD" | sed 's/^/- /' >> /tmp/release-notes.md
+          else
+            echo "## Release v${{ inputs.version }}" > /tmp/release-notes.md
+            echo "" >> /tmp/release-notes.md
+            git log --oneline -20 | sed 's/^/- /' >> /tmp/release-notes.md
+          fi
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "v${{ inputs.version }}" --title "v${{ inputs.version }}" --notes-file /tmp/release-notes.md
