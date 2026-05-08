@@ -30,6 +30,7 @@ import { runDedup } from "./commands/dedup.js";
 import { runMigrateCitations } from "./commands/migrate-citations.js";
 import { runFrontmatterFix } from "./commands/frontmatter-fix.js";
 import { runUpdate } from "./commands/update.js";
+import { runSelfUpdate } from "./commands/self-update.js";
 import { runTranscripts } from "./commands/transcripts.js";
 import { runProjectIndex } from "./commands/project-index.js";
 import { runCompound, runCompoundList, runCompoundDelete } from "./commands/compound.js";
@@ -427,6 +428,16 @@ program
   .action(async (opts) => emit(await runUpdate({
     home: process.env.HOME ?? "",
     distTag: opts.tag,
+  })));
+
+// self-update
+program
+  .command("self-update")
+  .description("update skillwiki CLI from local source or npm@beta")
+  .option("--check", "check for updates without installing", false)
+  .action(async (opts) => emit(await runSelfUpdate({
+    home: process.env.HOME ?? "",
+    check: !!opts.check,
   })));
 
 // transcripts
