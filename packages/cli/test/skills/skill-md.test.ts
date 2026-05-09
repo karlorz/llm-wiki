@@ -10,19 +10,19 @@ const ALL = [
 
 describe("SKILL.md structure", () => {
   it.each(ALL)("%s has frontmatter with name + description", (skill) => {
-    const text = readFileSync(join(SKILLS_DIR, skill, "SKILL.md"), "utf8");
+    const text = readFileSync(join(SKILLS_DIR, skill, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
     expect(text.startsWith("---\n")).toBe(true);
     expect(text).toMatch(/\nname: /);
     expect(text).toMatch(/\ndescription: /);
   });
 
   it.each(ALL)("%s declares pre-orientation expectations", (skill) => {
-    const text = readFileSync(join(SKILLS_DIR, skill, "SKILL.md"), "utf8");
+    const text = readFileSync(join(SKILLS_DIR, skill, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
     expect(text).toMatch(/Pre-orientation reads/);
   });
 
   it.each(ALL)("%s declares stop conditions", (skill) => {
-    const text = readFileSync(join(SKILLS_DIR, skill, "SKILL.md"), "utf8");
+    const text = readFileSync(join(SKILLS_DIR, skill, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
     expect(text).toMatch(/Stop conditions/);
   });
 });

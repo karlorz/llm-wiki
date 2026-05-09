@@ -67,7 +67,7 @@ describe("auto-update utilities", () => {
   });
 
   it("cachePath resolves to ~/.skillwiki/.update-cache.json", () => {
-    expect(cachePath("/home/user")).toBe("/home/user/.skillwiki/.update-cache.json");
+    expect(cachePath("/home/user")).toBe(join("/home/user", ".skillwiki", ".update-cache.json"));
   });
 
   it("triggerAutoUpdate respects NO_UPDATE_NOTIFIER env var", () => {
