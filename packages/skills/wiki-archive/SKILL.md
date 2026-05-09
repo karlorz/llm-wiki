@@ -26,7 +26,8 @@ Standard four reads (SCHEMA, index, log, project context if applicable).
 2. Run `skillwiki archive <page> [vault]`. Read the JSON output.
 3. Verify with `skillwiki index-check [vault]` — confirm no ghost entries remain.
 4. Run `skillwiki lint [vault]` — check for broken wikilinks from other pages that still reference the archived page. If found, update those pages to point to the replacement or remove the stale link.
-5. Append a `log.md` entry: `## [{date}] archive | {relPath} → _archive/{subdir}/`.
+5. **Raw file archiving (N9 Reingest Protocol only):** When archiving a `raw/` file due to content drift, update ALL `^[raw/...]` citation markers and `sources:` frontmatter entries that reference the old path. Change `raw/articles/foo.md` to `_archive/raw/articles/foo.md` in every referencing page. Verify with `skillwiki audit` that no broken markers remain.
+6. Append a `log.md` entry: `## [{date}] archive | {relPath} → _archive/{subdir}/`.
 
 ## Reversibility
 
@@ -39,6 +40,7 @@ Archiving is reversible: move the file back from `_archive/` to its original dir
 
 ## Forbidden
 
-- Archiving `raw/` files (N9 — raw is immutable).
+- Archiving `raw/` files outside the N9 Reingest Protocol (raw is immutable except during content-drift reingestion).
+- Archiving raw files without updating all `^[raw/...]` citation markers that reference them.
 - Archiving without user confirmation.
 - Deleting files (archive moves, never deletes).

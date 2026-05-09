@@ -33,3 +33,4 @@ Standard four reads. If cwd is inside `projects/{slug}/`, also read project READ
 ## Forbidden
 - Filing without explicit `provenance:`.
 - Updating `index.md` before `validate` passes.
+- Writing `[[wikilinks]]` to pages that don't exist in the vault. Before linking, verify the target exists: check `index.md` or `ls` the target directory. If the target doesn't exist yet, use plain text instead of a wikilink.

@@ -46,6 +46,7 @@ Run `skillwiki lang` at the start. Generate page-body prose, narrative sections,
 - Skipping `fetch-guard`.
 - Updating `index.md` or `log.md` before all pages validate.
 - Modifying any existing file in `raw/`.
+- Writing `[[wikilinks]]` to pages that don't exist in the vault. Before linking, verify the target exists: check `index.md` or `ls` the target directory. If the target doesn't exist yet, use plain text instead of a wikilink.
 
 ## Batch Mode
 
