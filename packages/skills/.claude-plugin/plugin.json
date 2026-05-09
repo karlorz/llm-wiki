@@ -1,6 +1,6 @@
 {
   "name": "skillwiki",
-  "version": "0.2.1-beta.26",
+  "version": "0.2.1-beta.27",
   "skills": "./",
   "description": "Project-aware Karpathy-style knowledge base for Claude Code: 19 prompt-only skills (wiki-*, proj-*, dev-loop-research, using-skillwiki) backed by the deterministic `skillwiki` CLI.",
   "author": {

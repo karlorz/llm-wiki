@@ -80,6 +80,11 @@ describe("isLegacyCitationStyle", () => {
     const body = "Pages with `sources:` frontmatter using `[[raw/...]]` wikilinks. `` body citations.\n\n## Sources\n- ^[raw/x.md]\n";
     expect(isLegacyCitationStyle(body)).toBe(false);
   });
+  it("allows marker-only line after a table row", () => {
+    // Tables can't hold inline citations — a bare marker after | rows is valid
+    const body = "Some claim. ^[raw/x.md]\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n^[raw/x.md]\n\n## Sources\n- ^[raw/x.md]\n";
+    expect(isLegacyCitationStyle(body)).toBe(false);
+  });
 });
 
 describe("extractParagraphEndCitations", () => {

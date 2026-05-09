@@ -40,17 +40,22 @@ export function isLegacyCitationStyle(body: string): boolean {
 
   const lines = stripFences(body).split("\n");
   let inSources = false;
+  let lastNonBlankWasTable = false;
 
   for (const line of lines) {
     if (/^## Sources\b/.test(line.trim())) { inSources = true; continue; }
     if (inSources) continue;
 
     const matches = [...line.matchAll(MARKER_RE)];
-    if (matches.length === 0) continue;
+    if (matches.length === 0) {
+      if (line.trim().length > 0) lastNonBlankWasTable = /^\|/.test(line.trim());
+      continue;
+    }
 
     const markerOnly = line.replace(MARKER_RE, "").trim();
-    if (markerOnly.length === 0) return true;
+    if (markerOnly.length === 0 && !lastNonBlankWasTable) return true;
 
+    lastNonBlankWasTable = false;
     const lastMatch = matches[matches.length - 1];
     const afterLast = line.slice(lastMatch.index! + lastMatch[0].length).replace(MARKER_RE, "").trim();
     if (afterLast.length > 0) return true;
