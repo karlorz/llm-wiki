@@ -46,6 +46,7 @@ import { runQuery } from "./commands/query.js";
 import { runIndexLinkFormat } from "./commands/index-link-format.js";
 import { runTopicMapCheck } from "./commands/topic-map-check.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
+import { postCommit } from "./utils/auto-commit.js";
 import { triggerAutoUpdate } from "./utils/auto-update.js";
 import { parseDotenvFile } from "./utils/dotenv.js";
 import { configPath } from "./commands/config.js";
@@ -56,8 +57,9 @@ const program = new Command();
 program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version(pkg.version);
 program.option("--human", "render terminal-readable output instead of JSON");
 
-function emit<T>(r: { exitCode: number; result: Result<T> }): never {
+async function emit<T>(r: { exitCode: number; result: Result<T> }, vault?: string): Promise<never> {
   if (program.opts().human) printHuman(r.result); else printJson(r.result);
+  if (vault) await postCommit(vault, r.exitCode);
   process.exit(r.exitCode);
 }
 
@@ -78,7 +80,7 @@ program
       if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
       else vault = v.vault;
     }
-    emit(await runValidate({ file, apply: !!opts.apply, vault }));
+    emit(await runValidate({ file, apply: !!opts.apply, vault }), vault);
   });
 
 program
@@ -87,7 +89,7 @@ program
   .command("build <vault>")
   .option("--out <path>", "graph output path", ".skillwiki/graph.json")
   .option("--wiki <name>", "wiki profile name")
-  .action(async (vault, opts) => emit(await runGraphBuild({ vault, out: opts.out })));
+  .action(async (vault, opts) => emit(await runGraphBuild({ vault, out: opts.out }), vault));
 
 const canvasCmd = program.command("canvas").description("manage Obsidian canvas files");
 
@@ -99,7 +101,7 @@ canvasCmd
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runCanvasGenerate({ vault: v.vault, graphPath: opts.graphPath }));
+    else emit(await runCanvasGenerate({ vault: v.vault, graphPath: opts.graphPath }), v.vault);
   });
 
 program
@@ -109,7 +111,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runOverlap({ vault: v.vault }));
+    else emit(await runOverlap({ vault: v.vault }), v.vault);
   });
 
 program
@@ -120,7 +122,7 @@ program
   .action(async (text, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runQuery({ text, vault: v.vault, limit: opts.limit }));
+    else emit(await runQuery({ text, vault: v.vault, limit: opts.limit }), v.vault);
   });
 
 program
@@ -234,7 +236,7 @@ program.command("links [vault]")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runLinks({ vault: v.vault }));
+    else emit(await runLinks({ vault: v.vault }), v.vault);
   });
 
 program.command("tag-audit [vault]")
@@ -243,7 +245,7 @@ program.command("tag-audit [vault]")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runTagAudit({ vault: v.vault }));
+    else emit(await runTagAudit({ vault: v.vault }), v.vault);
   });
 
 program.command("index-check [vault]")
@@ -252,7 +254,7 @@ program.command("index-check [vault]")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runIndexCheck({ vault: v.vault }));
+    else emit(await runIndexCheck({ vault: v.vault }), v.vault);
   });
 
 program.command("index-link-format [vault]")
@@ -261,7 +263,7 @@ program.command("index-link-format [vault]")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runIndexLinkFormat({ vault: v.vault }));
+    else emit(await runIndexLinkFormat({ vault: v.vault }), v.vault);
   });
 
 program.command("topic-map-check [vault]")
@@ -271,7 +273,7 @@ program.command("topic-map-check [vault]")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runTopicMapCheck({ vault: v.vault, threshold: opts.threshold }));
+    else emit(await runTopicMapCheck({ vault: v.vault, threshold: opts.threshold }), v.vault);
   });
 
 program
@@ -283,7 +285,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runStale({ vault: v.vault, days: opts.days, archive: !!opts.archive }));
+    else emit(await runStale({ vault: v.vault, days: opts.days, archive: !!opts.archive }), v.vault);
   });
 
 program
@@ -294,7 +296,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runPagesize({ vault: v.vault, lines: opts.lines }));
+    else emit(await runPagesize({ vault: v.vault, lines: opts.lines }), v.vault);
   });
 
 program
@@ -306,7 +308,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runLogRotate({ vault: v.vault, threshold: opts.threshold, apply: !!opts.apply }));
+    else emit(await runLogRotate({ vault: v.vault, threshold: opts.threshold, apply: !!opts.apply }), v.vault);
   });
 
 program
@@ -327,7 +329,7 @@ program
       lines: opts.lines,
       logThreshold: opts.logThreshold,
       fix: opts.fix ?? false
-    }));
+    }), v.vault);
   });
 
 // config — grouped under a parent command
@@ -380,7 +382,7 @@ program
       vault: v.vault,
       home: process.env.HOME ?? "",
       langEnvValue: process.env.WIKI_LANG,
-    }));
+    }), v.vault);
   });
 
 // archive
@@ -391,7 +393,7 @@ program
   .action(async (page, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runArchive({ vault: v.vault, page }));
+    else emit(await runArchive({ vault: v.vault, page }), v.vault);
   });
 
 // drift
@@ -404,7 +406,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runDrift({ vault: v.vault, apply: opts.apply, newSince: opts.new }));
+    else emit(await runDrift({ vault: v.vault, apply: opts.apply, newSince: opts.new }), v.vault);
   });
 
 // dedup
@@ -416,7 +418,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runDedup({ vault: v.vault, apply: opts.apply }));
+    else emit(await runDedup({ vault: v.vault, apply: opts.apply }), v.vault);
   });
 
 // migrate-citations
@@ -428,7 +430,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runMigrateCitations({ vault: v.vault, dryRun: !!opts.dryRun }));
+    else emit(await runMigrateCitations({ vault: v.vault, dryRun: !!opts.dryRun }), v.vault);
   });
 
 // frontmatter-fix
@@ -440,7 +442,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runFrontmatterFix({ vault: v.vault, dryRun: !!opts.dryRun }));
+    else emit(await runFrontmatterFix({ vault: v.vault, dryRun: !!opts.dryRun }), v.vault);
   });
 
 // update
@@ -472,7 +474,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runTranscripts({ vault: v.vault, since: opts.since }));
+    else emit(await runTranscripts({ vault: v.vault, since: opts.since }), v.vault);
   });
 
 // project-index
@@ -484,7 +486,7 @@ program
   .action(async (slug, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runProjectIndex({ vault: v.vault, slug, apply: !!opts.apply }));
+    else emit(await runProjectIndex({ vault: v.vault, slug, apply: !!opts.apply }), v.vault);
   });
 
 // compound — grouped under a parent command
@@ -499,7 +501,7 @@ compoundCmd
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runCompound({ vault: v.vault, project: opts.project, dryRun: !!opts.dryRun }));
+    else emit(await runCompound({ vault: v.vault, project: opts.project, dryRun: !!opts.dryRun }), v.vault);
   });
 
 compoundCmd
@@ -521,7 +523,7 @@ compoundCmd
   .action(async (entry, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runCompoundDelete({ vault: v.vault, project: opts.project, entry }));
+    else emit(await runCompoundDelete({ vault: v.vault, project: opts.project, entry }), v.vault);
   });
 
 // tag-sync
@@ -533,7 +535,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runTagSync({ vault: v.vault, dryRun: !!opts.dryRun }));
+    else emit(await runTagSync({ vault: v.vault, dryRun: !!opts.dryRun }), v.vault);
   });
 
 // sync — grouped under a parent command
@@ -566,7 +568,7 @@ syncCmd
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runSyncPull({ vault: v.vault }));
+    else emit(await runSyncPull({ vault: v.vault }), v.vault);
   });
 
 // backup — grouped under a parent command
@@ -595,7 +597,7 @@ backupCmd
       secretAccessKey: dotenv["BACKUP_SECRET_ACCESS_KEY"] ?? "",
       dryRun: opts.dryRun,
       prune: opts.prune,
-    }));
+    }), v.vault);
   });
 
 backupCmd
@@ -619,7 +621,7 @@ backupCmd
       accessKeyId: dotenv["BACKUP_ACCESS_KEY_ID"] ?? "",
       secretAccessKey: dotenv["BACKUP_SECRET_ACCESS_KEY"] ?? "",
       target: opts.target,
-    }));
+    }), v.vault);
   });
 
 // seed
@@ -630,7 +632,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runSeed({ vault: v.vault }));
+    else emit(await runSeed({ vault: v.vault }), v.vault);
   });
 
 // observe
@@ -649,7 +651,7 @@ program
       text: opts.text,
       kind: opts.kind,
       project: opts.project
-    }));
+    }), v.vault);
   });
 
 // ingest
@@ -674,7 +676,7 @@ program
       tags,
       provenance: opts.provenance,
       dryRun: !!opts.dryRun,
-    }));
+    }), opts.vault);
   });
 
 // Emit deprecation warnings for any installed skills marked deprecated
