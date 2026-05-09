@@ -15,9 +15,9 @@ export async function controlledFetch(url: string, opts: FetchOptions): Promise<
     let res: Response;
     try {
       res = await fetch(current, { redirect: "manual", signal: ctrl.signal });
-    } catch (e: any) {
+    } catch (e: unknown) {
       clearTimeout(timer);
-      if (e?.name === "AbortError") return err("FETCH_TIMEOUT", { url: current });
+      if (e instanceof Error && e.name === "AbortError") return err("FETCH_TIMEOUT", { url: current });
       return err("FETCH_FAILED", { message: String(e) });
     }
     clearTimeout(timer);

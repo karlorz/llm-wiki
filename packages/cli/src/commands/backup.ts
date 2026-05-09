@@ -206,7 +206,7 @@ export async function runBackupRestore(
         skipped++;
       }
     }
-  } catch (e: any) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.BACKUP_SYNC_FAILED,
       result: err("BACKUP_SYNC_FAILED", { message: `Failed to list bucket: ${String(e)}` }),

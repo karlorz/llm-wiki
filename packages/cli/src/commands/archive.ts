@@ -47,8 +47,8 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
         await writeFile(indexPath, filtered.join("\n"), "utf8");
         indexUpdated = true;
       }
-    } catch (e: any) {
-      if (e?.code !== "ENOENT") throw e;
+    } catch (e: unknown) {
+      if (e instanceof Error && "code" in e && e.code !== "ENOENT") throw e;
     }
   }
 

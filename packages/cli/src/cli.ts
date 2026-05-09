@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Command } from "commander";
-import type { Result } from "@skillwiki/shared";
+import type { Result, ErrResult } from "@skillwiki/shared";
 import { ExitCode } from "@skillwiki/shared";
 import { printJson, printHuman } from "./utils/output.js";
 import { getDeprecatedWarnings } from "./utils/deprecation.js";
@@ -218,7 +218,7 @@ program
     }));
   });
 
-async function resolveVaultArg(arg: string | undefined, wiki?: string): Promise<{ ok: true; vault: string } | { ok: false; exitCode: number; payload: any }> {
+async function resolveVaultArg(arg: string | undefined, wiki?: string): Promise<{ ok: true; vault: string } | { ok: false; exitCode: number; payload: ErrResult }> {
   if (arg) return { ok: true, vault: arg };
   const r = await resolveRuntimePath({
     flag: undefined,
