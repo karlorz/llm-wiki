@@ -85,6 +85,11 @@ describe("isLegacyCitationStyle", () => {
     const body = "Some claim. ^[raw/x.md]\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n^[raw/x.md]\n\n## Sources\n- ^[raw/x.md]\n";
     expect(isLegacyCitationStyle(body)).toBe(false);
   });
+  it("ignores citation markers in YAML frontmatter", () => {
+    // Regression: frontmatter sources: field contains ^[raw/...] that was parsed as body text
+    const body = "---\nname: test\nsources:\n  - \"^[raw/x.md]\"\n---\n\nSome claim. ^[raw/x.md]\n\n## Sources\n- ^[raw/x.md]\n";
+    expect(isLegacyCitationStyle(body)).toBe(false);
+  });
 });
 
 describe("extractParagraphEndCitations", () => {

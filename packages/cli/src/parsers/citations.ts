@@ -1,6 +1,7 @@
 const FENCE = /```[\s\S]*?```/g;
 const INLINE_CODE = /``[^`\n]+``|`[^`\n]+`/g;
 const MARKER_RE = /\^\[(raw\/[^\]]+)\]/g;
+const FRONTMATTER = /^---\n[\s\S]*?\n---\n?/;
 
 export interface CitationMarker { marker: string; target: string; }
 
@@ -38,7 +39,7 @@ export function isLegacyCitationStyle(body: string): boolean {
   // text appeared near the ## Sources header.
   if (!hasSourcesFooter(body)) return true;
 
-  const lines = stripFences(body).split("\n");
+  const lines = stripFences(body.replace(FRONTMATTER, "")).split("\n");
   let inSources = false;
   let lastNonBlankWasTable = false;
 
@@ -61,7 +62,7 @@ export function isLegacyCitationStyle(body: string): boolean {
     if (afterLast.length > 0) return true;
 
     const beforeFirst = line.slice(0, matches[0].index!).trim();
-    if (beforeFirst.length > 0 && !/[.!?]\s*$/.test(beforeFirst)) return true;
+    if (beforeFirst.length > 0 && !/[.!?]["'"]*\s*$/.test(beforeFirst)) return true;
   }
 
   return false;
@@ -78,7 +79,7 @@ export function isLegacyCitationStyle(body: string): boolean {
  * Markers appearing after this section are considered orphaned.
  */
 export function hasOrphanedCitations(body: string): boolean {
-  const stripped = stripFences(body);
+  const stripped = stripFences(body.replace(FRONTMATTER, ""));
   const lines = stripped.split("\n");
 
   let inSources = false;
@@ -146,7 +147,7 @@ export function hasWikilinkCitations(body: string): boolean {
 }
 
 export function extractParagraphEndCitations(body: string): string[] {
-  const lines = stripFences(body).split("\n");
+  const lines = stripFences(body.replace(FRONTMATTER, "")).split("\n");
   const targets: string[] = [];
   let inSources = false;
 
@@ -165,7 +166,7 @@ export function extractParagraphEndCitations(body: string): string[] {
     if (afterLast.length > 0) continue;
 
     const beforeFirst = line.slice(0, markers[0].index!).trim();
-    if (beforeFirst.length > 0 && !/[.!?]\s*$/.test(beforeFirst)) continue;
+    if (beforeFirst.length > 0 && !/[.!?]["'"]*\s*$/.test(beforeFirst)) continue;
 
     for (const m of markers) targets.push(m[1]);
   }
