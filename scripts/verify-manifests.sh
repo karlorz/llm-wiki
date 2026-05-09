@@ -49,15 +49,13 @@ fi
 # ---- 2. Skill directories have SKILL.md ----
 
 SKILLS_DIR="$REPO_ROOT/packages/skills"
-for dir in "$SKILLS_DIR"/wiki-* "$SKILLS_DIR"/proj-* "$SKILLS_DIR"/dev-loop-research "$SKILLS_DIR"/using-skillwiki; do
+ACTUAL_COUNT=0
+for dir in "$SKILLS_DIR"/*/; do
   name=$(basename "$dir")
-  if [ ! -f "$dir/SKILL.md" ]; then
-    echo "✗ Missing SKILL.md in $name/" >&2
-    ERRORS=$((ERRORS + 1))
+  if [ -f "$dir/SKILL.md" ]; then
+    ACTUAL_COUNT=$((ACTUAL_COUNT + 1))
   fi
 done
-
-ACTUAL_COUNT=$(ls -d "$SKILLS_DIR"/wiki-* "$SKILLS_DIR"/proj-* "$SKILLS_DIR"/dev-loop-research "$SKILLS_DIR"/using-skillwiki 2>/dev/null | wc -l | tr -d ' ')
 echo "✓ $ACTUAL_COUNT skill directories all have SKILL.md"
 
 # ---- 3. Skill count in plugin.json matches actual ----

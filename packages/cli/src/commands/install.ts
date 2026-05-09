@@ -47,9 +47,13 @@ async function createSymlink(src: string, dst: string): Promise<Result<{ linked:
 export async function runInstall(input: InstallInput): Promise<{ exitCode: number; result: Result<InstallOutput> }> {
   let entries: string[];
   try {
-    entries = (await readdir(input.skillsRoot, { withFileTypes: true }))
-      .filter(d => d.isDirectory() && (d.name.startsWith("wiki-") || d.name.startsWith("proj-") || d.name === "dev-loop-research" || d.name === "using-skillwiki"))
-      .map(d => d.name);
+    const dirs = (await readdir(input.skillsRoot, { withFileTypes: true }))
+      .filter(d => d.isDirectory());
+    const withSkill: string[] = [];
+    for (const d of dirs) {
+      try { await stat(join(input.skillsRoot, d.name, "SKILL.md")); withSkill.push(d.name); } catch { /* not a skill directory */ }
+    }
+    entries = withSkill;
   } catch (e) {
     return { exitCode: ExitCode.PREFLIGHT_FAILED, result: err("PREFLIGHT_FAILED", { message: String(e) }) };
   }

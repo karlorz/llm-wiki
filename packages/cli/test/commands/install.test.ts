@@ -69,11 +69,11 @@ describe("install", () => {
     }
   });
 
-  it("returns PREFLIGHT_FAILED when no skill directories match", async () => {
-    // skillsRoot with only non-matching dirs (no wiki-*/proj-*)
+  it("returns PREFLIGHT_FAILED when no skill directories have SKILL.md", async () => {
+    // skillsRoot with dirs but no SKILL.md in any of them
     const skillsRoot = mkdtempSync(join(tmpdir(), "skills-src-"));
-    mkdirSync(join(skillsRoot, "other-dir"), { recursive: true });
-    writeFileSync(join(skillsRoot, "other-dir", "SKILL.md"), "# other");
+    mkdirSync(join(skillsRoot, "wiki-init"), { recursive: true });
+    // Deliberately do NOT write SKILL.md anywhere
     const target = mkdtempSync(join(tmpdir(), "tgt-"));
     const r = await runInstall({ skillsRoot, target, dryRun: false, symlink: false });
     expect(r.exitCode).toBe(13); // PREFLIGHT_FAILED
@@ -83,19 +83,18 @@ describe("install", () => {
     }
   });
 
-  it("returns PREFLIGHT_FAILED when a skill directory has no SKILL.md", async () => {
+  it("skips directories without SKILL.md and installs those with it", async () => {
     const skillsRoot = mkdtempSync(join(tmpdir(), "skills-src-"));
     mkdirSync(join(skillsRoot, "wiki-init"), { recursive: true });
     // Deliberately do NOT write SKILL.md inside wiki-init
     mkdirSync(join(skillsRoot, "proj-init"), { recursive: true });
-    writeFileSync(join(skillsRoot, "proj-init", "SKILL.md"), "# proj-init");
+    writeFileSync(join(skillsRoot, "proj-init", "SKILL.md"), "---\nversion: 0.2.1\nname: proj-init\ndescription: Proj init\n---\n\n# proj-init");
     const target = mkdtempSync(join(tmpdir(), "tgt-"));
     const r = await runInstall({ skillsRoot, target, dryRun: false, symlink: false });
-    expect(r.exitCode).toBe(13); // PREFLIGHT_FAILED
-    expect(r.result.ok).toBe(false);
-    if (!r.result.ok) {
-      expect(r.result.error).toBe("PREFLIGHT_FAILED");
-    }
+    expect(r.exitCode).toBe(0);
+    // Only proj-install got installed; wiki-init was skipped (no SKILL.md)
+    expect(existsSync(join(target, "proj-init", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(target, "wiki-init", "SKILL.md"))).toBe(false);
   });
 
   it("installs bin/skillwiki as symlink in symlink mode", async () => {
