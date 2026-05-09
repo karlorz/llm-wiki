@@ -209,4 +209,33 @@ describe("cli smoke", () => {
     expect(() => JSON.parse(human.stdout)).toThrow();
     expect(human.stdout.length).toBeGreaterThan(0);
   });
+
+  it("auto-commits when AUTO_COMMIT=true is set", () => {
+    const acVault = mkdtempSync(join(tmpdir(), "smoke-ac-"));
+    mkdirSync(join(acVault, "raw", "articles"), { recursive: true });
+    mkdirSync(join(acVault, "concepts"), { recursive: true });
+    writeFileSync(join(acVault, "SCHEMA.md"), "# Vault Schema\n\n## Tag Taxonomy\n\n```yaml\ntaxonomy:\n  - model\n```\n");
+    writeFileSync(join(acVault, "index.md"), "# Index\n");
+    writeFileSync(join(acVault, "log.md"), "# Vault Log\n");
+    execFileSync("git", ["init", acVault], { encoding: "utf8" });
+    execFileSync("git", ["-C", acVault, "config", "user.email", "test@test.com"], { encoding: "utf8" });
+    execFileSync("git", ["-C", acVault, "config", "user.name", "Test"], { encoding: "utf8" });
+    writeFileSync(join(acVault, "README.md"), "# test\n");
+    execFileSync("git", ["-C", acVault, "add", "-A"], { encoding: "utf8" });
+    execFileSync("git", ["-C", acVault, "commit", "-m", "init"], { encoding: "utf8" });
+
+    const acHome = mkdtempSync(join(tmpdir(), "smoke-ac-home-"));
+    mkdirSync(join(acHome, ".skillwiki"), { recursive: true });
+    writeFileSync(join(acHome, ".skillwiki", ".env"), "AUTO_COMMIT=true\n");
+
+    const seedOut = execFileSync("node", [BIN, "seed", acVault], {
+      encoding: "utf8",
+      env: { ...process.env, HOME: acHome },
+    });
+    const parsed = JSON.parse(seedOut);
+    expect(parsed.ok).toBe(true);
+
+    const log = execFileSync("git", ["-C", acVault, "log", "--oneline"], { encoding: "utf8" }).trim();
+    expect(log).toContain("seed:");
+  });
 });
