@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Command } from "commander";
 import type { Result } from "@skillwiki/shared";
 import { ExitCode } from "@skillwiki/shared";
@@ -87,9 +88,12 @@ program
   .command("graph")
   .description("graph subcommands")
   .command("build <vault>")
-  .option("--out <path>", "graph output path", ".skillwiki/graph.json")
+  .option("--out <path>", "graph output path (default: <vault>/.skillwiki/graph.json)")
   .option("--wiki <name>", "wiki profile name")
-  .action(async (vault, opts) => emit(await runGraphBuild({ vault, out: opts.out }), vault));
+  .action(async (vault, opts) => {
+    const out = opts.out ?? join(vault, ".skillwiki", "graph.json");
+    emit(await runGraphBuild({ vault, out }), vault);
+  });
 
 const canvasCmd = program.command("canvas").description("manage Obsidian canvas files");
 

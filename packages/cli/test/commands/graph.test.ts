@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { join } from "node:path";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { runGraphBuild } from "../../src/commands/graph.js";
 
 const VAULT = join(__dirname, "..", "fixtures", "sample-vault");
@@ -160,5 +161,24 @@ describe("graph build", () => {
       // "other" doesn't exist as a page, so the adjacency list is empty
       expect(data.adjacency["concepts/bad.md"]).toEqual([]);
     }
+  });
+
+  it("defaults --out to <vault>/.skillwiki/graph.json, not CWD-relative", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    writeFileSync(join(v, "concepts", "solo.md"),
+      "---\ntitle: Solo\ntype: concept\ncreated: 2026-05-09\nupdated: 2026-05-09\ntags: []\n---\nNo links.\n");
+
+    const cli = join(__dirname, "..", "..", "dist", "cli.js");
+    const expectedOut = join(v, ".skillwiki", "graph.json");
+
+    // Run from a different CWD to prove --out resolves against vault, not CWD
+    execFileSync("node", [cli, "graph", "build", v], { cwd: tmpdir() });
+
+    // Graph should exist inside the vault, not in the CWD
+    expect(existsSync(expectedOut)).toBe(true);
+    const data = JSON.parse(readFileSync(expectedOut, "utf8"));
+    expect(data.adjacency).toBeDefined();
   });
 });
