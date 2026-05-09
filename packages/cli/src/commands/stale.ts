@@ -90,7 +90,22 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     }
   }
 
-  // 3. Archive if requested
+  // 3. Stale typed-knowledge pages: pages with `updated` older than --days
+  const stale: Array<{ page: string; reason: string }> = [];
+  for (const page of scan.data.typedKnowledge) {
+    try {
+      const text = await readFile(join(input.vault, page.relPath), "utf8");
+      const fm = extractFrontmatter(text);
+      if (fm.ok && typeof fm.data.updated === "string") {
+        const age = daysSince(fm.data.updated);
+        if (age >= input.days) {
+          stale.push({ page: page.relPath, reason: `updated ${age} days ago (threshold: ${input.days})` });
+        }
+      }
+    } catch { /* skip unreadable pages */ }
+  }
+
+  // 4. Archive if requested
   if (input.archive) {
     const archiveDir = join(input.vault, "_archive", new Date().toISOString().slice(0, 10));
     await mkdir(archiveDir, { recursive: true });
@@ -142,8 +157,9 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     });
   }
 
-  const total = staleTranscripts.length + incompleteWorkItems.length + doneWorkItems.length;
+  const total = stale.length + staleTranscripts.length + incompleteWorkItems.length + doneWorkItems.length;
   const hintLines: string[] = [];
+  if (stale.length > 0) hintLines.push(`stale_pages: ${stale.length}`, ...stale.map(p => `  ${p.page}: ${p.reason}`));
   if (staleTranscripts.length > 0) hintLines.push(`stale_transcripts: ${staleTranscripts.length}`, ...staleTranscripts.map(t => `  ${t.path}: ${t.reason}`));
   if (incompleteWorkItems.length > 0) hintLines.push(`incomplete_work_items: ${incompleteWorkItems.length}`, ...incompleteWorkItems.map(w => `  ${w.path}: ${w.reason}`));
   if (doneWorkItems.length > 0) hintLines.push(`done_work_items: ${doneWorkItems.length}`, ...doneWorkItems.map(w => `  ${w.path}: ${w.reason}`));
@@ -151,7 +167,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   if (hintLines.length === 0) hintLines.push("no stale transcripts or incomplete work items");
 
   return { exitCode: total > 0 ? ExitCode.STALE_PAGE : ExitCode.OK, result: ok({
-    stale: [...staleTranscripts.map(t => ({ page: t.path, reason: t.reason })), ...incompleteWorkItems.map(w => ({ page: w.path, reason: w.reason })), ...doneWorkItems.map(w => ({ page: w.path, reason: w.reason }))],
+    stale: [...stale, ...staleTranscripts.map(t => ({ page: t.path, reason: t.reason })), ...incompleteWorkItems.map(w => ({ page: w.path, reason: w.reason })), ...doneWorkItems.map(w => ({ page: w.path, reason: w.reason }))],
     stale_transcripts: staleTranscripts, incomplete_work_items: incompleteWorkItems, done_work_items: doneWorkItems, archived, humanHint: hintLines.join("\n")
   }) };
 }
