@@ -63,14 +63,18 @@ jobs:
   e2e-plugin:
     needs: build-and-test
     runs-on: ubuntu-latest
-    if: ${{ secrets.SSH_PRIVATE_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
-      - name: Setup SSH key
+      - name: Check SSH secret and run e2e-plugin
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "::warning::SSH_PRIVATE_KEY not set — skipping e2e-plugin"
+            exit 0
+          fi
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H sg01 >> ~/.ssh/known_hosts 2>/dev/null || true
-      - name: Run e2e-plugin
-        run: bash scripts/e2e-plugin.sh
+          bash scripts/e2e-plugin.sh
