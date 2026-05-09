@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ExitCode } from "@skillwiki/shared";
 import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "../../src/commands/config.js";
 
 function home(): string {
@@ -72,6 +73,13 @@ describe("runConfigSet", () => {
     const r = await runConfigSet({ key: "INVALID", value: "x", home: h });
     expect(r.exitCode).toBe(26);
     expect(r.result.ok).toBe(false);
+  });
+
+  it("accepts AUTO_COMMIT as a valid config key", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "AUTO_COMMIT", value: "true", home: h });
+    expect(r.exitCode).toBe(ExitCode.OK);
+    expect(r.result.ok).toBe(true);
   });
 });
 

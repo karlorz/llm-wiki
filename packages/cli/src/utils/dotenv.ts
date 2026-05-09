@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 
 export const CONFIG_KEYS = [
   "WIKI_PATH", "WIKI_LANG",
+  "AUTO_COMMIT",
   "BACKUP_ENDPOINT", "BACKUP_BUCKET", "BACKUP_REGION",
   "BACKUP_ACCESS_KEY_ID", "BACKUP_SECRET_ACCESS_KEY",
 ] as const;
