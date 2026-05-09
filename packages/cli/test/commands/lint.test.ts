@@ -656,6 +656,36 @@ Not yet indexed.
       expect(content).toContain("- ^[raw/articles/x.md]");
     });
 
+    it("removes all occurrences of the same marker across multiple body lines", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      // Same marker repeated across 3 paragraphs — was only removing first occurrence
+      const body =
+        "First claim. ^[raw/articles/x.md]\n\n" +
+        "Second claim. ^[raw/articles/x.md]\n\n" +
+        "Third claim. ^[raw/articles/x.md]\n";
+      writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + body);
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
+      if (r.result.ok) {
+        expect(r.result.data.fixed).toContain("concepts/alpha.md");
+        expect(r.result.data.unresolved).toHaveLength(0);
+      }
+      // Re-lint — should NOT flag legacy_citation_style
+      const r2 = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r2.result.ok) {
+        const warningKinds = r2.result.data.by_severity.warning.map(b => b.kind);
+        expect(warningKinds).not.toContain("legacy_citation_style");
+      }
+      const content = require("fs").readFileSync(join(v, "concepts", "alpha.md"), "utf8");
+      // All inline markers should be removed from body
+      expect(content).not.toMatch(/claim\.\s*\^\[raw/);
+      // Marker should appear exactly once in ## Sources (deduped)
+      const sourcesSection = content.split("## Sources")[1];
+      const markerMatches = sourcesSection.match(/\^\[raw\/articles\/x\.md\]/g);
+      expect(markerMatches).toHaveLength(1);
+    });
+
     it("fixes missing_overview by inserting ## Overview stub after frontmatter", async () => {
       const v = vault();
       writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "Just a body with no overview.\n");

@@ -311,35 +311,34 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
           const bodyLines = body.split("\n");
           let inSrc = false;
           const newBodyLines: string[] = [];
-          const seen = new Set<string>();
 
           for (const line of bodyLines) {
             if (/^## Sources\b/.test(line.trim())) { inSrc = true; newBodyLines.push(line); continue; }
             if (inSrc) { newBodyLines.push(line); continue; }
 
             // Check if line is a standalone marker (only a citation, no other text)
+            // Reset lastIndex since INLINE_MARKER uses the global flag
+            INLINE_MARKER.lastIndex = 0;
             const lineWithoutMarkers = line.replace(INLINE_MARKER, "").trim();
+            INLINE_MARKER.lastIndex = 0;
             if (lineWithoutMarkers.length === 0 && INLINE_MARKER.test(line)) {
               // Skip this line entirely — marker will be added to ## Sources
               continue;
             }
 
-            // Remove citation markers trailing sentence-ending punctuation
+            // Remove citation markers from this line
             let cleaned = line;
             for (const marker of inlineMarkers) {
-              if (seen.has(marker)) continue;
               const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
               // Marker after punctuation+space or punctuation at line end
               const trailingRe = new RegExp(`([.!?]\\s*)${escapedMarker}`);
               if (trailingRe.test(cleaned)) {
                 cleaned = cleaned.replace(trailingRe, "$1");
-                seen.add(marker);
               }
-              // Marker alone on a portion of the line (e.g. "text. ^[raw/x.md] more text")
+              // Marker anywhere else on the line (e.g. "text. ^[raw/x.md] more text")
               const midRe = new RegExp(`${escapedMarker}\\s*`);
-              if (!seen.has(marker) && midRe.test(cleaned)) {
+              if (midRe.test(cleaned)) {
                 cleaned = cleaned.replace(midRe, "");
-                seen.add(marker);
               }
             }
             newBodyLines.push(cleaned);
