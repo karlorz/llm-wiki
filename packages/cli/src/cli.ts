@@ -376,8 +376,6 @@ program
 program
   .command("status [vault]")
   .description("output vault diagnostics")
-  .option("--human", "render terminal-readable output instead of JSON")
-  .option("--json", "output as JSON (default)")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
