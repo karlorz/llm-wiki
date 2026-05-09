@@ -292,6 +292,8 @@ describe("runSyncPull", () => {
     git(cloneDir, 'commit -m init');
     git(cloneDir, "branch -M main");
     git(cloneDir, "push -u origin main");
+    // Point bare remote HEAD to main so subsequent clones inherit it
+    git(remoteDir, "symbolic-ref HEAD refs/heads/main");
     // Now create a second clone to simulate a second client pushing changes
     const clientADir = makeTempDir();
     git(clientADir, `clone ${remoteDir} .`);
