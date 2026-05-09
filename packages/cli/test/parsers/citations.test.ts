@@ -69,6 +69,17 @@ describe("isLegacyCitationStyle", () => {
     const body = "Use `--flag` for output. ^[raw/x.md]\n";
     expect(isLegacyCitationStyle(body)).toBe(true);
   });
+  it("ignores markers inside double-backtick inline code spans", () => {
+    // Regression: ``^[raw/x.md]`` double-backtick spans were not stripped
+    const body = "Use ``^[raw/x.md]`` for citations. ^[raw/y.md]\n\n## Sources\n- ^[raw/y.md]\n";
+    expect(isLegacyCitationStyle(body)).toBe(false);
+  });
+  it("ignores partial ^[raw/ in prose after stripping inline code", () => {
+    // Regression: adjacent inline code spans left bare ^[raw/] fragments
+    // e.g. `[[raw/...]]` and `` `` stripping left ^[raw/] in the line
+    const body = "Pages with `sources:` frontmatter using `[[raw/...]]` wikilinks. `` body citations.\n\n## Sources\n- ^[raw/x.md]\n";
+    expect(isLegacyCitationStyle(body)).toBe(false);
+  });
 });
 
 describe("extractParagraphEndCitations", () => {
