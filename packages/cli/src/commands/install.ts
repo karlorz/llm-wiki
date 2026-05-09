@@ -48,7 +48,7 @@ export async function runInstall(input: InstallInput): Promise<{ exitCode: numbe
   let entries: string[];
   try {
     entries = (await readdir(input.skillsRoot, { withFileTypes: true }))
-      .filter(d => d.isDirectory() && (d.name.startsWith("wiki-") || d.name.startsWith("proj-")))
+      .filter(d => d.isDirectory() && (d.name.startsWith("wiki-") || d.name.startsWith("proj-") || d.name === "dev-loop-research" || d.name === "using-skillwiki"))
       .map(d => d.name);
   } catch (e) {
     return { exitCode: ExitCode.PREFLIGHT_FAILED, result: err("PREFLIGHT_FAILED", { message: String(e) }) };

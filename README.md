@@ -11,7 +11,7 @@ Project-aware Karpathy-style knowledge base for Claude Code skills.
 /plugin install skillwiki@llm-wiki
 ```
 
-The plugin ships 18 skills (`wiki-*`, `proj-*`, `wiki-add-task`, `wiki-adapter-prd`, `wiki-reingest`, `using-skillwiki`). They are namespaced by Claude Code as `llm-wiki:<skill>` (e.g. `llm-wiki:wiki-init`).
+The plugin ships 19 skills (`wiki-*`, `proj-*`, `dev-loop-research`, `wiki-add-task`, `wiki-adapter-prd`, `wiki-reingest`, `using-skillwiki`). They are namespaced by Claude Code as `llm-wiki:<skill>` (e.g. `llm-wiki:wiki-init`).
 
 ### Option B — npm CLI installer
 
@@ -19,7 +19,7 @@ The plugin ships 18 skills (`wiki-*`, `proj-*`, `wiki-add-task`, `wiki-adapter-p
 npx skillwiki@latest install
 ```
 
-This copies 18 SKILL.md files into `~/.claude/skills/` and writes `.claude/skills/wiki-manifest.json`. Use this when you want the skills available outside a Claude Code plugin context, or to seed `~/.claude/skills/` for tools that scan it directly.
+This copies 19 SKILL.md files into `~/.claude/skills/` and writes `.claude/skills/wiki-manifest.json`. Use this when you want the skills available outside a Claude Code plugin context, or to seed `~/.claude/skills/` for tools that scan it directly.
 
 ## Skills
 
@@ -27,6 +27,7 @@ This copies 18 SKILL.md files into `~/.claude/skills/` and writes `.claude/skill
 |---|---|
 | `wiki-*` | `wiki-init`, `wiki-ingest`, `wiki-query`, `wiki-lint`, `wiki-crystallize`, `wiki-audit`, `wiki-archive`, `wiki-reingest`, `wiki-adapter-prd`, `wiki-add-task`, `wiki-sync`, `wiki-canvas`, `wiki-gate-plan-mode` |
 | `proj-*` | `proj-init`, `proj-work`, `proj-distill`, `proj-decide` |
+| `dev-loop-research` | `dev-loop-research` |
 | onboarding | `using-skillwiki` |
 
 ## CLI

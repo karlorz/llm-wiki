@@ -1,7 +1,7 @@
 ---
 version: 0.2.1
 name: using-skillwiki
-description: Invoke at session start or when knowledge-base tasks arise — maps all wiki-*/proj-* skills and teaches the skillwiki CLI workflow
+description: Invoke at session start or when knowledge-base tasks arise — maps all skillwiki skills and teaches the skillwiki CLI workflow
 ---
 
 <SUBAGENT-STOP>
@@ -28,6 +28,7 @@ Invoke a skillwiki skill when the user:
 - Asks about their skillwiki configuration or setup health
 - Wants to sync vault changes to/from a git remote
 - Wants to visualize the vault graph as an Obsidian Canvas
+- Wants to run a research scan of repo and vault health
 
 ## Vault Structure
 
@@ -87,6 +88,7 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 | `wiki-canvas` | Generate Obsidian Canvas visualization from vault graph data |
 | `proj-decide` | Write an Architectural Decision Record (ADR) |
 | `wiki-gate-plan-mode` | Toggle EnterPlanMode gating — force superpowers planning instead of built-in plan mode |
+| `dev-loop-research` | Standalone research agent — scans repo + vault health, outputs prioritized work-item recommendations |
 
 ## CLI Backbone
 
