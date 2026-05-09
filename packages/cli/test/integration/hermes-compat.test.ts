@@ -60,7 +60,8 @@ describe("Hermes wire-compat", () => {
 });
 
 function splitFM(text: string): string {
-  const m = text.match(/^---\n([\s\S]*?)\n---\n/);
+  const normalized = text.replace(/\r\n/g, "\n");
+  const m = normalized.match(/^---\n([\s\S]*?)\n---\n/);
   if (!m) throw new Error("no frontmatter");
   return m[1];
 }

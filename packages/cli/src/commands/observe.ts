@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
@@ -50,6 +51,13 @@ export async function runObserve(
     return {
       exitCode: ExitCode.SCHEME_REJECTED,
       result: err("SCHEME_REJECTED", { message: "Text must not be empty" })
+    };
+  }
+
+  if (!existsSync(input.vault) || !statSync(input.vault).isDirectory()) {
+    return {
+      exitCode: ExitCode.VAULT_PATH_INVALID,
+      result: err("VAULT_PATH_INVALID", { path: input.vault })
     };
   }
 

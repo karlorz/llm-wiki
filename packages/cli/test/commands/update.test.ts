@@ -187,7 +187,7 @@ describe("runUpdate", () => {
 
     expect(mockInstall).toHaveBeenCalledWith(
       expect.objectContaining({
-        skillsRoot: "/usr/local/lib/node_modules/skillwiki/skills",
+        skillsRoot: join("/usr/local/lib/node_modules/skillwiki/skills"),
         target: join(h, ".claude", "skills"),
         dryRun: false,
         symlink: false,
