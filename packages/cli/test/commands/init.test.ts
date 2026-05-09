@@ -46,7 +46,6 @@ describe("runInit", () => {
     expect(templatesConfig.folder).toBe("_Templates");
     const template = readFileSync(join(target, "_Templates", "tpl-ad-hoc-capture.md"), "utf8");
     expect(template).toContain("source_url:");
-    expect(template).toContain("sha256:");
     expect(template).toContain("kind:");
     expect(template).toContain("project:");
     expect(template).toContain("ingested: {{date:YYYY-MM-DD}}");

@@ -23,4 +23,10 @@ describe("detectSchema", () => {
   it("does not confuse meta with typed-knowledge (no sources)", () => {
     expect(detectSchema({ type: "meta", tags: ["x"] }).schema).toBe("meta");
   });
+  it("detects raw ad-hoc capture by source_url + ingested (no sha256)", () => {
+    expect(detectSchema({ source_url: null, ingested: "2026-05-08", kind: "idea" }).schema).toBe("raw");
+  });
+  it("detects raw by kind + ingested (no sha256, no source_url)", () => {
+    expect(detectSchema({ ingested: "2026-05-08", kind: "bug" }).schema).toBe("raw");
+  });
 });

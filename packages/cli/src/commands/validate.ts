@@ -83,7 +83,7 @@ export async function runValidate(input: ValidateInput): Promise<{ exitCode: num
       return { exitCode: ExitCode.VAULT_PATH_INVALID, result: err("VAULT_PATH_INVALID", { reason: `file ${input.file} is not inside vault ${input.vault}` }) };
     }
 
-    const pageType = typeof parsed.data.type === "string" ? parsed.data.type : "";
+    const pageType = "type" in parsed.data && typeof parsed.data.type === "string" ? parsed.data.type : "";
     const title = typeof parsed.data.title === "string" ? parsed.data.title : relPath.replace(/\.md$/, "");
 
     // Add to index.md for typed-knowledge and meta pages only

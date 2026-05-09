@@ -117,9 +117,9 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 ## Current counts (2026-05-09)
 
 - 17 SKILL.md files in `packages/skills/`
-- 45 CLI subcommands (40 source files in `packages/cli/src/commands/`)
-- 71 test files (42 commands, 14 utils, 4 parsers, 9 shared, 2 integration, 1 skills, 1 smoke)
-- 709 tests passing
+- 55 CLI subcommands (41 source files in `packages/cli/src/commands/`)
+- 72 test files (42 commands, 13 utils, 4 parsers, 9 shared, 2 integration, 1 skills, 1 smoke)
+- 776 tests passing
 - Lint buckets: 5 error, 13 warning, 5 info (incl. `page_structure`, `duplicate_frontmatter`, `missing_overview`, `frontmatter_wikilink`, `wikilink_citation`, `broken_sources`, `work_item_health`, `compound_refs`, `orphaned_project_pages`)
 - SKILL.md frontmatter: `name`, `version`, `description` (required); `deprecated` (optional)
 - Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`

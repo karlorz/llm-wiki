@@ -1,4 +1,4 @@
-const FENCE = /`[^`]*`|```[\s\S]*?```/g;
+const FENCE = /```[\s\S]*?```|`[^`\n]*`/g;
 
 export function extractBodyWikilinks(body: string): string[] {
   const stripped = body.replace(FENCE, "");

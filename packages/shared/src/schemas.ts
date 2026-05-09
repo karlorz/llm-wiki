@@ -37,7 +37,7 @@ export const RawSourceSchema = z.object({
   source_url: z.string().nullable(),
   ingested: isoDate,
   ingested_by: z.enum(["wiki-ingest", "proj-work", "manual"]).optional(),
-  sha256: sha256Hex,
+  sha256: sha256Hex.optional(),
   project: wikilink.optional(),
   work_item: wikilink.optional(),
   kind: z.enum(["postmortem", "session-log", "meeting-notes", "other", "idea", "bug", "task", "note"]).optional()
@@ -118,8 +118,10 @@ export function detectSchema(fm: Record<string, unknown>): { schema: SchemaName 
   if (fm.type === "meta") return { schema: "meta" };
   // Then typed-knowledge (has type + sources — let Zod validate the specific type value)
   if ("type" in fm && "sources" in fm) return { schema: "typed-knowledge" };
-  // Raw sources
-  if (typeof fm.sha256 === "string" && "ingested" in fm) return { schema: "raw" };
+  // Raw sources (ingested with source_url field, or ad-hoc capture with kind)
+  if ("ingested" in fm && ("source_url" in fm || "sha256" in fm)) return { schema: "raw" };
+  const RAW_KINDS = new Set(["postmortem", "session-log", "meeting-notes", "other", "idea", "bug", "task", "note"]);
+  if ("ingested" in fm && typeof fm.kind === "string" && RAW_KINDS.has(fm.kind)) return { schema: "raw" };
   // Work items
   if ("kind" in fm && "status" in fm) return { schema: "work-item" };
   return { schema: null };

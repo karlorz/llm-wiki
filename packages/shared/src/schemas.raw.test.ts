@@ -61,4 +61,18 @@ describe("RawSourceSchema", () => {
       expect(RawSourceSchema.parse({ ...remote, source_url: null, kind })).toBeTruthy();
     }
   });
+
+  it("accepts ad-hoc capture without sha256 (mutable working note)", () => {
+    const v = {
+      source_url: null,
+      ingested: "2026-05-08",
+      kind: "idea",
+      project: "[[llm-wiki]]"
+    };
+    expect(RawSourceSchema.parse(v)).toBeTruthy();
+  });
+
+  it("rejects malformed sha256 even when optional", () => {
+    expect(() => RawSourceSchema.parse({ ...remote, sha256: "deadbeef" })).toThrow();
+  });
 });

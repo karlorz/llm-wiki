@@ -213,7 +213,6 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       "---",
       "source_url:",
       "ingested: {{date:YYYY-MM-DD}}",
-      "sha256:          # run: skillwiki hash <this-file>",
       "kind:             # idea | bug | task | note | other",
       "project:          # optional: \"[[slug]]\"",
       "---",

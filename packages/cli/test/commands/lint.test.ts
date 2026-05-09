@@ -477,13 +477,14 @@ Do the work.
 
   it("does not warn on in-progress work item with started date", async () => {
     const v = vault();
-    const workDir = join(v, "projects", "test", "work", "2026-05-08-has-start");
+    const today = new Date().toISOString().slice(0, 10);
+    const workDir = join(v, "projects", "test", "work", `${today}-has-start`);
     mkdirSync(workDir, { recursive: true });
     writeFileSync(join(workDir, "spec.md"), `---
 title: Has start date
 status: in-progress
-started: 2026-05-08
-created: 2026-05-08
+started: ${today}
+created: ${today}
 ---
 
 ## Overview
