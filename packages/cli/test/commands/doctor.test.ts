@@ -115,6 +115,9 @@ describe("runDoctor", () => {
 
   it("warn-only scenario returns exit 28", async () => {
     const h = home();
+    // Create install bin so detectCliChannels always finds 2 channels (dev + install) → warn
+    mkdirSync(join(h, ".claude", "skills", "bin"), { recursive: true });
+    writeFileSync(join(h, ".claude", "skills", "bin", "skillwiki"), "#!/bin/sh\nexec npx skillwiki \"$@\"\n");
     const v = fullVault();
     writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "/path/to/cli.js", "doctor"], currentVersion: "0.2.0-beta.15" });

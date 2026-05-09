@@ -93,6 +93,7 @@ describe("runSyncStatus", () => {
     writeFileSync(join(dir, "README.md"), "hello");
     git(dir, "add .");
     git(dir, 'commit -m init');
+    git(dir, "branch -M main");
     git(dir, "push -u origin main");
     git(dir, "remote set-head origin main");
     // Second local-only commit (ahead of origin)
@@ -289,6 +290,7 @@ describe("runSyncPull", () => {
     writeFileSync(join(cloneDir, "README.md"), "hello");
     git(cloneDir, "add .");
     git(cloneDir, 'commit -m init');
+    git(cloneDir, "branch -M main");
     git(cloneDir, "push -u origin main");
     // Now create a second clone to simulate a second client pushing changes
     const clientADir = makeTempDir();
@@ -301,6 +303,7 @@ describe("runSyncPull", () => {
     writeFileSync(join(clientADir, "raw", "transcripts", "test.md"), "---\ntitle: test\n---\nbody");
     git(clientADir, "add .");
     git(clientADir, 'commit -m "add transcript"');
+    git(clientADir, "branch -M main");
     git(clientADir, "push origin main");
     // Now pull from the first clone
     const { exitCode, result } = await runSyncPull({ vault: cloneDir });
