@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This repo ships the `skillwiki` CLI and 17 prompt-only SKILL.md files.
+This repo ships the `skillwiki` CLI and 18 prompt-only SKILL.md files.
 
 ## Working in this repo
 
@@ -26,7 +26,7 @@ Four scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 - **`verify-manifests.sh`** — validates manifest consistency: version sync across 6 files, skill count in descriptions matches actual, every skill dir has SKILL.md. Runs as a CI gate before build.
 - **`e2e-local.sh`** — builds from source, runs all CLI commands locally (130 assertions). No network required.
 - **`e2e-remote.sh`** — upgrades skillwiki on sg01 via `npm install -g skillwiki@beta`, then runs the full CLI suite over SSH (48 assertions).
-- **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 17 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
+- **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 18 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
 
 Assertion counts are approximate — they include loop-expanded iterations (e.g., a `for` loop over 10 skills produces 10 runtime assertions from 1 source line). Hard Rule 15: counts are not a contract; only exit code matters.
 
@@ -127,7 +127,7 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 
 ## Current counts (2026-05-09)
 
-- 17 SKILL.md files in `packages/skills/`
+- 18 SKILL.md files in `packages/skills/`
 - 55 CLI subcommands (41 source files in `packages/cli/src/commands/`)
 - 74 test files (42 commands, 15 utils, 9 shared, 4 parsers, 2 integration, 1 skills, 1 smoke)
 - 794 tests passing

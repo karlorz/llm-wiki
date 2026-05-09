@@ -86,6 +86,7 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 | `wiki-sync` | Safely sync vault git repository — push/pull with lint guards and conflict resolution |
 | `wiki-canvas` | Generate Obsidian Canvas visualization from vault graph data |
 | `proj-decide` | Write an Architectural Decision Record (ADR) |
+| `wiki-gate-plan-mode` | Toggle EnterPlanMode gating — force superpowers planning instead of built-in plan mode |
 
 ## CLI Backbone
 
