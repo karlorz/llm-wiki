@@ -130,7 +130,8 @@ export function hasOrphanedCitations(body: string): boolean {
 
   // Check for orphaned markers after Sources section ended
   if (sourcesEnded) {
-    for (let i = lastNonBlankInSources + 1; i < lines.length; i++) {
+    const scanStart = Math.max(lastNonBlankInSources + 1, sourcesStartLine + 1);
+    for (let i = scanStart; i < lines.length; i++) {
       if (/\^\[raw\//.test(lines[i])) {
         return true;
       }

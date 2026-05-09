@@ -16,7 +16,7 @@ Standard four + project context.
 
 ### Source selection
 
-Check `projects/{slug}/compound/` first. If empty, fall back to retro
+Check `projects/{slug}/compound/` first. If no project context exists, default to `playground`. If empty, fall back to retro
 entries in vault `log.md` (lines matching `## [YYYY-MM-DD] retro`).
 
 When reading retros as source material:

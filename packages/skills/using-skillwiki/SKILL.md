@@ -139,6 +139,6 @@ When skillwiki is installed, **all spec and plan documents must land in the vaul
 
 Both skills say "User preferences for spec location override this default" — the vault work-item path IS the override.
 
-**If no project context exists** (standalone vault, not inside a project), save specs/plans directly under the vault root with the PRD skill's default naming, e.g. `<vault>/specs/YYYY-MM-DD-<slug>.md`.
+**If no project context exists** (standalone vault, not inside a project), default to the `playground` project slug. Invoke `proj-work` with `playground` as the slug so redirect paths are emitted normally and the PRD bridge chain works. The `playground` project is a pre-initialized catch-all workspace at `projects/playground/` for exploratory work, experiments, and unclassified features. Work items that mature can be moved to a real project later.
 
 **Never create `docs/superpowers/` in any repo.**

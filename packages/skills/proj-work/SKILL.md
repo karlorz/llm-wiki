@@ -9,6 +9,7 @@ description: Open or run a work item under projects/{slug}/work/YYYY-MM-DD-{slug
 ## When to invoke
 - User starts a feature, issue, refactor, or decision inside an existing project.
 - Brainstorming or writing-plans skills would otherwise default-write outside the project tree.
+- If no project context can be determined, default to the `playground` slug so redirect paths always emit and the PRD bridge chain works.
 
 ## Pre-orientation reads
 Standard four + project context (project README, last ~5 work logs).

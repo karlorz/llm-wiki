@@ -137,6 +137,12 @@ describe("hasOrphanedCitations", () => {
     const body = "Body.\n\n## Sources\n- ^[raw/x.md]\n\n```\n^[raw/y.md]\n```\n";
     expect(hasOrphanedCitations(body)).toBe(false);
   });
+  it("does not flag body citation when Sources uses non-standard format", () => {
+    // Sources section with numbered URLs (no ^[raw/] markers) should not
+    // cause body citations before ## Sources to be flagged as orphaned
+    const body = "Some claim. ^[raw/articles/x.md]\n\nMore text.\n\n## Sources\n\n1. [example.com](https://example.com) — description\n2. [other.com](https://other.com) — description\n\n## Related\n\n- [[concepts/foo]]\n";
+    expect(hasOrphanedCitations(body)).toBe(false);
+  });
 });
 
 describe("hasWikilinkCitations", () => {
