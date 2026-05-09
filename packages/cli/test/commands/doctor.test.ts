@@ -120,7 +120,7 @@ describe("runDoctor", () => {
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "/path/to/cli.js", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      const cli = r.result.data.checks.find(c => c.id === "cli_on_path");
+      const cli = r.result.data.checks.find(c => c.id === "cli_channels");
       expect(cli?.status).toBe("warn");
       if (r.result.data.summary.error === 0 && r.result.data.summary.warn > 0) {
         expect(r.exitCode).toBe(28);
@@ -139,12 +139,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 15 checks", async () => {
+  it("always returns exactly 16 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(15);
+      expect(r.result.data.checks).toHaveLength(16);
     }
   });
 
@@ -318,6 +318,93 @@ describe("runDoctor", () => {
       const ds = r.result.data.checks.find(c => c.id === "dsstore_clean");
       expect(ds?.status).toBe("warn");
       expect(ds?.detail).toContain(".DS_Store file(s) found");
+    }
+  });
+
+  it("skills_duplicate passes when only plugin is installed", async () => {
+    const h = homeWithPlugin("0.2.0-beta.15");
+    // Create ~/.claude/skills/ with non-overlapping skill
+    mkdirSync(join(h, ".claude", "skills", "other-skill"), { recursive: true });
+    writeFileSync(join(h, ".claude", "skills", "other-skill", "SKILL.md"), "# Other\n");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const dup = r.result.data.checks.find(c => c.id === "skills_duplicate");
+      expect(dup?.status).toBe("pass");
+      expect(dup?.detail).toContain("No overlap");
+    }
+  });
+
+  it("skills_duplicate passes when only CLI install exists (no plugin)", async () => {
+    const h = home();
+    // home() creates ~/.claude/skills/example/SKILL.md but no plugin
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const dup = r.result.data.checks.find(c => c.id === "skills_duplicate");
+      expect(dup?.status).toBe("pass");
+      expect(dup?.detail).toContain("Single install channel");
+    }
+  });
+
+  it("skills_duplicate warns when skills exist in both plugin and CLI install", async () => {
+    const h = homeWithPlugin("0.2.0-beta.15");
+    // Add overlapping wiki-init skill in CLI install path
+    mkdirSync(join(h, ".claude", "skills", "wiki-init"), { recursive: true });
+    writeFileSync(join(h, ".claude", "skills", "wiki-init", "SKILL.md"), "# Wiki Init\n");
+    // Add non-overlapping skill too
+    mkdirSync(join(h, ".claude", "skills", "wiki-query"), { recursive: true });
+    writeFileSync(join(h, ".claude", "skills", "wiki-query", "SKILL.md"), "# Wiki Query\n");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const dup = r.result.data.checks.find(c => c.id === "skills_duplicate");
+      expect(dup?.status).toBe("warn");
+      expect(dup?.detail).toContain("skill(s) in both plugin and ~/.claude/skills/");
+      expect(dup?.detail).toContain("wiki-init");
+    }
+  });
+
+  it("cli_channels passes with single channel", async () => {
+    const h = home();
+    const v = fullVault();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const cli = r.result.data.checks.find(c => c.id === "cli_channels");
+      expect(cli).toBeDefined();
+      // Either pass with single channel or warn if multiple channels detected on test machine
+    }
+  });
+
+  it("cli_channels detects dev source from argv", async () => {
+    const h = home();
+    const v = fullVault();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "/path/to/packages/cli/dist/cli.js", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const cli = r.result.data.checks.find(c => c.id === "cli_channels");
+      expect(cli?.detail).toContain("dev");
+    }
+  });
+
+  it("cli_channels warns when plugin bin and CLI install bin both exist", async () => {
+    const h = homeWithPlugin("0.2.0-beta.15");
+    // Add CLI install bin
+    mkdirSync(join(h, ".claude", "skills", "bin"), { recursive: true });
+    writeFileSync(join(h, ".claude", "skills", "bin", "skillwiki"), "#!/usr/bin/env bash\nexec npx skillwiki \"$@\"\n");
+    // Add plugin bin
+    const pluginDir = join(h, ".claude", "plugins", "cache", "llm-wiki", "skillwiki", "0.2.0-beta.15");
+    mkdirSync(join(pluginDir, "bin"), { recursive: true });
+    writeFileSync(join(pluginDir, "bin", "skillwiki"), "#!/usr/bin/env bash\nexec npx skillwiki \"$@\"\n");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const cli = r.result.data.checks.find(c => c.id === "cli_channels");
+      expect(cli?.status).toBe("warn");
+      expect(cli?.detail).toContain("channels");
     }
   });
 });

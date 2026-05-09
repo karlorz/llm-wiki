@@ -7,17 +7,17 @@ import { configPath } from "../commands/config.js";
 
 /**
  * Auto-commit vault changes after a successful command.
- * Only runs when AUTO_COMMIT=true is set in ~/.skillwiki/.env.
+ * Enabled by default; set AUTO_COMMIT=false in ~/.skillwiki/.env to disable.
  * On failure: logs warning to stderr, does not change exit code.
  */
 export async function postCommit(vault: string, exitCode: number): Promise<void> {
   // Guard: only auto-commit on success
   if (exitCode !== 0) return;
 
-  // Guard: check config
+  // Guard: check config (default: enabled)
   const home = process.env.HOME ?? "";
   const dotenv = await parseDotenvFile(configPath(home));
-  if (dotenv["AUTO_COMMIT"] !== "true") return;
+  if (dotenv["AUTO_COMMIT"] === "false") return;
 
   // Guard: vault must be a git repo
   if (!existsSync(join(vault, ".git"))) return;

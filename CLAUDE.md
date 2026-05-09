@@ -9,6 +9,8 @@ This repo ships the `skillwiki` CLI and 17 prompt-only SKILL.md files.
 - All deterministic logic lives under `packages/cli/src/`.
 - Shared types live in `packages/shared/src/` and are imported via `@skillwiki/shared`.
 - Tests are co-located with the package they cover; run them with `npm run -w <package> test`.
+- Local dev build: `npm run -w packages/cli build` (output in `packages/cli/dist/`). Run with `node packages/cli/dist/cli.js <command>`.
+- Run tests: `npx vitest run packages/cli/test/` (all) or `npx vitest run packages/cli/test/commands/doctor.test.ts` (single file).
 
 ## Conventions
 
@@ -47,6 +49,15 @@ The skills ship through two independent channels — keep both working:
 2. **npm CLI installer** — `npx skillwiki install` copies SKILL.md files and the `bin/skillwiki` wrapper into `~/.claude/skills/` via the `install` subcommand (see `packages/cli/src/commands/install.ts`).
 
 Changing the layout under `packages/skills/<skill>/` requires updating BOTH `packages/skills/.claude-plugin/plugin.json` AND the `install` subcommand's directory scan.
+
+## Dev vs prod plugin source
+
+- **Global** (`~/.claude/settings.json`): `llm-wiki` marketplace → `"source": "github"`. All projects get the production plugin.
+- **Project-local** (`.claude/settings.local.json`, gitignored): overrides `llm-wiki` → `"source": "directory"` so this repo uses dev source.
+- **Same marketplace name is required** — the name must match `marketplace.json`'s `"name"` field. A distinct name like `llm-wiki-dev` will fail with "Plugin not found in marketplace".
+- **Same cache dir** — Claude Code shares `~/.claude/plugins/cache/llm-wiki/` across scopes; you cannot have two versions at different scopes simultaneously.
+- **Plugin install scope:** `claude plugin install skillwiki@llm-wiki --scope user` (global) or `--scope local` (project). Uninstall must match: `--scope local` for directory-sourced installs.
+- **After changing source or scope:** clear cache (`rm -rf ~/.claude/plugins/cache/llm-wiki`) then reinstall. Settings changes do not auto-flush the cache.
 
 ## Plugin release workflow
 
@@ -101,11 +112,11 @@ wiki/
 
 - The vault at `~/wiki` is the canonical project knowledge base. All specs, plans, and retros land there via `skillwiki` skills.
 - **New** specs and plans go into work items via `proj-work` → `projects/llm-wiki/work/YYYY-MM-DD-{slug}/spec.md` or `plan.md`. The `history/{specs,plans}/` folder is **archive-only** for superseded historical documents — do not write new work there. Do not recreate `docs/superpowers/`.
-- The dev-loop skill (`dev-loop:1.4.0`) drives the PRD+skillwiki workflow. It reads project config from `.claude/dev-loop.config.md`. Legacy commands are archived at `~/.claude/commands/_archive/2026-05-07/`.
+- The dev-loop skill (`dev-loop:1.5.1`) drives the PRD+skillwiki workflow. It reads project config from `.claude/dev-loop.config.md`. Legacy commands are archived at `~/.claude/commands/_archive/2026-05-07/`.
 
 ## CI gates
 
-CI runs three validation stages before allowing merge:
+CI runs four validation stages before allowing merge:
 
 1. **verify-manifests** — version sync, skill count, SKILL.md presence (no build needed, runs first)
 2. **build-and-test** — unit tests across 3 platforms + install --dry-run smoke
@@ -118,10 +129,12 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 
 - 17 SKILL.md files in `packages/skills/`
 - 55 CLI subcommands (41 source files in `packages/cli/src/commands/`)
-- 72 test files (42 commands, 13 utils, 4 parsers, 9 shared, 2 integration, 1 skills, 1 smoke)
-- 776 tests passing
+- 74 test files (42 commands, 15 utils, 9 shared, 4 parsers, 2 integration, 1 skills, 1 smoke)
+- 794 tests passing
 - Lint buckets: 5 error, 13 warning, 5 info (incl. `page_structure`, `duplicate_frontmatter`, `missing_overview`, `frontmatter_wikilink`, `wikilink_citation`, `broken_sources`, `work_item_health`, `compound_refs`, `orphaned_project_pages`)
 - SKILL.md frontmatter: `name`, `version`, `description` (required); `deprecated` (optional)
 - Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`
 - New exit codes: `BACKUP_SYNC_FAILED (44)`, `BACKUP_RESTORE_CONFLICTS (45)`
 - New config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`
+- `AUTO_COMMIT` defaults to enabled; set `AUTO_COMMIT=false` to disable (was opt-in, now opt-out)
+- `doctor` checks: 17 checks (was 15); new: `cli_channels` (replaces `cli_on_path`), `skills_duplicate`

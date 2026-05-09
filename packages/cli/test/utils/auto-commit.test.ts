@@ -57,7 +57,7 @@ describe("postCommit", () => {
     expect(existsSync(lastOpPath)).toBe(true);
   });
 
-  it("does nothing when AUTO_COMMIT is not true", async () => {
+  it("does nothing when AUTO_COMMIT=false", async () => {
     const vault = initTestRepo();
     makeDotenv("false");
     process.env.HOME = join(TMP, "home");
@@ -68,6 +68,26 @@ describe("postCommit", () => {
 
     const lastOpPath = join(vault, ".skillwiki", "last-op.json");
     expect(existsSync(lastOpPath)).toBe(true);
+  });
+
+  it("commits when AUTO_COMMIT is unset (default enabled)", async () => {
+    const vault = initTestRepo();
+    // Create home without AUTO_COMMIT key
+    const dir = join(TMP, "home", ".skillwiki");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".env"), "WIKI_PATH=/tmp\n", "utf8");
+    process.env.HOME = join(TMP, "home");
+    writeFileSync(join(vault, "raw", "articles", "test.md"), "content");
+    appendLastOp(vault, { operation: "ingest", summary: "added test", files: ["raw/articles/test.md"], timestamp: new Date().toISOString() });
+
+    await postCommit(vault, 0);
+
+    // last-op should be cleared after commit
+    const lastOpPath = join(vault, ".skillwiki", "last-op.json");
+    expect(existsSync(lastOpPath)).toBe(false);
+
+    const log = execFileSync("git", ["-C", vault, "log", "-1", "--format=%s"], { encoding: "utf8" }).trim();
+    expect(log).toContain("ingest: added test");
   });
 
   it("commits when AUTO_COMMIT=true and last-op exists", async () => {
