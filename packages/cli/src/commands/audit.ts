@@ -43,7 +43,7 @@ export async function runAudit(input: AuditInput): Promise<{ exitCode: number; r
   const broken = resolved.filter(m => !m.resolved);
 
   // Footer consistency check
-  const footerMatch = body.match(/\n## Sources\n([\s\S]*)$/);
+  const footerMatch = body.match(/\r?\n## Sources\r?\n([\s\S]*)$/);
   let footer_consistency: AuditOutput["footer_consistency"];
   if (footerMatch) {
     const footerTargets = new Set<string>();

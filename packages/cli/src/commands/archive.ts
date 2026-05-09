@@ -32,7 +32,7 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
 
   if (relPath.startsWith("_archive/")) return { exitCode: ExitCode.ARCHIVE_ALREADY_ARCHIVED, result: err("ARCHIVE_ALREADY_ARCHIVED", { page: relPath }) };
 
-  const archivePath = join("_archive", relPath);
+  const archivePath = join("_archive", relPath).replace(/\\/g, "/");
   await mkdir(dirname(join(input.vault, archivePath)), { recursive: true });
 
   let indexUpdated = false;

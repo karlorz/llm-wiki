@@ -56,7 +56,7 @@ function* walkMarkdown(dir: string, base: string): Generator<string> {
     if (entry.isDirectory()) {
       yield* walkMarkdown(full, base);
     } else if (entry.name.endsWith(".md")) {
-      yield relative(base, full);
+      yield relative(base, full).replace(/\\/g, "/");
     }
   }
 }
