@@ -2,6 +2,7 @@ import { mkdir, writeFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { isoDate } from "@skillwiki/shared";
+import { appendLastOp } from "../utils/last-op.js";
 
 export interface SeedInput {
   vault: string;
@@ -114,6 +115,15 @@ export async function runSeed(input: SeedInput): Promise<{ exitCode: number; res
     await mkdir(join(rawPath, ".."), { recursive: true });
     await writeFile(rawPath, EXAMPLE_RAW, "utf8");
     created.push("raw/articles/example-source.md");
+  }
+
+  if (created.length > 0) {
+    appendLastOp(input.vault, {
+      operation: "seed",
+      summary: `seeded ${created.length} example pages`,
+      files: created,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   const hintLines = [`seeded: ${created.length}`, `skipped (already exist): ${skipped.length}`];

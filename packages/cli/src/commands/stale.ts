@@ -3,6 +3,7 @@ import { join, dirname } from "node:path";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault } from "../utils/vault.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
+import { appendLastOp } from "../utils/last-op.js";
 
 export interface StaleInput { vault: string; days: number; archive?: boolean }
 export interface StaleTranscript { path: string; reason: string }
@@ -130,6 +131,15 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
         try { await rename(join(input.vault, w.path), dest); archived.push(w.path); } catch { /* skip */ }
       }
     }
+  }
+
+  if (input.archive && archived.length > 0) {
+    appendLastOp(input.vault, {
+      operation: "stale-archive",
+      summary: `archived ${archived.length} stale items`,
+      files: archived,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   const total = staleTranscripts.length + incompleteWorkItems.length + doneWorkItems.length;

@@ -6,6 +6,7 @@ import { resolveLang } from "../utils/lang.js";
 import { parseDotenvText, writeDotenv, profileKey, type DotenvMap } from "../utils/dotenv.js";
 import { extractTaxonomy } from "../parsers/taxonomy.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
+import { appendLastOp } from "../utils/last-op.js";
 
 const DEFAULT_TAXONOMY = [
   "research", "comparison", "timeline", "summary", "person",
@@ -258,6 +259,15 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
     `discovered tags: ${discovered_tags}`,
     skipEnv ? "env: skipped" : `env: ${envWritten}`,
   ].join("\n");
+
+  if (created.length > 0) {
+    appendLastOp(target, {
+      operation: "init",
+      summary: `initialized vault: ${domain}`,
+      files: created,
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   return {
     exitCode: ExitCode.OK,

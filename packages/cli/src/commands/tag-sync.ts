@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { appendLastOp } from "../utils/last-op.js";
 
 export interface TagSyncInput {
   vault: string;
@@ -149,6 +150,15 @@ export async function runTagSync(input: TagSyncInput): Promise<{ exitCode: numbe
       await writeFile(page.absPath, newText, "utf8");
     }
     synced.push(page.relPath);
+  }
+
+  if (!input.dryRun && synced.length > 0) {
+    appendLastOp(input.vault, {
+      operation: "tag-sync",
+      summary: `synced tags on ${synced.length} pages`,
+      files: synced,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   const exitCode = synced.length > 0 ? ExitCode.MIGRATION_APPLIED : ExitCode.OK;

@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
+import { appendLastOp } from "../utils/last-op.js";
 
 const ALLOWED_KINDS = new Set(["note", "bug", "task", "idea", "session-log"]);
 
@@ -96,6 +97,13 @@ export async function runObserve(
       result: err("WRITE_FAILED", { path: filePath, message: String(e) })
     };
   }
+
+  appendLastOp(input.vault, {
+    operation: "observe",
+    summary: `created observation: ${slug}`,
+    files: [`raw/transcripts/${fileName}`],
+    timestamp: new Date().toISOString(),
+  });
 
   const relPath = `raw/transcripts/${fileName}`;
   const humanHint = `created ${relPath} (${sha256.slice(0, 12)}...)`;

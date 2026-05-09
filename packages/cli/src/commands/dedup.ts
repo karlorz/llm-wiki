@@ -1,6 +1,7 @@
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
+import { appendLastOp } from "../utils/last-op.js";
 import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
@@ -96,6 +97,15 @@ export async function runDedup(input: DedupInput): Promise<{ exitCode: number; r
         // File may already be gone; skip
       }
     }
+  }
+
+  if (input.apply && (rewired.length > 0 || removed.length > 0)) {
+    appendLastOp(input.vault, {
+      operation: "dedup",
+      summary: `rewired ${rewired.length} pages, removed ${removed.length} duplicates`,
+      files: [...rewired, ...removed],
+      timestamp: new Date().toISOString(),
+    });
   }
 
   const exitCode = duplicates.length > 0
