@@ -1,9 +1,9 @@
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { runLint } from "./lint.js";
 import { readLastOp, clearLastOp } from "../utils/last-op.js";
+import { git, gitStrict } from "../utils/git.js";
 
 export interface SyncStatusInput {
   vault: string;
@@ -17,20 +17,6 @@ export interface SyncStatusOutput {
   last_commit: string;
   status: "clean" | "dirty" | "ahead" | "behind" | "not_a_repo";
   humanHint: string;
-}
-
-/** Run git and return trimmed stdout on success, or empty string on failure. */
-function git(cwd: string, args: string[]): string {
-  try {
-    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
-  } catch {
-    return "";
-  }
-}
-
-/** Run git and throw on failure, returning trimmed stdout. */
-function gitStrict(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] }).trim();
 }
 
 export function runSyncStatus(input: SyncStatusInput): { exitCode: number; result: Result<SyncStatusOutput> } {
