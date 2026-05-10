@@ -38,7 +38,7 @@ async function createSymlink(src: string, dst: string): Promise<Result<{ linked:
   try { await unlink(dst); } catch { /* not present */ }
   try {
     await symlink(resolve(src), dst);
-  } catch (e) {
+  } catch (e: unknown) {
     return err("SYMLINK_FAILED", { message: String(e) });
   }
   return ok({ linked: true });
@@ -54,7 +54,7 @@ export async function runInstall(input: InstallInput): Promise<{ exitCode: numbe
       try { await stat(join(input.skillsRoot, d.name, "SKILL.md")); withSkill.push(d.name); } catch { /* not a skill directory */ }
     }
     entries = withSkill;
-  } catch (e) {
+  } catch (e: unknown) {
     return { exitCode: ExitCode.PREFLIGHT_FAILED, result: err("PREFLIGHT_FAILED", { message: String(e) }) };
   }
   if (entries.length === 0) {

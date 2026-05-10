@@ -321,7 +321,7 @@ export async function runIngest(
   try {
     await mkdir(join(input.vault, "raw", "articles"), { recursive: true });
     await writeFile(rawAbsPath, rawContent, "utf8");
-  } catch (e) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.WRITE_FAILED,
       result: err("WRITE_FAILED", { path: rawAbsPath, message: String(e) }),
@@ -332,7 +332,7 @@ export async function runIngest(
   try {
     await mkdir(join(input.vault, typedDir), { recursive: true });
     await writeFile(typedAbsPath, typedContent, "utf8");
-  } catch (e) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.WRITE_FAILED,
       result: err("WRITE_FAILED", { path: typedAbsPath, message: String(e) }),

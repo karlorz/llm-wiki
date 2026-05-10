@@ -129,7 +129,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       await mkdir(join(target, d), { recursive: true });
       created.push(d + "/");
     }
-  } catch (e) {
+  } catch (e: unknown) {
     return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { message: String(e) }) };
   }
 
@@ -171,7 +171,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       .replace("{{TAXONOMY_YAML}}", fullTaxonomyYaml);
     await writeFile(join(target, "SCHEMA.md"), schema, "utf8");
     created.push("SCHEMA.md");
-  } catch (e) {
+  } catch (e: unknown) {
     return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: "SCHEMA.md", message: String(e) }) };
   }
 
@@ -188,7 +188,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       await writeFile(join(target, fileName), await render(), "utf8");
       created.push(fileName);
       return undefined;
-    } catch (e) {
+    } catch (e: unknown) {
       return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: fileName, message: String(e) }) };
     }
   }
@@ -244,7 +244,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       }
       await writeDotenv(envPath, envEntries, existingEnvRaw);
       envWritten = envPath;
-    } catch (e) {
+    } catch (e: unknown) {
       return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: envPath, message: String(e) }) };
     }
   }

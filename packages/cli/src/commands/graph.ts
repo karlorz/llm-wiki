@@ -35,7 +35,7 @@ export async function runGraphBuild(input: GraphBuildInput): Promise<{ exitCode:
   try {
     await mkdir(dirname(input.out), { recursive: true });
     await writeFile(input.out, JSON.stringify({ adjacency, adamicAdar }, null, 2));
-  } catch (e) {
+  } catch (e: unknown) {
     return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { message: String(e) }) };
   }
   return {

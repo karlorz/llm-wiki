@@ -54,7 +54,7 @@ export async function runSelfUpdate(
           encoding: "utf8",
           timeout: 15_000,
         }).trim();
-      } catch (e) {
+      } catch (e: unknown) {
         return {
           exitCode: ExitCode.INTERNAL_ERROR,
           result: err("PREFLIGHT_FAILED", { message: `Failed to query npm registry: ${String(e)}` }),
@@ -88,7 +88,7 @@ export async function runSelfUpdate(
         stdio: "pipe",
         timeout: 60_000,
       });
-    } catch (e) {
+    } catch (e: unknown) {
       return {
         exitCode: ExitCode.INTERNAL_ERROR,
         result: err("BUILD_FAILED", { message: `Build failed: ${String(e)}` }),
@@ -102,7 +102,7 @@ export async function runSelfUpdate(
         stdio: "pipe",
         timeout: 30_000,
       });
-    } catch (e) {
+    } catch (e: unknown) {
       return {
         exitCode: ExitCode.INTERNAL_ERROR,
         result: err("LINK_FAILED", { message: `npm link failed: ${String(e)}` }),
@@ -138,7 +138,7 @@ export async function runSelfUpdate(
       encoding: "utf8",
       timeout: 15_000,
     }).trim();
-  } catch (e) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.INTERNAL_ERROR,
       result: err("PREFLIGHT_FAILED", { message: `Failed to query npm registry: ${String(e)}` }),
@@ -163,7 +163,7 @@ export async function runSelfUpdate(
       stdio: "pipe",
       timeout: 60_000,
     });
-  } catch (e) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.INTERNAL_ERROR,
       result: err("INSTALL_FAILED", { message: `npm install failed: ${String(e)}` }),

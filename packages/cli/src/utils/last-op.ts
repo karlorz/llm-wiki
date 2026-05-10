@@ -27,7 +27,7 @@ export function readLastOp(vault: string): LastOpEntry[] {
     }
     return parsed as LastOpEntry[];
   } catch {
-    try { unlinkSync(p); } catch {}
+    try { unlinkSync(p); } catch (_e: unknown) { /* file may not exist */ }
     return [];
   }
 }
@@ -42,5 +42,5 @@ export function appendLastOp(vault: string, entry: LastOpEntry): void {
 
 export function clearLastOp(vault: string): void {
   const p = lastOpPath(vault);
-  try { unlinkSync(p); } catch {}
+  try { unlinkSync(p); } catch (_e: unknown) { /* file may not exist */ }
 }

@@ -161,8 +161,8 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
   try {
     gitStrict(vault, ["add", "-A"]);
     // Unstage last-op.json if it was staged (it should not be committed)
-    try { gitStrict(vault, ["reset", "HEAD", "--", ".skillwiki/last-op.json"]); } catch {}
-  } catch (e) {
+    try { gitStrict(vault, ["reset", "HEAD", "--", ".skillwiki/last-op.json"]); } catch (_e: unknown) { /* file may not be staged */ }
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.SYNC_PUSH_FAILED,
       result: err("GIT_ADD_FAILED", { message: String(e) }),
@@ -180,7 +180,7 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
   }
   try {
     gitStrict(vault, ["commit", "-m", commitMessage]);
-  } catch (e) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.SYNC_PUSH_FAILED,
       result: err("GIT_COMMIT_FAILED", { message: String(e) }),
@@ -195,7 +195,7 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
   try {
     gitStrict(vault, ["push", "origin", "HEAD"]);
     pushed = true;
-  } catch (e) {
+  } catch (e: unknown) {
     // Commit succeeded but push failed — report partial success
     return {
       exitCode: ExitCode.SYNC_PUSH_FAILED,
@@ -251,7 +251,7 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
   try {
     gitStrict(vault, ["fetch", "origin"]);
     fetched = true;
-  } catch (e) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.SYNC_PULL_FAILED,
       result: err("GIT_FETCH_FAILED", { message: String(e) }),
@@ -268,7 +268,7 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
     // Count files changed from the pull output
     const fileMatch = pullOutput.match(/(\d+) file[s]? changed/);
     if (fileMatch) filesUpdated = parseInt(fileMatch[1]!, 10);
-  } catch (e) {
+  } catch (e: unknown) {
     // Check for rebase conflicts
     const errString = String(e);
     if (errString.includes("conflict")) {

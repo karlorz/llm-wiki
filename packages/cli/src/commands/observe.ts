@@ -99,7 +99,7 @@ export async function runObserve(
 
   try {
     await writeFile(filePath, content, "utf8");
-  } catch (e) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.WRITE_FAILED,
       result: err("WRITE_FAILED", { path: filePath, message: String(e) })

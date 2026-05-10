@@ -46,7 +46,7 @@ export async function runLogRotate(input: LogRotateInput): Promise<{ exitCode: n
     const today = new Date().toISOString().slice(0, 10);
     const fresh = `# Vault Log\n\nChronological action log. Newest entries last. Skill writes append entries; lint may rotate.\n\n## [${today}] rotate | Log rotated from ${entries} entries\n\n- Previous log moved to ${rotatedName}\n`;
     await writeFile(logPath, fresh, "utf8");
-  } catch (e) {
+  } catch (e: unknown) {
     return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { message: String(e) }) };
   }
 

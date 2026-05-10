@@ -145,7 +145,7 @@ export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitC
     try {
       await mkdir(dirname(indexPath), { recursive: true });
       await writeFile(indexPath, body, "utf8");
-    } catch (e) {
+    } catch (e: unknown) {
       return {
         exitCode: ExitCode.WRITE_FAILED,
         result: err("WRITE_FAILED", { file: indexPath, message: String(e) })

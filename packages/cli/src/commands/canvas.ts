@@ -150,7 +150,7 @@ export async function runCanvasGenerate(
   let raw: string;
   try {
     raw = await readFile(graphPath, "utf8");
-  } catch (e) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.FILE_NOT_FOUND,
       result: err("FILE_NOT_FOUND", { path: graphPath, message: String(e) }),
@@ -183,7 +183,7 @@ export async function runCanvasGenerate(
 
   try {
     await writeFile(outPath, JSON.stringify(canvas, null, 2));
-  } catch (e) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.WRITE_FAILED,
       result: err("WRITE_FAILED", { message: String(e), path: outPath }),

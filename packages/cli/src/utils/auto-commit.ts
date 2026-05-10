@@ -37,8 +37,8 @@ export async function postCommit(vault: string, exitCode: number): Promise<void>
   try {
     gitStrict(vault, ["add", "-A"]);
     // Unstage last-op.json (same as sync push)
-    try { gitStrict(vault, ["reset", "HEAD", "--", ".skillwiki/last-op.json"]); } catch {}
-  } catch (e) {
+    try { gitStrict(vault, ["reset", "HEAD", "--", ".skillwiki/last-op.json"]); } catch (_e: unknown) { /* file may not be staged */ }
+  } catch (e: unknown) {
     process.stderr.write(`auto-commit: git add failed: ${String(e)}\n`);
     return;
   }
@@ -49,7 +49,7 @@ export async function postCommit(vault: string, exitCode: number): Promise<void>
   // Commit
   try {
     gitStrict(vault, ["commit", "-m", commitMessage]);
-  } catch (e) {
+  } catch (e: unknown) {
     process.stderr.write(`auto-commit: git commit failed: ${String(e)}\n`);
     return;
   }

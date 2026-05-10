@@ -45,7 +45,7 @@ async function refreshInstalledSkills(target: string): Promise<{ warnings: strin
       return { warnings: result.result.data.version_warnings, refreshed: true };
     }
     return { warnings: [`skill refresh failed: ${result.result.error}`], refreshed: false };
-  } catch (e) {
+  } catch (e: unknown) {
     return { warnings: [`skill refresh error: ${String(e)}`], refreshed: false };
   }
 }
@@ -66,7 +66,7 @@ export async function runUpdate(
       encoding: "utf8",
       timeout: 15_000,
     }).trim();
-  } catch (e) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.PREFLIGHT_FAILED,
       result: err("PREFLIGHT_FAILED", { message: `Failed to query npm registry: ${String(e)}` }),
@@ -101,7 +101,7 @@ export async function runUpdate(
       stdio: "pipe",
       timeout: 60_000,
     });
-  } catch (e) {
+  } catch (e: unknown) {
     return {
       exitCode: ExitCode.PREFLIGHT_FAILED,
       result: err("PREFLIGHT_FAILED", { message: `npm install failed: ${String(e)}` }),

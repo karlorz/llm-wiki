@@ -16,7 +16,7 @@ export async function atomicCopyWithBackup(src: string, dst: string): Promise<Re
   try {
     await copyFile(src, tmp);
     await rename(tmp, dst);
-  } catch (e) {
+  } catch (e: unknown) {
     return err("ATOMIC_COPY_FAILED", { message: String(e) });
   }
   return ok({ copied: true, backupPath });

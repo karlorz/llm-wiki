@@ -1,5 +1,5 @@
 import yaml from "js-yaml";
-import { ok, err, type Result } from "@skillwiki/shared";
+import { ok, err, type Result, getErrorMessage } from "@skillwiki/shared";
 
 export interface SplitResult {
   rawFrontmatter: string;
@@ -29,7 +29,7 @@ export function extractFrontmatter(text: string): Result<Record<string, unknown>
     const parsed = yaml.load(split.data.rawFrontmatter, { schema: yaml.JSON_SCHEMA });
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return ok({});
     return ok(parsed as Record<string, unknown>);
-  } catch (e) {
-    return err("INVALID_FRONTMATTER", { message: (e as Error).message });
+  } catch (e: unknown) {
+    return err("INVALID_FRONTMATTER", { message: getErrorMessage(e) });
   }
 }

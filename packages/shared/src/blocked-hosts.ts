@@ -1,7 +1,7 @@
-export const METADATA_HOSTS = [
+export const METADATA_HOSTS = new Set([
   "metadata.google.internal",
-  "metadata"
-] as const;
+  "metadata",
+]);
 
 const METADATA_IPS = new Set(["169.254.169.254"]);
 
@@ -27,7 +27,7 @@ function inRange(ip: string, baseStr: string, prefix: number): boolean {
 
 export function isBlockedHost(host: string): boolean {
   const lower = host.toLowerCase();
-  if (METADATA_HOSTS.includes(lower as any)) return true;
+  if (METADATA_HOSTS.has(lower)) return true;
   if (METADATA_IPS.has(host)) return true;
 
   // IPv6 quick checks

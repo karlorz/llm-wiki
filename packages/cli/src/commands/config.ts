@@ -59,7 +59,7 @@ export async function runConfigSet(
     const merged: DotenvMap = { ...existing, [input.key]: input.value };
     await writeDotenv(filePath, merged, originalContent);
     return { exitCode: ExitCode.OK, result: ok({ key: input.key, value: input.value, written: true, humanHint: `${input.key}=${input.value}` }) };
-  } catch (e) {
+  } catch (e: unknown) {
     return { exitCode: ExitCode.CONFIG_WRITE_FAILED, result: err("CONFIG_WRITE_FAILED", { key: input.key, error: String(e) }) };
   }
 }

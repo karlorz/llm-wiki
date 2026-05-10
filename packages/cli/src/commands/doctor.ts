@@ -163,7 +163,7 @@ async function checkConfigFile(home: string): Promise<CheckResult> {
     const map = await parseDotenvFile(cfgPath);
     const keys = Object.keys(map);
     return check("pass", "config_file", "Config file exists", `Found with keys: ${keys.length > 0 ? keys.join(", ") : "(none set)"}`);
-  } catch (e) {
+  } catch (e: unknown) {
     return check("warn", "config_file", "Config file exists", `Failed to parse ${cfgPath}: ${String(e)}`);
   }
 }
