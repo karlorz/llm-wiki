@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # e2e-plugin.sh — Plugin channel E2E test for skillwiki on sg01.
-# Verifies the Claude Code plugin discovers all 11 skills and that
+# Verifies the Claude Code plugin discovers all skills and that
 # the backing CLI commands work correctly through the plugin channel.
 #
 # Usage:  ./scripts/e2e-plugin.sh
@@ -17,6 +17,12 @@ REMOTE_CLI="skillwiki"
 # Read expected version from package.json (no manual updates needed)
 EXPECTED_VERSION=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 
+# Count expected skills dynamically from repo (no manual updates needed)
+EXPECTED_SKILLS=$(find "$REPO_ROOT/packages/skills" -maxdepth 2 -name 'SKILL.md' | wc -l | tr -d ' ')
+
+# Count discoverable CLI skills (wiki-*, proj-*) dynamically (no manual updates needed)
+EXPECTED_DISC=$(ls "$REPO_ROOT/packages/skills" | grep -cE '^(wiki-|proj-)')
+
 printf "=== Plugin E2E (sg01) ===\n\n"
 
 # ---- 0. Verify plugin version ----
@@ -28,26 +34,27 @@ else
   FAIL=$((FAIL + 1)); printf "  \u2717 plugin version is %s, expected %s\n" "$PLUGIN_VERSION" "$EXPECTED_VERSION"
 fi
 
-# ---- 1. Verify plugin installed with 11 skills ----
+# ---- 1. Verify plugin installed with expected skills ----
 printf "%s\n" "--- Plugin installation ---"
 SKILL_COUNT=$(ssh "$SSH_HOST" "find /root/.claude/plugins/cache/llm-wiki/skillwiki/ -name 'SKILL.md' 2>/dev/null | wc -l")
-if [ "$SKILL_COUNT" -eq 15 ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 plugin has 15 SKILL.md files\n"
+if [ "$SKILL_COUNT" -eq "$EXPECTED_SKILLS" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 plugin has %s SKILL.md files\n" "$SKILL_COUNT"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s SKILL.md files, expected 15\n" "$SKILL_COUNT"
+  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s SKILL.md files, expected %s\n" "$SKILL_COUNT" "$EXPECTED_SKILLS"
 fi
 
-# Verify skill discovery via claude (10 CLI skills — using-skillwiki is hook-injected, not listed by /skills)
+# Verify skill discovery via claude (using-skillwiki is hook-injected, not listed by /skills)
 DISCOVERED=$(ssh "$SSH_HOST" "claude -p 'list skills starting with wiki- or proj-. names only, one per line, nothing else.' 2>&1")
 DISC_COUNT=$(printf '%s' "$DISCOVERED" | grep -cE '^(wiki-|proj-)' || true)
-if [ "$DISC_COUNT" -eq 10 ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 claude discovers all 10 CLI skills\n"
+if [ "$DISC_COUNT" -eq "$EXPECTED_DISC" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 claude discovers all %s CLI skills\n" "$EXPECTED_DISC"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 claude discovered %s/10 CLI skills\n" "$DISC_COUNT"
+  FAIL=$((FAIL + 1)); printf "  \u2717 claude discovered %s/%s CLI skills\n" "$DISC_COUNT" "$EXPECTED_DISC"
 fi
 
-# Verify specific skills are present
-for skill in wiki-init wiki-ingest wiki-query wiki-lint wiki-crystallize wiki-audit proj-init proj-work proj-distill proj-decide; do
+# Verify specific skills are present (dynamic from repo)
+CLI_SKILLS=$(ls "$REPO_ROOT/packages/skills" | grep -E '^(wiki-|proj-)' | sort)
+for skill in $CLI_SKILLS; do
   if printf '%s' "$DISCOVERED" | grep -q "^${skill}$"; then
     PASS=$((PASS + 1)); printf "  \u2713 skill '%s' discoverable\n" "$skill"
   else
