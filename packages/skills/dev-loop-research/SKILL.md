@@ -33,6 +33,9 @@ Parse arguments for `high` (case-insensitive). If present,
 1. **Project config** — load `./.claude/dev-loop.config.md`. Required
    fields: `slug`. Optional: `vault`, `cli_src`, `cli_test`,
    `skills_glob`. If missing, prompt user to bootstrap via dev-loop.
+   If no project context exists (no config, no discoverable slug),
+   default to `playground` as the slug so the research cycle can
+   proceed.
 2. **Resolve BACKEND_CAPS** from `knowledge_layer` config field (default:
    `skillwiki` if vault exists, `none` otherwise).
 3. **Resolve VAULT_TYPES** from `{vault}/SCHEMA.md` `## Layers` section —

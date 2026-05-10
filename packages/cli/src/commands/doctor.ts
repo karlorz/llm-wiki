@@ -139,14 +139,19 @@ function checkCliChannels(argv: string[], home: string): CheckResult {
     );
   }
 
-  // Multiple prod channels (e.g., npm + plugin + install) — also overlap
+  // Multiple prod channels — only warn if install channel is present (true duplicate)
   const names = channels.map(c => c.name);
-  return check(
-    "warn",
-    "cli_channels",
-    "CLI channels",
-    `${channels.length} channels: ${names.join(", ")} — remove unused install with: rm ~/.claude/skills/bin/skillwiki`
-  );
+  const hasInstall = channels.some(c => c.name === "install");
+  if (hasInstall) {
+    return check(
+      "warn",
+      "cli_channels",
+      "CLI channels",
+      `${channels.length} channels: ${names.join(", ")} — remove unused install with: rm ~/.claude/skills/bin/skillwiki`
+    );
+  }
+  // npm + plugin (or other non-install combos) are legitimate — versions checked separately
+  return check("pass", "cli_channels", "CLI channels", `${channels.length} channels: ${names.join(", ")}`);
 }
 
 async function checkConfigFile(home: string): Promise<CheckResult> {
