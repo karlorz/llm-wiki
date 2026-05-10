@@ -33,6 +33,12 @@ When reading retros as source material:
    `provenance: project` and
    `provenance_projects: ["[[slug]]"]`. Validate with
    `skillwiki validate`.
+   - **Tag hygiene:** `tags:` must only contain entries from
+     `{vault}/SCHEMA.md` taxonomy. Never derive tags from prose text
+     (lesson/evidence sections) — use only established taxonomy tags
+     (e.g., `dev-loop`, `lint`, `vault`). If no relevant taxonomy tag
+     exists, use `[dev-loop]` as the safe default rather than inventing
+     new tags. New tags must be added to SCHEMA.md first.
 3. **Backlink.** Set `promoted_to: "[[concept-slug]]"` on the source
    compound entry. For retro-sourced distillation, skip backlink (log.md
    entries are append-only) and instead add `sources:` citing the vault
