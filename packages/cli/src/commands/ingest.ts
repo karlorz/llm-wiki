@@ -70,6 +70,7 @@ function buildRawContent(
   const lines = [
     "---",
     sourceUrl !== null ? `source_url: "${sourceUrl}"` : "source_url:",
+    `created: ${ingested}`,
     `ingested: ${ingested}`,
     `sha256: ${sha256}`,
     `ingested_by: wiki-ingest`,

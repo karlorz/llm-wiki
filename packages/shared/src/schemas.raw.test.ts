@@ -72,6 +72,15 @@ describe("RawSourceSchema", () => {
     expect(RawSourceSchema.parse(v)).toBeTruthy();
   });
 
+  it("accepts created field (Obsidian auto-fill)", () => {
+    const v = { ...remote, created: "2026-05-08" };
+    expect(RawSourceSchema.parse(v)).toMatchObject({ created: "2026-05-08" });
+  });
+
+  it("omits created when not provided", () => {
+    expect(RawSourceSchema.parse(remote)).not.toHaveProperty("created");
+  });
+
   it("rejects malformed sha256 even when optional", () => {
     expect(() => RawSourceSchema.parse({ ...remote, sha256: "deadbeef" })).toThrow();
   });

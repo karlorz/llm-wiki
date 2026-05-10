@@ -71,6 +71,7 @@ This is a seed concept page. Concept pages capture topics, patterns, and ideas t
 
 const EXAMPLE_RAW = `---
 source_url: https://example.com
+created: ${TODAY}
 ingested: ${TODAY}
 sha256: 0000000000000000000000000000000000000000000000000000000000000000
 ---
