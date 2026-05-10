@@ -28,6 +28,13 @@ knowledge_backends:
     work_dir: .claude/dev-loop-work/
 ```
 
+## PRD layer
+
+```yaml
+prd_layer: superpowers
+prd_pipeline: full
+```
+
 ## Code layout
 
 ```yaml
