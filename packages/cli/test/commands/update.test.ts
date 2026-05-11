@@ -67,7 +67,7 @@ describe("runUpdate", () => {
     const h = home();
     mockExec.mockReturnValueOnce(`${currentVersion}\n`); // npm view returns current version
 
-    const r = await runUpdate({ home: h, distTag: "beta" });
+    const r = await runUpdate({ home: h, distTag: "latest" });
     expect(r.exitCode).toBe(0);
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
@@ -85,7 +85,7 @@ describe("runUpdate", () => {
     mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n"); // npm root -g
     mockInstallSuccess();
 
-    const r = await runUpdate({ home: h, distTag: "beta" });
+    const r = await runUpdate({ home: h, distTag: "latest" });
     expect(r.exitCode).toBe(0);
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
@@ -100,7 +100,7 @@ describe("runUpdate", () => {
     const h = home();
     mockExec.mockImplementationOnce(() => { throw new Error("network error"); });
 
-    const r = await runUpdate({ home: h, distTag: "beta" });
+    const r = await runUpdate({ home: h, distTag: "latest" });
     expect(r.exitCode).toBe(13); // PREFLIGHT_FAILED
     expect(r.result.ok).toBe(false);
   });
@@ -110,7 +110,7 @@ describe("runUpdate", () => {
     mockExec.mockReturnValueOnce("0.2.0-beta.16\n"); // npm view succeeds
     mockExec.mockImplementationOnce(() => { throw new Error("permission denied"); }); // npm install fails
 
-    const r = await runUpdate({ home: h, distTag: "beta" });
+    const r = await runUpdate({ home: h, distTag: "latest" });
     expect(r.exitCode).toBe(13); // PREFLIGHT_FAILED
     expect(r.result.ok).toBe(false);
   });
@@ -122,7 +122,7 @@ describe("runUpdate", () => {
     mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
     mockInstallSuccess();
 
-    await runUpdate({ home: h, distTag: "beta" });
+    await runUpdate({ home: h, distTag: "latest" });
     const cache = JSON.parse(readFileSync(cachePath(h), "utf8"));
     expect(cache.latestVersion).toBe("0.2.0-beta.16");
     expect(cache.updateAppliedAt).toBeDefined();
@@ -149,7 +149,7 @@ describe("runUpdate", () => {
     const h = home();
     // Already-latest path
     mockExec.mockReturnValueOnce(`${currentVersion}\n`);
-    const r1 = await runUpdate({ home: h, distTag: "beta" });
+    const r1 = await runUpdate({ home: h, distTag: "latest" });
     if (r1.result.ok) {
       expect(r1.result.data.previousVersion).toBe(currentVersion);
     }
@@ -158,7 +158,7 @@ describe("runUpdate", () => {
     mockExec.mockReturnValueOnce(undefined);
     mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
     mockInstallSuccess();
-    const r2 = await runUpdate({ home: h, distTag: "beta" });
+    const r2 = await runUpdate({ home: h, distTag: "latest" });
     if (r2.result.ok) {
       expect(r2.result.data.previousVersion).toBe(currentVersion);
     }
@@ -168,7 +168,7 @@ describe("runUpdate", () => {
     const h = home();
     mockExec.mockReturnValueOnce(`${currentVersion}\n`);
 
-    await runUpdate({ home: h, distTag: "beta" });
+    await runUpdate({ home: h, distTag: "latest" });
     const cache = JSON.parse(readFileSync(cachePath(h), "utf8"));
     expect(cache.latestVersion).toBe(currentVersion);
     expect(cache.updateAppliedAt).toBeUndefined();
@@ -183,7 +183,7 @@ describe("runUpdate", () => {
     mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n"); // npm root -g
     mockInstallSuccess();
 
-    await runUpdate({ home: h, distTag: "beta" });
+    await runUpdate({ home: h, distTag: "latest" });
 
     expect(mockInstall).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -202,7 +202,7 @@ describe("runUpdate", () => {
     mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
     mockInstallSuccess(["wiki-old: DEPRECATED — will be removed in a future release", "wiki-init: version changed 0.2.0 → 0.3.0"]);
 
-    const r = await runUpdate({ home: h, distTag: "beta" });
+    const r = await runUpdate({ home: h, distTag: "latest" });
     expect(r.exitCode).toBe(0);
     if (r.result.ok) {
       expect(r.result.data.version_warnings).toHaveLength(2);
@@ -218,7 +218,7 @@ describe("runUpdate", () => {
     mockExec.mockReturnValueOnce(undefined); // npm install
     mockExec.mockImplementationOnce(() => { throw new Error("npm root failed"); }); // npm root -g
 
-    const r = await runUpdate({ home: h, distTag: "beta" });
+    const r = await runUpdate({ home: h, distTag: "latest" });
     expect(r.exitCode).toBe(0);
     if (r.result.ok) {
       expect(r.result.data.skills_refreshed).toBe(false);
@@ -234,7 +234,7 @@ describe("runUpdate", () => {
     mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
     mockInstallFailure("PREFLIGHT_FAILED");
 
-    const r = await runUpdate({ home: h, distTag: "beta" });
+    const r = await runUpdate({ home: h, distTag: "latest" });
     expect(r.exitCode).toBe(0); // npm update itself succeeded
     if (r.result.ok) {
       expect(r.result.data.skills_refreshed).toBe(false);
@@ -249,7 +249,7 @@ describe("runUpdate", () => {
     mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
     mockInstallSuccess();
 
-    const r = await runUpdate({ home: h, distTag: "beta" });
+    const r = await runUpdate({ home: h, distTag: "latest" });
     if (r.result.ok) {
       expect(r.result.data.humanHint).toContain("skills refreshed: true");
     }
@@ -262,7 +262,7 @@ describe("runUpdate", () => {
     mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n");
     mockInstallSuccess(["wiki-init: version changed 0.2.0 → 0.3.0"]);
 
-    const r = await runUpdate({ home: h, distTag: "beta" });
+    const r = await runUpdate({ home: h, distTag: "latest" });
     if (r.result.ok) {
       expect(r.result.data.humanHint).toContain("version warnings: 1");
       expect(r.result.data.humanHint).toContain("version changed");
@@ -273,19 +273,19 @@ describe("runUpdate", () => {
     const h = home();
     mockExec.mockReturnValueOnce(`${currentVersion}\n`);
 
-    await runUpdate({ home: h, distTag: "beta" });
+    await runUpdate({ home: h, distTag: "latest" });
 
     expect(mockInstall).not.toHaveBeenCalled();
   });
 
-  it("defaults to beta distTag when not specified", async () => {
+  it("defaults to latest distTag when not specified", async () => {
     const h = home();
     mockExec.mockReturnValueOnce(`${currentVersion}\n`); // npm view
 
     await runUpdate({ home: h }); // no distTag
 
     expect(mockExec).toHaveBeenCalledWith(
-      expect.stringContaining("skillwiki@beta"),
+      expect.stringContaining("skillwiki@latest"),
       expect.any(Object),
     );
   });
@@ -294,12 +294,12 @@ describe("runUpdate", () => {
     const h = home();
     mockExec.mockReturnValueOnce(`${currentVersion}\n`); // npm view only
 
-    await runUpdate({ home: h, distTag: "beta" });
+    await runUpdate({ home: h, distTag: "latest" });
 
     // Only npm view should be called, no npm install
     expect(mockExec).toHaveBeenCalledTimes(1);
     expect(mockExec).toHaveBeenCalledWith(
-      "npm view skillwiki@beta version",
+      "npm view skillwiki@latest version",
       expect.any(Object),
     );
   });
@@ -311,7 +311,7 @@ describe("runUpdate", () => {
     mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n"); // npm root -g
     mockInstall.mockRejectedValueOnce(new Error("install crashed"));
 
-    const r = await runUpdate({ home: h, distTag: "beta" });
+    const r = await runUpdate({ home: h, distTag: "latest" });
     expect(r.exitCode).toBe(0); // npm update itself succeeded
     if (r.result.ok) {
       expect(r.result.data.skills_refreshed).toBe(false);

@@ -219,7 +219,7 @@ describe("runSelfUpdate", () => {
   // --- npm fallback ---
 
   describe("npm fallback", () => {
-    it("installs from npm@beta when no local source", async () => {
+    it("installs from npm@latest when no local source", async () => {
       const h = home();
       mockExec.mockReturnValueOnce("0.2.0-beta.99\n"); // npm view
       mockExec.mockReturnValueOnce(undefined); // npm install
@@ -229,22 +229,22 @@ describe("runSelfUpdate", () => {
       if (r.result.ok) {
         expect(r.result.data.source).toBe("npm");
         expect(r.result.data.newVersion).toBe("0.2.0-beta.99");
-        expect(r.result.data.humanHint).toContain("npm@beta");
+        expect(r.result.data.humanHint).toContain("npm@latest");
       }
     });
 
-    it("uses skillwiki@beta in npm view and install commands", async () => {
+    it("uses skillwiki@latest in npm view and install commands", async () => {
       const h = home();
       mockExec.mockReturnValueOnce("0.2.0-beta.99\n");
       mockExec.mockReturnValueOnce(undefined);
 
       await runSelfUpdate({ home: h, check: false, sourceRoot: "/nonexistent" });
       expect(mockExec).toHaveBeenCalledWith(
-        "npm view skillwiki@beta version",
+        "npm view skillwiki@latest version",
         expect.any(Object),
       );
       expect(mockExec).toHaveBeenCalledWith(
-        "npm install -g skillwiki@beta",
+        "npm install -g skillwiki@latest",
         expect.any(Object),
       );
     });
@@ -259,7 +259,7 @@ describe("runSelfUpdate", () => {
         expect(r.result.data.source).toBe("npm");
         expect(r.result.data.updateAvailable).toBe(false);
         expect(r.result.data.newVersion).toBeUndefined();
-        expect(r.result.data.humanHint).toContain("Already on latest beta");
+        expect(r.result.data.humanHint).toContain("Already on latest");
       }
     });
 
@@ -285,7 +285,7 @@ describe("runSelfUpdate", () => {
       }
     });
 
-    it("does not call npm install when already on latest beta", async () => {
+    it("does not call npm install when already on latest", async () => {
       const h = home();
       mockExec.mockReturnValueOnce(`${currentVersion}\n`); // npm view only
 
@@ -294,7 +294,7 @@ describe("runSelfUpdate", () => {
       // Only npm view should be called, no npm install
       expect(mockExec).toHaveBeenCalledTimes(1);
       expect(mockExec).toHaveBeenCalledWith(
-        "npm view skillwiki@beta version",
+        "npm view skillwiki@latest version",
         expect.any(Object),
       );
     });

@@ -25,7 +25,7 @@ Four scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 
 - **`verify-manifests.sh`** — validates manifest consistency: version sync across 6 files, skill count in descriptions matches actual, every skill dir has SKILL.md. Runs as a CI gate before build.
 - **`e2e-local.sh`** — builds from source, runs all CLI commands locally (130 assertions). No network required.
-- **`e2e-remote.sh`** — upgrades skillwiki on sg01 via `npm install -g skillwiki@beta`, then runs the full CLI suite over SSH (48 assertions).
+- **`e2e-remote.sh`** — upgrades skillwiki on sg01 via `npm install -g skillwiki@latest`, then runs the full CLI suite over SSH (48 assertions).
 - **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 18 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
 
 Assertion counts are approximate — they include loop-expanded iterations (e.g., a `for` loop over 10 skills produces 10 runtime assertions from 1 source line). Hard Rule 15: counts are not a contract; only exit code matters.
@@ -62,9 +62,9 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 ## Plugin release workflow
 
 - **Local dev marketplace:** `claude plugin marketplace add /path/to/llm-wiki` (pass the repo root, not `.claude-plugin/` — the CLI appends `.claude-plugin/` automatically). Then `claude plugin install skillwiki@llm-wiki`.
-- **Pushing to `dev` = releasing the plugin.** There is no version pinning or channel tag (`@beta`) for Claude Code plugins. Every push to the default branch (`dev`) is what users get on `plugin install`.
+- **Pushing to `dev` = releasing the plugin.** There is no version pinning or channel tag for Claude Code plugins. Every push to the default branch (`dev`) is what users get on `plugin install`.
 - **Version gate:** `/plugin update` only detects changes when the `version` field in `plugin.json` is bumped. New commits without a version bump are ignored.
-- **npm is a separate channel:** `npm publish --tag beta` gives CLI users a beta track independent of the plugin channel.
+- **npm is a separate channel:** `npm publish --tag beta` gives CLI users a beta track independent of the plugin channel. Default dist-tag is `latest`; use `--tag beta` in `skillwiki update` for pre-release.
 - **Always run `e2e-plugin.sh` before pushing to `dev`** — CI runs it automatically when SSH secrets are configured, but run it locally too if you can.
 - **Updating plugin on test hosts:** the marketplace cache at `~/.claude/plugins/marketplaces/<name>/` does NOT auto-update. Run `git fetch origin && git reset --hard origin/dev` inside it, then `claude plugin uninstall skillwiki@llm-wiki && rm -rf ~/.claude/plugins/cache/llm-wiki && claude plugin install skillwiki@llm-wiki`.
 - **Shell command, not slash command:** use `claude plugin install` (no slash) from the terminal. The `/plugin` slash command only works inside an interactive Claude session.

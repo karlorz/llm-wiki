@@ -25,11 +25,11 @@ describe("npm utilities", () => {
       );
     });
 
-    it("defaults to beta tag when no tag provided", () => {
+    it("defaults to latest tag when no tag provided", () => {
       mockExecSync.mockReturnValue("0.2.0\n");
       npmViewVersion();
       expect(mockExecSync).toHaveBeenCalledWith(
-        expect.stringContaining("skillwiki@beta"),
+        expect.stringContaining("skillwiki@latest"),
         expect.anything(),
       );
     });
@@ -50,11 +50,11 @@ describe("npm utilities", () => {
       );
     });
 
-    it("defaults to beta tag and ignore stdio", () => {
+    it("defaults to latest tag and ignore stdio", () => {
       mockExecSync.mockReturnValue(undefined);
       npmInstallGlobal();
       expect(mockExecSync).toHaveBeenCalledWith(
-        expect.stringContaining("skillwiki@beta"),
+        expect.stringContaining("skillwiki@latest"),
         expect.objectContaining({ stdio: "ignore" }),
       );
     });

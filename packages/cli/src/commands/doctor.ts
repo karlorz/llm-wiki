@@ -290,7 +290,7 @@ function checkPluginVersionDrift(home: string, currentVersion: string): CheckRes
   }
   // Versions differ — warn
   const updateCmd = semverGt(pluginVersion, currentVersion)
-    ? "npm install -g skillwiki@beta"
+    ? "npm install -g skillwiki@latest"
     : "claude plugin update skillwiki@llm-wiki";
   return check(
     "warn",

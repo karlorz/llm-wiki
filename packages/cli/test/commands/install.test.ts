@@ -46,7 +46,7 @@ describe("install", () => {
   it("installs bin/skillwiki wrapper when present", async () => {
     const skillsRoot = fakeSkillsDir();
     mkdirSync(join(skillsRoot, "bin"), { recursive: true });
-    writeFileSync(join(skillsRoot, "bin", "skillwiki"), "#!/usr/bin/env bash\nexec npx -y skillwiki@beta \"$@\"");
+    writeFileSync(join(skillsRoot, "bin", "skillwiki"), "#!/usr/bin/env bash\nexec npx -y skillwiki@latest \"$@\"");
     const target = mkdtempSync(join(tmpdir(), "tgt-"));
     const r = await runInstall({ skillsRoot, target, dryRun: false, symlink: false });
     expect(r.exitCode).toBe(0);
@@ -100,7 +100,7 @@ describe("install", () => {
   it("installs bin/skillwiki as symlink in symlink mode", async () => {
     const skillsRoot = fakeSkillsDir();
     mkdirSync(join(skillsRoot, "bin"), { recursive: true });
-    writeFileSync(join(skillsRoot, "bin", "skillwiki"), "#!/usr/bin/env bash\nexec npx -y skillwiki@beta \"$@\"");
+    writeFileSync(join(skillsRoot, "bin", "skillwiki"), "#!/usr/bin/env bash\nexec npx -y skillwiki@latest \"$@\"");
     const target = mkdtempSync(join(tmpdir(), "tgt-"));
     const r = await runInstall({ skillsRoot, target, dryRun: false, symlink: true });
     expect(r.exitCode).toBe(0);

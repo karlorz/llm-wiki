@@ -3,7 +3,7 @@
  * Background auto-update script for skillwiki.
  *
  * Spawned as a detached child process by triggerAutoUpdate().
- * Queries npm for the latest skillwiki@beta version, compares
+ * Queries npm for the latest skillwiki@latest version, compares
  * with the current version, and installs the update if newer.
  *
  * Args: <home> <currentVersion>
@@ -24,7 +24,7 @@ const cacheFile = join(home, ".skillwiki", ".update-cache.json");
 setTimeout(() => process.exit(0), 30_000);
 
 try {
-  const latest = execSync("npm view skillwiki@beta version", {
+  const latest = execSync("npm view skillwiki@latest version", {
     encoding: "utf8",
     timeout: 15_000,
   }).trim();
@@ -39,7 +39,7 @@ try {
 
   // Only auto-update if latest is strictly greater (avoids downgrades)
   if (semverGt(latest, currentVersion)) {
-    execSync("npm install -g skillwiki@beta", {
+    execSync("npm install -g skillwiki@latest", {
       stdio: "ignore",
       timeout: 60_000,
     });

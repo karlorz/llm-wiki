@@ -57,7 +57,7 @@ export async function runUpdate(
     readFileSync(new URL("../../package.json", import.meta.url), "utf8")
   );
   const currentVersion: string = pkg.version;
-  const tag = input.distTag ?? "beta";
+  const tag = input.distTag ?? "latest";
   const target = join(input.home, ".claude", "skills");
 
   let latest: string;

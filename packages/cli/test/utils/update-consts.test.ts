@@ -16,8 +16,8 @@ describe("update-consts", () => {
     expect(PKG_NAME).toBe("skillwiki");
   });
 
-  it("exports DIST_TAG as beta", () => {
-    expect(DIST_TAG).toBe("beta");
+  it("exports DIST_TAG as latest", () => {
+    expect(DIST_TAG).toBe("latest");
   });
 
   it("exports CACHE_FILENAME", () => {

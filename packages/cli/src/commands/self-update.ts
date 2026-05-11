@@ -50,7 +50,7 @@ export async function runSelfUpdate(
     } else {
       source = "npm";
       try {
-        availableVersion = execSync("npm view skillwiki@beta version", {
+        availableVersion = execSync("npm view skillwiki@latest version", {
           encoding: "utf8",
           timeout: 15_000,
         }).trim();
@@ -131,10 +131,10 @@ export async function runSelfUpdate(
     };
   }
 
-  // No local source — install from npm (prefer beta channel)
+  // No local source — install from npm (latest channel)
   let latestVersion: string;
   try {
-    latestVersion = execSync("npm view skillwiki@beta version", {
+    latestVersion = execSync("npm view skillwiki@latest version", {
       encoding: "utf8",
       timeout: 15_000,
     }).trim();
@@ -153,13 +153,13 @@ export async function runSelfUpdate(
         currentVersion,
         availableVersion: latestVersion,
         updateAvailable: false,
-        humanHint: `Already on latest beta: v${currentVersion}`,
+        humanHint: `Already on latest: v${currentVersion}`,
       }),
     };
   }
 
   try {
-    execSync("npm install -g skillwiki@beta", {
+    execSync("npm install -g skillwiki@latest", {
       stdio: "pipe",
       timeout: 60_000,
     });
@@ -178,7 +178,7 @@ export async function runSelfUpdate(
       availableVersion: latestVersion,
       updateAvailable: true,
       newVersion: latestVersion,
-      humanHint: `Updated skillwiki ${currentVersion} → ${latestVersion} via npm@beta`,
+      humanHint: `Updated skillwiki ${currentVersion} → ${latestVersion} via npm@latest`,
     }),
   };
 }

@@ -76,7 +76,7 @@ function isDisabled(): boolean {
 
 /**
  * Trigger a background auto-update check. Spawns a detached child process
- * that queries npm for the latest skillwiki@beta version and installs it
+ * that queries npm for the latest skillwiki@latest version and installs it
  * if newer than currentVersion. The current process is NOT blocked.
  *
  * Why 24h: balances freshness with avoiding npm registry load and user annoyance.
