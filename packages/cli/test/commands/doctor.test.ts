@@ -310,7 +310,7 @@ describe("runDoctor", () => {
     }
   });
 
-  it("dsstore_clean warns when .DS_Store in raw/", async () => {
+  it("dsstore_clean reports info when .DS_Store in raw/", async () => {
     const h = home();
     const v = fullVault();
     writeFileSync(join(v, "raw", ".DS_Store"), "fake");
@@ -319,8 +319,10 @@ describe("runDoctor", () => {
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const ds = r.result.data.checks.find(c => c.id === "dsstore_clean");
-      expect(ds?.status).toBe("warn");
+      expect(ds?.status).toBe("info");
       expect(ds?.detail).toContain(".DS_Store file(s) found");
+      // info items counted in summary
+      expect(r.result.data.summary.info).toBeGreaterThanOrEqual(1);
     }
   });
 
@@ -365,6 +367,42 @@ describe("runDoctor", () => {
       expect(dup?.status).toBe("warn");
       expect(dup?.detail).toContain("skill(s) in both plugin and ~/.claude/skills/");
       expect(dup?.detail).toContain("wiki-init");
+    }
+  });
+
+  it("skills_duplicate reports info when stale skills in codex/agents dirs", async () => {
+    const h = homeWithPlugin("0.2.0-beta.15");
+    // Add stale wiki-init skill in ~/.codex/skills/
+    mkdirSync(join(h, ".codex", "skills", "wiki-init"), { recursive: true });
+    writeFileSync(join(h, ".codex", "skills", "wiki-init", "SKILL.md"), "# Wiki Init (stale)\n");
+    // Add stale wiki-query skill in ~/.agents/skills/
+    mkdirSync(join(h, ".agents", "skills", "wiki-init"), { recursive: true });
+    writeFileSync(join(h, ".agents", "skills", "wiki-init", "SKILL.md"), "# Wiki Init (stale)\n");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const dup = r.result.data.checks.find(c => c.id === "skills_duplicate");
+      expect(dup?.status).toBe("info");
+      expect(dup?.detail).toContain("~/.codex/skills/");
+      expect(dup?.detail).toContain("~/.agents/skills/");
+    }
+  });
+
+  it("skills_duplicate shows warn (not info) when CLI and agent duplicates both exist", async () => {
+    const h = homeWithPlugin("0.2.0-beta.15");
+    // Add overlapping wiki-init in ~/.claude/skills/ (warn-level)
+    mkdirSync(join(h, ".claude", "skills", "wiki-init"), { recursive: true });
+    writeFileSync(join(h, ".claude", "skills", "wiki-init", "SKILL.md"), "# Wiki Init\n");
+    // Add stale in ~/.codex/skills/ (info-level, but warn takes precedence)
+    mkdirSync(join(h, ".codex", "skills", "wiki-init"), { recursive: true });
+    writeFileSync(join(h, ".codex", "skills", "wiki-init", "SKILL.md"), "# Wiki Init (stale)\n");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const dup = r.result.data.checks.find(c => c.id === "skills_duplicate");
+      expect(dup?.status).toBe("warn");
+      expect(dup?.detail).toContain("~/.claude/skills/");
+      expect(dup?.detail).toContain("~/.codex/skills/");
     }
   });
 

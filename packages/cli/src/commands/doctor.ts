@@ -9,7 +9,7 @@ import { latestFromCache } from "../utils/auto-update.js";
 import { semverGt } from "../utils/semver.js";
 import { findPlugin } from "../utils/plugin-registry.js";
 
-export type CheckStatus = "pass" | "warn" | "error";
+export type CheckStatus = "pass" | "info" | "warn" | "error";
 
 export interface CheckResult {
   id: string;
@@ -20,7 +20,7 @@ export interface CheckResult {
 
 export interface DoctorOutput {
   checks: CheckResult[];
-  summary: { pass: number; warn: number; error: number };
+  summary: { pass: number; info: number; warn: number; error: number };
   humanHint: string;
 }
 
@@ -225,26 +225,47 @@ function checkSkillsInstalled(home: string, cwd?: string): CheckResult {
 function checkDuplicateSkills(home: string): CheckResult {
   const plugin = findPlugin(home);
   const skillsDir = join(home, ".claude", "skills");
+  const agentSkillDirs = [
+    { label: "~/.codex/skills/", path: join(home, ".codex", "skills") },
+    { label: "~/.agents/skills/", path: join(home, ".agents", "skills") },
+  ];
 
-  // No overlap possible without both channels present
-  if (!plugin || !existsSync(skillsDir)) {
+  // No plugin means no reference set to compare against
+  if (!plugin) {
     return check("pass", "skills_duplicate", "Skills not duplicated", "Single install channel");
   }
 
   const pluginSkills = findSkillNames(plugin.installPath);
-  const cliSkills = findSkillNames(skillsDir);
-  const duplicates = pluginSkills.filter(name => cliSkills.includes(name));
 
-  if (duplicates.length === 0) {
-    return check("pass", "skills_duplicate", "Skills not duplicated", "No overlap between plugin and CLI install");
+  // Check ~/.claude/skills/ overlap (warn — user should remove CLI copies)
+  const cliSkills = findSkillNames(skillsDir);
+  const cliDuplicates = cliSkills.filter(name => pluginSkills.includes(name));
+
+  // Check agent-skill dirs overlap (info — stale but harmless)
+  const agentDuplicates: { dir: string; names: string[] }[] = [];
+  for (const { label, path } of agentSkillDirs) {
+    const overlap = findSkillNames(path).filter(name => pluginSkills.includes(name));
+    if (overlap.length > 0) {
+      agentDuplicates.push({ dir: label, names: overlap });
+    }
   }
 
-  return check(
-    "warn",
-    "skills_duplicate",
-    "Skills not duplicated",
-    `${duplicates.length} skill(s) in both plugin and ~/.claude/skills/ — remove CLI copies: rm -r ~/.claude/skills/{${duplicates.slice(0, 3).join(",")}${duplicates.length > 3 ? ",…" : ""}}`
-  );
+  if (cliDuplicates.length === 0 && agentDuplicates.length === 0) {
+    return check("pass", "skills_duplicate", "Skills not duplicated", "No overlap between plugin and other channels");
+  }
+
+  // Build detail message
+  const parts: string[] = [];
+  if (cliDuplicates.length > 0) {
+    parts.push(`${cliDuplicates.length} skill(s) in both plugin and ~/.claude/skills/ — remove CLI copies: rm -r ~/.claude/skills/{${cliDuplicates.slice(0, 3).join(",")}${cliDuplicates.length > 3 ? ",…" : ""}}`);
+  }
+  for (const { dir, names } of agentDuplicates) {
+    parts.push(`${names.length} stale skill(s) in ${dir} — plugin provides: ${names.slice(0, 3).join(", ")}${names.length > 3 ? ", …" : ""}`);
+  }
+
+  // CLI duplicates are warn; agent-only duplicates are info
+  const status: CheckStatus = cliDuplicates.length > 0 ? "warn" : "info";
+  return check(status, "skills_duplicate", "Skills not duplicated", parts.join("; "));
 }
 
 function checkNpmUpdate(home: string, currentVersion: string): CheckResult {
@@ -364,7 +385,7 @@ function checkDotStoreClean(resolvedPath: string | undefined): CheckResult {
   if (found.length === 0) {
     return check("pass", "dsstore_clean", "No .DS_Store in raw/", "No .DS_Store files found");
   }
-  return check("warn", "dsstore_clean", "No .DS_Store in raw/", `${found.length} .DS_Store file(s) found — remove with: find ${rawDir} -name .DS_Store -delete`);
+  return check("info", "dsstore_clean", "No .DS_Store in raw/", `${found.length} .DS_Store file(s) found — remove with: find ${rawDir} -name .DS_Store -delete`);
 }
 
 function checkSyncLastPush(resolvedPath: string | undefined): CheckResult {
@@ -470,6 +491,7 @@ export async function runDoctor(
 
   const summary = {
     pass: checks.filter(c => c.status === "pass").length,
+    info: checks.filter(c => c.status === "info").length,
     warn: checks.filter(c => c.status === "warn").length,
     error: checks.filter(c => c.status === "error").length,
   };
@@ -480,14 +502,17 @@ export async function runDoctor(
       ? ExitCode.DOCTOR_HAS_WARNINGS
       : ExitCode.OK;
 
-  const statusIcon: Record<CheckStatus, string> = { pass: "✓", warn: "⚠", error: "✗" };
+  const statusIcon: Record<CheckStatus, string> = { pass: "✓", info: "i", warn: "⚠", error: "✗" };
   const lines = checks.map(c => {
     const icon = statusIcon[c.status];
     const padded = c.label.padEnd(24);
     return `  ${icon} ${padded} ${c.detail}`;
   });
   lines.push("");
-  lines.push(`${summary.pass} pass · ${summary.warn} warn · ${summary.error} error`);
+  const summaryParts = [`${summary.pass} pass`];
+  if (summary.info > 0) summaryParts.push(`${summary.info} info`);
+  summaryParts.push(`${summary.warn} warn`, `${summary.error} error`);
+  lines.push(summaryParts.join(" · "));
   const humanHint = lines.join("\n");
 
   return { exitCode, result: ok({ checks, summary, humanHint }) };

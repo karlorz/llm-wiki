@@ -138,3 +138,4 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 - New config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`
 - `AUTO_COMMIT` defaults to enabled; set `AUTO_COMMIT=false` to disable (was opt-in, now opt-out)
 - `doctor` checks: 16 checks (was 15); new: `cli_channels` (replaces `cli_on_path`), `skills_duplicate`
+- `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code; used by `dsstore_clean` and `skills_duplicate` (agent-dir-only duplicates)
