@@ -11,6 +11,7 @@ const SCHEMA = `# Vault Schema
 \`\`\`yaml
 taxonomy:
   - model
+  - architecture
 \`\`\`
 `;
 
@@ -38,7 +39,7 @@ function vault(): string {
 describe("runLint", () => {
   it("clean fixture exits 0", async () => {
     const v = vault();
-    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");
+    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "## TL;DR\n\n- Summary.\n\n## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");
     writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
     const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
     expect(r.exitCode).toBe(0);
@@ -608,6 +609,171 @@ Not yet indexed.
     if (r.result.ok) {
       const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
       expect(infoKinds).not.toContain("wikilink_citation");
+    }
+  });
+
+  it("flags missing_tldr for pages without ## TL;DR", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
+    const fm = `---
+title: t
+type: concept
+tags: [model]
+sources:
+  - "^[raw/articles/x.md]"
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+`;
+    writeFileSync(join(v, "concepts", "no-tldr.md"), fm + "## Overview\n\nContent.\n\n## Sources\n\n- ^[raw/articles/x.md]\n\n## Related\n\n- [[x]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[no-tldr]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(22);
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).toContain("missing_tldr");
+      const bucket = r.result.data.by_severity.info.find(b => b.kind === "missing_tldr");
+      expect(bucket!.items).toContain("concepts/no-tldr.md");
+    }
+  });
+
+  it("does not flag missing_tldr for pages with ## TL;DR", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
+    const fm = `---
+title: t
+type: concept
+tags: [model]
+sources:
+  - "^[raw/articles/x.md]"
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+`;
+    writeFileSync(join(v, "concepts", "has-tldr.md"), fm + "## TL;DR\n\n- Summary here.\n\n## Overview\n\nContent.\n\n## Sources\n\n- ^[raw/articles/x.md]\n\n## Related\n\n- [[x]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[has-tldr]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).not.toContain("missing_tldr");
+    }
+  });
+
+  it("fixes missing_tldr by inserting ## TL;DR stub after frontmatter", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
+    const fm = `---
+title: t
+type: concept
+tags: [model]
+sources:
+  - "^[raw/articles/x.md]"
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+`;
+    writeFileSync(join(v, "concepts", "no-tldr.md"), fm + "## Overview\n\nContent.\n\n## Sources\n\n- ^[raw/articles/x.md]\n\n## Related\n\n- [[x]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[no-tldr]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
+    if (r.result.ok) {
+      expect(r.result.data.fixed).toContain("concepts/no-tldr.md");
+    }
+    // Re-lint — should no longer flag missing_tldr
+    const r2 = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r2.result.ok) {
+      const infoKinds = r2.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).not.toContain("missing_tldr");
+    }
+    // File should have ## TL;DR after frontmatter
+    const content = require("fs").readFileSync(join(v, "concepts", "no-tldr.md"), "utf8");
+    expect(content).toContain("## TL;DR\n\n- Pending summary.");
+  });
+
+  it("flags missing_diagram for architecture-tagged pages without mermaid", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
+    const fm = `---
+title: t
+type: concept
+tags: [architecture]
+sources:
+  - "^[raw/articles/x.md]"
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+`;
+    writeFileSync(join(v, "concepts", "arch.md"), fm + "## TL;DR\n\n- Summary.\n\n## Overview\n\nArchitecture content without diagrams.\n\n## Sources\n\n- ^[raw/articles/x.md]\n\n## Related\n\n- [[x]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[arch]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(22);
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).toContain("missing_diagram");
+      const bucket = r.result.data.by_severity.info.find(b => b.kind === "missing_diagram");
+      expect(bucket!.items).toContain("concepts/arch.md");
+    }
+  });
+
+  it("does not flag missing_diagram for architecture pages with mermaid", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
+    const fm = `---
+title: t
+type: concept
+tags: [architecture]
+sources:
+  - "^[raw/articles/x.md]"
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+`;
+    const body = "## TL;DR\n\n- Summary.\n\n## Overview\n\nArchitecture with diagram.\n\n```mermaid\ngraph TB\n  A --> B\n```\n\n## Sources\n\n- ^[raw/articles/x.md]\n\n## Related\n\n- [[x]]\n";
+    writeFileSync(join(v, "concepts", "arch.md"), fm + body);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[arch]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).not.toContain("missing_diagram");
+    }
+  });
+
+  it("does not flag missing_diagram for non-architecture pages", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
+    const fm = `---
+title: t
+type: concept
+tags: [model]
+sources:
+  - "^[raw/articles/x.md]"
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+`;
+    writeFileSync(join(v, "concepts", "concept.md"), fm + "## TL;DR\n\n- Summary.\n\n## Overview\n\nConcept without diagram — fine because no architecture tag.\n\n## Sources\n\n- ^[raw/articles/x.md]\n\n## Related\n\n- [[x]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[concept]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).not.toContain("missing_diagram");
     }
   });
 

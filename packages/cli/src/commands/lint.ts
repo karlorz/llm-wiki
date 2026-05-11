@@ -80,7 +80,7 @@ export interface LintOutput {
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "broken_sources", "tag_not_in_taxonomy"] as const;
 const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview"] as const;
-const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation"] as const;
+const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "missing_diagram"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
   const buckets: Record<string, unknown[]> = {};
@@ -157,6 +157,8 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     const fmWikilinkFlags: string[] = [];
     const wikilinkCitationFlags: string[] = [];
     const brokenSourceFlags: string[] = [];
+    const missingTldrFlags: string[] = [];
+    const missingDiagramFlags: string[] = [];
     for (const page of scan.data.typedKnowledge) {
       const text = await readPage(page);
       const split = splitFrontmatter(text);
@@ -197,6 +199,15 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       const bodyLines = body.split("\n").filter(l => l.trim().length > 0).length;
       const hasOverview = /^## Overview/m.test(body);
       if (!hasOverview) noOverview.push(page.relPath);
+      // TL;DR check: look for ## TL;DR in first 15 lines of body
+      const bodyFirst15 = body.split("\n").slice(0, 15).join("\n");
+      if (!/^##\s+TL;\s*DR/m.test(bodyFirst15)) missingTldrFlags.push(page.relPath);
+      // Diagram check: architecture-tagged pages should have a mermaid block
+      const fmData = extractFrontmatter(text);
+      const pageTags: string[] = fmData.ok && Array.isArray(fmData.data.tags) ? fmData.data.tags : [];
+      if (pageTags.includes("architecture") && !body.includes("```mermaid")) {
+        missingDiagramFlags.push(page.relPath);
+      }
       if (bodyLines < STRUCT_MIN_BODY_LINES) {
         const hasRelated = /^## (Related|Relationships)/m.test(body);
         const sectionCount = (body.match(/^## /gm) ?? []).length;
@@ -216,6 +227,8 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     if (fmWikilinkFlags.length > 0) buckets.frontmatter_wikilink = fmWikilinkFlags;
     if (wikilinkCitationFlags.length > 0) buckets.wikilink_citation = wikilinkCitationFlags;
     if (brokenSourceFlags.length > 0) buckets.broken_sources = brokenSourceFlags;
+    if (missingTldrFlags.length > 0) buckets.missing_tldr = missingTldrFlags;
+    if (missingDiagramFlags.length > 0) buckets.missing_diagram = missingDiagramFlags;
 
     // Work item health check
     const workItemHealth: string[] = [];
@@ -414,6 +427,34 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       const remaining = noOverview.filter(p => !fixedSet.has(p));
       if (remaining.length > 0) buckets.missing_overview = remaining;
       else delete buckets.missing_overview;
+    }
+
+    // --fix: auto-fix missing_tldr by inserting ## TL;DR stub after frontmatter
+    if (input.fix && missingTldrFlags.length > 0) {
+      for (const relPath of missingTldrFlags) {
+        try {
+          const absPath = `${input.vault}/${relPath}`;
+          const raw = await readFile(absPath, "utf8");
+          const split = splitFrontmatter(raw);
+          if (!split.ok) { unresolved.push(relPath); continue; }
+          const body = split.data.body;
+          const rawFm = split.data.rawFrontmatter;
+
+          // Insert ## TL;DR after frontmatter, before existing body
+          const trimmedBody = body.replace(/^\n+/, "");
+          const newContent = `---\n${rawFm}\n---\n\n## TL;DR\n\n- Pending summary.\n\n${trimmedBody}`;
+          await writeFile(absPath, newContent, "utf8");
+          fixed.push(relPath);
+        } catch {
+          unresolved.push(relPath);
+        }
+      }
+
+      // Re-scan: remove fixed pages from the bucket
+      const fixedSet = new Set(fixed);
+      const remaining = missingTldrFlags.filter(p => !fixedSet.has(p));
+      if (remaining.length > 0) buckets.missing_tldr = remaining;
+      else delete buckets.missing_tldr;
     }
 
     // --fix: auto-fix wikilink_citation by removing [[raw/...]] and adding ^[raw/...] to ## Sources

@@ -52,6 +52,17 @@ Rule: every tag on every page MUST appear in this taxonomy. Add new tags here fi
 - Citations in body: `^[raw/...]` markers at paragraph-end; every entry in `sources:` MUST appear in body and in `## Sources` footer.
 - Legacy inline `^[raw/...]` markers remain valid; `migrate-citations` converts them.
 - sha256 in `raw/` frontmatter is computed by `skillwiki hash` over body bytes after closing `---`.
+- Every typed-knowledge page SHOULD include a `## TL;DR` section near the top (after frontmatter, before `## Overview`). Lint flags pages missing it as `missing_tldr` (info).
+
+## Mermaid Diagrams
+
+Pages explaining architectures, workflows, or complex concepts SHOULD include inline Mermaid diagrams. Lint flags architecture-tagged pages without a ` ```mermaid ` block as `missing_diagram` (info).
+
+Obsidian-compatible Mermaid rules:
+- Prefer `graph TB` / `sequenceDiagram`.
+- Use `subgraph "Title"` (avoid `subgraph ID[Label]`).
+- Avoid `\n` in labels; use `<br/>` or single-line labels.
+- Keep node IDs ASCII and simple (`CMUX_DB`, `OC_GW`).
 
 ## Obsidian Integration
 

@@ -22,7 +22,9 @@ Standard four reads. If cwd is inside `projects/{slug}/`, also read project READ
 0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`.
 1. Identify type: entity / concept / comparison / query / summary.
 2. Set `provenance:`. Default `research`. If in project context: `project` with `provenance_projects: ["[[slug]]"]`.
-3. Compose the page with citations pre-attached. Reuse existing `raw/` sources where possible.
+3. Compose the page with citations pre-attached. Reuse existing `raw/` sources where possible. Every page MUST include:
+   - `## TL;DR` as the first section after frontmatter — a 1–3 bullet summary of the page's key takeaway.
+   - For pages tagged `architecture` or explaining workflows/systems: include a Mermaid diagram (`graph TB` or `sequenceDiagram`) in the body. Follow Obsidian-compatible Mermaid rules (see SCHEMA.md `## Mermaid Diagrams`).
 4. `skillwiki validate <page>`. If non-zero, STOP.
 5. Apply writes: page → `index.md` → `log.md`.
 

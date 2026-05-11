@@ -125,13 +125,13 @@ CI runs four validation stages before allowing merge:
 
 Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift early.
 
-## Current counts (2026-05-10)
+## Current counts (2026-05-12)
 
 - 18 SKILL.md files in `packages/skills/`
 - 41 source files in `packages/cli/src/commands/`
 - 68 test files in cli (42 commands, 18 utils, 4 parsers, 2 integration, 1 skills, 1 smoke) + 10 shared
-- 874 tests passing
-- Lint buckets: 0 error, 0 warning, 5 info (incl. `bridges`, `orphaned_citations`)
+- 884 tests passing
+- Lint buckets: 0 error, 0 warning, 7 info (incl. `bridges`, `orphaned_citations`, `missing_tldr`, `missing_diagram`)
 - SKILL.md frontmatter: `name`, `version`, `description` (required); `deprecated` (optional)
 - Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`
 - New exit codes: `BACKUP_SYNC_FAILED (44)`, `BACKUP_RESTORE_CONFLICTS (45)`
