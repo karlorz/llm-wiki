@@ -282,4 +282,113 @@ project: "[[acme]]"
       expect(r.result.data.unclaimed_transcripts.length).toBe(0);
     }
   });
+
+  it("force-scan: infers kind from filename pattern", async () => {
+    const v = makeVault();
+    // No kind in frontmatter, but filename matches YYYY-MM-DD-task-*.md
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-fix-foo.md"), `---
+source_url:
+ingested: 2026-04-01
+project: "[[acme]]"
+---
+
+Fix the foo thing.`);
+    const r = await runStale({ vault: v, days: 0, forceScan: true });
+    expect(r.exitCode).toBe(19);
+    if (r.result.ok) {
+      expect(r.result.data.unclaimed_transcripts.length).toBe(1);
+      expect(r.result.data.unclaimed_transcripts[0].reason).toContain("task");
+    }
+  });
+
+  it("force-scan: infers project from body wikilink", async () => {
+    const v = makeVault();
+    // Create project directory so workDirsBySlug has "acme"
+    mkdirSync(join(v, "projects", "acme", "work"), { recursive: true });
+    // No project in frontmatter, but body contains [[acme]] wikilink
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-fix-bar.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+---
+
+Fix the bar thing for [[acme]].`);
+    const r = await runStale({ vault: v, days: 0, forceScan: true });
+    expect(r.exitCode).toBe(19);
+    if (r.result.ok) {
+      expect(r.result.data.unclaimed_transcripts.length).toBe(1);
+      expect(r.result.data.unclaimed_transcripts[0].reason).toContain("[[acme]]");
+    }
+  });
+
+  it("force-scan: infers both kind and project from filename and body", async () => {
+    const v = makeVault();
+    // Create project directory so workDirsBySlug has "acme"
+    mkdirSync(join(v, "projects", "acme", "work"), { recursive: true });
+    // No kind or project in frontmatter — both inferred
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-bug-crash.md"), `---
+source_url:
+ingested: 2026-04-01
+---
+
+App crashes on startup for [[acme]].`);
+    const r = await runStale({ vault: v, days: 0, forceScan: true });
+    expect(r.exitCode).toBe(19);
+    if (r.result.ok) {
+      expect(r.result.data.unclaimed_transcripts.length).toBe(1);
+      expect(r.result.data.unclaimed_transcripts[0].reason).toContain("bug");
+      expect(r.result.data.unclaimed_transcripts[0].reason).toContain("[[acme]]");
+    }
+  });
+
+  it("force-scan: does not infer kind for loop-cycle transcripts", async () => {
+    const v = makeVault();
+    // loop-cycle- transcripts are dev-loop session logs, not claimable work
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-loop-cycle-test.md"), `---
+source_url:
+ingested: 2026-04-01
+---
+
+Session log for [[acme]].`);
+    const r = await runStale({ vault: v, days: 0, forceScan: true });
+    if (r.result.ok) {
+      // loop-cycle transcripts should NOT be detected as unclaimed
+      expect(r.result.data.unclaimed_transcripts.length).toBe(0);
+    }
+  });
+
+  it("force-scan: skips inference when kind already present", async () => {
+    const v = makeVault();
+    // Kind already set to note — force-scan should not override it
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-something.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: note
+project: "[[acme]]"
+---
+
+Some note.`);
+    const r = await runStale({ vault: v, days: 0, forceScan: true });
+    if (r.result.ok) {
+      // note is not a claimable kind — should not be unclaimed
+      expect(r.result.data.unclaimed_transcripts.length).toBe(0);
+    }
+  });
+
+  it("without force-scan: does not infer kind from filename", async () => {
+    const v = makeVault();
+    // No kind in frontmatter, filename has task pattern — but forceScan is off
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-fix-foo.md"), `---
+source_url:
+ingested: 2026-04-01
+project: "[[acme]]"
+---
+
+Fix the foo thing.`);
+    const r = await runStale({ vault: v, days: 0 });
+    if (r.result.ok) {
+      // Without force-scan, kind is empty → not claimable → not unclaimed
+      expect(r.result.data.unclaimed_transcripts.length).toBe(0);
+    }
+  });
 });

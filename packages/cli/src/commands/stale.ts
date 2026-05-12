@@ -5,7 +5,7 @@ import { scanVault } from "../utils/vault.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
 
-export interface StaleInput { vault: string; days: number; archive?: boolean }
+export interface StaleInput { vault: string; days: number; archive?: boolean; forceScan?: boolean }
 export interface StaleTranscript { path: string; reason: string }
 export interface IncompleteWorkItem { path: string; reason: string }
 export interface StaleOutput {
@@ -67,21 +67,52 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     return projectField.replace(/^\[\[/, "").replace(/\]\]$/, "").replace(/^"|"$/g, "");
   }
 
+  // Helper: infer kind from filename pattern YYYY-MM-DD-{kind}-{slug}.md
+  const KIND_FROM_FILENAME = /^(?:\d{4}-\d{2}-\d{2})-(task|bug|idea|note|observation)-.+\.md$/;
+  const LOOP_CYCLE_PATTERN = /loop-cycle-/;
+
   // 1. Stale transcripts: raw/transcripts/*.md where matching work item is done/invalid
   const transcripts = scan.data.raw.filter(p => p.relPath.startsWith("raw/transcripts/") && p.relPath.endsWith(".md"));
   const claimedPaths = new Set<string>();
 
   // Pre-parse transcript frontmatter for project/kind fields
-  const transcriptMeta = new Map<string, { kind: string; project: string; slug: string }>();
+  const transcriptMeta = new Map<string, { kind: string; project: string; slug: string; inferred: boolean }>();
   for (const t of transcripts) {
     try {
       const content = await readFile(join(input.vault, t.relPath), "utf8");
       const fm = extractFrontmatter(content);
-      if (fm.ok) {
-        const kind = typeof fm.data.kind === "string" ? fm.data.kind : "";
-        const project = typeof fm.data.project === "string" ? fm.data.project : "";
-        transcriptMeta.set(t.relPath, { kind, project, slug: extractSlug(project) });
+      let kind = fm.ok && typeof fm.data.kind === "string" ? fm.data.kind : "";
+      let project = fm.ok && typeof fm.data.project === "string" ? fm.data.project : "";
+      let inferred = false;
+
+      // Force-scan: infer kind from filename if missing (skip loop-cycle session logs)
+      if (input.forceScan && !kind) {
+        const basename = t.relPath.split("/").pop()!;
+        if (!LOOP_CYCLE_PATTERN.test(basename)) {
+          const m = basename.match(KIND_FROM_FILENAME);
+          if (m) { kind = m[1]!; inferred = true; }
+        }
       }
+
+      // Force-scan: infer project from content if missing
+      if (input.forceScan && !project && kind) {
+        // Search for [[slug]] wikilink in body (skip frontmatter)
+        const bodyStart = content.indexOf("---", 4);
+        if (bodyStart > 0) {
+          const body = content.slice(bodyStart);
+          const wikilink = body.match(/\[\[([a-z0-9-]+)\]\]/);
+          if (wikilink) {
+            const candidate = wikilink[1]!;
+            // Verify this is a known project slug
+            if (workDirsBySlug.has(candidate)) {
+              project = `[[${candidate}]]`;
+              inferred = true;
+            }
+          }
+        }
+      }
+
+      transcriptMeta.set(t.relPath, { kind, project, slug: extractSlug(project), inferred });
     } catch { /* skip */ }
   }
 
