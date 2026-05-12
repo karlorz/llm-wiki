@@ -29,22 +29,23 @@ Run `skillwiki lang` at the start. Entry prose and `--human` summaries use the r
 0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`.
 1. **Parse arguments.** Extract from the user's message:
    - `text` — the idea/bug/task/note content (required)
-   - `type` — one of: `idea`, `bug`, `task`, `note` (default: `idea`)
-   - `project` — optional project slug to cross-reference (e.g., `llm-wiki`)
+   - `type` — one of: `idea`, `bug`, `task`, `note` (default: `task`)
+   - `project` — project slug for claim detection (e.g., `llm-wiki`). Required for `task` and `bug` types to appear in `skillwiki stale` unclaimed list.
 2. **Build filename.** Derive a slug from the first ~6 words of the text (lowercased, hyphens for spaces, non-alphanumeric stripped). The capture file is `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md`. Each capture gets its own file — never append to an existing file.
 3. **Write frontmatter.** Create the file with ad-hoc capture frontmatter:
    ```yaml
    ---
    source_url:
-   ingested: YYYY-MM-DD
+   created: YYYY-MM-DD
+   ingested:          # filled by ingest pipeline
    kind: {type}
    project: "[[{slug}]]"
    ---
    ```
    - Set `kind` to the parsed type (`idea`, `bug`, `task`, `note`).
-   - If a `project` slug was provided, set `project: "[[slug]]"`.
-   - If no project, omit the `project` field entirely.
+   - Set `project: "[[slug]]"` — **required for claim detection**. Without this field, the transcript is invisible to `skillwiki stale`. If no project context exists, ask the user which project this capture belongs to.
    - `source_url` is null (these are locally originated captures).
+   - `created` — today's date. `ingested` is left empty for the ingest pipeline.
    - No `sha256` — ad-hoc captures are mutable working notes, not immutable sources.
 4. **Write body.** Below the frontmatter, write:
    ```markdown
@@ -72,7 +73,8 @@ Each capture is a standalone file with ad-hoc capture frontmatter:
 ```yaml
 ---
 source_url:
-ingested: 2026-05-08
+created: 2026-05-08
+ingested:
 kind: idea
 project: "[[llm-wiki]]"
 ---
@@ -84,7 +86,7 @@ Fix the template mismatch between wiki-add-task and the vault template.
 
 The `kind` field uses the capture type and must be one of: `idea`, `bug`, `task`, `note` (plus the existing `postmortem`, `session-log`, `meeting-notes`, `other` for non-capture raw sources).
 
-The `project` and `kind` fields can be set independently — they do not require `work_item`. The `work_item` field is only used when the raw source is directly tied to a project work item (set by `proj-work`).
+The `project` field is **required for claim detection**. Without it, `skillwiki stale` cannot surface the transcript as unclaimed work. The `kind` and `project` fields can be set independently — they do not require `work_item`. The `work_item` field is only used when the raw source is directly tied to a project work item (set by `proj-work`).
 
 Ad-hoc captures omit `sha256` — they are mutable working notes, not immutable sources. The `sha256` field is reserved for ingested raw sources that require integrity verification.
 
@@ -106,14 +108,25 @@ Ad-hoc captures omit `sha256` — they are mutable working notes, not immutable 
 When you're not in a Claude session, drop files directly into `raw/transcripts/`:
 
 1. Create a `.md` file in `raw/transcripts/` — name it descriptively (e.g., `2026-05-08-idea-fix-template.md`)
-2. Use ad-hoc capture frontmatter: `source_url:`, `ingested:`, `kind:`, and optionally `project:`
+2. Use ad-hoc capture frontmatter: `source_url:`, `ingested:`, `kind:`, and `project:` (required for `task`/`bug`)
 3. Write your idea/bug/task/note below the frontmatter
 
-No special format required — the dev-loop QUERY step will discover new files on the next cycle and surface them as claimable work. Mark the type with a heading like `## idea`, `## bug`, `## task`, or just write freeform.
+**For claim detection**, `kind` must be `task` or `bug` AND `project: "[[slug]]"` must be set. Without both fields, the transcript won't appear in `skillwiki stale` unclaimed list.
+
+No special format required — `skillwiki stale --days 0` will detect unclaimed task/bug transcripts on the next run. Mark the type with a heading like `## idea`, `## bug`, `## task`, or just write freeform.
 
 ## Dev-loop discovery
 
-When the dev-loop QUERY step runs, it should scan `raw/transcripts/` for files with `ingested:` date newer than the last cycle. New files are surfaced as claimable work items. The agent then decides whether to:
-- Create a work item via `proj-work` (for tasks and bugs)
+`skillwiki stale` detects unclaimed transcripts automatically. A transcript is **unclaimed** when:
+- `kind` is `task` or `bug`
+- `project` field is set (e.g., `project: "[[llm-wiki]]"`)
+- No work item matches it (via date-prefix or `source:` frontmatter reference in spec.md)
+
+Run `skillwiki stale --days 0 --human` to see all unclaimed transcripts. The output includes an `unclaimed_transcripts` section listing each capture that needs a work item.
+
+The agent then decides whether to:
+- Create a work item via `proj-work` (for tasks and bugs) — set `source:` in spec.md to the transcript path for cross-date linking
 - Ingest as a knowledge page via `wiki-ingest` (for ideas with sources)
 - Leave in place (for notes that don't need action yet)
+
+Transcripts without `kind` or `project` fields (e.g., `loop-cycle-*` session logs) are excluded from claim detection.

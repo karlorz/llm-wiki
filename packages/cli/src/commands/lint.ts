@@ -115,7 +115,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   const staleResult = await runStale({ vault: input.vault, days: input.days });
   if (staleResult.result.ok) {
     const st = staleResult.result.data;
-    const staleList = [...st.stale_transcripts.map(t => t.path), ...st.incomplete_work_items.map(w => w.path), ...(st.done_work_items ?? []).map(w => w.path)];
+    const staleList = [...st.stale_transcripts.map(t => t.path), ...(st.unclaimed_transcripts ?? []).map(t => t.path), ...st.incomplete_work_items.map(w => w.path), ...(st.done_work_items ?? []).map(w => w.path)];
     if (staleList.length > 0) buckets.stale_page = staleList;
   }
 

@@ -36,7 +36,7 @@ function slugify(text: string): string {
 export async function runObserve(
   input: ObserveInput
 ): Promise<{ exitCode: number; result: Result<ObserveOutput> }> {
-  const kind = input.kind || "note";
+  const kind = input.kind || "task";
 
   if (!ALLOWED_KINDS.has(kind)) {
     return {

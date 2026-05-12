@@ -42,7 +42,7 @@ describe("runObserve", () => {
     const fm = fmMatch![1];
     expect(fm).toContain("source_url:");
     expect(fm).toContain(`sha256: ${sha256}`);
-    expect(fm).toContain("kind: note");
+    expect(fm).toContain("kind: task");
     expect(fm).toMatch(/ingested: \d{4}-\d{2}-\d{2}/);
 
     const body = content.split("---").slice(2).join("---");
@@ -50,15 +50,15 @@ describe("runObserve", () => {
     expect(sha256).toBe(expectedHash);
   });
 
-  it("defaults kind to note", async () => {
+  it("defaults kind to task", async () => {
     const dir = makeVault();
-    const r = await runObserve({ vault: dir, text: "some note text here" });
+    const r = await runObserve({ vault: dir, text: "some task text here" });
     expect(r.exitCode).toBe(0);
     if (!r.result.ok) throw new Error("expected ok");
 
     const fullPath = join(dir, r.result.data.path);
     const content = readFileSync(fullPath, "utf8");
-    expect(content).toContain("kind: note");
+    expect(content).toContain("kind: task");
   });
 
   it("sets kind when provided", async () => {

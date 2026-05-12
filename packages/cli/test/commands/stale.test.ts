@@ -167,4 +167,119 @@ describe("runStale", () => {
       expect(existsSync(workDir)).toBe(false);
     }
   });
+
+  it("detects unclaimed task transcript with project field", async () => {
+    const v = makeVault();
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-fix-foo.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+project: "[[acme]]"
+---
+
+# task: Fix foo
+
+Fix the foo thing.`);
+    const r = await runStale({ vault: v, days: 0 });
+    expect(r.exitCode).toBe(19);
+    if (r.result.ok) {
+      expect(r.result.data.unclaimed_transcripts.length).toBe(1);
+      expect(r.result.data.unclaimed_transcripts[0].path).toBe("raw/transcripts/2026-04-01-task-fix-foo.md");
+      expect(r.result.data.unclaimed_transcripts[0].reason).toContain("task");
+      expect(r.result.data.unclaimed_transcripts[0].reason).toContain("no work item");
+    }
+  });
+
+  it("detects unclaimed bug transcript with project field", async () => {
+    const v = makeVault();
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-bug-crash.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: bug
+project: "[[acme]]"
+---
+
+# bug: App crashes
+
+App crashes on startup.`);
+    const r = await runStale({ vault: v, days: 0 });
+    expect(r.exitCode).toBe(19);
+    if (r.result.ok) {
+      expect(r.result.data.unclaimed_transcripts.length).toBe(1);
+      expect(r.result.data.unclaimed_transcripts[0].reason).toContain("bug");
+    }
+  });
+
+  it("does not flag transcript without project field as unclaimed", async () => {
+    const v = makeVault();
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-no-project.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+---
+
+# task: Orphan task
+
+No project field.`);
+    const r = await runStale({ vault: v, days: 0 });
+    if (r.result.ok) {
+      expect(r.result.data.unclaimed_transcripts.length).toBe(0);
+    }
+  });
+
+  it("does not flag note/idea transcripts as unclaimed", async () => {
+    const v = makeVault();
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-note-idea.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: note
+project: "[[acme]]"
+---
+
+# note: Some observation
+
+Just a note.`);
+    const r = await runStale({ vault: v, days: 0 });
+    if (r.result.ok) {
+      expect(r.result.data.unclaimed_transcripts.length).toBe(0);
+    }
+  });
+
+  it("claims transcript via date-prefix match to work item", async () => {
+    const v = makeVault();
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-fix-bar.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+project: "[[acme]]"
+---
+
+# task: Fix bar`);
+    const workDir = join(v, "projects", "acme", "work", "2026-04-01-fix-bar");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: fix bar\n---\n\nspec`);
+    const r = await runStale({ vault: v, days: 0 });
+    if (r.result.ok) {
+      expect(r.result.data.unclaimed_transcripts.length).toBe(0);
+    }
+  });
+
+  it("claims transcript via spec.md source: frontmatter reference", async () => {
+    const v = makeVault();
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-05-task-cross-date.md"), `---
+source_url:
+ingested: 2026-04-05
+kind: task
+project: "[[acme]]"
+---
+
+# task: Cross date task`);
+    const workDir = join(v, "projects", "acme", "work", "2026-04-10-cross-date");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: cross date\nsource: raw/transcripts/2026-04-05-task-cross-date.md\n---\n\nspec`);
+    const r = await runStale({ vault: v, days: 0 });
+    if (r.result.ok) {
+      expect(r.result.data.unclaimed_transcripts.length).toBe(0);
+    }
+  });
 });

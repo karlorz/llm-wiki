@@ -11,6 +11,7 @@ export interface IncompleteWorkItem { path: string; reason: string }
 export interface StaleOutput {
   stale: Array<{ page: string; reason: string }>;
   stale_transcripts: StaleTranscript[];
+  unclaimed_transcripts: StaleTranscript[];
   incomplete_work_items: IncompleteWorkItem[];
   done_work_items: IncompleteWorkItem[];
   archived: string[];
@@ -29,8 +30,9 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   const incompleteWorkItems: IncompleteWorkItem[] = [];
   const archived: string[] = [];
 
-  // Discover work directories and their statuses
+  // Discover work directories and their statuses, grouped by project slug
   const workDirs = new Map<string, string>(); // relDir -> status | ""
+  const workDirsBySlug = new Map<string, Map<string, string>>(); // slug -> (dirName -> status)
   const projectsDir = join(input.vault, "projects");
   let projectSlugs: string[] = [];
   try { projectSlugs = (await readdir(projectsDir, { withFileTypes: true })).filter(d => d.isDirectory()).map(d => d.name); } catch { /* no projects */ }
@@ -39,13 +41,14 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     const workPath = join(projectsDir, slug, "work");
     let entries;
     try { entries = await readdir(workPath, { withFileTypes: true }); } catch { continue; }
+    const slugDirs = new Map<string, string>();
     for (const e of entries) {
       if (!e.isDirectory()) continue;
       const relDir = `projects/${slug}/work/${e.name}`;
       const absDir = join(workPath, e.name);
       let status = "";
       let files: string[];
-      try { files = await readdir(absDir); } catch { workDirs.set(relDir, ""); continue; }
+      try { files = await readdir(absDir); } catch { workDirs.set(relDir, ""); slugDirs.set(e.name, ""); continue; }
       for (const f of files) {
         if (!f.endsWith(".md")) continue;
         try {
@@ -54,18 +57,94 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
         } catch { /* skip */ }
       }
       workDirs.set(relDir, status);
+      slugDirs.set(e.name, status);
     }
+    workDirsBySlug.set(slug, slugDirs);
+  }
+
+  // Helper: extract project slug from frontmatter project field ("[[slug]]" → "slug")
+  function extractSlug(projectField: string): string {
+    return projectField.replace(/^\[\[/, "").replace(/\]\]$/, "").replace(/^"|"$/g, "");
   }
 
   // 1. Stale transcripts: raw/transcripts/*.md where matching work item is done/invalid
   const transcripts = scan.data.raw.filter(p => p.relPath.startsWith("raw/transcripts/") && p.relPath.endsWith(".md"));
+  const claimedPaths = new Set<string>();
+
+  // Pre-parse transcript frontmatter for project/kind fields
+  const transcriptMeta = new Map<string, { kind: string; project: string; slug: string }>();
+  for (const t of transcripts) {
+    try {
+      const content = await readFile(join(input.vault, t.relPath), "utf8");
+      const fm = extractFrontmatter(content);
+      if (fm.ok) {
+        const kind = typeof fm.data.kind === "string" ? fm.data.kind : "";
+        const project = typeof fm.data.project === "string" ? fm.data.project : "";
+        transcriptMeta.set(t.relPath, { kind, project, slug: extractSlug(project) });
+      }
+    } catch { /* skip */ }
+  }
+
   for (const t of transcripts) {
     const datePrefix = t.relPath.split("/").pop()!.slice(0, 10);
-    for (const [dir, status] of workDirs) {
-      if (dir.split("/").pop()!.startsWith(datePrefix) && (status === "done" || status === "invalid")) {
-        staleTranscripts.push({ path: t.relPath, reason: `work item ${dir} is ${status}` });
-        break;
+    const meta = transcriptMeta.get(t.relPath);
+    const slug = meta?.slug || "";
+
+    if (slug && workDirsBySlug.has(slug)) {
+      // Project-scoped match: check slug substring, word overlap, or source: reference
+      const slugDirs = workDirsBySlug.get(slug)!;
+      const tSlug = t.relPath.split("/").pop()!.replace(/^\d{4}-\d{2}-\d{2}-/, "").replace(/\.md$/, "").replace(/^(task|bug|idea|note|observation)-/, "");
+      for (const [dirName, status] of slugDirs) {
+        if (!dirName.startsWith(datePrefix)) continue;
+        const wSlug = dirName.replace(/^\d{4}-\d{2}-\d{2}-/, "");
+        // Substring match (either direction) or word overlap >= 2
+        const tWords = new Set(tSlug.split("-").filter(w => w.length >= 3));
+        const wWords = wSlug.split("-").filter(w => w.length >= 3);
+        const overlap = wWords.filter(w => tWords.has(w)).length;
+        if (dirName.includes(tSlug) || tSlug.includes(wSlug) || overlap >= 1) {
+          claimedPaths.add(t.relPath);
+          if (status === "done" || status === "invalid") {
+            staleTranscripts.push({ path: t.relPath, reason: `work item projects/${slug}/work/${dirName} is ${status}` });
+          }
+          break;
+        }
       }
+    } else if (!slug) {
+      // No project field: fall back to cross-project date-prefix matching
+      for (const [dir, status] of workDirs) {
+        if (dir.split("/").pop()!.startsWith(datePrefix)) {
+          claimedPaths.add(t.relPath);
+          if (status === "done" || status === "invalid") {
+            staleTranscripts.push({ path: t.relPath, reason: `work item ${dir} is ${status}` });
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // 1b. Also claim transcripts referenced by work item spec.md `source:` frontmatter
+  for (const [relDir] of workDirs) {
+    const specPath = join(input.vault, relDir, "spec.md");
+    try {
+      const specContent = await readFile(specPath, "utf8");
+      const specFm = extractFrontmatter(specContent);
+      if (specFm.ok && typeof specFm.data.source === "string") {
+        const sourcePath = specFm.data.source;
+        if (sourcePath.startsWith("raw/transcripts/")) claimedPaths.add(sourcePath);
+      }
+    } catch { /* no spec or unreadable */ }
+  }
+
+  // 1c. Unclaimed transcripts: kind=task|bug with project field but no matching work item
+  const unclaimedTranscripts: StaleTranscript[] = [];
+  const CLAIMABLE_KINDS = new Set(["task", "bug"]);
+  for (const t of transcripts) {
+    if (claimedPaths.has(t.relPath)) continue;
+    const meta = transcriptMeta.get(t.relPath);
+    if (!meta) continue;
+    if (CLAIMABLE_KINDS.has(meta.kind) && meta.project) {
+      unclaimedTranscripts.push({ path: t.relPath, reason: `${meta.kind} for ${meta.project} — no work item` });
     }
   }
 
@@ -157,17 +236,18 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     });
   }
 
-  const total = stale.length + staleTranscripts.length + incompleteWorkItems.length + doneWorkItems.length;
+  const total = stale.length + staleTranscripts.length + unclaimedTranscripts.length + incompleteWorkItems.length + doneWorkItems.length;
   const hintLines: string[] = [];
   if (stale.length > 0) hintLines.push(`stale_pages: ${stale.length}`, ...stale.map(p => `  ${p.page}: ${p.reason}`));
   if (staleTranscripts.length > 0) hintLines.push(`stale_transcripts: ${staleTranscripts.length}`, ...staleTranscripts.map(t => `  ${t.path}: ${t.reason}`));
+  if (unclaimedTranscripts.length > 0) hintLines.push(`unclaimed_transcripts: ${unclaimedTranscripts.length}`, ...unclaimedTranscripts.map(t => `  ${t.path}: ${t.reason}`));
   if (incompleteWorkItems.length > 0) hintLines.push(`incomplete_work_items: ${incompleteWorkItems.length}`, ...incompleteWorkItems.map(w => `  ${w.path}: ${w.reason}`));
   if (doneWorkItems.length > 0) hintLines.push(`done_work_items: ${doneWorkItems.length}`, ...doneWorkItems.map(w => `  ${w.path}: ${w.reason}`));
   if (archived.length > 0) hintLines.push(`archived: ${archived.length}`, ...archived.map(a => `  ${a}`));
   if (hintLines.length === 0) hintLines.push("no stale transcripts or incomplete work items");
 
   return { exitCode: total > 0 ? ExitCode.STALE_PAGE : ExitCode.OK, result: ok({
-    stale: [...stale, ...staleTranscripts.map(t => ({ page: t.path, reason: t.reason })), ...incompleteWorkItems.map(w => ({ page: w.path, reason: w.reason })), ...doneWorkItems.map(w => ({ page: w.path, reason: w.reason }))],
-    stale_transcripts: staleTranscripts, incomplete_work_items: incompleteWorkItems, done_work_items: doneWorkItems, archived, humanHint: hintLines.join("\n")
+    stale: [...stale, ...staleTranscripts.map(t => ({ page: t.path, reason: t.reason })), ...unclaimedTranscripts.map(t => ({ page: t.path, reason: t.reason })), ...incompleteWorkItems.map(w => ({ page: w.path, reason: w.reason })), ...doneWorkItems.map(w => ({ page: w.path, reason: w.reason }))],
+    stale_transcripts: staleTranscripts, unclaimed_transcripts: unclaimedTranscripts, incomplete_work_items: incompleteWorkItems, done_work_items: doneWorkItems, archived, humanHint: hintLines.join("\n")
   }) };
 }

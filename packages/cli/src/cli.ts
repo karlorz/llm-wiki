@@ -642,8 +642,8 @@ program
   .command("observe [vault]")
   .description("create a raw transcript observation entry")
   .requiredOption("--text <text>", "observation text")
-  .option("--kind <kind>", "observation kind (note|bug|task|idea|session-log)", "note")
-  .option("--project <slug>", "associated project slug")
+  .option("--kind <kind>", "observation kind (note|bug|task|idea|session-log)", "task")
+  .option("--project <slug>", "associated project slug (required for task/bug claim detection)")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
