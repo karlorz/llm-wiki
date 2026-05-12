@@ -391,4 +391,40 @@ Fix the foo thing.`);
       expect(r.result.data.unclaimed_transcripts.length).toBe(0);
     }
   });
+
+  it("unclaimed transcripts include claim hints", async () => {
+    const v = makeVault();
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-fix-foo.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+project: "[[acme]]"
+---
+
+Fix the foo thing.`);
+    const r = await runStale({ vault: v, days: 0 });
+    expect(r.exitCode).toBe(19);
+    if (r.result.ok) {
+      expect(r.result.data.unclaimed_transcripts.length).toBe(1);
+      expect(r.result.data.unclaimed_transcripts[0].hint).toBe(
+        "skillwiki claim raw/transcripts/2026-04-01-task-fix-foo.md --project acme"
+      );
+    }
+  });
+
+  it("humanHint includes claim hints for unclaimed transcripts", async () => {
+    const v = makeVault();
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-fix-foo.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+project: "[[acme]]"
+---
+
+Fix the foo thing.`);
+    const r = await runStale({ vault: v, days: 0 });
+    if (r.result.ok) {
+      expect(r.result.data.humanHint).toContain("hint: skillwiki claim");
+    }
+  });
 });

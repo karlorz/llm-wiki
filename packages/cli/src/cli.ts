@@ -20,6 +20,7 @@ import { runLinks } from "./commands/links.js";
 import { runTagAudit } from "./commands/tag-audit.js";
 import { runIndexCheck } from "./commands/index-check.js";
 import { runStale } from "./commands/stale.js";
+import { runClaim } from "./commands/claim.js";
 import { runPagesize } from "./commands/pagesize.js";
 import { runLogRotate } from "./commands/log-rotate.js";
 import { runLint } from "./commands/lint.js";
@@ -291,6 +292,18 @@ program
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runStale({ vault: v.vault, days: opts.days, archive: !!opts.archive, forceScan: !!opts.forceScan }), v.vault);
+  });
+
+program
+  .command("claim <transcript> [vault]")
+  .description("claim an unclaimed transcript by creating a work item with source: link")
+  .option("--project <slug>", "project slug (overrides transcript frontmatter)")
+  .option("--slug <slug>", "work-item slug (defaults to transcript filename without date/kind prefix)")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (transcript, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runClaim({ vault: v.vault, transcript, project: opts.project, slug: opts.slug }), v.vault);
   });
 
 program

@@ -6,7 +6,7 @@ import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
 
 export interface StaleInput { vault: string; days: number; archive?: boolean; forceScan?: boolean }
-export interface StaleTranscript { path: string; reason: string }
+export interface StaleTranscript { path: string; reason: string; hint?: string }
 export interface IncompleteWorkItem { path: string; reason: string }
 export interface StaleOutput {
   stale: Array<{ page: string; reason: string }>;
@@ -175,7 +175,9 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     const meta = transcriptMeta.get(t.relPath);
     if (!meta) continue;
     if (CLAIMABLE_KINDS.has(meta.kind) && meta.project) {
-      unclaimedTranscripts.push({ path: t.relPath, reason: `${meta.kind} for ${meta.project} — no work item` });
+      const projectSlug = extractSlug(meta.project);
+      const hint = `skillwiki claim ${t.relPath} --project ${projectSlug}`;
+      unclaimedTranscripts.push({ path: t.relPath, reason: `${meta.kind} for ${meta.project} — no work item`, hint });
     }
   }
 
@@ -271,7 +273,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   const hintLines: string[] = [];
   if (stale.length > 0) hintLines.push(`stale_pages: ${stale.length}`, ...stale.map(p => `  ${p.page}: ${p.reason}`));
   if (staleTranscripts.length > 0) hintLines.push(`stale_transcripts: ${staleTranscripts.length}`, ...staleTranscripts.map(t => `  ${t.path}: ${t.reason}`));
-  if (unclaimedTranscripts.length > 0) hintLines.push(`unclaimed_transcripts: ${unclaimedTranscripts.length}`, ...unclaimedTranscripts.map(t => `  ${t.path}: ${t.reason}`));
+  if (unclaimedTranscripts.length > 0) hintLines.push(`unclaimed_transcripts: ${unclaimedTranscripts.length}`, ...unclaimedTranscripts.map(t => `  ${t.path}: ${t.reason}${t.hint ? `\n    hint: ${t.hint}` : ""}`));
   if (incompleteWorkItems.length > 0) hintLines.push(`incomplete_work_items: ${incompleteWorkItems.length}`, ...incompleteWorkItems.map(w => `  ${w.path}: ${w.reason}`));
   if (doneWorkItems.length > 0) hintLines.push(`done_work_items: ${doneWorkItems.length}`, ...doneWorkItems.map(w => `  ${w.path}: ${w.reason}`));
   if (archived.length > 0) hintLines.push(`archived: ${archived.length}`, ...archived.map(a => `  ${a}`));
