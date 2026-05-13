@@ -64,6 +64,40 @@ Obsidian-compatible Mermaid rules:
 - Avoid `\n` in labels; use `<br/>` or single-line labels.
 - Keep node IDs ASCII and simple (`CMUX_DB`, `OC_GW`).
 
+## Ad-Hoc Capture Format
+
+Ad-hoc captures are mutable working notes created during development
+(via `/wiki-add-task` or filesystem drop). They live in `raw/transcripts/`.
+
+### Frontmatter
+
+```yaml
+---
+source_url:       # null for ad-hoc (locally originated)
+created: YYYY-MM-DD     # when capture was written
+ingested:          # filled by ingest pipeline (empty at creation)
+kind:             # idea | bug | task | note | other
+project:          # optional: "[[slug]]" for cross-reference
+---
+```
+
+### Fields
+
+- `created`: Date the ad-hoc capture was created. Set by `/wiki-add-task` or filesystem.
+- `ingested`: Date processed into typed knowledge. **Empty at creation.** Filled by `wiki-ingest`, `wiki-crystallize`.
+- `kind`: Capture type. Affects dev-loop routing (`bug`/`task` → work items; `idea` → knowledge development).
+- `project`: Optional project cross-reference. Enables `provenance_projects:` auto-linking.
+
+### vs Ingested Sources
+
+| Aspect | Ad-Hoc Capture | Ingested Source |
+|--------|----------------|-----------------|
+| Location | `raw/transcripts/` | `raw/articles/`, `raw/papers/`, etc. |
+| Mutability | Mutable (working notes) | Immutable after ingest |
+| `sha256` | **Omitted** | Required |
+| `created` | Required | Use `ingested` |
+| Entry | `/wiki-add-task`, filesystem drop | `wiki-ingest`, `skillwiki fetch` |
+
 ## Obsidian Integration
 
 - **Attachment folder:** `raw/assets/` — binary assets (images, diagrams) live here.
