@@ -499,6 +499,48 @@ An item in progress with a started date.
     }
   });
 
+  it("does not warn on completed work item without plan after 24h", async () => {
+    const v = vault();
+    const workDir = join(v, "projects", "test", "work", "2026-05-01-done-item");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), `---
+title: Done item
+status: completed
+created: 2026-05-01
+---
+
+## Overview
+
+A completed work item with no separate plan.
+`);
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).not.toContain("work_item_health");
+    }
+  });
+
+  it("does not warn on abandoned work item without plan after 24h", async () => {
+    const v = vault();
+    const workDir = join(v, "projects", "test", "work", "2026-05-01-dropped-item");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), `---
+title: Dropped item
+status: abandoned
+created: 2026-05-01
+---
+
+## Overview
+
+An abandoned work item.
+`);
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warningKinds).not.toContain("work_item_health");
+    }
+  });
+
   it("flags orphaned_project_pages when page claims project but knowledge.md omits it", async () => {
     const v = vault();
     mkdirSync(join(v, "projects", "test-proj"), { recursive: true });

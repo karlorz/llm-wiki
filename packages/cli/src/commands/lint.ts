@@ -240,9 +240,20 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       workItemDirs.set(dir, pages);
     }
     for (const [dir, pages] of workItemDirs) {
-      const hasSpec = pages.some(p => p.relPath.endsWith("/spec.md"));
+      const specPage = pages.find(p => p.relPath.endsWith("/spec.md"));
       const hasPlan = pages.some(p => p.relPath.endsWith("/plan.md"));
-      if (hasSpec && !hasPlan) {
+      let specStatus: string | undefined;
+      let specStarted: unknown;
+      if (specPage) {
+        const text = await readPage(specPage);
+        const fm = extractFrontmatter(text);
+        if (fm.ok) {
+          specStatus = fm.data.status;
+          specStarted = fm.data.started;
+        }
+      }
+      const isClosed = specStatus === "completed" || specStatus === "abandoned";
+      if (specPage && !hasPlan && !isClosed) {
         const lastSegment = dir.split("/").pop()!;
         const dateMatch = lastSegment.match(/^(\d{4}-\d{2}-\d{2})/);
         if (dateMatch) {
@@ -252,13 +263,8 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
           }
         }
       }
-      for (const page of pages) {
-        if (!page.relPath.endsWith("/spec.md")) continue;
-        const text = await readPage(page);
-        const fm = extractFrontmatter(text);
-        if (fm.ok && fm.data.status === "in-progress" && !fm.data.started) {
-          workItemHealth.push(`${page.relPath}: in-progress without started date`);
-        }
+      if (specPage && specStatus === "in-progress" && !specStarted) {
+        workItemHealth.push(`${specPage.relPath}: in-progress without started date`);
       }
     }
     if (workItemHealth.length > 0) buckets.work_item_health = workItemHealth;
