@@ -1,0 +1,39 @@
+{
+  "name": "skillwiki",
+  "version": "0.4.2",
+  "description": "Project-aware Karpathy-style knowledge base for Codex with 18 prompt-only skills backed by the deterministic skillwiki CLI.",
+  "author": {
+    "name": "karlorz",
+    "url": "https://github.com/karlorz"
+  },
+  "homepage": "https://github.com/karlorz/llm-wiki",
+  "repository": "https://github.com/karlorz/llm-wiki",
+  "license": "MIT",
+  "keywords": [
+    "knowledge-base",
+    "wiki",
+    "codex",
+    "skills",
+    "obsidian",
+    "karpathy"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "SkillWiki",
+    "shortDescription": "Project-aware wiki skills for Codex agents",
+    "longDescription": "18 prompt-only skills (wiki-*, proj-*, using-skillwiki) for deterministic, project-aware knowledge workflows.",
+    "developerName": "karlorz",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/karlorz/llm-wiki",
+    "defaultPrompt": [
+      "Initialize a project wiki and schema for this repository.",
+      "Ingest this PRD and produce typed knowledge pages with provenance.",
+      "Run a vault lint pass and summarize the highest priority fixes."
+    ],
+    "brandColor": "#1f6feb"
+  }
+}

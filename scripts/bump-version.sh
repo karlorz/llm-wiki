@@ -7,12 +7,13 @@
 # Updates version in these files:
 #   1. packages/cli/package.json          (npm-published CLI)
 #   2. packages/skills/.claude-plugin/plugin.json  (Claude plugin)
-#   3. packages/skills/package.json        (skills package)
-#   4. .claude-plugin/marketplace.json     (metadata.version + plugins[0].version)
-#   5. packages/shared/package.json        (shared types — internal)
-#   6. package.json                        (monorepo root — internal)
+#   3. packages/skills/.codex-plugin/plugin.json   (Codex plugin)
+#   4. packages/skills/package.json        (skills package)
+#   5. .claude-plugin/marketplace.json     (metadata.version + plugins[0].version)
+#   6. packages/shared/package.json        (shared types — internal)
+#   7. package.json                        (monorepo root — internal)
 #
-# After editing, verifies all 6 files have the new version.
+# After editing, verifies all 7 files have the new version.
 
 set -euo pipefail
 
@@ -43,6 +44,7 @@ bump_file() {
 
 bump_file "packages/cli/package.json"              "${REPO_ROOT}/packages/cli/package.json"
 bump_file "packages/skills/.claude-plugin/plugin.json" "${REPO_ROOT}/packages/skills/.claude-plugin/plugin.json"
+bump_file "packages/skills/.codex-plugin/plugin.json" "${REPO_ROOT}/packages/skills/.codex-plugin/plugin.json"
 bump_file "packages/skills/package.json"           "${REPO_ROOT}/packages/skills/package.json"
 bump_file ".claude-plugin/marketplace.json (×2)"   "${REPO_ROOT}/.claude-plugin/marketplace.json" "g"
 bump_file "packages/shared/package.json"           "${REPO_ROOT}/packages/shared/package.json"
@@ -51,14 +53,32 @@ bump_file "package.json (root)"                    "${REPO_ROOT}/package.json"
 echo ""
 echo "Verifying all files..."
 
-# Count occurrences of the new version
-COUNT=$(git grep -c "\"version\": \"${VERSION}\"" -- '*.json' 2>/dev/null | grep -v ':0$' | wc -l | tr -d ' ')
+EXPECTED_FILES=(
+  "${REPO_ROOT}/packages/cli/package.json"
+  "${REPO_ROOT}/packages/skills/.claude-plugin/plugin.json"
+  "${REPO_ROOT}/packages/skills/.codex-plugin/plugin.json"
+  "${REPO_ROOT}/packages/skills/package.json"
+  "${REPO_ROOT}/packages/shared/package.json"
+  "${REPO_ROOT}/package.json"
+)
 
-if [ "$COUNT" -ge 6 ]; then
-  echo "  ✓ All ${COUNT} version fields updated to ${VERSION}"
+MISSING=0
+for file in "${EXPECTED_FILES[@]}"; do
+  if ! grep -q "\"version\": \"${VERSION}\"" "$file"; then
+    echo "  ⚠ Missing version ${VERSION} in ${file}" >&2
+    MISSING=$((MISSING + 1))
+  fi
+done
+
+if ! grep -q "\"version\": \"${VERSION}\"" "${REPO_ROOT}/.claude-plugin/marketplace.json"; then
+  echo "  ⚠ Missing version ${VERSION} in .claude-plugin/marketplace.json" >&2
+  MISSING=$((MISSING + 1))
+fi
+
+if [ "$MISSING" -eq 0 ]; then
+  echo "  ✓ All 7 manifest version fields updated to ${VERSION}"
 else
-  echo "  ⚠ Expected 6+ version fields, found ${COUNT}" >&2
-  git grep -n "\"version\": \"${VERSION}\"" -- '*.json'
+  echo "  ⚠ Expected 7 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
   exit 1
 fi
 

@@ -39,16 +39,19 @@ Assertion counts are approximate — they include loop-expanded iterations (e.g.
 - CLI wrapper: `packages/skills/bin/skillwiki` (npx delegation for plugin PATH injection).
 - Claude plugin manifest: `packages/skills/.claude-plugin/plugin.json`.
 - Claude marketplace manifest: `.claude-plugin/marketplace.json` (repo root). Skill discovery is driven by `plugin.json`'s `"skills": "./"` field; `marketplace.json` points the plugin source at `./packages/skills`.
-- Version bump: `npm run bump <version>` — syncs version across all 6 manifests (`scripts/bump-version.sh`).
+- Codex plugin manifest: `packages/skills/.codex-plugin/plugin.json`.
+- Codex marketplace manifest: `.agents/plugins/marketplace.json` (repo root). Plugin discovery in Codex is driven by marketplace entries that point at `./packages/skills`.
+- Version bump: `npm run bump <version>` — syncs version across all 7 manifests (`scripts/bump-version.sh`).
 
 ## Distribution channels
 
-The skills ship through two independent channels — keep both working:
+The skills ship through three independent channels — keep all three working:
 
 1. **Claude Code plugin** — `/plugin marketplace add karlorz/llm-wiki` then `/plugin install skillwiki@llm-wiki`. Discovery is driven by `packages/skills/.claude-plugin/plugin.json` with a SessionStart hook that auto-injects the `using-skillwiki` onboarding skill. The `bin/skillwiki` npx wrapper is auto-injected into PATH when the plugin is enabled.
-2. **npm CLI installer** — `npx skillwiki install` copies SKILL.md files and the `bin/skillwiki` wrapper into `~/.claude/skills/` via the `install` subcommand (see `packages/cli/src/commands/install.ts`).
+2. **Codex plugin marketplace** — `codex plugin marketplace add karlorz/llm-wiki@dev` (GitHub source) or `codex plugin marketplace add /path/to/llm-wiki` (local source). Then open Codex TUI (`codex`), run `/plugins`, select marketplace `llm-wiki`, and install plugin `skillwiki`. Discovery is driven by `.agents/plugins/marketplace.json` and `packages/skills/.codex-plugin/plugin.json`.
+3. **npm CLI installer** — `npx skillwiki install` copies SKILL.md files and the `bin/skillwiki` wrapper into `~/.claude/skills/` via the `install` subcommand (see `packages/cli/src/commands/install.ts`).
 
-Changing the layout under `packages/skills/<skill>/` requires updating BOTH `packages/skills/.claude-plugin/plugin.json` AND the `install` subcommand's directory scan.
+Changing the layout under `packages/skills/<skill>/` requires updating `packages/skills/.claude-plugin/plugin.json`, `packages/skills/.codex-plugin/plugin.json`, and the `install` subcommand's directory scan. If the plugin root path changes, update both marketplace manifests (`.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`).
 
 ## Dev vs prod plugin source
 
@@ -62,6 +65,8 @@ Changing the layout under `packages/skills/<skill>/` requires updating BOTH `pac
 ## Plugin release workflow
 
 - **Local dev marketplace:** `claude plugin marketplace add /path/to/llm-wiki` (pass the repo root, not `.claude-plugin/` — the CLI appends `.claude-plugin/` automatically). Then `claude plugin install skillwiki@llm-wiki`.
+- **Codex local dev marketplace:** `codex plugin marketplace add /path/to/llm-wiki`, then in TUI run `/plugins` and install `skillwiki` from marketplace `llm-wiki`.
+- **Codex GitHub marketplace source:** `codex plugin marketplace add karlorz/llm-wiki@dev` (or `--ref <branch|tag>` with Git URLs). Refresh Git-backed marketplace sources with `codex plugin marketplace upgrade llm-wiki`.
 - **Pushing to `dev` = releasing the plugin.** There is no version pinning or channel tag for Claude Code plugins. Every push to the default branch (`dev`) is what users get on `plugin install`.
 - **Version gate:** `/plugin update` only detects changes when the `version` field in `plugin.json` is bumped. New commits without a version bump are ignored.
 - **npm is a separate channel:** `npm publish --tag beta` gives CLI users a beta track independent of the plugin channel. Default dist-tag is `latest`; use `--tag beta` in `skillwiki update` for pre-release.
