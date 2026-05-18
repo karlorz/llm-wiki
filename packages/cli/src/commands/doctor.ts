@@ -444,7 +444,6 @@ function detectFuseMount(vaultPath: string): string | null {
       if (best && best.fs.includes("fuse")) return best.point;
     } else if (os === "darwin") {
       const out = execSync("mount", { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-      // Find the longest-matching mount point with fuse in the type
       let best: { point: string } | null = null;
       for (const line of out.split("\n")) {
         // macOS mount format: //user@host/path on /mountpoint (osxfuse, ...)
@@ -459,7 +458,6 @@ function detectFuseMount(vaultPath: string): string | null {
       if (best) return best.point;
     }
   } catch {
-    // /proc/mounts unreadable or mount command failed
   }
   return null;
 }
@@ -479,21 +477,6 @@ function checkS3MountPerf(resolvedPath: string | undefined): CheckResult {
     return check("pass", "s3_mount_perf", "S3 mount performance", `S3 FUSE mount (${mountPoint}), no concepts/ to benchmark`);
   }
 
-  // Verify rg is available before benchmarking
-  let rgAvailable = false;
-  try {
-    execSync("which rg", { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-    rgAvailable = true;
-  } catch {
-    return check(
-      "info",
-      "s3_mount_perf",
-      "S3 mount performance",
-      `S3 FUSE mount (${mountPoint}) — ripgrep not found, benchmark skipped`
-    );
-  }
-
-  // Benchmark: content-search across concepts/ to force disk reads, with 5s timeout
   const start = Date.now();
   let timedOut = false;
   try {
