@@ -1,7 +1,8 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { existsSync, lstatSync, readlinkSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readlinkSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execSync } from "node:child_process";
+import { platform } from "node:os";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 import { parseDotenvFile } from "../utils/dotenv.js";
 import { configPath } from "./config.js";
@@ -424,6 +425,115 @@ function checkSyncLastPush(resolvedPath: string | undefined): CheckResult {
   return check("pass", "sync_last_push", "Vault sync recency", `Last push: ${dateStr} (${daysSince} day(s) ago)`);
 }
 
+/** Detect if vaultPath lives on a FUSE mount. Returns the mount point if found. */
+function detectFuseMount(vaultPath: string): string | null {
+  const os = platform();
+  try {
+    if (os === "linux") {
+      const mounts = readFileSync("/proc/mounts", "utf8");
+      let best: { point: string; fs: string } | null = null;
+      for (const line of mounts.split("\n")) {
+        const parts = line.split(" ");
+        if (parts.length < 3) continue;
+        const point = parts[1];
+        const fs = parts[2];
+        if (vaultPath.startsWith(point) && (!best || point.length > best.point.length)) {
+          best = { point, fs };
+        }
+      }
+      if (best && best.fs.includes("fuse")) return best.point;
+    } else if (os === "darwin") {
+      const out = execSync("mount", { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+      // Find the longest-matching mount point with fuse in the type
+      let best: { point: string } | null = null;
+      for (const line of out.split("\n")) {
+        // macOS mount format: //user@host/path on /mountpoint (osxfuse, ...)
+        const match = line.match(/^(\S+) on (\S+) \((.*?)\)/);
+        if (!match) continue;
+        const point = match[2];
+        const opts = match[3];
+        if (opts.includes("fuse") && vaultPath.startsWith(point) && (!best || point.length > best.point.length)) {
+          best = { point };
+        }
+      }
+      if (best) return best.point;
+    }
+  } catch {
+    // /proc/mounts unreadable or mount command failed
+  }
+  return null;
+}
+
+function checkS3MountPerf(resolvedPath: string | undefined): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("pass", "s3_mount_perf", "S3 mount performance", "No vault path — check skipped");
+  }
+
+  const mountPoint = detectFuseMount(resolvedPath);
+  if (!mountPoint) {
+    return check("pass", "s3_mount_perf", "S3 mount performance", "local disk");
+  }
+
+  const conceptsDir = join(resolvedPath, "concepts");
+  if (!existsSync(conceptsDir)) {
+    return check("pass", "s3_mount_perf", "S3 mount performance", `S3 FUSE mount (${mountPoint}), no concepts/ to benchmark`);
+  }
+
+  // Verify rg is available before benchmarking
+  let rgAvailable = false;
+  try {
+    execSync("which rg", { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+    rgAvailable = true;
+  } catch {
+    return check(
+      "info",
+      "s3_mount_perf",
+      "S3 mount performance",
+      `S3 FUSE mount (${mountPoint}) — ripgrep not found, benchmark skipped`
+    );
+  }
+
+  // Benchmark: content-search across concepts/ to force disk reads, with 5s timeout
+  const start = Date.now();
+  let timedOut = false;
+  try {
+    execSync(`rg -l "." "${conceptsDir}"`, {
+      timeout: 5000,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (e: any) {
+    if (e.killed || (e.status === null && e.signal === "SIGTERM")) {
+      timedOut = true;
+    } else if (e.code === "ENOENT") {
+      return check(
+        "info",
+        "s3_mount_perf",
+        "S3 mount performance",
+        `S3 FUSE mount (${mountPoint}) — rg not found at runtime, benchmark skipped`
+      );
+    }
+    // rg exits 1 on no matches (or 2 on error) — both still completed, use elapsed time
+  }
+  const elapsed = (Date.now() - start) / 1000;
+
+  if (timedOut || elapsed >= 3) {
+    return check(
+      "warn",
+      "s3_mount_perf",
+      "S3 mount performance",
+      `S3 FUSE mount (${mountPoint}) with cold cache (rg scan: >3s). Vault scans may exceed 60s. Consider running wiki-cache-warm or checking rclone-wiki.service.`
+    );
+  }
+
+  return check(
+    "pass",
+    "s3_mount_perf",
+    "S3 mount performance",
+    `S3 FUSE mount, cache warm (rg scan: ${elapsed.toFixed(3)}s)`
+  );
+}
+
 function findSkillMd(dir: string): string[] {
   const results: string[] = [];
   let entries;
@@ -484,6 +594,7 @@ export async function runDoctor(
   checks.push(checkVaultGitRemote(resolvedPath));
   checks.push(checkSyncLastPush(resolvedPath));
   checks.push(checkDotStoreClean(resolvedPath));
+  checks.push(checkS3MountPerf(resolvedPath));
   checks.push(checkSkillsInstalled(input.home, input.cwd));
   checks.push(checkDuplicateSkills(input.home));
   checks.push(checkNpmUpdate(input.home, input.currentVersion));
