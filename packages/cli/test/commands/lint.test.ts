@@ -1019,6 +1019,56 @@ Different content, same filename stem.
       }
     });
 
+    it("keeps raw subdirectory duplicate checks scoped by raw type", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles", "import"), { recursive: true });
+      mkdirSync(join(v, "raw", "papers", "import"), { recursive: true });
+
+      writeFileSync(join(v, "raw", "articles", "shared.md"), `---
+type: raw
+sha256: ${"a".repeat(64)}
+ingested: "2026-05-19"
+---
+
+Article flat body.
+`);
+      writeFileSync(join(v, "raw", "papers", "shared.md"), `---
+type: raw
+sha256: ${"b".repeat(64)}
+ingested: "2026-05-19"
+---
+
+Paper flat body.
+`);
+      writeFileSync(join(v, "raw", "articles", "import", "shared.md"), `---
+type: raw
+sha256: ${"c".repeat(64)}
+ingested: "2026-05-19"
+---
+
+Article nested body.
+`);
+      writeFileSync(join(v, "raw", "papers", "import", "shared.md"), `---
+type: raw
+sha256: ${"d".repeat(64)}
+ingested: "2026-05-19"
+---
+
+Paper nested body.
+`);
+
+      writeFileSync(join(v, "concepts", "test.md"), FM(["model"]) + "## TL;DR\n\n- Test.\n\n## Overview\n\nBody.\n");
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[test]]\n");
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      expect(r.exitCode).toBe(22);
+      if (r.result.ok) {
+        const bucket = r.result.data.by_severity.warning.find(b => b.kind === "raw_subdirectory_duplicate");
+        expect(bucket!.items).toContain("raw/articles/import/shared.md -> duplicate of raw/articles/shared.md");
+        expect(bucket!.items).toContain("raw/papers/import/shared.md -> duplicate of raw/papers/shared.md");
+      }
+    });
+
     it("warns on body duplicates with different frontmatter SHA256", async () => {
       const v = vault();
       mkdirSync(join(v, "raw", "articles"), { recursive: true });

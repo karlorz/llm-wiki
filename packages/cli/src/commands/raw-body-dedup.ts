@@ -1,4 +1,4 @@
-import { ok, type Result } from "@skillwiki/shared";
+import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { createHash } from "node:crypto";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
@@ -15,7 +15,7 @@ export interface RawBodyDedupOutput {
 
 export async function runRawBodyDedup(vault: string): Promise<{ exitCode: number; result: Result<RawBodyDedupOutput> }> {
   const scan = await scanVault(vault);
-  if (!scan.ok) return { exitCode: 0, result: ok({ scanned: 0, duplicates: [] }) };
+  if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
   const bodyHashMap = new Map<string, { relPath: string; sha256: string | null }[]>();
   let totalFiles = 0;
@@ -45,13 +45,14 @@ export async function runRawBodyDedup(vault: string): Promise<{ exitCode: number
     }
   }
 
-  // A group is a true body duplicate only if the files have different frontmatter SHA256s.
-  // If all files share the same SHA256, the existing SHA256-based dedup already catches it.
+  // Suppress only groups that the existing SHA256-based dedup already catches.
+  // Missing/invalid SHA values still need the body duplicate warning.
   const duplicates: BodyDupGroup[] = [];
   for (const [bodyHash, files] of bodyHashMap) {
     if (files.length < 2) continue;
     const uniqueShas = new Set(files.map(f => f.sha256));
-    if (uniqueShas.size > 1) {
+    const allHaveSameValidSha = uniqueShas.size === 1 && files.every(f => f.sha256 !== null);
+    if (!allHaveSameValidSha) {
       duplicates.push({ bodyHash, files });
     }
   }

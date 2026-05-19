@@ -60,6 +60,24 @@ describe("runRawBodyDedup", () => {
     }
   });
 
+  it("detects identical body when all frontmatter SHA256s are missing", async () => {
+    const dir = makeVault();
+    const rawWithoutSha = (body: string) => `---
+type: raw
+ingested: "2026-05-19"
+---
+
+${body}`;
+    writeFileSync(join(dir, "raw", "articles", "a.md"), rawWithoutSha("same body"));
+    writeFileSync(join(dir, "raw", "articles", "b.md"), rawWithoutSha("same body"));
+    const r = await runRawBodyDedup(dir);
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.duplicates.length).toBe(1);
+      expect(r.result.data.duplicates[0]!.files.map(f => f.sha256)).toEqual([null, null]);
+    }
+  });
+
   it("handles empty vault gracefully", async () => {
     const dir = makeVault();
     const r = await runRawBodyDedup(dir);
@@ -92,5 +110,12 @@ describe("runRawBodyDedup", () => {
     if (r.result.ok) {
       expect(r.result.data.scanned).toBe(2);
     }
+  });
+
+  it("returns VAULT_PATH_INVALID for invalid vaults", async () => {
+    const r = await runRawBodyDedup(join(tmpdir(), "missing-vault"));
+    expect(r.exitCode).toBe(9);
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toBe("VAULT_PATH_INVALID");
   });
 });

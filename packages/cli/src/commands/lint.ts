@@ -162,14 +162,14 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     // Raw files should be at depth 2: raw/{type}/{file}.md
     // Anything deeper (e.g., raw/articles/subdir/file.md) with a same-stem flat duplicate is flagged
     const subDirDupes: string[] = [];
-    const flatStems = new Map<string, string>(); // stem → relPath for depth-2 raw files
+    const flatStems = new Map<string, string>(); // parentType/stem → relPath for depth-2 raw files
     const deepFiles: { relPath: string; stem: string; parentType: string }[] = [];
 
     for (const raw of scan.data.raw) {
       const parts = raw.relPath.split("/");
       if (parts.length === 3) {
         const stem = parts[2]!.replace(/\.md$/, "");
-        flatStems.set(stem, raw.relPath);
+        flatStems.set(`${parts[1]!}/${stem}`, raw.relPath);
       } else if (parts.length > 3) {
         const stem = parts[parts.length - 1]!.replace(/\.md$/, "");
         deepFiles.push({ relPath: raw.relPath, stem, parentType: parts[1]! });
@@ -177,8 +177,8 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     }
 
     for (const df of deepFiles) {
-      const flatPath = flatStems.get(df.stem);
-      if (flatPath && flatPath.startsWith(`raw/${df.parentType}/`)) {
+      const flatPath = flatStems.get(`${df.parentType}/${df.stem}`);
+      if (flatPath) {
         subDirDupes.push(`${df.relPath} -> duplicate of ${flatPath}`);
       }
     }
