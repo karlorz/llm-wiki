@@ -13,6 +13,7 @@ import { runOrphans } from "./orphans.js";
 import { runTopicMapCheck } from "./topic-map-check.js";
 import { runIndexLinkFormat } from "./index-link-format.js";
 import { runDedup } from "./dedup.js";
+import { runRawBodyDedup } from "./raw-body-dedup.js";
 import { validateCompoundReferences } from "./audit.js";
 import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
@@ -79,7 +80,7 @@ export interface LintOutput {
 }
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "broken_sources", "tag_not_in_taxonomy"] as const;
-const WARNING_ORDER = ["index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview"] as const;
+const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview"] as const;
 const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "missing_diagram"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
@@ -141,6 +142,14 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   const dedup = await runDedup({ vault: input.vault });
   if (dedup.result.ok && dedup.result.data.duplicates.length > 0) buckets.raw_dedup = dedup.result.data.duplicates;
 
+  const bodyDedup = await runRawBodyDedup(input.vault);
+  if (bodyDedup.result.ok && bodyDedup.result.data.duplicates.length > 0) {
+    buckets.raw_body_duplicate = bodyDedup.result.data.duplicates.map(d => ({
+      body_hash: d.bodyHash.slice(0, 12),
+      files: d.files.map(f => `${f.relPath} (sha256: ${f.sha256 ?? "none"})`),
+    }));
+  }
+
   const compoundRefs = await validateCompoundReferences(input.vault);
   if (compoundRefs.ok && compoundRefs.data.length > 0) buckets.compound_refs = compoundRefs.data;
 
@@ -149,6 +158,35 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   const allPages = scan.ok ? [...scan.data.typedKnowledge, ...scan.data.raw, ...scan.data.workItems, ...scan.data.compound] : [];
   const slugs = scan.ok ? buildSlugMap(allPages) : new Map<string, string>();
   if (scan.ok) {
+    // Raw subdirectory duplicate detection
+    // Raw files should be at depth 2: raw/{type}/{file}.md
+    // Anything deeper (e.g., raw/articles/subdir/file.md) with a same-stem flat duplicate is flagged
+    const subDirDupes: string[] = [];
+    const flatStems = new Map<string, string>(); // stem → relPath for depth-2 raw files
+    const deepFiles: { relPath: string; stem: string; parentType: string }[] = [];
+
+    for (const raw of scan.data.raw) {
+      const parts = raw.relPath.split("/");
+      if (parts.length === 3) {
+        const stem = parts[2]!.replace(/\.md$/, "");
+        flatStems.set(stem, raw.relPath);
+      } else if (parts.length > 3) {
+        const stem = parts[parts.length - 1]!.replace(/\.md$/, "");
+        deepFiles.push({ relPath: raw.relPath, stem, parentType: parts[1]! });
+      }
+    }
+
+    for (const df of deepFiles) {
+      const flatPath = flatStems.get(df.stem);
+      if (flatPath && flatPath.startsWith(`raw/${df.parentType}/`)) {
+        subDirDupes.push(`${df.relPath} -> duplicate of ${flatPath}`);
+      }
+    }
+
+    if (subDirDupes.length > 0) {
+      buckets.raw_subdirectory_duplicate = subDirDupes;
+    }
+
     const legacyPages: string[] = [];
     const orphanedPages: string[] = [];
     const structFlags: string[] = [];

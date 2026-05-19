@@ -983,5 +983,72 @@ Some body text.
       const content = require("fs").readFileSync(join(v, "concepts", "alpha.md"), "utf8");
       expect(content).toContain("Some claim about X. ^[raw/articles/x.md]");
     });
+
+    it("warns on raw files in subdirectory duplicating flat-space content", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles", "obsidian-migration"), { recursive: true });
+
+      // Flat canonical file
+      writeFileSync(join(v, "raw", "articles", "export-obsidian-foo.md"), `---
+type: raw
+sha256: ${"a".repeat(64)}
+ingested: "2026-05-19"
+---
+
+Article body content for foo.
+`);
+
+      // Subdirectory file with same stem (different content — subdirectory detection is stem-based)
+      writeFileSync(join(v, "raw", "articles", "obsidian-migration", "export-obsidian-foo.md"), `---
+type: raw
+sha256: ${"b".repeat(64)}
+ingested: "2026-05-19"
+---
+
+Different content, same filename stem.
+`);
+
+      writeFileSync(join(v, "concepts", "test.md"), FM(["model"]) + "## TL;DR\n\n- Test.\n\n## Overview\n\nBody.\n");
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[test]]\n");
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      expect(r.exitCode).toBe(22);
+      if (r.result.ok) {
+        const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+        expect(warningKinds).toContain("raw_subdirectory_duplicate");
+      }
+    });
+
+    it("warns on body duplicates with different frontmatter SHA256", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+
+      writeFileSync(join(v, "raw", "articles", "a.md"), `---
+type: raw
+sha256: ${"a".repeat(64)}
+ingested: "2026-05-19"
+---
+
+same body content here
+`);
+      writeFileSync(join(v, "raw", "articles", "b.md"), `---
+type: raw
+sha256: ${"b".repeat(64)}
+ingested: "2026-05-19"
+---
+
+same body content here
+`);
+
+      writeFileSync(join(v, "concepts", "test.md"), FM(["model"]) + "## TL;DR\n\n- Test.\n\n## Overview\n\nBody.\n");
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[test]]\n");
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      expect(r.exitCode).toBe(22);
+      if (r.result.ok) {
+        const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+        expect(warningKinds).toContain("raw_body_duplicate");
+      }
+    });
   });
 });
