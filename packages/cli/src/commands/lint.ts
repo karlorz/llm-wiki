@@ -357,7 +357,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     const approachingThreshold = 7; // days before expiry to flag as approaching
     for (const page of scan.data.typedKnowledge) {
       try {
-        const text = await readFile(join(input.vault, page.relPath), "utf8");
+        const text = await readPage(page);
         const annotations = parseExpiryAnnotations(text, page.relPath);
         for (const ann of annotations) {
           if (ann.expires < today) {

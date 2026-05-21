@@ -14,7 +14,7 @@ export interface StaleSection {
   heading: string;
   line: number;
   expires: string;
-  refresh?: string;
+  refresh?: "weekly" | "monthly" | "quarterly";
   source?: string;
   reason: string;
 }
@@ -251,7 +251,6 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
 
   // 3b. Stale sections: typed-knowledge pages with expired <!-- expires: YYYY-MM-DD --> annotations
   const staleSections: StaleSection[] = [];
-  const today = new Date().toISOString().slice(0, 10);
   for (const page of scan.data.typedKnowledge) {
     try {
       const text = await readFile(join(input.vault, page.relPath), "utf8");
@@ -260,13 +259,13 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
         const fm = extractFrontmatter(text);
         if (fm.ok) {
           const pp = fm.data.provenance_projects;
-          const linked = Array.isArray(pp) && pp.some((p: string) => String(p).includes(input.project!));
+          const linked = Array.isArray(pp) && pp.some((p: string) => String(p).includes(input.project));
           if (!linked) continue;
         }
       }
       const annotations = parseExpiryAnnotations(text, page.relPath);
       for (const ann of annotations) {
-        if (ann.expires < today) {
+        if (daysSince(ann.expires) >= 0) {
           staleSections.push({
             page: ann.page,
             heading: ann.heading,
@@ -282,8 +281,9 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   }
 
   // 4. Archive if requested
+  const today = new Date().toISOString().slice(0, 10);
   if (input.archive) {
-    const archiveDir = join(input.vault, "_archive", new Date().toISOString().slice(0, 10));
+    const archiveDir = join(input.vault, "_archive", today);
     await mkdir(archiveDir, { recursive: true });
     // Build set of raw paths cited as sources by typed-knowledge pages (protect from archival)
     const citedRawPaths = new Set<string>();
