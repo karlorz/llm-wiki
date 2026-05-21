@@ -39,7 +39,7 @@ function vault(): string {
 describe("runLint", () => {
   it("clean fixture exits 0", async () => {
     const v = vault();
-    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "## TL;DR\n\n- Summary.\n\n## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");
+    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "> **TL;DR:** Summary about alpha.\n\n## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");
     writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
     const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
     expect(r.exitCode).toBe(0);
@@ -682,7 +682,32 @@ updated: 2026-05-03
     }
   });
 
-  it("does not flag missing_tldr for pages with ## TL;DR", async () => {
+  it("does not flag missing_tldr for pages with blockquote TL;DR", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
+    const fm = `---
+title: t
+type: concept
+tags: [model]
+sources:
+  - "^[raw/articles/x.md]"
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+`;
+    writeFileSync(join(v, "concepts", "has-tldr.md"), fm + "> **TL;DR:** Summary here.\n\n## Overview\n\nContent.\n\n## Sources\n\n- ^[raw/articles/x.md]\n\n## Related\n\n- [[x]]\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[has-tldr]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+      expect(infoKinds).not.toContain("missing_tldr");
+    }
+  });
+
+  it("does not flag missing_tldr for pages with ## TL;DR heading", async () => {
     const v = vault();
     mkdirSync(join(v, "raw", "articles"), { recursive: true });
     writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
@@ -735,9 +760,9 @@ updated: 2026-05-03
       const infoKinds = r2.result.data.by_severity.info.map(b => b.kind);
       expect(infoKinds).not.toContain("missing_tldr");
     }
-    // File should have ## TL;DR after frontmatter
+    // File should have > **TL;DR:** stub after the title heading
     const content = require("fs").readFileSync(join(v, "concepts", "no-tldr.md"), "utf8");
-    expect(content).toContain("## TL;DR\n\n- Pending summary.");
+    expect(content).toContain("> **TL;DR:** ");
   });
 
   it("flags missing_diagram for architecture-tagged pages without mermaid", async () => {

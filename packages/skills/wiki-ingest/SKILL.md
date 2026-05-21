@@ -21,7 +21,7 @@ Run `skillwiki lang` at the start. Generate page-body prose, narrative sections,
 2. **Fetch.** Use `web_fetch` (or read local file) under Layer 2 controls (the CLI Layer 2 fetcher applies in tests; in skill runtime use `web_fetch` directly and treat any error as STOP).
 3. **Hash.** Write the raw file (frontmatter + body). Run `skillwiki hash <raw-file>` and embed the result in raw frontmatter `sha256:`.
 4. **Generate page(s).** Compose typed-knowledge page(s) with citations pre-attached (`^[raw/...]` markers). Every page MUST include:
-- `## TL;DR` as the first section after frontmatter — a 1–3 bullet summary of the page's key takeaway.
+- `> **TL;DR:**` blockquote as the first content after the title heading — a one-sentence summary of the page's key takeaway (under 200 chars). See SCHEMA.md `## TL;DR Convention`.
 - For pages tagged `architecture` or explaining workflows/systems: include a Mermaid diagram (`graph TB` or `sequenceDiagram`) in the body. Follow Obsidian-compatible Mermaid rules (see SCHEMA.md `## Mermaid Diagrams`).
 5. **Validate.** For each generated page: run `skillwiki validate <page>`. If exit ≠ 0, STOP — do not write index/log.
 6. **Apply writes in order.** raw → page(s) → `index.md` → `log.md`.

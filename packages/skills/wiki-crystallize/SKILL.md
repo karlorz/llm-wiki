@@ -16,7 +16,7 @@ Standard four reads. If cwd is inside `projects/{slug}/`, also read project READ
 1. Identify type: entity / concept / comparison / query / summary.
 2. Set `provenance:`. Default `research`. If in project context: `project` with `provenance_projects: ["[[slug]]"]`.
 3. Compose the page with citations pre-attached. Reuse existing `raw/` sources where possible. Every page MUST include:
-- `## TL;DR` as the first section after frontmatter — a 1–3 bullet summary of the page's key takeaway.
+- `> **TL;DR:**` blockquote as the first content after the title heading — a one-sentence summary of the page's key takeaway (under 200 chars). See SCHEMA.md `## TL;DR Convention`.
 - For pages tagged `architecture` or explaining workflows/systems: include a Mermaid diagram (`graph TB` or `sequenceDiagram`) in the body. Follow Obsidian-compatible Mermaid rules (see SCHEMA.md `## Mermaid Diagrams`).
 4. `skillwiki validate <page>`. If non-zero, STOP.
 5. Apply writes: page → `index.md` → `log.md`.

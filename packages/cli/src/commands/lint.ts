@@ -238,9 +238,9 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       const bodyLines = body.split("\n").filter(l => l.trim().length > 0).length;
       const hasOverview = /^## Overview/m.test(body);
       if (!hasOverview) noOverview.push(page.relPath);
-      // TL;DR check: look for ## TL;DR in first 15 lines of body
+      // TL;DR check: look for > **TL;DR:** or ## TL;DR in first 15 lines of body
       const bodyFirst15 = body.split("\n").slice(0, 15).join("\n");
-      if (!/^##\s+TL;\s*DR/m.test(bodyFirst15)) missingTldrFlags.push(page.relPath);
+      if (!/^>\s*\*\*TL;DR:?\*\*/m.test(bodyFirst15) && !/^##\s+TL;\s*DR/m.test(bodyFirst15)) missingTldrFlags.push(page.relPath);
       // Diagram check: architecture-tagged pages should have a mermaid block
       const fmData = extractFrontmatter(text);
       const pageTags: string[] = fmData.ok && Array.isArray(fmData.data.tags) ? fmData.data.tags : [];
@@ -487,7 +487,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       else delete buckets.missing_overview;
     }
 
-    // --fix: auto-fix missing_tldr by inserting ## TL;DR stub after frontmatter
+    // --fix: auto-fix missing_tldr by inserting > **TL;DR:** stub after title heading
     if (input.fix && missingTldrFlags.length > 0) {
       for (const relPath of missingTldrFlags) {
         try {
@@ -498,9 +498,27 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
           const body = split.data.body;
           const rawFm = split.data.rawFrontmatter;
 
-          // Insert ## TL;DR after frontmatter, before existing body
-          const trimmedBody = body.replace(/^\n+/, "");
-          const newContent = `---\n${rawFm}\n---\n\n## TL;DR\n\n- Pending summary.\n\n${trimmedBody}`;
+          // Insert > **TL;DR:** stub after the first # heading (or after frontmatter if no heading)
+          const lines = body.split("\n");
+          let insertIndex = 0;
+          for (let i = 0; i < lines.length; i++) {
+            if (/^# /.test(lines[i])) {
+              insertIndex = i + 1;
+              // Skip blank lines after heading
+              while (insertIndex < lines.length && lines[insertIndex].trim() === "") {
+                insertIndex++;
+              }
+              break;
+            }
+          }
+          // If no heading found, insert at start of body
+          if (insertIndex === 0) {
+            lines.splice(0, 0, "", "> **TL;DR:** ");
+          } else {
+            lines.splice(insertIndex, 0, "> **TL;DR:** ");
+          }
+          const trimmedFm = rawFm.endsWith("\n") ? rawFm : rawFm + "\n";
+          const newContent = `---\n${trimmedFm}---\n${lines.join("\n")}`;
           await writeFile(absPath, newContent, "utf8");
           fixed.push(relPath);
         } catch {
