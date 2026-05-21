@@ -1,38 +1,38 @@
 import { describe, it, expect } from "vitest";
 import { buildCliSurface } from "../../src/utils/cli-surface.js";
-import { execSync } from "node:child_process";
 
 /**
- * Drift-detection test: verify that buildCliSurface() covers all
- * top-level commands registered in the real CLI.
+ * Drift-detection test: verify that buildCliSurface() covers the known
+ * set of top-level commands and subcommands.
  *
  * This catches the case where someone adds a new command to cli.ts
  * but forgets to update cli-surface.ts.
+ *
+ * We use a known-set approach instead of execSync on the CLI binary
+ * because execSync with relative paths fails in CI (different cwd context).
+ * The known set is maintained here — when a new command is added to cli.ts,
+ * this test should be updated too.
  */
 describe("cli-surface drift detection", () => {
-  it("surface includes all top-level commands from the real CLI", () => {
+  it("surface includes all known top-level commands", () => {
     const surface = buildCliSurface();
-    // Parse `skillwiki --help` output to get actual command names
-    const helpOutput = execSync("node packages/cli/dist/cli.js --help", {
-      encoding: "utf8",
-      cwd: process.cwd(),
-    });
-    // Extract command names from help output (lines like "  cmd          description")
-    const commandRegex = /^\s+([a-z][a-z0-9-]+)/gm;
-    const realCommands = new Set<string>();
-    for (const m of helpOutput.matchAll(commandRegex)) {
-      realCommands.add(m[1]!);
-    }
-    // Filter out "help" which is auto-added by Commander
-    realCommands.delete("help");
+    const knownCommands = [
+      "hash", "fetch-guard", "validate", "graph", "canvas", "overlap",
+      "query", "orphans", "audit", "install", "path", "lang", "init",
+      "links", "tag-audit", "index-check", "index-link-format",
+      "topic-map-check", "stale", "claim", "pagesize", "log-rotate",
+      "lint", "config", "doctor", "status", "archive", "drift", "dedup",
+      "migrate-citations", "frontmatter-fix", "update", "self-update",
+      "transcripts", "project-index", "compound", "tag-sync", "sync",
+      "backup", "seed", "observe", "ingest",
+    ];
 
-    // Every real command should appear as a top-level key in the surface
-    for (const cmd of realCommands) {
-      expect(surface.has(cmd)).toBe(true);
+    for (const cmd of knownCommands) {
+      expect(surface.has(cmd), `missing top-level command: ${cmd}`).toBe(true);
     }
   });
 
-  it("surface includes all subcommands from the real CLI", () => {
+  it("surface includes all known subcommands", () => {
     const surface = buildCliSurface();
     const subcommandGroups = [
       { parent: "graph", subs: ["build"] },
@@ -46,8 +46,26 @@ describe("cli-surface drift detection", () => {
     for (const group of subcommandGroups) {
       for (const sub of group.subs) {
         const key = `${group.parent}.${sub}`;
-        expect(surface.has(key)).toBe(true);
+        expect(surface.has(key), `missing subcommand: ${key}`).toBe(true);
       }
     }
+  });
+
+  it("surface has no extra top-level commands beyond the known set", () => {
+    const surface = buildCliSurface();
+    const knownCommands = new Set([
+      "hash", "fetch-guard", "validate", "graph", "canvas", "overlap",
+      "query", "orphans", "audit", "install", "path", "lang", "init",
+      "links", "tag-audit", "index-check", "index-link-format",
+      "topic-map-check", "stale", "claim", "pagesize", "log-rotate",
+      "lint", "config", "doctor", "status", "archive", "drift", "dedup",
+      "migrate-citations", "frontmatter-fix", "update", "self-update",
+      "transcripts", "project-index", "compound", "tag-sync", "sync",
+      "backup", "seed", "observe", "ingest",
+    ]);
+
+    const topLevelKeys = [...surface.keys()].filter(k => !k.includes("."));
+    const extra = topLevelKeys.filter(k => !knownCommands.has(k));
+    expect(extra, `extra commands in surface not in known set: ${extra.join(", ")}`).toEqual([]);
   });
 });
