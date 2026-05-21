@@ -5,7 +5,6 @@
   "files": [
     "wiki-*",
     "proj-*",
-    "dev-loop-research",
     "using-skillwiki",
     ".claude-plugin",
     ".codex-plugin",

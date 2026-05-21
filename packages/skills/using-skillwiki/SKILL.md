@@ -71,7 +71,7 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 | `wiki-canvas` | Generate Obsidian Canvas visualization from vault graph data |
 | `proj-decide` | Write an Architectural Decision Record (ADR) |
 | `wiki-gate-plan-mode` | Toggle EnterPlanMode gating — force superpowers planning instead of built-in plan mode |
-| `dev-loop-research` | Standalone research agent — scans repo + vault health, outputs prioritized work-item recommendations |
+| `dev-loop:research` | Research agent for dev-loop IDLE — scans repo + vault health, outputs prioritized work-item recommendations (formerly `/dev-loop-research`) |
 ## CLI Backbone
 All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, and linting. Skills invoke it via Bash for the mechanical parts and use Claude for the creative parts.
 Key CLI subcommands: `init`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `graph build`, `archive`, `drift`, `compound`, `tag-sync`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
