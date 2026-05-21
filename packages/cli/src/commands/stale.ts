@@ -240,8 +240,10 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
           if (!linked) continue;
         }
         const age = daysSince(fm.data.updated);
-        if (age >= input.days) {
-          stale.push({ page: page.relPath, reason: `updated ${age} days ago (threshold: ${input.days})` });
+        // Use stale_ttl from frontmatter if present, otherwise global --days
+        const threshold = (typeof fm.data.stale_ttl === "number" && fm.data.stale_ttl > 0) ? fm.data.stale_ttl : input.days;
+        if (age >= threshold) {
+          stale.push({ page: page.relPath, reason: `updated ${age} days ago (threshold: ${threshold})` });
         }
       }
     } catch { /* skip unreadable pages */ }

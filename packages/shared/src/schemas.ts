@@ -21,7 +21,8 @@ export const TypedKnowledgeSchema = z.object({
   contradictions: z.array(z.string()).optional(),
   provenance: z.enum(["research", "project", "mixed"]).optional(),
   provenance_projects: z.array(wikilink).optional(),
-  work_items: z.array(wikilink).optional()
+  work_items: z.array(wikilink).optional(),
+  stale_ttl: z.number().int().positive().optional()
 }).superRefine((v, ctx) => {
   if (v.provenance && v.provenance !== "research" && (!v.provenance_projects || v.provenance_projects.length === 0)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["provenance_projects"], message: "required when provenance != research" });

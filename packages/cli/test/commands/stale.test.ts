@@ -543,5 +543,23 @@ Other project task.`);
         expect(r.result.data.humanHint).toContain("stale_sections:");
       }
     });
+
+    it("respects stale_ttl frontmatter over global days threshold", async () => {
+      const v = makeVault();
+      mkdirSync(join(v, "concepts"), { recursive: true });
+      const recentDate = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+      writeFileSync(
+        join(v, "concepts", "short-ttl.md"),
+        `---\ntitle: Short TTL\ncreated: ${recentDate}\nupdated: ${recentDate}\ntype: concept\ntags: []\nsources: []\nstale_ttl: 1\n---\n\nContent\n`
+      );
+      // With default --days 3, this page (2 days old) is NOT stale
+      // But stale_ttl: 1 makes it stale
+      const r = await runStale({ vault: v, days: 3 });
+      if (r.result.ok) {
+        const shortTtl = r.result.data.stale.find((s: any) => s.page.includes("short-ttl"));
+        expect(shortTtl).toBeDefined();
+        expect(shortTtl!.reason).toContain("threshold: 1");
+      }
+    });
   });
 });
