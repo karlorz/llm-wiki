@@ -133,14 +133,12 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 ## Current counts (2026-05-21)
 
 - 18 SKILL.md files in `packages/skills/`
-- 42 source files in `packages/cli/src/commands/` + 1 utility in `src/utils/cli-surface.ts`
-- 70 test files in cli (42 commands, 19 utils, 4 parsers, 2 integration, 1 skills, 1 smoke) + 10 shared
+- 43 command files in `packages/cli/src/commands/`, 19 utilities in `src/utils/`
+- 72 test files in cli (46 commands, 18 utils, 4 parsers, 2 integration, 1 skills, 1 smoke) + 10 shared
 - 880 tests passing
 - Lint buckets: 0 error, 0 warning, 8 info (incl. `bridges`, `orphaned_citations`, `missing_tldr`, `missing_diagram`, `cli_refs`)
 - SKILL.md frontmatter: `name`, `version`, `description` (required); `deprecated` (optional)
 - Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`
-- New exit codes: `BACKUP_SYNC_FAILED (44)`, `BACKUP_RESTORE_CONFLICTS (45)`
-- New config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`
-- `AUTO_COMMIT` defaults to enabled; set `AUTO_COMMIT=false` to disable (was opt-in, now opt-out)
-- `doctor` checks: 17 checks (was 15); new: `cli_channels` (replaces `cli_on_path`), `skills_duplicate`, `s3_mount_perf`
-- `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code; used by `dsstore_clean` and `skills_duplicate` (agent-dir-only duplicates)
+- Exit codes: 48 total; highest: `BACKUP_RESTORE_CONFLICTS (45)`
+- Config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`; `AUTO_COMMIT` (default: enabled, opt-out)
+- `doctor` checks: 17; `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code
