@@ -786,9 +786,9 @@ updated: 2026-05-03
     const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
     expect(r.exitCode).toBe(22);
     if (r.result.ok) {
-      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
-      expect(infoKinds).toContain("missing_diagram");
-      const bucket = r.result.data.by_severity.info.find(b => b.kind === "missing_diagram");
+      const warnKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warnKinds).toContain("missing_diagram");
+      const bucket = r.result.data.by_severity.warning.find(b => b.kind === "missing_diagram");
       expect(bucket!.items).toContain("concepts/arch.md");
     }
   });
@@ -814,8 +814,8 @@ updated: 2026-05-03
     writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[arch]]\n");
     const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
     if (r.result.ok) {
-      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
-      expect(infoKinds).not.toContain("missing_diagram");
+      const warnKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warnKinds).not.toContain("missing_diagram");
     }
   });
 
@@ -839,8 +839,8 @@ updated: 2026-05-03
     writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[concept]]\n");
     const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
     if (r.result.ok) {
-      const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
-      expect(infoKinds).not.toContain("missing_diagram");
+      const warnKinds = r.result.data.by_severity.warning.map(b => b.kind);
+      expect(warnKinds).not.toContain("missing_diagram");
     }
   });
 
