@@ -143,6 +143,20 @@ describe("hasOrphanedCitations", () => {
     const body = "Some claim. ^[raw/articles/x.md]\n\nMore text.\n\n## Sources\n\n1. [example.com](https://example.com) — description\n2. [other.com](https://other.com) — description\n\n## Related\n\n- [[concepts/foo]]\n";
     expect(hasOrphanedCitations(body)).toBe(false);
   });
+  it("accepts numbered list items in Sources section", () => {
+    // Regression: numbered lists (1. 2. etc.) were not recognized as valid
+    const body = "Body cites X. ^[raw/x.md]\n\n## Sources\n1. ^[raw/x.md]\n2. ^[raw/y.md]\n";
+    expect(hasOrphanedCitations(body)).toBe(false);
+  });
+  it("accepts backtick-wrapped raw paths in Sources list items", () => {
+    // Regression: backtick paths like `raw/articles/foo.md` were not recognized
+    const body = "Body cites X. ^[raw/x.md]\n\n## Sources\n- `raw/articles/foo.md`\n- ^[raw/y.md]\n";
+    expect(hasOrphanedCitations(body)).toBe(false);
+  });
+  it("still flags orphaned markers with numbered list support", () => {
+    const body = "Body cites X. ^[raw/x.md]\n\n## Sources\n1. ^[raw/x.md]\n\n^[raw/y.md]\n";
+    expect(hasOrphanedCitations(body)).toBe(true);
+  });
 });
 
 describe("hasWikilinkCitations", () => {

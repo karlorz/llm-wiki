@@ -79,8 +79,10 @@ export function isLegacyCitationStyle(body: string): boolean {
  * Markers appearing after this section are considered orphaned.
  */
 export function hasOrphanedCitations(body: string): boolean {
-  const stripped = stripFences(body.replace(FRONTMATTER, ""));
+  const noFm = body.replace(FRONTMATTER, "");
+  const stripped = stripFences(noFm);
   const lines = stripped.split("\n");
+  const rawLines = noFm.split("\n");
 
   let inSources = false;
   let sourcesEnded = false;
@@ -109,11 +111,17 @@ export function hasOrphanedCitations(body: string): boolean {
     }
 
     // Check if this is valid Sources content (list item with citation)
-    const isListItem = /^\s*[-*]\s+/.test(line);
+    const isListItem = /^\s*(?:[-*]|\d+\.)\s+/.test(line);
     const hasMarker = /\^\[raw\//.test(line);
+    // Check raw (unstripped) line for backtick-wrapped raw paths —
+    // stripFences removes inline code so we must use rawLines[i] here
+    const hasBacktickRawPath = /`raw\/[^`]+`/.test(rawLines[i]);
 
     if (isListItem && hasMarker) {
       // Valid list item in Sources section
+      lastNonBlankInSources = i;
+    } else if (isListItem && hasBacktickRawPath) {
+      // Backtick-wrapped raw path in a list item — treat as valid citation
       lastNonBlankInSources = i;
     } else if (hasMarker && !isListItem) {
       // Citation marker that is NOT a list item - this ends Sources section
