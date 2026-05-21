@@ -140,6 +140,6 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 - Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`, `missing_tldr`
 - Lint --only supports: any valid bucket name (e.g., `lint --only cli_refs`)
 - Stale --project supports: scope to a single project (e.g., `stale --project llm-wiki`)
-- Exit codes: 48 total; highest: `BACKUP_RESTORE_CONFLICTS (45)`
+- Exit codes: 48 total; highest: `USAGE (46)`
 - Config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`; `AUTO_COMMIT` (default: enabled, opt-out)
 - `doctor` checks: 17; `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code

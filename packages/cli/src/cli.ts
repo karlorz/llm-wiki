@@ -604,7 +604,7 @@ backupCmd
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
-    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    if (!v.ok) { emit({ exitCode: v.exitCode, result: v.payload }); return; }
     const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
     const dotenv = await parseDotenvFile(configPath(home));
     emit(await runBackupSync({
@@ -629,7 +629,7 @@ backupCmd
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
-    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    if (!v.ok) { emit({ exitCode: v.exitCode, result: v.payload }); return; }
     const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
     const dotenv = await parseDotenvFile(configPath(home));
     emit(await runBackupRestore({

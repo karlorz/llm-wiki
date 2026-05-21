@@ -1,4 +1,4 @@
-import { ok, ExitCode, type Result } from "@skillwiki/shared";
+import { ok, ExitCode, type ExitCodeValue, type Result } from "@skillwiki/shared";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -288,7 +288,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
         const text = await readPage(specPage);
         const fm = extractFrontmatter(text);
         if (fm.ok) {
-          specStatus = fm.data.status;
+          specStatus = typeof fm.data.status === "string" ? fm.data.status : undefined;
           specStarted = fm.data.started;
         }
       }
@@ -647,7 +647,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       warnings: filtered.warning.reduce((n, b) => n + b.items.length, 0),
       info: filtered.info.reduce((n, b) => n + b.items.length, 0)
     };
-    let fExit = ExitCode.OK;
+    let fExit: ExitCodeValue = ExitCode.OK;
     if (fSummary.errors > 0) fExit = ExitCode.LINT_HAS_ERRORS;
     else if (fSummary.warnings > 0 || fSummary.info > 0) fExit = ExitCode.LINT_HAS_WARNINGS;
     return {
