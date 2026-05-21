@@ -136,7 +136,7 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 - 43 command files in `packages/cli/src/commands/`, 19 utilities in `src/utils/`
 - 73 test files in cli (46 commands, 18 utils, 5 parsers, 2 integration, 1 skills, 1 smoke) + 10 shared
 - 908 tests passing
-- Lint buckets: 0 error, 0 warning, 9 info (incl. `bridges`, `orphaned_citations`, `missing_tldr`, `missing_diagram`, `stale_sections`, `cli_refs`)
+- Lint buckets: 0 error, 0 warning (clean vault), 8 info (incl. `bridges`, `orphaned_citations`, `missing_tldr`, `stale_sections`, `cli_refs`); `missing_diagram` is warning severity for architecture-tagged pages
 - Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`, `missing_tldr`
 - Lint --only supports: any valid bucket name (e.g., `lint --only cli_refs`)
 - Stale --project supports: scope to a single project (e.g., `stale --project llm-wiki`)
