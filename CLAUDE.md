@@ -135,10 +135,11 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 - 18 SKILL.md files in `packages/skills/`
 - 43 command files in `packages/cli/src/commands/`, 19 utilities in `src/utils/`
 - 72 test files in cli (46 commands, 18 utils, 4 parsers, 2 integration, 1 skills, 1 smoke) + 10 shared
-- 882 tests passing
+- 887 tests passing
 - Lint buckets: 0 error, 0 warning, 8 info (incl. `bridges`, `orphaned_citations`, `missing_tldr`, `missing_diagram`, `cli_refs`)
-- SKILL.md frontmatter: `name`, `version`, `description` (required); `deprecated` (optional)
-- Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`
+- Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`, `missing_tldr`
+- Lint --only supports: any valid bucket name (e.g., `lint --only cli_refs`)
+- Stale --project supports: scope to a single project (e.g., `stale --project llm-wiki`)
 - Exit codes: 48 total; highest: `BACKUP_RESTORE_CONFLICTS (45)`
 - Config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`; `AUTO_COMMIT` (default: enabled, opt-out)
 - `doctor` checks: 17; `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code

@@ -47,6 +47,7 @@ export interface LintInput {
   lines: number;
   logThreshold: number;
   fix?: boolean;
+  only?: string;
 }
 
 /** Extract source entry strings from frontmatter, handling both inline and multi-line YAML formats. */
@@ -625,6 +626,42 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   const errorOut: Bucket[] = ERROR_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);
   const warningOut: Bucket[] = WARNING_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);
   const infoOut: Bucket[] = INFO_ORDER.flatMap(k => buckets[k] ? [{ kind: k, items: buckets[k]! }] : []);
+
+  // --only: filter to a single bucket
+  if (input.only) {
+    const allKnown = [...ERROR_ORDER, ...WARNING_ORDER, ...INFO_ORDER];
+    if (!allKnown.includes(input.only as typeof allKnown[number])) {
+      return {
+        exitCode: ExitCode.USAGE,
+        result: { ok: false, error: "UNKNOWN_BUCKET", detail: `Unknown bucket "${input.only}". Valid: ${allKnown.join(", ")}` }
+      };
+    }
+    const match = [...errorOut, ...warningOut, ...infoOut].filter(b => b.kind === input.only);
+    const severity = (ERROR_ORDER as readonly string[]).includes(input.only) ? "error"
+      : (WARNING_ORDER as readonly string[]).includes(input.only) ? "warning" : "info";
+    const filtered = severity === "error" ? { error: match, warning: [], info: [] }
+      : severity === "warning" ? { error: [], warning: match, info: [] }
+      : { error: [], warning: [], info: match };
+    const fSummary = {
+      errors: filtered.error.reduce((n, b) => n + b.items.length, 0),
+      warnings: filtered.warning.reduce((n, b) => n + b.items.length, 0),
+      info: filtered.info.reduce((n, b) => n + b.items.length, 0)
+    };
+    let fExit = ExitCode.OK;
+    if (fSummary.errors > 0) fExit = ExitCode.LINT_HAS_ERRORS;
+    else if (fSummary.warnings > 0 || fSummary.info > 0) fExit = ExitCode.LINT_HAS_WARNINGS;
+    return {
+      exitCode: fExit,
+      result: ok({
+        vault: { path: input.vault, source: input.source ?? "resolved" },
+        summary: fSummary,
+        by_severity: filtered,
+        fixed,
+        unresolved,
+        humanHint: `--only ${input.only}\n${match.length === 0 ? "0 violations" : match.map(b => `  ${b.kind}: ${b.items.length}`).join("\n")}`
+      })
+    };
+  }
 
   const summary = {
     errors: errorOut.reduce((n, b) => n + b.items.length, 0),

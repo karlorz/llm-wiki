@@ -287,11 +287,12 @@ program
   .option("--archive", "move stale items to _archive/", false)
   .option("--days <n>", "staleness threshold in days", (s) => parseInt(s, 10), 3)
   .option("--force-scan", "infer kind/project from filename and content when frontmatter is missing", false)
+  .option("--project <slug>", "scope to a single project")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runStale({ vault: v.vault, days: opts.days, archive: !!opts.archive, forceScan: !!opts.forceScan }), v.vault);
+    else emit(await runStale({ vault: v.vault, days: opts.days, archive: !!opts.archive, forceScan: !!opts.forceScan, project: opts.project }), v.vault);
   });
 
 program
@@ -336,6 +337,7 @@ program
   .option("--lines <n>", "pagesize threshold", (s) => parseInt(s, 10), 200)
   .option("--log-threshold <n>", "log rotation threshold", (s) => parseInt(s, 10), 500)
   .option("--fix", "auto-fix legacy_citation_style violations")
+  .option("--only <bucket>", "run only the specified lint bucket")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -346,7 +348,8 @@ program
       days: opts.days,
       lines: opts.lines,
       logThreshold: opts.logThreshold,
-      fix: opts.fix ?? false
+      fix: opts.fix ?? false,
+      only: opts.only
     }), v.vault);
   });
 

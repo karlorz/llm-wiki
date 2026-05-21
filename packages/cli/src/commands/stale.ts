@@ -5,7 +5,7 @@ import { scanVault } from "../utils/vault.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
 
-export interface StaleInput { vault: string; days: number; archive?: boolean; forceScan?: boolean }
+export interface StaleInput { vault: string; days: number; archive?: boolean; forceScan?: boolean; project?: string }
 export interface StaleTranscript { path: string; reason: string; hint?: string }
 export interface IncompleteWorkItem { path: string; reason: string }
 export interface StaleOutput {
@@ -36,6 +36,14 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   const projectsDir = join(input.vault, "projects");
   let projectSlugs: string[] = [];
   try { projectSlugs = (await readdir(projectsDir, { withFileTypes: true })).filter(d => d.isDirectory()).map(d => d.name); } catch { /* no projects */ }
+
+  // --project: scope to a single project
+  if (input.project) {
+    if (!projectSlugs.includes(input.project)) {
+      return { exitCode: ExitCode.USAGE, result: { ok: false, error: "UNKNOWN_PROJECT", detail: `Project "${input.project}" not found. Available: ${projectSlugs.join(", ") || "(none)"}` } };
+    }
+    projectSlugs = [input.project];
+  }
 
   for (const slug of projectSlugs) {
     const workPath = join(projectsDir, slug, "work");
@@ -72,7 +80,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   const LOOP_CYCLE_PATTERN = /loop-cycle-/;
 
   // 1. Stale transcripts: raw/transcripts/*.md where matching work item is done/invalid
-  const transcripts = scan.data.raw.filter(p => p.relPath.startsWith("raw/transcripts/") && p.relPath.endsWith(".md"));
+  let transcripts = scan.data.raw.filter(p => p.relPath.startsWith("raw/transcripts/") && p.relPath.endsWith(".md"));
   const claimedPaths = new Set<string>();
 
   // Pre-parse transcript frontmatter for project/kind fields
@@ -83,6 +91,9 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
       const fm = extractFrontmatter(content);
       let kind = fm.ok && typeof fm.data.kind === "string" ? fm.data.kind : "";
       let project = fm.ok && typeof fm.data.project === "string" ? fm.data.project : "";
+
+      // --project: skip transcripts not linked to this project
+      if (input.project && !project.includes(input.project)) continue;
       let inferred = false;
 
       // Force-scan: infer kind from filename if missing (skip loop-cycle session logs)
@@ -209,6 +220,12 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
       const text = await readFile(join(input.vault, page.relPath), "utf8");
       const fm = extractFrontmatter(text);
       if (fm.ok && typeof fm.data.updated === "string") {
+        // --project: only include pages linked to this project
+        if (input.project) {
+          const pp = fm.data.provenance_projects;
+          const linked = Array.isArray(pp) && pp.some((p: string) => String(p).includes(input.project!));
+          if (!linked) continue;
+        }
         const age = daysSince(fm.data.updated);
         if (age >= input.days) {
           stale.push({ page: page.relPath, reason: `updated ${age} days ago (threshold: ${input.days})` });

@@ -1126,4 +1126,43 @@ same body content here
       }
     });
   });
+
+  describe("--only", () => {
+    it("filters to a single bucket", async () => {
+      const v = vault();
+      writeFileSync(join(v, "concepts", "test.md"), FM(["model"]) + "# Test\n\n> **TL;DR:** test\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "bridges" });
+      expect(r.result.ok).toBe(true);
+      if (r.result.ok) {
+        const allKinds = [
+          ...r.result.data.by_severity.error,
+          ...r.result.data.by_severity.warning,
+          ...r.result.data.by_severity.info,
+        ].map(b => b.kind);
+        // Only "bridges" should appear (if it has items), no other buckets
+        for (const k of allKinds) {
+          expect(k).toBe("bridges");
+        }
+      }
+    });
+
+    it("returns UNKNOWN_BUCKET for invalid bucket name", async () => {
+      const v = vault();
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "nonexistent" });
+      expect(r.result.ok).toBe(false);
+      if (!r.result.ok) {
+        expect(r.result.error).toBe("UNKNOWN_BUCKET");
+      }
+    });
+
+    it("returns empty results for bucket with no violations", async () => {
+      const v = vault();
+      writeFileSync(join(v, "concepts", "test.md"), FM(["model"]) + "# Test\n\n> **TL;DR:** test\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "cli_refs" });
+      expect(r.result.ok).toBe(true);
+      if (r.result.ok) {
+        expect(r.result.data.summary.info).toBe(0);
+      }
+    });
+  });
 });

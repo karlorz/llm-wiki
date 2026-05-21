@@ -427,4 +427,43 @@ Fix the foo thing.`);
       expect(r.result.data.humanHint).toContain("hint: skillwiki claim");
     }
   });
+
+  describe("--project", () => {
+    it("scopes results to a single project", async () => {
+      const v = makeVault();
+      // Create a second project with an unclaimed transcript
+      mkdirSync(join(v, "projects", "other"), { recursive: true });
+      mkdirSync(join(v, "projects", "other", "work"), { recursive: true });
+      writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-other-project.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+project: "[[other]]"
+---
+
+Other project task.`);
+
+      const rAll = await runStale({ vault: v, days: 0 });
+      const rScoped = await runStale({ vault: v, days: 0, project: "acme" });
+      if (rAll.result.ok && rScoped.result.ok) {
+        // Scoped should have fewer or equal unclaimed transcripts than unscoped
+        expect(rScoped.result.data.unclaimed_transcripts.length).toBeLessThanOrEqual(rAll.result.data.unclaimed_transcripts.length);
+        // Scoped should not include "other" project transcripts
+        const scopedPaths = rScoped.result.data.unclaimed_transcripts.map(t => t.path);
+        for (const p of scopedPaths) {
+          expect(p).not.toContain("other-project");
+        }
+      }
+    });
+
+    it("returns UNKNOWN_PROJECT for invalid slug", async () => {
+      const v = makeVault();
+      // acme project exists from makeVault()
+      const r = await runStale({ vault: v, days: 0, project: "nonexistent" });
+      expect(r.result.ok).toBe(false);
+      if (!r.result.ok) {
+        expect(r.result.error).toBe("UNKNOWN_PROJECT");
+      }
+    });
+  });
 });
