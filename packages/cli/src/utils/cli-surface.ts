@@ -117,7 +117,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
  * Matches: `skillwiki <cmd> [--<flag> ...]`
  * Does NOT match prose like "skillwiki also provides" (no backticks).
  */
-const CLI_REF_RE = /`skillwiki\s+([a-z][a-z0-9-]*(?:\s+[a-z][a-z0-9-]*)?)(\s+--[a-z][a-z0-9-]*)*`/g;
+const CLI_REF_RE = /`skillwiki\s+([a-z][a-z0-9-]*(?:\s+[a-z][a-z0-9-]*)?)((?:\s+--[a-z][a-z0-9-]*(?:\s+(?!--)\S+)?)*)`/g;
 
 /**
  * Validate CLI references in a vault page's text content.
@@ -152,6 +152,19 @@ export function validateCliRefs(text: string, page: string, surface: Map<string,
     }
 
     if (!resolvedKey) {
+      // When the user wrote a two-word ref like `skillwiki sync deploy`
+      // and "sync.deploy" is not a known subcommand, check whether the parent
+      // "sync" is itself a parent command (has subcommands).  If it does, the
+      // second word was intended as a subcommand that does not exist — flag it.
+      if (words.length >= 2) {
+        const oneWordKey = words[0]!;
+        const parentHasSubcommands = [...allKeys].some(k => k.startsWith(oneWordKey + "."));
+        if (parentHasSubcommands) {
+          violations.push({ page, ref: fullMatch.replace(/^`|`$/g, ""), reason: "unknown_command" });
+          continue;
+        }
+      }
+
       const oneWordKey = words[0]!;
       if (allKeys.has(oneWordKey)) {
         resolvedKey = oneWordKey;
