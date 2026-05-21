@@ -75,6 +75,9 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     return projectField.replace(/^\[\[/, "").replace(/\]\]$/, "").replace(/^"|"$/g, "");
   }
 
+  // Terminal statuses that indicate work is finished (Zod schema: completed | abandoned; legacy: done | invalid)
+  const TERMINAL_STATUSES = new Set(["completed", "abandoned", "done", "invalid"]);
+
   // Helper: infer kind from filename pattern YYYY-MM-DD-{kind}-{slug}.md
   const KIND_FROM_FILENAME = /^(?:\d{4}-\d{2}-\d{2})-(task|bug|idea|note|observation)-.+\.md$/;
   const LOOP_CYCLE_PATTERN = /loop-cycle-/;
@@ -145,7 +148,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
         const overlap = wWords.filter(w => tWords.has(w)).length;
         if (dirName.includes(tSlug) || tSlug.includes(wSlug) || overlap >= 1) {
           claimedPaths.add(t.relPath);
-          if (status === "done" || status === "invalid") {
+          if (TERMINAL_STATUSES.has(status)) {
             staleTranscripts.push({ path: t.relPath, reason: `work item projects/${slug}/work/${dirName} is ${status}` });
           }
           break;
@@ -156,7 +159,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
       for (const [dir, status] of workDirs) {
         if (dir.split("/").pop()!.startsWith(datePrefix)) {
           claimedPaths.add(t.relPath);
-          if (status === "done" || status === "invalid") {
+          if (TERMINAL_STATUSES.has(status)) {
             staleTranscripts.push({ path: t.relPath, reason: `work item ${dir} is ${status}` });
           }
           break;
@@ -202,10 +205,8 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     let files: string[];
     try { files = await readdir(join(input.vault, relDir)); } catch { continue; }
     const hasSpec = files.includes("spec.md"), hasPlan = files.includes("plan.md"), hasWI = files.includes("work-item.md");
-    if (status === "done") {
-      doneWorkItems.push({ path: relDir, reason: "completed — should be archived" });
-    } else if (status === "invalid") {
-      doneWorkItems.push({ path: relDir, reason: "invalid — should be archived" });
+    if (TERMINAL_STATUSES.has(status)) {
+      doneWorkItems.push({ path: relDir, reason: `${status || "completed"} — should be archived` });
     } else if (hasSpec && !hasPlan) {
       incompleteWorkItems.push({ path: relDir, reason: "has spec but no plan" });
     } else if (hasWI && !hasSpec && !hasPlan) {

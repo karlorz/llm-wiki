@@ -9,3 +9,4 @@ dist/
 coverage/
 *.bak
 packages/cli/skills/
+.claude/scheduled_tasks.json

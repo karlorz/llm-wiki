@@ -22,7 +22,7 @@ capture text`;
 
 const DONE_SPEC = `---
 title: done item
-status: done
+status: completed
 ---
 
 spec body`;
@@ -45,7 +45,7 @@ describe("runStale", () => {
     if (r.result.ok) {
       expect(r.result.data.stale_transcripts.length).toBe(1);
       expect(r.result.data.stale_transcripts[0].path).toBe("raw/transcripts/2026-04-01-idea-foo.md");
-      expect(r.result.data.stale_transcripts[0].reason).toContain("done");
+      expect(r.result.data.stale_transcripts[0].reason).toContain("completed");
     }
   });
 
@@ -130,6 +130,33 @@ describe("runStale", () => {
     if (result.result.ok) {
       expect(result.result.data.done_work_items.length).toBe(1);
       expect(result.result.data.done_work_items[0].reason).toContain("invalid");
+    }
+  });
+
+  it("flags abandoned work items that should be archived", async () => {
+    const v = makeVault();
+    const workDir = join(v, "projects", "acme", "work", "2026-04-01-abandoned-item");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: abandoned item\nstatus: abandoned\n---\n\nspec body`);
+    const r = await runStale({ vault: v, days: 3 });
+    expect(r.exitCode).toBe(19);
+    if (r.result.ok) {
+      expect(r.result.data.done_work_items.length).toBe(1);
+      expect(r.result.data.done_work_items[0].reason).toContain("abandoned");
+    }
+  });
+
+  it("does not flag completed work items as incomplete", async () => {
+    const v = makeVault();
+    const workDir = join(v, "projects", "acme", "work", "2026-04-01-completed-item");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: completed item\nstatus: completed\n---\n\nspec body`);
+    const r = await runStale({ vault: v, days: 3 });
+    if (r.result.ok) {
+      const incomplete = r.result.data.incomplete_work_items.filter(w => w.path.includes("completed-item"));
+      expect(incomplete.length).toBe(0);
+      const done = r.result.data.done_work_items.filter(w => w.path.includes("completed-item"));
+      expect(done.length).toBe(1);
     }
   });
 
