@@ -493,4 +493,55 @@ Other project task.`);
       }
     });
   });
+
+  describe("stale_sections", () => {
+    it("reports expired sections from expiry annotations", async () => {
+      const v = makeVault();
+      mkdirSync(join(v, "concepts"), { recursive: true });
+      const pastDate = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      writeFileSync(
+        join(v, "concepts", "test-expiry.md"),
+        `---\ntitle: Test\ncreated: 2026-01-01\nupdated: 2026-01-01\ntype: concept\ntags: []\nsources: []\n---\n\n## Stars\n<!-- expires: ${pastDate} -->\n97.1k stars\n`
+      );
+      const r = await runStale({ vault: v, days: 3 });
+      if (r.result.ok) {
+        expect(r.result.data.stale_sections).toBeDefined();
+        expect(r.result.data.stale_sections.length).toBeGreaterThanOrEqual(1);
+        expect(r.result.data.stale_sections[0]!.heading).toBe("Stars");
+        expect(r.result.data.stale_sections[0]!.expires).toBe(pastDate);
+        expect(r.result.data.stale_sections[0]!.reason).toContain("expired");
+      }
+    });
+
+    it("does not report unexpired sections", async () => {
+      const v = makeVault();
+      mkdirSync(join(v, "concepts"), { recursive: true });
+      const futureDate = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      writeFileSync(
+        join(v, "concepts", "test-future.md"),
+        `---\ntitle: Future\ncreated: 2026-01-01\nupdated: 2026-01-01\ntype: concept\ntags: []\nsources: []\n---\n\n## Future\n<!-- expires: ${futureDate} -->\nStill valid\n`
+      );
+      const r = await runStale({ vault: v, days: 3 });
+      if (r.result.ok) {
+        const futureSections = (r.result.data.stale_sections || []).filter(
+          (s: any) => s.heading === "Future"
+        );
+        expect(futureSections).toHaveLength(0);
+      }
+    });
+
+    it("includes stale_sections in humanHint output", async () => {
+      const v = makeVault();
+      mkdirSync(join(v, "concepts"), { recursive: true });
+      const pastDate = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      writeFileSync(
+        join(v, "concepts", "hint-test.md"),
+        `---\ntitle: Hint Test\ncreated: 2026-01-01\nupdated: 2026-01-01\ntype: concept\ntags: []\nsources: []\n---\n\n## Old Data\n<!-- expires: ${pastDate} -->\nOutdated\n`
+      );
+      const r = await runStale({ vault: v, days: 3 });
+      if (r.result.ok) {
+        expect(r.result.data.humanHint).toContain("stale_sections:");
+      }
+    });
+  });
 });

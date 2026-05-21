@@ -3,17 +3,29 @@ import { join, dirname } from "node:path";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault } from "../utils/vault.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
+import { parseExpiryAnnotations, type ExpiryAnnotation } from "../parsers/expiry-annotations.js";
 import { appendLastOp } from "../utils/last-op.js";
 
 export interface StaleInput { vault: string; days: number; archive?: boolean; forceScan?: boolean; project?: string }
 export interface StaleTranscript { path: string; reason: string; hint?: string }
 export interface IncompleteWorkItem { path: string; reason: string }
+export interface StaleSection {
+  page: string;
+  heading: string;
+  line: number;
+  expires: string;
+  refresh?: string;
+  source?: string;
+  reason: string;
+}
+
 export interface StaleOutput {
   stale: Array<{ page: string; reason: string }>;
   stale_transcripts: StaleTranscript[];
   unclaimed_transcripts: StaleTranscript[];
   incomplete_work_items: IncompleteWorkItem[];
   done_work_items: IncompleteWorkItem[];
+  stale_sections: StaleSection[];
   archived: string[];
   humanHint: string;
 }
@@ -235,6 +247,38 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     } catch { /* skip unreadable pages */ }
   }
 
+  // 3b. Stale sections: typed-knowledge pages with expired <!-- expires: YYYY-MM-DD --> annotations
+  const staleSections: StaleSection[] = [];
+  const today = new Date().toISOString().slice(0, 10);
+  for (const page of scan.data.typedKnowledge) {
+    try {
+      const text = await readFile(join(input.vault, page.relPath), "utf8");
+      // --project: only include pages linked to this project
+      if (input.project) {
+        const fm = extractFrontmatter(text);
+        if (fm.ok) {
+          const pp = fm.data.provenance_projects;
+          const linked = Array.isArray(pp) && pp.some((p: string) => String(p).includes(input.project!));
+          if (!linked) continue;
+        }
+      }
+      const annotations = parseExpiryAnnotations(text, page.relPath);
+      for (const ann of annotations) {
+        if (ann.expires < today) {
+          staleSections.push({
+            page: ann.page,
+            heading: ann.heading,
+            line: ann.line,
+            expires: ann.expires,
+            refresh: ann.refresh,
+            source: ann.source,
+            reason: `section "${ann.heading}" expired on ${ann.expires}`,
+          });
+        }
+      }
+    } catch { /* skip unreadable pages */ }
+  }
+
   // 4. Archive if requested
   if (input.archive) {
     const archiveDir = join(input.vault, "_archive", new Date().toISOString().slice(0, 10));
@@ -287,18 +331,19 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     });
   }
 
-  const total = stale.length + staleTranscripts.length + unclaimedTranscripts.length + incompleteWorkItems.length + doneWorkItems.length;
+  const total = stale.length + staleTranscripts.length + unclaimedTranscripts.length + incompleteWorkItems.length + doneWorkItems.length + staleSections.length;
   const hintLines: string[] = [];
   if (stale.length > 0) hintLines.push(`stale_pages: ${stale.length}`, ...stale.map(p => `  ${p.page}: ${p.reason}`));
   if (staleTranscripts.length > 0) hintLines.push(`stale_transcripts: ${staleTranscripts.length}`, ...staleTranscripts.map(t => `  ${t.path}: ${t.reason}`));
   if (unclaimedTranscripts.length > 0) hintLines.push(`unclaimed_transcripts: ${unclaimedTranscripts.length}`, ...unclaimedTranscripts.map(t => `  ${t.path}: ${t.reason}${t.hint ? `\n    hint: ${t.hint}` : ""}`));
   if (incompleteWorkItems.length > 0) hintLines.push(`incomplete_work_items: ${incompleteWorkItems.length}`, ...incompleteWorkItems.map(w => `  ${w.path}: ${w.reason}`));
   if (doneWorkItems.length > 0) hintLines.push(`done_work_items: ${doneWorkItems.length}`, ...doneWorkItems.map(w => `  ${w.path}: ${w.reason}`));
+  if (staleSections.length > 0) hintLines.push(`stale_sections: ${staleSections.length}`, ...staleSections.map(s => `  ${s.page}#${s.heading}: ${s.reason}`));
   if (archived.length > 0) hintLines.push(`archived: ${archived.length}`, ...archived.map(a => `  ${a}`));
   if (hintLines.length === 0) hintLines.push("no stale transcripts or incomplete work items");
 
   return { exitCode: total > 0 ? ExitCode.STALE_PAGE : ExitCode.OK, result: ok({
     stale: [...stale, ...staleTranscripts.map(t => ({ page: t.path, reason: t.reason })), ...unclaimedTranscripts.map(t => ({ page: t.path, reason: t.reason })), ...incompleteWorkItems.map(w => ({ page: w.path, reason: w.reason })), ...doneWorkItems.map(w => ({ page: w.path, reason: w.reason }))],
-    stale_transcripts: staleTranscripts, unclaimed_transcripts: unclaimedTranscripts, incomplete_work_items: incompleteWorkItems, done_work_items: doneWorkItems, archived, humanHint: hintLines.join("\n")
+    stale_transcripts: staleTranscripts, unclaimed_transcripts: unclaimedTranscripts, incomplete_work_items: incompleteWorkItems, done_work_items: doneWorkItems, stale_sections: staleSections, archived, humanHint: hintLines.join("\n")
   }) };
 }
