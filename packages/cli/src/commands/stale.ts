@@ -1,5 +1,5 @@
 import { readdir, rename, mkdir, readFile } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault } from "../utils/vault.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
@@ -255,11 +255,12 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     try {
       const text = await readFile(join(input.vault, page.relPath), "utf8");
       // --project: only include pages linked to this project
-      if (input.project) {
+      const projectFilter = input.project;
+      if (projectFilter) {
         const fm = extractFrontmatter(text);
         if (fm.ok) {
           const pp = fm.data.provenance_projects;
-          const linked = Array.isArray(pp) && pp.some((p: string) => String(p).includes(input.project));
+          const linked = Array.isArray(pp) && pp.some((p: string) => String(p).includes(projectFilter));
           if (!linked) continue;
         }
       }
