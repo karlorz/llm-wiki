@@ -1,5 +1,3 @@
-import type { isoDate } from "@skillwiki/shared";
-
 export interface ExpiryAnnotation {
   page: string;
   heading: string;

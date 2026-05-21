@@ -35,4 +35,30 @@ describe("TypedKnowledgeSchema", () => {
   it("requires provenance_projects when provenance != research", () => {
     expect(() => TypedKnowledgeSchema.parse({ ...valid, provenance: "project" })).toThrow();
   });
+
+  describe("stale_ttl", () => {
+    it("accepts a positive integer", () => {
+      expect(TypedKnowledgeSchema.parse({ ...valid, stale_ttl: 30 }).stale_ttl).toBe(30);
+    });
+
+    it("rejects a negative integer", () => {
+      expect(() => TypedKnowledgeSchema.parse({ ...valid, stale_ttl: -1 })).toThrow();
+    });
+
+    it("rejects zero", () => {
+      expect(() => TypedKnowledgeSchema.parse({ ...valid, stale_ttl: 0 })).toThrow();
+    });
+
+    it("rejects a non-integer", () => {
+      expect(() => TypedKnowledgeSchema.parse({ ...valid, stale_ttl: 1.5 })).toThrow();
+    });
+
+    it("rejects a string", () => {
+      expect(() => TypedKnowledgeSchema.parse({ ...valid, stale_ttl: "30" as unknown as number })).toThrow();
+    });
+
+    it("defaults to undefined when omitted", () => {
+      expect(TypedKnowledgeSchema.parse(valid).stale_ttl).toBeUndefined();
+    });
+  });
 });
