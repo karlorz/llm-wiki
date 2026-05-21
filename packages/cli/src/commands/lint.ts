@@ -19,6 +19,7 @@ import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
 import { isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations } from "../parsers/citations.js";
 import { buildSlugMap } from "../utils/slug.js";
+import { buildCliSurface, validateCliRefs } from "../utils/cli-surface.js";
 
 const STRUCT_MIN_BODY_LINES = 60;
 const STRUCT_MIN_SECTIONS = 3;
@@ -81,7 +82,7 @@ export interface LintOutput {
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "broken_sources", "tag_not_in_taxonomy"] as const;
 const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview"] as const;
-const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "missing_diagram"] as const;
+const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "missing_diagram", "cli_refs"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
   const buckets: Record<string, unknown[]> = {};
@@ -334,6 +335,19 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       }
     }
     if (orphanedProjectPages.length > 0) buckets.orphaned_project_pages = orphanedProjectPages;
+
+    // CLI reference validation
+    const cliRefFlags: string[] = [];
+    const cliSurface = buildCliSurface();
+    const allScanPages = [...scan.data.typedKnowledge, ...scan.data.raw, ...scan.data.workItems, ...scan.data.compound];
+    for (const page of allScanPages) {
+      const text = await readPage(page);
+      const violations = validateCliRefs(text, page.relPath, cliSurface);
+      for (const v of violations) {
+        cliRefFlags.push(`${v.page}: ${v.ref} (${v.reason})`);
+      }
+    }
+    if (cliRefFlags.length > 0) buckets.cli_refs = cliRefFlags;
 
     // --fix: auto-fix legacy_citation_style by moving inline ^[raw/...] to ## Sources
     if (input.fix && legacyPages.length > 0) {
