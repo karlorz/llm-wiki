@@ -43,8 +43,8 @@ describe("buildCliSurface", () => {
   it("does not include non-existent flags", () => {
     const surface = buildCliSurface();
     expect(surface.get("stale")!.has("--unclaimed")).toBe(false);
-    expect(surface.get("stale")!.has("--project")).toBe(false);
-    expect(surface.get("lint")!.has("--only")).toBe(false);
+    expect(surface.get("stale")!.has("--project")).toBe(true);
+    expect(surface.get("lint")!.has("--only")).toBe(true);
     expect(surface.get("lint")!.has("--bucket")).toBe(false);
   });
 });
@@ -88,18 +88,17 @@ describe("validateCliRefs", () => {
     expect(violations[0]!.ref).toBe("skillwiki stale --unclaimed");
   });
 
-  it("flags --project on stale (does not exist on stale)", () => {
+  it("accepts --project on stale (now a valid flag)", () => {
     const text = "Run `skillwiki stale --project zzapi-mes` to check.";
+    expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
+  });
+
+  it("accepts --only on lint (now a valid flag), flags --bucket (does not exist)", () => {
+    const text = "Use `skillwiki lint --only links` or `skillwiki lint --bucket broken_wikilinks`.";
     const violations = validateCliRefs(text, "test.md", surface);
     expect(violations.length).toBe(1);
     expect(violations[0]!.reason).toBe("unknown_flag");
-  });
-
-  it("flags --only and --bucket on lint (do not exist)", () => {
-    const text = "Use `skillwiki lint --only links` or `skillwiki lint --bucket broken_wikilinks`.";
-    const violations = validateCliRefs(text, "test.md", surface);
-    expect(violations.length).toBe(2);
-    expect(violations.every(v => v.reason === "unknown_flag")).toBe(true);
+    expect(violations[0]!.ref).toContain("--bucket");
   });
 
   it("ignores prose references without backticks", () => {

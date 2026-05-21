@@ -38,11 +38,11 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("index-check").option("--wiki <name>");
   program.command("index-link-format").option("--wiki <name>");
   program.command("topic-map-check").option("--threshold <n>").option("--wiki <name>");
-  program.command("stale").option("--archive").option("--days <n>").option("--force-scan").option("--wiki <name>");
+  program.command("stale").option("--archive").option("--days <n>").option("--force-scan").option("--project <slug>").option("--wiki <name>");
   program.command("claim").option("--project <slug>").option("--slug <slug>").option("--wiki <name>");
   program.command("pagesize").option("--lines <n>").option("--wiki <name>");
   program.command("log-rotate").option("--threshold <n>").option("--apply").option("--wiki <name>");
-  program.command("lint").option("--days <n>").option("--lines <n>").option("--log-threshold <n>").option("--fix").option("--wiki <name>");
+  program.command("lint").option("--days <n>").option("--lines <n>").option("--log-threshold <n>").option("--fix").option("--only <bucket>").option("--wiki <name>");
   program.command("config"); // has subcommands
   program.command("doctor");
   program.command("status").option("--wiki <name>");
