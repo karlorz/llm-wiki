@@ -20,6 +20,7 @@ import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js"
 import { isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations } from "../parsers/citations.js";
 import { buildSlugMap } from "../utils/slug.js";
 import { buildCliSurface, validateCliRefs } from "../utils/cli-surface.js";
+import { parseExpiryAnnotations } from "../parsers/expiry-annotations.js";
 
 const STRUCT_MIN_BODY_LINES = 60;
 const STRUCT_MIN_SECTIONS = 3;
@@ -83,7 +84,7 @@ export interface LintOutput {
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "broken_sources", "tag_not_in_taxonomy"] as const;
 const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview"] as const;
-const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "missing_diagram", "cli_refs"] as const;
+const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "missing_diagram", "stale_sections", "cli_refs"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
   const buckets: Record<string, unknown[]> = {};
@@ -349,6 +350,28 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       }
     }
     if (cliRefFlags.length > 0) buckets.cli_refs = cliRefFlags;
+
+    // stale_sections: typed-knowledge pages with expired <!-- expires: YYYY-MM-DD --> annotations
+    const staleSectionFlags: string[] = [];
+    const today = new Date().toISOString().slice(0, 10);
+    const approachingThreshold = 7; // days before expiry to flag as approaching
+    for (const page of scan.data.typedKnowledge) {
+      try {
+        const text = await readFile(join(input.vault, page.relPath), "utf8");
+        const annotations = parseExpiryAnnotations(text, page.relPath);
+        for (const ann of annotations) {
+          if (ann.expires < today) {
+            staleSectionFlags.push(`${page.relPath}: section "${ann.heading}" expired on ${ann.expires}`);
+          } else {
+            const daysUntilExpiry = Math.floor((Date.parse(ann.expires) - Date.now()) / 86400000);
+            if (daysUntilExpiry <= approachingThreshold) {
+              staleSectionFlags.push(`${page.relPath}: section "${ann.heading}" expires in ${daysUntilExpiry} day(s) (${ann.expires})`);
+            }
+          }
+        }
+      } catch { /* skip unreadable pages */ }
+    }
+    if (staleSectionFlags.length > 0) buckets.stale_sections = staleSectionFlags;
 
     // --fix: auto-fix legacy_citation_style by moving inline ^[raw/...] to ## Sources
     if (input.fix && legacyPages.length > 0) {

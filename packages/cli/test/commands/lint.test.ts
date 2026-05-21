@@ -1165,4 +1165,63 @@ same body content here
       }
     });
   });
+
+  describe("stale_sections", () => {
+    it("reports stale_sections info when expiry annotations are expired", async () => {
+      const v = vault();
+      const pastDate = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      writeFileSync(
+        join(v, "concepts", "expired-section.md"),
+        FM(["model"]) + `## Stats\n<!-- expires: ${pastDate} -->\nOld data\n`
+      );
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r.result.ok) {
+        const sections = r.result.data.by_severity.info.filter((i: any) => i.kind === "stale_sections");
+        expect(sections.length).toBeGreaterThanOrEqual(1);
+        expect(sections[0]!.items[0]).toContain("expired");
+      }
+    });
+
+    it("reports approaching expiry within 7 days", async () => {
+      const v = vault();
+      const soonDate = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+      writeFileSync(
+        join(v, "concepts", "approaching-section.md"),
+        FM(["model"]) + `## Stats\n<!-- expires: ${soonDate} -->\nAlmost expired\n`
+      );
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r.result.ok) {
+        const sections = r.result.data.by_severity.info.filter((i: any) => i.kind === "stale_sections");
+        expect(sections.length).toBeGreaterThanOrEqual(1);
+        expect(sections[0]!.items[0]).toContain("expires in");
+      }
+    });
+
+    it("does not report unexpired sections beyond 7 days", async () => {
+      const v = vault();
+      const futureDate = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+      writeFileSync(
+        join(v, "concepts", "future-section.md"),
+        FM(["model"]) + `## Stats\n<!-- expires: ${futureDate} -->\nStill valid\n`
+      );
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r.result.ok) {
+        const sections = r.result.data.by_severity.info.filter((i: any) => i.kind === "stale_sections");
+        expect(sections).toHaveLength(0);
+      }
+    });
+
+    it("supports --only stale_sections", async () => {
+      const v = vault();
+      const pastDate = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      writeFileSync(
+        join(v, "concepts", "only-section.md"),
+        FM(["model"]) + `## Stats\n<!-- expires: ${pastDate} -->\nOld\n`
+      );
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "stale_sections" });
+      if (r.result.ok) {
+        expect(r.result.data.summary.info).toBeGreaterThanOrEqual(1);
+      }
+    });
+  });
 });
