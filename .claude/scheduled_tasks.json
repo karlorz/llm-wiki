@@ -1,0 +1,12 @@
+{
+  "tasks": [
+    {
+      "id": "9d7fac16",
+      "cron": "13 * * * *",
+      "prompt": "/dev-loop",
+      "createdAt": 1779336563459,
+      "lastFiredAt": 1779341487956,
+      "recurring": true
+    }
+  ]
+}
