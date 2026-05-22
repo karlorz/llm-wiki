@@ -39,7 +39,7 @@ import { runCompound, runCompoundList, runCompoundDelete } from "./commands/comp
 import { runObserve } from "./commands/observe.js";
 import { runIngest } from "./commands/ingest.js";
 import { runTagSync } from "./commands/tag-sync.js";
-import { runSyncStatus, runSyncPush, runSyncPull } from "./commands/sync.js";
+import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "./commands/sync.js";
 import { runBackupSync, runBackupRestore } from "./commands/backup.js";
 import { runStatus } from "./commands/status.js";
 import { runSeed } from "./commands/seed.js";
@@ -564,10 +564,11 @@ syncCmd
   .command("status [vault]")
   .description("check vault git sync status")
   .option("--wiki <name>", "wiki profile name")
+  .option("--include-stashes", "enumerate all stashes in output", false)
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(runSyncStatus({ vault: v.vault }));
+    else emit(runSyncStatus({ vault: v.vault, includeStashes: !!opts.includeStashes }));
   });
 
 syncCmd
@@ -588,6 +589,42 @@ syncCmd
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runSyncPull({ vault: v.vault }), v.vault);
+  });
+
+syncCmd
+  .command("lock [vault]")
+  .description("acquire advisory lock on vault")
+  .option("--summary <text>", "lock description", "skillwiki sync")
+  .option("--ttl-minutes <n>", "lock time-to-live in minutes", "30")
+  .option("--force", "overwrite existing lock", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else {
+      const ttl = parseInt(opts.ttlMinutes, 10) || 30;
+      emit(runSyncLock({ vault: v.vault, summary: opts.summary, ttlMinutes: ttl, force: !!opts.force }));
+    }
+  });
+
+syncCmd
+  .command("unlock [vault]")
+  .description("release advisory lock on vault")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(runSyncUnlock({ vault: v.vault }));
+  });
+
+syncCmd
+  .command("peers [vault]")
+  .description("list active locks and recent wiki-sync stashes")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(runSyncPeers({ vault: v.vault }));
   });
 
 // backup — grouped under a parent command
