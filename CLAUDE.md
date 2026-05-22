@@ -133,7 +133,7 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 ## Current counts (2026-05-22)
 
 - 18 SKILL.md files in `packages/skills/`
-- 43 command files in `packages/cli/src/commands/`, 20 utilities in `src/utils/`
+- 43 command files in `packages/cli/src/commands/`, 21 utilities in `src/utils/`
 - 74 test files in cli (46 commands, 19 utils, 5 parsers, 2 integration, 1 skills, 1 smoke) + 10 shared
 - 917 tests passing
 - Lint buckets: 0 error, 0 warning (clean vault), 8 info (incl. `bridges`, `orphaned_citations`, `missing_tldr`, `stale_sections`, `cli_refs`); `missing_diagram` is warning severity for architecture-tagged pages
@@ -142,5 +142,5 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 - Stale --project supports: scope to a single project (e.g., `stale --project llm-wiki`)
 - Exit codes: 49 total; highest: `BODY_TRUNCATION_GUARD (47)`
 - Config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`; `AUTO_COMMIT` (default: enabled, opt-out)
-- `doctor` checks: 17; `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code
+- `doctor` checks: 21 (incl. 4 new S3 mount health checks: `rclone_flags`, `rclone_version`, `s3_write_test`, `vfs_cache_health` — skip on local disk, activate on FUSE mounts); `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code
 - Page-rewriting commands (`frontmatter-fix`, `tag-sync`, `migrate-citations`, `lint --fix`, `drift`) use `safeWritePage` (atomic temp+rename, body-shrink guard at 0.5 ratio) as defense-in-depth against the 2026-05-22 SeaweedFS rclone VFS write-back race.

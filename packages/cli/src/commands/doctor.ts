@@ -1,14 +1,25 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { existsSync, lstatSync, readlinkSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readlinkSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execSync } from "node:child_process";
-import { platform } from "node:os";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 import { parseDotenvFile } from "../utils/dotenv.js";
 import { configPath } from "./config.js";
 import { latestFromCache } from "../utils/auto-update.js";
 import { semverGt } from "../utils/semver.js";
 import { findPlugin } from "../utils/plugin-registry.js";
+import {
+  findRcloneMountPid,
+  parseRcloneFlags,
+  getRcloneArgs,
+  extractRcloneFs,
+  getRcloneVersion,
+  queryRcloneRC,
+  detectFuseMount,
+  writeTest,
+  FLAG_THRESHOLDS,
+  MIN_RCLONE_VERSION,
+} from "../utils/s3-mount-health.js";
 
 export type CheckStatus = "pass" | "info" | "warn" | "error";
 
@@ -425,52 +436,16 @@ function checkSyncLastPush(resolvedPath: string | undefined): CheckResult {
   return check("pass", "sync_last_push", "Vault sync recency", `Last push: ${dateStr} (${daysSince} day(s) ago)`);
 }
 
-/** Detect if vaultPath lives on a FUSE mount. Returns the mount point if found. */
-function detectFuseMount(vaultPath: string): string | null {
-  const os = platform();
-  try {
-    if (os === "linux") {
-      const mounts = readFileSync("/proc/mounts", "utf8");
-      let best: { point: string; fs: string } | null = null;
-      for (const line of mounts.split("\n")) {
-        const parts = line.split(" ");
-        if (parts.length < 3) continue;
-        const point = parts[1];
-        const fs = parts[2];
-        if (vaultPath.startsWith(point) && (!best || point.length > best.point.length)) {
-          best = { point, fs };
-        }
-      }
-      if (best && best.fs.includes("fuse")) return best.point;
-    } else if (os === "darwin") {
-      const out = execSync("mount", { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
-      let best: { point: string } | null = null;
-      for (const line of out.split("\n")) {
-        // macOS mount format: //user@host/path on /mountpoint (osxfuse, ...)
-        const match = line.match(/^(\S+) on (\S+) \((.*?)\)/);
-        if (!match) continue;
-        const point = match[2];
-        const opts = match[3];
-        if (opts.includes("fuse") && vaultPath.startsWith(point) && (!best || point.length > best.point.length)) {
-          best = { point };
-        }
-      }
-      if (best) return best.point;
-    }
-  } catch {
-  }
-  return null;
-}
-
 function checkS3MountPerf(resolvedPath: string | undefined): CheckResult {
   if (resolvedPath === undefined) {
     return check("pass", "s3_mount_perf", "S3 mount performance", "No vault path — check skipped");
   }
 
-  const mountPoint = detectFuseMount(resolvedPath);
-  if (!mountPoint) {
+  const fuse = detectFuseMount(resolvedPath);
+  if (!fuse) {
     return check("pass", "s3_mount_perf", "S3 mount performance", "local disk");
   }
+  const mountPoint = fuse.mountPoint;
 
   const conceptsDir = join(resolvedPath, "concepts");
   if (!existsSync(conceptsDir)) {
@@ -515,6 +490,178 @@ function checkS3MountPerf(resolvedPath: string | undefined): CheckResult {
     "S3 mount performance",
     `S3 FUSE mount, cache warm (rg scan: ${elapsed.toFixed(3)}s)`
   );
+}
+
+// ── S3 mount health checks (A–D) ────────────────────────────
+
+/** Check A: rclone flag audit — are critical VFS flags set to safe values? */
+function checkRcloneFlagAudit(resolvedPath: string | undefined): CheckResult {
+  if (!resolvedPath) {
+    return check("pass", "rclone_flags", "rclone VFS flags", "No vault path — check skipped");
+  }
+  const fuse = detectFuseMount(resolvedPath);
+  if (!fuse) {
+    return check("pass", "rclone_flags", "rclone VFS flags", "local disk — check skipped");
+  }
+
+  const pid = findRcloneMountPid();
+  if (pid === null) {
+    return check("warn", "rclone_flags", "rclone VFS flags", `S3 FUSE mount (${fuse.mountPoint}) but no rclone process found — cannot audit flags`);
+  }
+
+  const flags = parseRcloneFlags(pid);
+  if (flags.size === 0) {
+    return check("warn", "rclone_flags", "rclone VFS flags", `rclone PID ${pid} found but could not parse flags`);
+  }
+
+  const warnings: string[] = [];
+  for (const [flag, threshold] of Object.entries(FLAG_THRESHOLDS)) {
+    const raw = flags.get(flag);
+    if (raw === undefined) {
+      warnings.push(`${flag} not set (default may be unsafe)`);
+      continue;
+    }
+    const value = parseFloat(raw);
+    if (isNaN(value)) continue;
+    // Normalize to seconds for comparison
+    let inSeconds = value;
+    if (raw.endsWith("h")) inSeconds = value * 3600;
+    else if (raw.endsWith("m")) inSeconds = value * 60;
+    const thresholdSec = threshold.unit === "h" ? threshold.min * 3600 : threshold.unit === "m" ? threshold.min * 60 : threshold.min;
+    if (inSeconds < thresholdSec) {
+      warnings.push(`${flag}=${raw} (recommended ≥${threshold.min}${threshold.unit})`);
+    }
+  }
+
+  // Bonus: check for --vfs-cache-mode
+  const cacheMode = flags.get("--vfs-cache-mode");
+  if (!cacheMode) {
+    warnings.push("--vfs-cache-mode not set (recommended: full)");
+  } else if (cacheMode !== "full") {
+    warnings.push(`--vfs-cache-mode=${cacheMode} (recommended: full)`);
+  }
+
+  // Bonus: check for --log-file
+  if (!flags.has("--log-file")) {
+    warnings.push("--log-file not set — no rclone error log configured");
+  }
+
+  if (warnings.length > 0) {
+    return check("warn", "rclone_flags", "rclone VFS flags", warnings.join("; "));
+  }
+  return check("pass", "rclone_flags", "rclone VFS flags", `PID ${pid}: all critical flags at safe values`);
+}
+
+/** Check B: rclone version — does it support --vfs-write-wait? */
+function checkRcloneVersion(resolvedPath: string | undefined): CheckResult {
+  if (!resolvedPath) {
+    return check("pass", "rclone_version", "rclone version", "No vault path — check skipped");
+  }
+  const fuse = detectFuseMount(resolvedPath);
+  if (!fuse) {
+    return check("pass", "rclone_version", "rclone version", "local disk — check skipped");
+  }
+
+  const ver = getRcloneVersion();
+  if (!ver) {
+    return check("warn", "rclone_version", "rclone version", "rclone not found on PATH — cannot verify version");
+  }
+
+  const min = MIN_RCLONE_VERSION;
+  const tooOld = ver.major < min.major ||
+    (ver.major === min.major && ver.minor < min.minor) ||
+    (ver.major === min.major && ver.minor === min.minor && ver.patch < min.patch);
+
+  if (tooOld) {
+    return check(
+      "warn",
+      "rclone_version",
+      "rclone version",
+      `${ver.raw} — upgrade to ≥v${min.major}.${min.minor}.${min.patch} for --vfs-write-wait support (current version may silently ignore this flag)`
+    );
+  }
+  return check("pass", "rclone_version", "rclone version", ver.raw);
+}
+
+/** Check C: write-then-read test — can the vault actually write and read files? */
+function checkWriteTest(resolvedPath: string | undefined): CheckResult {
+  if (!resolvedPath) {
+    return check("pass", "s3_write_test", "S3 write test", "No vault path — check skipped");
+  }
+  const fuse = detectFuseMount(resolvedPath);
+  if (!fuse) {
+    return check("pass", "s3_write_test", "S3 write test", "local disk — check skipped");
+  }
+
+  const conceptsDir = join(resolvedPath, "concepts");
+  if (!existsSync(conceptsDir)) {
+    return check("pass", "s3_write_test", "S3 write test", "no concepts/ dir to test — check skipped");
+  }
+
+  const result = writeTest(conceptsDir);
+
+  if (result.success) {
+    const totalMs = result.writeMs + result.readMs;
+    if (totalMs > 3000) {
+      return check("warn", "s3_write_test", "S3 write test",
+        `write+read ${totalMs}ms (write ${result.writeMs}ms, read ${result.readMs}ms, ${result.size}B) — S3 mount is slow`);
+    }
+    return check("pass", "s3_write_test", "S3 write test",
+      `write+read ${totalMs}ms (write ${result.writeMs}ms, read ${result.readMs}ms)`);
+  }
+  return check("warn", "s3_write_test", "S3 write test",
+    `${result.error} — S3 mount may have a stale FUSE handle or write-back failure`);
+}
+
+/** Check D: VFS cache health via rclone RC endpoint. */
+function checkVfsCacheHealth(resolvedPath: string | undefined): CheckResult {
+  if (!resolvedPath) {
+    return check("pass", "vfs_cache_health", "VFS cache health", "No vault path — check skipped");
+  }
+  const fuse = detectFuseMount(resolvedPath);
+  if (!fuse) {
+    return check("pass", "vfs_cache_health", "VFS cache health", "local disk — check skipped");
+  }
+
+  const pid = findRcloneMountPid();
+  if (pid === null) {
+    return check("warn", "vfs_cache_health", "VFS cache health", "no rclone process found — cannot query VFS stats");
+  }
+
+  const flags = parseRcloneFlags(pid);
+  const rcAddr = flags.get("--rc-addr") || "127.0.0.1:5572";
+
+  // Only query if --rc flag is present
+  if (!flags.has("--rc")) {
+    return check("info", "vfs_cache_health", "VFS cache health",
+      `rclone RC not enabled — add --rc --rc-addr ${rcAddr} to enable cache health monitoring`);
+  }
+
+  // Extract the rclone remote path from the cmdline (e.g., "cloud:cloud/wiki")
+  const args = getRcloneArgs(pid);
+  const fs = extractRcloneFs(args) || "unknown:";
+
+  const stats = queryRcloneRC(rcAddr, fs || "unknown:");
+  if (!stats) {
+    return check("warn", "vfs_cache_health", "VFS cache health",
+      `RC endpoint ${rcAddr} unreachable — is rclone --rc enabled?`);
+  }
+  if (stats.error) {
+    return check("warn", "vfs_cache_health", "VFS cache health", stats.error);
+  }
+
+  const issues: string[] = [];
+  if (stats.uploadsInProgress > 0) issues.push(`${stats.uploadsInProgress} upload(s) in progress`);
+  if (stats.uploadsQueued > 10) issues.push(`${stats.uploadsQueued} upload(s) queued (backlog)`);
+  if (stats.erroredFiles > 0) issues.push(`${stats.erroredFiles} errored file(s)`);
+  if (stats.outOfSpace) issues.push("cache disk full");
+
+  if (issues.length > 0) {
+    return check("warn", "vfs_cache_health", "VFS cache health",
+      `${stats.files} files, ${stats.bytesUsed} bytes — ${issues.join("; ")}`);
+  }
+  return check("pass", "vfs_cache_health", "VFS cache health",
+    `${stats.files} files, ${(stats.bytesUsed / 1024 / 1024).toFixed(1)}MB — clean (0 errored, 0 pending)`);
 }
 
 function findSkillMd(dir: string): string[] {
@@ -578,6 +725,10 @@ export async function runDoctor(
   checks.push(checkSyncLastPush(resolvedPath));
   checks.push(checkDotStoreClean(resolvedPath));
   checks.push(checkS3MountPerf(resolvedPath));
+  checks.push(checkRcloneFlagAudit(resolvedPath));
+  checks.push(checkRcloneVersion(resolvedPath));
+  checks.push(checkWriteTest(resolvedPath));
+  checks.push(checkVfsCacheHealth(resolvedPath));
   checks.push(checkSkillsInstalled(input.home, input.cwd));
   checks.push(checkDuplicateSkills(input.home));
   checks.push(checkNpmUpdate(input.home, input.currentVersion));
