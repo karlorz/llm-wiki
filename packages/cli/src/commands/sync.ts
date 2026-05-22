@@ -4,9 +4,17 @@ import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { runLint } from "./lint.js";
 import { readLastOp, clearLastOp } from "../utils/last-op.js";
 import { git, gitStrict } from "../utils/git.js";
+import { acquireLock, releaseLock, readLock, getSessionId, getCwdHash, type LockFile } from "../utils/sync-lock.js";
 
 export interface SyncStatusInput {
   vault: string;
+  includeStashes?: boolean;
+}
+
+export interface StashEntry {
+  ref: string;
+  message: string;
+  age_minutes: number;
 }
 
 export interface SyncStatusOutput {
@@ -17,10 +25,12 @@ export interface SyncStatusOutput {
   last_commit: string;
   status: "clean" | "dirty" | "ahead" | "behind" | "not_a_repo";
   humanHint: string;
+  stashes?: StashEntry[];
 }
 
 export function runSyncStatus(input: SyncStatusInput): { exitCode: number; result: Result<SyncStatusOutput> } {
   const vault = input.vault;
+  const includeStashes = input.includeStashes ?? false;
 
   // 1. Check if the vault is a git repository
   if (!existsSync(join(vault, ".git"))) {
@@ -91,17 +101,29 @@ export function runSyncStatus(input: SyncStatusInput): { exitCode: number; resul
     ? ExitCode.OK
     : ExitCode.LINT_HAS_WARNINGS;
 
+  // 7. Optionally enumerate stashes
+  let stashes: StashEntry[] | undefined;
+  if (includeStashes) {
+    stashes = enumerateStashes(vault);
+  }
+
+  const output: SyncStatusOutput = {
+    is_git_repo: true,
+    dirty,
+    ahead,
+    behind,
+    last_commit,
+    status,
+    humanHint: hintLines.join("\n"),
+  };
+
+  if (stashes !== undefined) {
+    output.stashes = stashes;
+  }
+
   return {
     exitCode,
-    result: ok({
-      is_git_repo: true,
-      dirty,
-      ahead,
-      behind,
-      last_commit,
-      status,
-      humanHint: hintLines.join("\n"),
-    }),
+    result: ok(output),
   };
 }
 
@@ -221,6 +243,34 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
 
 // ── sync pull ──────────────────────────────────────────────────────────────
 
+/**
+ * Enumerate all stashes from git reflog, returning array of StashEntry.
+ */
+function enumerateStashes(vault: string): StashEntry[] {
+  // Use git log -g to get reflog entries with commit timestamp
+  const output = git(vault, ["log", "--format=%gd%x09%s%x09%ct", "-g", "stash"]);
+  if (!output) return [];
+
+  const now = Date.now();
+  const stashes: StashEntry[] = [];
+  const lines = output.split("\n").filter((l) => l.trim().length > 0);
+
+  for (const line of lines) {
+    const parts = line.split("\t");
+    if (parts.length < 3) continue;
+    const ref = parts[0]!;
+    const message = parts[1]!;
+    const ctStr = parts[2]!;
+    const ct = parseInt(ctStr, 10);
+    if (isNaN(ct)) continue;
+
+    const age_minutes = Math.floor((now - ct * 1000) / (60 * 1000));
+    stashes.push({ ref, message, age_minutes });
+  }
+
+  return stashes;
+}
+
 export interface SyncPullInput {
   vault: string;
 }
@@ -324,6 +374,190 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
       lint_errors: lintErrors,
       lint_warnings: lintWarnings,
       humanHint: hintParts.join(", "),
+    }),
+  };
+}
+
+// ── sync lock ──────────────────────────────────────────────────────────────
+
+export interface SyncPeersInput {
+  vault: string;
+}
+
+export interface PeerLock {
+  session_id: string;
+  pid: number;
+  cwd: string;
+  summary: string;
+  acquired: string;
+  expires: string;
+  is_self: boolean;
+}
+
+export interface WikiSyncStash {
+  ref: string;
+  session_id: string;
+  cwd_hash: string;
+  timestamp: string;
+  summary: string;
+  age_minutes: number;
+}
+
+export interface SyncPeersOutput {
+  locks: PeerLock[];
+  stashes: WikiSyncStash[];
+  humanHint: string;
+}
+
+/**
+ * List active locks and recent wiki-sync:* stashes.
+ */
+export function runSyncPeers(input: SyncPeersInput): { exitCode: number; result: Result<SyncPeersOutput> } {
+  const vault = input.vault;
+
+  // 1. Read lock file if present
+  const locks: PeerLock[] = [];
+  const existingLock = readLock(vault);
+  if (existingLock) {
+    const self = existingLock.session_id === getSessionId();
+    locks.push({ ...existingLock, is_self: self });
+  }
+
+  // 2. Enumerate wiki-sync:* stashes
+  const allStashes = enumerateStashes(vault);
+  const stashes: WikiSyncStash[] = [];
+
+  for (const stash of allStashes) {
+    // The stash message includes "On <branch>: " prefix added by git
+    // Extract the actual message after the ": "
+    let actualMessage = stash.message;
+    const prefixMatch = stash.message.match(/^On [^:]+:\s*(.*)/);
+    if (prefixMatch) {
+      actualMessage = prefixMatch[1]!;
+    }
+
+    // Parse wiki-sync:{session}:{cwd}:{timestamp}:{summary} format
+    // The timestamp is ISO8601 (e.g., 2026-05-23T03:25:00Z) so we need a regex that matches it exactly
+    const match = actualMessage.match(/^wiki-sync:([^:]+):([^:]+):(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z):(.*)$/);
+    if (!match) continue;
+
+    const session_id = match[1]!;
+    const cwd_hash = match[2]!;
+    const timestamp = match[3]!;
+    const summary = match[4]!;
+
+    stashes.push({
+      ref: stash.ref,
+      session_id,
+      cwd_hash,
+      timestamp,
+      summary,
+      age_minutes: stash.age_minutes,
+    });
+  }
+
+  const hintParts: string[] = [];
+  if (locks.length > 0) hintParts.push(`${locks.length} lock(s)`);
+  if (stashes.length > 0) hintParts.push(`${stashes.length} wiki-sync stash(es)`);
+  const humanHint = hintParts.length > 0 ? hintParts.join(", ") : "no peers detected";
+
+  return {
+    exitCode: ExitCode.OK,
+    result: ok({
+      locks,
+      stashes,
+      humanHint,
+    }),
+  };
+}
+
+// ── sync lock ──────────────────────────────────────────────────────────────
+
+export interface SyncLockInput {
+  vault: string;
+  summary?: string;
+  ttlMinutes?: number;
+  force?: boolean;
+  sessionId?: string;
+}
+
+export interface SyncLockOutput {
+  acquired: boolean;
+  lock: LockFile;
+  held_by?: LockFile;
+  humanHint: string;
+}
+
+export function runSyncLock(input: SyncLockInput): { exitCode: number; result: Result<SyncLockOutput> } {
+  const vault = input.vault;
+
+  // Verify vault path exists
+  if (!existsSync(vault)) {
+    return {
+      exitCode: ExitCode.VAULT_PATH_INVALID,
+      result: err("VAULT_PATH_INVALID", { path: vault }),
+    };
+  }
+
+  const result = acquireLock(vault, {
+    sessionId: input.sessionId,
+    summary: input.summary,
+    ttlMinutes: input.ttlMinutes,
+    force: input.force,
+  });
+
+  if (result.ok) {
+    return {
+      exitCode: ExitCode.OK,
+      result: ok({
+        acquired: true,
+        lock: result.lock,
+        humanHint: `lock acquired for ${result.lock.summary} (expires ${result.lock.expires})`,
+      }),
+    };
+  } else {
+    return {
+      exitCode: ExitCode.SYNC_LOCK_HELD,
+      result: ok({
+        acquired: false,
+        lock: result.held,
+        held_by: result.held,
+        humanHint: `lock held by session ${result.held.session_id} (PID ${result.held.pid}) for ${result.held.summary}`,
+      }),
+    };
+  }
+}
+
+// ── sync unlock ────────────────────────────────────────────────────────────
+
+export interface SyncUnlockInput {
+  vault: string;
+  sessionId?: string;
+}
+
+export interface SyncUnlockOutput {
+  released: boolean;
+  humanHint: string;
+}
+
+export function runSyncUnlock(input: SyncUnlockInput): { exitCode: number; result: Result<SyncUnlockOutput> } {
+  const vault = input.vault;
+
+  // Verify vault path exists
+  if (!existsSync(vault)) {
+    return {
+      exitCode: ExitCode.VAULT_PATH_INVALID,
+      result: err("VAULT_PATH_INVALID", { path: vault }),
+    };
+  }
+
+  const result = releaseLock(vault, { sessionId: input.sessionId });
+
+  return {
+    exitCode: ExitCode.OK,
+    result: ok({
+      released: result.released,
+      humanHint: result.released ? "lock released" : "lock not held by this session (no-op)",
     }),
   };
 }

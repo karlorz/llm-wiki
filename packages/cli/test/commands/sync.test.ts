@@ -1,12 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExitCode } from "@skillwiki/shared";
-import { runSyncStatus, runSyncPush, runSyncPull } from "../../src/commands/sync.js";
+import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "../../src/commands/sync.js";
 import { appendLastOp } from "../../src/utils/last-op.js";
-import { existsSync } from "node:fs";
 
 let tmpDirs: string[] = [];
 
@@ -314,6 +313,312 @@ describe("runSyncPull", () => {
     if (result.ok) {
       expect(result.data.fetched).toBe(true);
       expect(result.data.pulled).toBe(true);
+    }
+  });
+});
+
+describe("runSyncLock", () => {
+  afterEach(() => {
+    for (const dir of tmpDirs) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    tmpDirs = [];
+  });
+
+  it("acquires lock on fresh vault and writes lockfile", () => {
+    const dir = makeTempDir();
+    const { exitCode, result } = runSyncLock({ vault: dir, summary: "test lock" });
+    expect(exitCode).toBe(ExitCode.OK);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.acquired).toBe(true);
+      expect(result.data.lock.summary).toBe("test lock");
+      expect(existsSync(join(dir, ".skillwiki", "sync.lock"))).toBe(true);
+    }
+  });
+
+  it("refuses second acquire with SYNC_LOCK_HELD", () => {
+    const dir = makeTempDir();
+    // First acquire
+    const { exitCode: exitCode1 } = runSyncLock({ vault: dir, summary: "test lock" });
+    expect(exitCode1).toBe(ExitCode.OK);
+    // Second acquire should fail
+    const { exitCode: exitCode2, result: result2 } = runSyncLock({ vault: dir, summary: "another lock" });
+    expect(exitCode2).toBe(ExitCode.SYNC_LOCK_HELD); // 48
+    expect(result2.ok).toBe(true);
+    if (result2.ok) {
+      expect(result2.data.acquired).toBe(false);
+      expect(result2.data.held_by).toBeDefined();
+    }
+  });
+
+  it("--force always wins and overwrites lock", () => {
+    const dir = makeTempDir();
+    // First acquire
+    const { result: result1 } = runSyncLock({ vault: dir, summary: "first" });
+    const lock1 = result1.ok ? result1.data.lock : null;
+    expect(lock1).toBeDefined();
+    // Force overwrite
+    const { exitCode: exitCode2, result: result2 } = runSyncLock({
+      vault: dir,
+      summary: "second",
+      force: true,
+    });
+    expect(exitCode2).toBe(ExitCode.OK);
+    expect(result2.ok).toBe(true);
+    if (result2.ok) {
+      expect(result2.data.acquired).toBe(true);
+      expect(result2.data.lock.summary).toBe("second");
+    }
+  });
+
+  it("auto-takeover when lock is stale", () => {
+    const dir = makeTempDir();
+    mkdirSync(join(dir, ".skillwiki"), { recursive: true });
+    // Write a stale lock (expired 1 minute ago)
+    const now = new Date();
+    const expiredLock = {
+      session_id: "old-session",
+      pid: 9999,
+      cwd: "/old/path",
+      summary: "old lock",
+      acquired: new Date(now.getTime() - 2 * 60 * 1000).toISOString(),
+      expires: new Date(now.getTime() - 1 * 60 * 1000).toISOString(),
+    };
+    writeFileSync(join(dir, ".skillwiki", "sync.lock"), JSON.stringify(expiredLock, null, 2));
+    // Now try to acquire
+    const { exitCode, result } = runSyncLock({ vault: dir, summary: "new lock" });
+    expect(exitCode).toBe(ExitCode.OK);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.acquired).toBe(true);
+      expect(result.data.lock.summary).toBe("new lock");
+    }
+  });
+
+  it("respects custom ttl-minutes", () => {
+    const dir = makeTempDir();
+    const now = new Date();
+    const { result } = runSyncLock({ vault: dir, summary: "test", ttlMinutes: 60 });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const expiresTime = new Date(result.data.lock.expires).getTime();
+      const nowTime = now.getTime();
+      // Lock should expire around 60 minutes from now (+/- 5 seconds)
+      expect(expiresTime - nowTime).toBeGreaterThan(59 * 60 * 1000 - 5000);
+      expect(expiresTime - nowTime).toBeLessThan(61 * 60 * 1000 + 5000);
+    }
+  });
+});
+
+describe("runSyncUnlock", () => {
+  afterEach(() => {
+    for (const dir of tmpDirs) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    tmpDirs = [];
+  });
+
+  it("removes lock when held by this session", () => {
+    const dir = makeTempDir();
+    // Acquire a lock
+    const { result: result1 } = runSyncLock({ vault: dir });
+    expect(result1.ok).toBe(true);
+    // Verify file exists
+    expect(existsSync(join(dir, ".skillwiki", "sync.lock"))).toBe(true);
+    // Unlock
+    const { exitCode, result } = runSyncUnlock({ vault: dir });
+    expect(exitCode).toBe(ExitCode.OK);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.released).toBe(true);
+    }
+    // Verify file is gone
+    expect(existsSync(join(dir, ".skillwiki", "sync.lock"))).toBe(false);
+  });
+
+  it("is no-op when lock not held or missing", () => {
+    const dir = makeTempDir();
+    // Unlock on empty vault
+    const { exitCode, result } = runSyncUnlock({ vault: dir });
+    expect(exitCode).toBe(ExitCode.OK);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.released).toBe(false);
+    }
+  });
+
+  it("does not delete lock held by another session", () => {
+    const dir = makeTempDir();
+    mkdirSync(join(dir, ".skillwiki"), { recursive: true });
+    // Write a lock from a different session
+    const lock = {
+      session_id: "other-session",
+      pid: 9999,
+      cwd: "/other/path",
+      summary: "other lock",
+      acquired: new Date().toISOString(),
+      expires: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    };
+    writeFileSync(join(dir, ".skillwiki", "sync.lock"), JSON.stringify(lock, null, 2));
+    // Try to unlock (should be no-op)
+    const { result } = runSyncUnlock({ vault: dir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.released).toBe(false);
+    }
+    // Verify file still exists
+    expect(existsSync(join(dir, ".skillwiki", "sync.lock"))).toBe(true);
+  });
+});
+
+describe("runSyncPeers", () => {
+  afterEach(() => {
+    for (const dir of tmpDirs) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    tmpDirs = [];
+  });
+
+  it("returns empty locks and stashes when vault is clean", () => {
+    const dir = makeTempDir();
+    const { exitCode, result } = runSyncPeers({ vault: dir });
+    expect(exitCode).toBe(ExitCode.OK);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.locks).toEqual([]);
+      expect(result.data.stashes).toEqual([]);
+    }
+  });
+
+  it("lists our own lock with is_self: true", () => {
+    const dir = makeTempDir();
+    // Acquire a lock
+    runSyncLock({ vault: dir });
+    // Query peers
+    const { result } = runSyncPeers({ vault: dir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.locks.length).toBe(1);
+      expect(result.data.locks[0]!.is_self).toBe(true);
+    }
+  });
+
+  it("parses wiki-sync named stashes correctly", () => {
+    const dir = makeTempDir();
+    git(dir, "init");
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    writeFileSync(join(dir, "README.md"), "hello");
+    git(dir, "add .");
+    git(dir, "commit -m init");
+    // Modify an existing tracked file so stash can capture it
+    writeFileSync(join(dir, "README.md"), "modified");
+    // Create a stash with wiki-sync name format
+    // Git will add "On main: " prefix, but the message itself should be preserved
+    const stashMsg = "wiki-sync:session123:abc12345:2026-05-23T03:25:00Z:pre-pull";
+    git(dir, `stash push -m "${stashMsg}"`);
+    // Query peers
+    const { result } = runSyncPeers({ vault: dir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.stashes.length).toBe(1);
+      const stash = result.data.stashes[0]!;
+      expect(stash.session_id).toBe("session123");
+      expect(stash.cwd_hash).toBe("abc12345");
+      expect(stash.timestamp).toBe("2026-05-23T03:25:00Z");
+      expect(stash.summary).toBe("pre-pull");
+    }
+  });
+
+  it("ignores non-wiki-sync stashes", () => {
+    const dir = makeTempDir();
+    git(dir, "init");
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    writeFileSync(join(dir, "README.md"), "hello");
+    git(dir, "add .");
+    git(dir, "commit -m init");
+    // Modify a tracked file to create a stash
+    writeFileSync(join(dir, "README.md"), "modified");
+    git(dir, 'stash push -m "some random stash"');
+    // Query peers
+    const { result } = runSyncPeers({ vault: dir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.stashes.length).toBe(0);
+    }
+  });
+});
+
+describe("runSyncStatus with includeStashes", () => {
+  afterEach(() => {
+    for (const dir of tmpDirs) {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    tmpDirs = [];
+  });
+
+  it("includes stashes when --include-stashes is true", () => {
+    const dir = makeTempDir();
+    git(dir, "init");
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    writeFileSync(join(dir, "README.md"), "hello");
+    git(dir, "add .");
+    git(dir, "commit -m init");
+    // Modify a tracked file and stash it
+    writeFileSync(join(dir, "README.md"), "modified");
+    git(dir, 'stash push -m "test stash"');
+    // Query status without stashes
+    const { result: result1 } = runSyncStatus({ vault: dir, includeStashes: false });
+    expect(result1.ok).toBe(true);
+    if (result1.ok) {
+      expect(result1.data.stashes).toBeUndefined();
+    }
+    // Query status with stashes
+    const { result: result2 } = runSyncStatus({ vault: dir, includeStashes: true });
+    expect(result2.ok).toBe(true);
+    if (result2.ok) {
+      expect(result2.data.stashes).toBeDefined();
+      expect(result2.data.stashes!.length).toBe(1);
+      // The message will have "On main: " prefix from git
+      expect(result2.data.stashes![0]!.message).toContain("test stash");
+    }
+  });
+
+  it("defaults to not including stashes when option omitted", () => {
+    const dir = makeTempDir();
+    git(dir, "init");
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    writeFileSync(join(dir, "README.md"), "hello");
+    git(dir, "add .");
+    git(dir, "commit -m init");
+    // Modify and stash
+    writeFileSync(join(dir, "README.md"), "modified");
+    git(dir, 'stash push -m "test stash"');
+    // Query status without option (default)
+    const { result } = runSyncStatus({ vault: dir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.stashes).toBeUndefined();
     }
   });
 });
