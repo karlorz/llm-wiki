@@ -1,6 +1,6 @@
 import { ok, ExitCode, type ExitCodeValue, type Result } from "@skillwiki/shared";
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runLinks } from "./links.js";
 import { runTagAudit } from "./tag-audit.js";
@@ -13,6 +13,7 @@ import { runOrphans } from "./orphans.js";
 import { runTopicMapCheck } from "./topic-map-check.js";
 import { runIndexLinkFormat } from "./index-link-format.js";
 import { runDedup } from "./dedup.js";
+import { safeWritePage } from "../utils/safe-write.js";
 import { runRawBodyDedup } from "./raw-body-dedup.js";
 import { validateCompoundReferences } from "./audit.js";
 import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
@@ -462,7 +463,8 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
           }
 
           const newContent = `---\n${rawFm}\n---\n${newBody}`;
-          await writeFile(absPath, newContent, "utf8");
+          const w = await safeWritePage(absPath, newContent);
+          if (!w.ok) { unresolved.push(relPath); continue; }
           fixed.push(relPath);
         } catch {
           unresolved.push(relPath);
@@ -496,7 +498,8 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
           const overviewSection = `## Overview\n\n${title}`;
           const trimmedBody = body.replace(/^\n+/, "");
           const newContent = `---\n${rawFm}\n---\n\n${overviewSection}\n\n${trimmedBody}`;
-          await writeFile(absPath, newContent, "utf8");
+          const w = await safeWritePage(absPath, newContent);
+          if (!w.ok) { unresolved.push(relPath); continue; }
           fixed.push(relPath);
         } catch {
           unresolved.push(relPath);
@@ -543,7 +546,8 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
           }
           const trimmedFm = rawFm.endsWith("\n") ? rawFm : rawFm + "\n";
           const newContent = `---\n${trimmedFm}---\n${lines.join("\n")}`;
-          await writeFile(absPath, newContent, "utf8");
+          const w = await safeWritePage(absPath, newContent);
+          if (!w.ok) { unresolved.push(relPath); continue; }
           fixed.push(relPath);
         } catch {
           unresolved.push(relPath);
@@ -627,7 +631,8 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
           }
 
           const newContent = `---\n${rawFm}\n---\n${newBody}`;
-          await writeFile(absPath, newContent, "utf8");
+          const w = await safeWritePage(absPath, newContent);
+          if (!w.ok) { unresolved.push(relPath); continue; }
           wikilinkFixed.push(relPath);
         } catch {
           unresolved.push(relPath);

@@ -45,7 +45,8 @@ export const ExitCode = {
   SYNC_PULL_FAILED: 43,
   BACKUP_SYNC_FAILED: 44,
   BACKUP_RESTORE_CONFLICTS: 45,
-  USAGE: 46
+  USAGE: 46,
+  BODY_TRUNCATION_GUARD: 47
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -97,7 +98,8 @@ const NAMES: Record<number, string> = {
   43: "SYNC_PULL_FAILED",
   44: "BACKUP_SYNC_FAILED",
   45: "BACKUP_RESTORE_CONFLICTS",
-  46: "USAGE"
+  46: "USAGE",
+  47: "BODY_TRUNCATION_GUARD"
 };
 
 export function exitCodeName(code: number): string {

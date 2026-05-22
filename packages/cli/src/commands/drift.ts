@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
 import { controlledFetch, type FetchOptions } from "../utils/fetch.js";
+import { safeWritePage } from "../utils/safe-write.js";
 
 const FETCH_OPTS: FetchOptions = { timeoutMs: 10000, maxBytes: 5_000_000, maxRedirects: 5 };
 
@@ -99,7 +99,7 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
       // Update sha256 in frontmatter and write back
       const newFm = rawFrontmatter.replace(/^sha256:\s*[a-f0-9]+$/m, `sha256: ${currentHash}`);
       const newText = `---\n${newFm}\n---\n${body}`;
-      await writeFile(raw.absPath, newText, "utf8");
+      await safeWritePage(raw.absPath, newText);
       results.push({
         raw_path: raw.relPath,
         source_url: sourceUrl,

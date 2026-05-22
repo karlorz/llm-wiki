@@ -1,9 +1,9 @@
-import { writeFile } from "node:fs/promises";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 import { extractCitationMarkers } from "../parsers/citations.js";
 import { appendLastOp } from "../utils/last-op.js";
+import { safeWritePage } from "../utils/safe-write.js";
 
 export interface MigrateCitationsInput {
   vault: string;
@@ -151,7 +151,8 @@ export async function runMigrateCitations(input: MigrateCitationsInput): Promise
     if (newText === text) { skipped.push(page.relPath); continue; }
 
     if (!input.dryRun) {
-      await writeFile(page.absPath, newText, "utf8");
+      const w = await safeWritePage(page.absPath, newText);
+      if (!w.ok) { skipped.push(page.relPath); continue; }
     }
     migrated.push(page.relPath);
   }

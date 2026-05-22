@@ -1,8 +1,8 @@
-import { writeFile } from "node:fs/promises";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
+import { safeWritePage } from "../utils/safe-write.js";
 
 export interface FrontmatterFixInput {
   vault: string;
@@ -66,7 +66,8 @@ export async function runFrontmatterFix(input: FrontmatterFixInput): Promise<{ e
     if (newText === text) { unchanged++; continue; }
 
     if (!input.dryRun) {
-      await writeFile(page.absPath, newText, "utf8");
+      const w = await safeWritePage(page.absPath, newText);
+      if (!w.ok) { skipped.push(page.relPath); continue; }
     }
     fixed.push(page.relPath);
   }
