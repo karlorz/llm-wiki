@@ -1,7 +1,7 @@
 ---
-version: 0.3.0
+version: 0.6.1
 name: wiki-sync
-description: Safely sync the vault git repository — multi-session safe via advisory lockfile. Runs skillwiki sync status, then guides push or pull with lint guards and conflict resolution.
+description: Safely sync the vault git repository — multi-session safe via advisory lockfile. Handles rebase conflict storms from archive-commit × snapshot-stream patterns. Runs skillwiki sync status, then guides push or pull with lint guards and conflict resolution.
 ---
 # wiki-sync
 ## When This Skill Activates
@@ -142,6 +142,31 @@ When `git pull --rebase` reports `CONFLICT (modify/delete)`:
    - `git -C "$VAULT" rm <path>` — accept the deletion (rebase continues)
    - `git -C "$VAULT" add <path>` — keep the local restoration (rebase continues)
 4. `git -C "$VAULT" rebase --continue`.
+
+### Rebase conflict storm (archive commits × snapshot stream)
+
+When many local archive-only commits (e.g., `archive: moved X to _archive/`) are rebased over an origin/main that receives frequent snapshot commits (e.g., sg01 `Snapshot YYYYMMDD_HHMMSS`), every archive commit re-triggers the same content conflicts on shared files (`log.md`, `knowledge.md`, `spec.md`). This is predictable and can be resolved systematically.
+
+**Detection**: 3+ consecutive rebase stops on commits whose message matches `^archive: moved`.
+
+**Resolution**: For each archive commit during the storm:
+
+```bash
+# Apply --ours to all conflicting files (keep HEAD = origin/main + snapshots)
+for f in $(git -C "$VAULT" diff --name-only --diff-filter=U); do
+  git -C "$VAULT" checkout --ours "$f" && git -C "$VAULT" add "$f"
+done
+git -C "$VAULT" rebase --continue
+```
+
+**After the storm passes** (non-archive commits or clean rebase), pop the stash and handle any remaining conflicts per the normal Conflict Resolution sections above.
+
+**Prevention**:
+- Sync more frequently — don't let local fall >5 commits behind origin/main
+- Bundle archive commits — `skillwiki archive --batch` groups 5-10 transcript archives into one commit, reducing rebase surface
+- For vaults with snapshot cron, prefer smaller, more frequent syncs over large batch rebases
+
+See `concepts/wiki-sync-rebase-conflict-storm-pattern.md` for detailed analysis.
 
 ## Multi-device coordination
 When the user mentions editing from Obsidian desktop and Claude Code on a server (or any two-device setup):
