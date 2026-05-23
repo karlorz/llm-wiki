@@ -210,7 +210,7 @@ export function detectFuseMount(vaultPath: string): { mountPoint: string; fsType
           best = { point, fsType: `fuse.${match[1].split(":")[0] || "unknown"}` };
         }
       }
-      if (best) return best;
+      if (best) return { mountPoint: best.point, fsType: best.fsType };
     }
   } catch { /* non-root may not read /proc/mounts */ }
   return null;
