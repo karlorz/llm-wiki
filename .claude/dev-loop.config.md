@@ -58,8 +58,41 @@ e2e_scripts:
 ```yaml
 bump_script: ./scripts/bump-version.sh
 publish_via: ci-tag-trigger
-manifests_count: 6
-remote_hosts: [sg01]
+manifests_count: 7        # bump-version.sh updates 7 manifests (cli, claude-plugin, codex-plugin, skills, shared, root, marketplace)
+deploy_script: ""         # sg01 is a plugin-test host, not a deploy target — DEPLOY step is a no-op
+remote_hosts: [sg01]      # kept for context (e2e-remote/e2e-plugin targets), not used by DEPLOY step
+
+# Release-trigger policy (consumed by step 10 PUSH)
+release_policy:
+  auto_bump: true
+  channel: beta                          # next bump → 0.6.1-beta.1, then -beta.2, ...; tag pattern v<X.Y.Z>-beta.<N>
+  trigger_globs:                          # any committed file matching these globs makes PUSH fire
+    - "packages/skills/**"
+    - "packages/cli/**"
+    - "packages/shared/**"
+    - ".claude-plugin/marketplace.json"
+    - "scripts/bump-version.sh"
+  skip_globs:                              # cycles where ALL committed files match these skip PUSH entirely
+    - "raw/**"
+    - "concepts/**"
+    - "entities/**"
+    - "queries/**"
+    - "comparisons/**"
+    - "meta/**"
+    - "projects/**"
+    - "_archive/**"
+    - "*.md"                               # standalone doc-only commits (CLAUDE.md, README, etc.)
+  tag_format: "v{version}"                 # publish.yml matches v[0-9]+.[0-9]+.[0-9]+(-beta.*)
+  verify_after_push: true                  # `git ls-remote origin refs/tags/<tag>` + `gh run watch --exit-status`
+```
+
+## CI Configuration
+
+```yaml
+ci_configured: true                        # .github/workflows/ci.yml present + branch protection on dev
+ci_discovery: runtime                       # GitHub branch protection is the source of truth for required checks
+ci_workflow: .github/workflows/ci.yml
+release_workflow: .github/workflows/publish.yml   # fires on v* tag push via OIDC (no NPM_TOKEN needed)
 ```
 
 ## Notes
@@ -74,12 +107,22 @@ notes:
     Vault structure (raw/, entities/, concepts/, etc.) is identical.
     SCHEMA.md, index.md, log.md conventions are shared.
   push_workflow: |
-    Sequence:
-    1. Bump all 6 manifests in lock-step via bump_script.
-    2. Commit and push to dev branch — this push IS the plugin release.
-    3. Tag (v0.X.Y-beta.Z) and push the tag → CI workflow publishes via OIDC.
-    4. Verify tag landed on remote: git ls-remote origin refs/tags/<tag>.
-    5. Monitor CI with `gh run watch`; never publish from dev host.
+    Sequence (step 10 PUSH — fires when release_policy.trigger_globs match committed files):
+    1. Compute next version: read current root package.json version (e.g. 0.6.0),
+       then list existing tags `git tag --list 'v<base>-beta.*'`, increment -beta.N
+       (e.g. v0.6.1-beta.1, then -beta.2). Stable bumps require explicit user request.
+    2. Bump all 7 manifests in lock-step via bump_script.
+    3. Commit (`chore: bump version to <X.Y.Z-beta.N>`) and push to dev branch
+       — this push IS the plugin release (Claude Code plugin uses HEAD of dev).
+    4. Tag `v<version>` and push the tag → publish.yml fires via OIDC → npm publish --tag beta.
+    5. Verify tag landed on remote: `git ls-remote origin refs/tags/v<version>`.
+    6. Verify CI: `gh run watch --exit-status` on the publish.yml run.
+    7. Never run `npm dist-tag add` or `npm publish` locally — OIDC tag routing only.
+  release_policy_notes: |
+    PUSH (step 10) is intentionally separate from MERGE (step 6b). MERGE always
+    commits + pushes/PRs the code change. PUSH bumps + tags + lets CI publish.
+    A cycle that only edits vault/, docs, or CLAUDE.md should commit (MERGE)
+    but skip PUSH. The trigger_globs / skip_globs lists encode this decision.
   distribution: |
     Two channels:
     1. Claude Code plugin via marketplace.json + plugin.json.
