@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runLint } from "../../src/commands/lint.js";
@@ -1221,6 +1221,76 @@ same body content here
       const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "stale_sections" });
       if (r.result.ok) {
         expect(r.result.data.summary.info).toBeGreaterThanOrEqual(1);
+      }
+    });
+  });
+
+  describe("file_source_url bucket", () => {
+    it("flags raw files with source_url: file://", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      writeFileSync(
+        join(v, "raw", "articles", "local-file.md"),
+        `---\nsource_url: file:///Users/me/Downloads/article.html\ningested: "2026-05-24"\nsha256: abc123\n---\n\ncontent\n`
+      );
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r.result.ok) {
+        const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+        expect(warningKinds).toContain("file_source_url");
+        const bucket = r.result.data.by_severity.warning.find(b => b.kind === "file_source_url");
+        expect(bucket?.items).toContain("raw/articles/local-file.md");
+      }
+    });
+
+    it("does not flag raw files with valid HTTP source_url", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      writeFileSync(
+        join(v, "raw", "articles", "web-file.md"),
+        `---\nsource_url: https://example.com/article\ningested: "2026-05-24"\nsha256: abc123\n---\n\ncontent\n`
+      );
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r.result.ok) {
+        const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+        expect(warningKinds).not.toContain("file_source_url");
+      }
+    });
+
+    it("--fix extracts web URL from body source: field and rewrites frontmatter", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      const path = join(v, "raw", "articles", "fixable.md");
+      writeFileSync(
+        path,
+        `---\nsource_url: file:///Users/me/Downloads/article.html\ningested: "2026-05-24"\nsha256: abc123\n---\n\nsource: https://example.com/real-url\n\nbody content\n`
+      );
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
+      expect(r.result.ok).toBe(true);
+      const after = readFileSync(path, "utf8");
+      expect(after).toContain("source_url: https://example.com/real-url");
+      expect(after).not.toContain("source_url: file://");
+      // Re-lint: file_source_url should no longer fire
+      const r2 = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r2.result.ok) {
+        const warningKinds = r2.result.data.by_severity.warning.map(b => b.kind);
+        expect(warningKinds).not.toContain("file_source_url");
+      }
+    });
+
+    it("--fix leaves frontmatter alone when body has no web source: field", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      const path = join(v, "raw", "articles", "unfixable.md");
+      const before = `---\nsource_url: file:///Users/me/Downloads/x.html\ningested: "2026-05-24"\nsha256: abc123\n---\n\nbody with no source field\n`;
+      writeFileSync(path, before);
+      await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
+      const after = readFileSync(path, "utf8");
+      expect(after).toBe(before); // unchanged
+      // Bucket still flags it
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r.result.ok) {
+        const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+        expect(warningKinds).toContain("file_source_url");
       }
     });
   });

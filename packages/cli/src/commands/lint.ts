@@ -84,7 +84,7 @@ export interface LintOutput {
 }
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "broken_sources", "tag_not_in_taxonomy"] as const;
-const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram"] as const;
+const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file_source_url", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram"] as const;
 const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
@@ -190,6 +190,18 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     if (subDirDupes.length > 0) {
       buckets.raw_subdirectory_duplicate = subDirDupes;
     }
+
+    // file:// source_url check: raw files should have a real external source URL, not a local file path
+    const fileSourceUrlFlags: string[] = [];
+    for (const raw of scan.data.raw) {
+      const text = await readPage(raw);
+      const split = splitFrontmatter(text);
+      if (!split.ok) continue;
+      if (/^source_url:\s*file:\/\//m.test(split.data.rawFrontmatter)) {
+        fileSourceUrlFlags.push(raw.relPath);
+      }
+    }
+    if (fileSourceUrlFlags.length > 0) buckets.file_source_url = fileSourceUrlFlags;
 
     const legacyPages: string[] = [];
     const orphanedPages: string[] = [];
@@ -647,6 +659,48 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
         const remaining = wikilinkCitationFlags.filter(p => !fixedSet.has(p));
         if (remaining.length > 0) buckets.wikilink_citation = remaining;
         else delete buckets.wikilink_citation;
+      }
+    }
+
+    // --fix: auto-fix file_source_url by extracting web URL from body source: field
+    if (input.fix && fileSourceUrlFlags.length > 0) {
+      const FILE_FIXED: string[] = [];
+      for (const relPath of fileSourceUrlFlags) {
+        try {
+          const absPath = `${input.vault}/${relPath}`;
+          const raw = await readFile(absPath, "utf8");
+          const parts = raw.split("---", 3);
+          if (parts.length < 3) { unresolved.push(relPath); continue; }
+          const rawFm = parts[1]!;
+          const rest = parts[2]!;
+
+          // Try to extract a real web URL from the body's source: field
+          const sourceMatch = rest.match(/^source:\s*"?(https?:\/\/[^\s\n"]+)"?\s*$/m);
+          if (!sourceMatch) {
+            // No web URL found in body — can't auto-fix
+            unresolved.push(relPath);
+            continue;
+          }
+          const realUrl = sourceMatch[1]!;
+
+          const newRawFm = rawFm.replace(/^source_url:\s*file:\/\/[^\n]+/m, `source_url: ${realUrl}`);
+          const newContent = `---${newRawFm}---${rest}`;
+          const w = await safeWritePage(absPath, newContent);
+          if (!w.ok) { unresolved.push(relPath); continue; }
+          FILE_FIXED.push(relPath);
+        } catch {
+          unresolved.push(relPath);
+        }
+      }
+
+      fixed.push(...FILE_FIXED);
+
+      // Re-scan: remove fixed pages from the bucket
+      if (FILE_FIXED.length > 0) {
+        const fixedSet = new Set(FILE_FIXED);
+        const remaining = fileSourceUrlFlags.filter(p => !fixedSet.has(p));
+        if (remaining.length > 0) buckets.file_source_url = remaining;
+        else delete buckets.file_source_url;
       }
     }
   }
