@@ -130,6 +130,21 @@ CI runs four validation stages before allowing merge:
 
 Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift early.
 
+## Vault sync infrastructure (macOS dev host)
+
+Two launchd jobs keep `~/wiki` in sync with the canonical stores. Reference: `~/wiki/projects/llm-wiki/architecture/2026-05-23-vault-sync-topology.md`.
+
+- **`com.karlchow.wiki-push`** (`~/bin/wiki-push.sh`, every 60 s) — pushes macOS file changes to SeaweedFS S3 via `rclone copy --update`. Push-only; never deletes on remote. Filter file `~/.config/rclone/wiki-push-filters.txt` excludes credentials (`remotely-save/data.json`), advisory locks (`.skillwiki/sync.lock`), `.claude/settings.local.json`, and noise.
+- **`com.karlchow.wiki-fetch`** (`~/bin/wiki-fetch-notify.sh`, every 5 min) — read-only `git fetch origin main`; fires `osascript` notification only on positive delta. No working-tree writes.
+- **`wiki-presync` skill** (`~/wiki/.claude/skills/wiki-presync/`) — vault-local skill (not in this repo's plugin) that runs lint gate + collision dedup + `git pull --rebase`. Invoke manually before pushing.
+- **Retired**: `com.karlchow.seaweedfs-bisync.plist.disabled` — bidirectional bisync, killed 2026-05-23. Do not re-enable. Tombstone: see `~/wiki/raw/transcripts/2026-05-23-task-tombstone-bisync-plist.md`.
+
+## Cross-host sync gotchas (read before touching sg01)
+
+- **sg01 `wiki-snapshot-v3.sh` uses `rclone sync` (destructive)** — `/root/.hermes/scripts/wiki-snapshot-v3.sh`. A `--max-delete 10` guard was added 2026-05-23 to abort the cycle before mass deletions. **Do not remove this flag without a deliberate replacement** — without it, any momentary S3 inconsistency mass-deletes files from GitHub (this happened during 2026-05-23 session, see `raw/transcripts/2026-05-23-bug-sg01-snapshot-destructive-rclone-sync.md`). Backup of original: `/root/.hermes/scripts/wiki-snapshot-v3.sh.bak.20260523-180658`.
+- **Single-writer-git is enforced by convention**: only sg01 produces "Snapshot $DATE" commits; macOS pushes its own edits. See `queries/multi-writer-git-sync-conflict-prevention.md`.
+- **GitHub is canonical for promoted typed-knowledge**; S3 is canonical for agent-edit transients. See `concepts/vault-write-authority-model.md`.
+
 ## Current counts (2026-05-22)
 
 - 18 SKILL.md files in `packages/skills/`
@@ -141,6 +156,6 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 - Lint --only supports: any valid bucket name (e.g., `lint --only cli_refs`)
 - Stale --project supports: scope to a single project (e.g., `stale --project llm-wiki`)
 - Exit codes: 49 total; highest: `BODY_TRUNCATION_GUARD (47)`
-- Config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`; `AUTO_COMMIT` (default: enabled, opt-out)
+- Config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`; `AUTO_COMMIT` (default: enabled, opt-out — **only triggers on skillwiki CLI writes, NOT on Edit/Write tool calls or bash `mv`/`rm`. Plain file edits leave a dirty working tree.**)
 - `doctor` checks: 21 (incl. 4 new S3 mount health checks: `rclone_flags`, `rclone_version`, `s3_write_test`, `vfs_cache_health` — skip on local disk, activate on FUSE mounts); `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code
 - Page-rewriting commands (`frontmatter-fix`, `tag-sync`, `migrate-citations`, `lint --fix`, `drift`) use `safeWritePage` (atomic temp+rename, body-shrink guard at 0.5 ratio) as defense-in-depth against the 2026-05-22 SeaweedFS rclone VFS write-back race.
