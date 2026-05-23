@@ -1,15 +1,52 @@
 import { rename, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault } from "../utils/vault.js";
+import { scanVault, readPage } from "../utils/vault.js";
+import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
 
-export interface ArchiveInput { vault: string; page: string }
+export interface ArchiveInput {
+  vault: string;
+  page: string;
+  cascade?: boolean;
+  apply?: boolean;
+}
+
+export interface CascadeWikilinkRef { page: string; count: number }
+export interface CascadeIndexRef { line: number; text: string }
+export interface CascadeSourceArrayRef {
+  page: string;
+  sources_before: string[];
+  sources_after: string[];
+}
+
+export interface CascadePreview {
+  wikilink_refs: CascadeWikilinkRef[];
+  index_refs: CascadeIndexRef[];
+  source_array_refs: CascadeSourceArrayRef[];
+}
+
 export interface ArchiveOutput {
   archived_from: string;
   archived_to: string;
   index_updated: boolean;
+  applied?: boolean;
+  cascade?: CascadePreview;
   humanHint: string;
+}
+
+function countWikilinks(body: string, slug: string): number {
+  // Match [[slug]], [[slug|alias]], [[slug#anchor]] — slug is the bare basename
+  const escaped = slug.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`\\[\\[${escaped}(?:[|#][^\\]]*)?\\]\\]`, "g");
+  const m = body.match(re);
+  return m ? m.length : 0;
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 export async function runArchive(input: ArchiveInput): Promise<{ exitCode: number; result: Result<ArchiveOutput> }> {
@@ -32,7 +69,90 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
 
   if (relPath.startsWith("_archive/")) return { exitCode: ExitCode.ARCHIVE_ALREADY_ARCHIVED, result: err("ARCHIVE_ALREADY_ARCHIVED", { page: relPath }) };
 
+  const slug = relPath.replace(/\.md$/, "").split("/").pop()!;
   const archivePath = join("_archive", relPath).replace(/\\/g, "/");
+
+  // ----- Cascade scan (read-only) -----
+  let cascade: CascadePreview | undefined;
+  if (input.cascade) {
+    const wikilinkRefs: CascadeWikilinkRef[] = [];
+    const sourceArrayRefs: CascadeSourceArrayRef[] = [];
+    for (const page of scan.data.typedKnowledge) {
+      if (page.relPath === relPath) continue;
+      const text = await readPage(page);
+      const split = splitFrontmatter(text);
+      if (!split.ok) continue;
+      // Wikilinks in body
+      const wl = countWikilinks(split.data.body, slug);
+      if (wl > 0) wikilinkRefs.push({ page: page.relPath, count: wl });
+      // sources: arrays in frontmatter
+      const fm = extractFrontmatter(text);
+      if (!fm.ok) continue;
+      const sources = fm.data.sources;
+      if (Array.isArray(sources) && sources.includes(relPath)) {
+        const before = sources.filter((s): s is string => typeof s === "string");
+        const after = before.filter(s => s !== relPath);
+        sourceArrayRefs.push({ page: page.relPath, sources_before: before, sources_after: after });
+      }
+    }
+    // index.md row scan (typed-knowledge only)
+    const indexRefs: CascadeIndexRef[] = [];
+    if (!isRaw) {
+      try {
+        const idx = await readFile(join(input.vault, "index.md"), "utf8");
+        idx.split("\n").forEach((line, i) => {
+          if (line.includes(`[[${slug}]]`)) indexRefs.push({ line: i + 1, text: line });
+        });
+      } catch (e: unknown) {
+        if (e instanceof Error && "code" in e && e.code !== "ENOENT") throw e;
+      }
+    }
+    cascade = { wikilink_refs: wikilinkRefs, index_refs: indexRefs, source_array_refs: sourceArrayRefs };
+  }
+
+  // ----- Dry-run gate -----
+  // --cascade alone is preview-only; --apply confirms mutation.
+  if (input.cascade && !input.apply) {
+    const summary = `DRY-RUN — would archive ${relPath}; ${cascade!.wikilink_refs.length} wikilink ref(s), ${cascade!.index_refs.length} index ref(s), ${cascade!.source_array_refs.length} source array ref(s).`;
+    return {
+      exitCode: ExitCode.OK,
+      result: ok({
+        archived_from: relPath,
+        archived_to: archivePath,
+        index_updated: false,
+        applied: false,
+        cascade,
+        humanHint: summary,
+      }),
+    };
+  }
+
+  // ----- Apply cascade mutations (sources arrays only) -----
+  if (input.cascade && input.apply && cascade) {
+    for (const ref of cascade.source_array_refs) {
+      const absPath = join(input.vault, ref.page);
+      const text = await readFile(absPath, "utf8");
+      const split = splitFrontmatter(text);
+      if (!split.ok) continue;
+      // Rewrite the sources: block in the frontmatter
+      const before = split.data.rawFrontmatter;
+      // Replace the YAML `sources:` array. Conservative regex: matches a `sources:` key followed by
+      // either inline `[...]` or block-list lines (`  - ...`) until next top-level key or end.
+      const newSourcesYaml = ref.sources_after.length === 0
+        ? "sources: []"
+        : "sources:\n" + ref.sources_after.map(s => `  - ${s}`).join("\n");
+      const fmRewritten = before.replace(
+        /^sources:\s*(?:\[[^\]]*\]|(?:\r?\n(?:\s*-\s.*))+)/m,
+        newSourcesYaml,
+      );
+      if (fmRewritten === before) continue; // no change — bail safely
+      if (!arraysEqual(ref.sources_after, ref.sources_before)) {
+        await writeFile(absPath, `---\n${fmRewritten}\n---${split.data.body}`, "utf8");
+      }
+    }
+  }
+
+  // ----- Standard archive flow (always runs unless dry-run gated above) -----
   await mkdir(dirname(join(input.vault, archivePath)), { recursive: true });
 
   let indexUpdated = false;
@@ -40,7 +160,6 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
     const indexPath = join(input.vault, "index.md");
     try {
       const idx = await readFile(indexPath, "utf8");
-      const slug = relPath.replace(/\.md$/, "").split("/").pop()!;
       const originalLines = idx.split("\n");
       const filtered = originalLines.filter(l => !l.includes(`[[${slug}]]`));
       if (filtered.length !== originalLines.length) {
@@ -55,11 +174,23 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
   await rename(join(input.vault, relPath), join(input.vault, archivePath));
 
   appendLastOp(input.vault, {
-    operation: "archive",
-    summary: `moved ${relPath} to ${archivePath}`,
+    operation: input.cascade ? "archive-cascade" : "archive",
+    summary: `moved ${relPath} to ${archivePath}${input.cascade ? ` (cascade: ${cascade?.source_array_refs.length ?? 0} source arrays updated)` : ""}`,
     files: [relPath],
     timestamp: new Date().toISOString(),
   });
 
-  return { exitCode: ExitCode.OK, result: ok({ archived_from: relPath, archived_to: archivePath, index_updated: indexUpdated, humanHint: `${relPath} -> ${archivePath}${indexUpdated ? " (index updated)" : ""}` }) };
+  const applied = input.cascade ? true : undefined;
+  const cascadeNote = input.cascade ? ` (cascade: ${cascade!.source_array_refs.length} src arrays updated, ${cascade!.wikilink_refs.length} wikilinks reported)` : "";
+  return {
+    exitCode: ExitCode.OK,
+    result: ok({
+      archived_from: relPath,
+      archived_to: archivePath,
+      index_updated: indexUpdated,
+      ...(applied !== undefined ? { applied } : {}),
+      ...(cascade ? { cascade } : {}),
+      humanHint: `${relPath} -> ${archivePath}${indexUpdated ? " (index updated)" : ""}${cascadeNote}`,
+    }),
+  };
 }

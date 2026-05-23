@@ -409,10 +409,12 @@ program
   .command("archive <page> [vault]")
   .description("archive a typed-knowledge or raw page")
   .option("--wiki <name>", "wiki profile name")
+  .option("--cascade", "scan vault for references (wikilinks + sources arrays); preview by default", false)
+  .option("--apply", "with --cascade: mutate sources arrays and archive (without --apply, --cascade is preview-only)", false)
   .action(async (page, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runArchive({ vault: v.vault, page }), v.vault);
+    else emit(await runArchive({ vault: v.vault, page, cascade: !!opts.cascade, apply: !!opts.apply }), v.vault);
   });
 
 // drift

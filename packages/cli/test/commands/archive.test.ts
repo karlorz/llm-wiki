@@ -129,4 +129,94 @@ describe("runArchive", () => {
     }
     expect(existsSync(join(dir, "raw", "articles", "alpha.md"))).toBe(true);
   });
+
+  // --- cascade tests ---
+
+  it("--cascade preview reports wikilink + sources + index refs, no mutation", async () => {
+    const dir = makeVault(true);
+    writeFileSync(join(dir, "concepts", "alpha.md"), FM);
+    // Page that wikilinks to alpha
+    writeFileSync(
+      join(dir, "concepts", "bar.md"),
+      `---\ntitle: bar\ntype: concept\ntags: []\nsources: []\nprovenance: research\ncreated: 2026-05-05\nupdated: 2026-05-05\n---\n\nReferences [[alpha]] twice and [[alpha|alias]].`,
+    );
+    // Page with alpha in sources array
+    writeFileSync(
+      join(dir, "concepts", "baz.md"),
+      `---\ntitle: baz\ntype: concept\ntags: []\nsources:\n  - concepts/alpha.md\n  - raw/articles/other.md\nprovenance: research\ncreated: 2026-05-05\nupdated: 2026-05-05\n---\n\ncontent`,
+    );
+    const r = await runArchive({ vault: dir, page: "alpha", cascade: true });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.applied).toBe(false);
+      expect(r.result.data.cascade).toBeDefined();
+      expect(r.result.data.cascade!.wikilink_refs).toEqual([
+        { page: "concepts/bar.md", count: 2 },
+      ]);
+      expect(r.result.data.cascade!.source_array_refs).toEqual([
+        {
+          page: "concepts/baz.md",
+          sources_before: ["concepts/alpha.md", "raw/articles/other.md"],
+          sources_after: ["raw/articles/other.md"],
+        },
+      ]);
+      expect(r.result.data.cascade!.index_refs.length).toBeGreaterThan(0);
+    }
+    // No mutation: file still exists, baz still has alpha in sources
+    expect(existsSync(join(dir, "concepts", "alpha.md"))).toBe(true);
+    expect(existsSync(join(dir, "_archive", "concepts", "alpha.md"))).toBe(false);
+    expect(readFileSync(join(dir, "concepts", "baz.md"), "utf8")).toContain("concepts/alpha.md");
+    expect(readFileSync(join(dir, "index.md"), "utf8")).toContain("[[alpha]]");
+  });
+
+  it("--cascade --apply mutates sources arrays + archives", async () => {
+    const dir = makeVault(true);
+    writeFileSync(join(dir, "concepts", "alpha.md"), FM);
+    writeFileSync(
+      join(dir, "concepts", "baz.md"),
+      `---\ntitle: baz\ntype: concept\ntags: []\nsources:\n  - concepts/alpha.md\n  - raw/articles/other.md\nprovenance: research\ncreated: 2026-05-05\nupdated: 2026-05-05\n---\n\ncontent`,
+    );
+    const r = await runArchive({ vault: dir, page: "alpha", cascade: true, apply: true });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.applied).toBe(true);
+    }
+    // File archived
+    expect(existsSync(join(dir, "concepts", "alpha.md"))).toBe(false);
+    expect(existsSync(join(dir, "_archive", "concepts", "alpha.md"))).toBe(true);
+    // baz sources cleaned (alpha removed; other.md preserved)
+    const baz = readFileSync(join(dir, "concepts", "baz.md"), "utf8");
+    expect(baz).not.toContain("concepts/alpha.md");
+    expect(baz).toContain("raw/articles/other.md");
+    // Index stripped
+    expect(readFileSync(join(dir, "index.md"), "utf8")).not.toContain("[[alpha]]");
+  });
+
+  it("--cascade --apply preserves shared entities (sources entry removed, page kept)", async () => {
+    const dir = makeVault(false);
+    writeFileSync(join(dir, "concepts", "alpha.md"), FM);
+    // Page with ONLY alpha in sources — should still be kept (only entry removed)
+    writeFileSync(
+      join(dir, "concepts", "lonely.md"),
+      `---\ntitle: lonely\ntype: concept\ntags: []\nsources:\n  - concepts/alpha.md\nprovenance: research\ncreated: 2026-05-05\nupdated: 2026-05-05\n---\n\ncontent`,
+    );
+    await runArchive({ vault: dir, page: "alpha", cascade: true, apply: true });
+    // lonely.md must still exist
+    expect(existsSync(join(dir, "concepts", "lonely.md"))).toBe(true);
+    const lonely = readFileSync(join(dir, "concepts", "lonely.md"), "utf8");
+    expect(lonely).not.toContain("concepts/alpha.md");
+    // sources should be empty array (or empty list block) — alpha removed
+    expect(lonely).toMatch(/sources:\s*(\[\]|\n)/);
+  });
+
+  it("plain archive (no --cascade) behaves as before — no cascade field in output", async () => {
+    const dir = makeVault(true);
+    writeFileSync(join(dir, "concepts", "alpha.md"), FM);
+    const r = await runArchive({ vault: dir, page: "alpha" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.cascade).toBeUndefined();
+      expect(r.result.data.applied).toBeUndefined();
+    }
+  });
 });
