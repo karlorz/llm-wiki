@@ -111,7 +111,7 @@ run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME WIKI_PATH=$VAULT $REMOTE_CLI doctor"
 # TEMP_HOME has no ~/.claude/skills/ so skills_installed warns → exit 28
 assert_exit 28 "$RUN_RC" "doctor exits 28 (skills_installed warn)"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0" "doctor 0 errors"
-assert_json_contains "$RUN_OUTPUT" "data.summary.warn" "1" "doctor 1 warn (skills_installed)"
+assert_json_contains "$RUN_OUTPUT" "data.summary.warn" "2" "doctor 2 warns (skills_installed + temp vault)"
 
 # ---- 6. Cleanup ----
 ssh "$SSH_HOST" "rm -rf $VAULT $TEMP_HOME" 2>/dev/null || true
