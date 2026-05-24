@@ -26,6 +26,12 @@ jobs:
       - run: npm ci
       - name: Bump all manifests
         run: bash scripts/bump-version.sh ${{ inputs.version }}
+      - name: Pre-tag guard
+        run: |
+          if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Tag v${{ inputs.version }} already exists — aborting promote"
+            exit 1
+          fi
       - name: Commit and tag
         run: |
           git config user.name "github-actions[bot]"
@@ -33,7 +39,7 @@ jobs:
           git add -A
           git commit -m "chore: release v${{ inputs.version }}"
           git tag "v${{ inputs.version }}"
-          git push origin HEAD --tags
+          git push origin dev --tags
       - name: Generate release notes
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
