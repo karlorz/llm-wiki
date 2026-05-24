@@ -72,6 +72,13 @@ release_policy:
     - "packages/shared/**"
     - ".claude-plugin/marketplace.json"
     - "scripts/bump-version.sh"
+  # NOTE: scripts/e2e-*.sh is intentionally NOT in trigger_globs.
+  # E2E assertion fixes (e.g., doctor warn count updates) are test
+  # infrastructure, not shipped artifacts. Cycles that only edit e2e
+  # scripts skip PUSH so they don't produce noise releases. If an e2e
+  # change rides alongside a feature-bearing change in trigger_globs,
+  # the PUSH still fires for the feature and pulls the e2e fix in too.
+  # Decision recorded 2026-05-24, closes raw/transcripts/2026-05-24-task-release-policy-trigger-globs-e2e-scripts.md
   skip_globs:                              # cycles where ALL committed files match these skip PUSH entirely
     - "raw/**"
     - "concepts/**"
