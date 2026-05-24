@@ -253,12 +253,12 @@ ssh "$SSH_HOST" "rm -rf $TEMP_HOME_REMOTE" 2>/dev/null || true
 printf "\n--- Remote doctor ---\n"
 
 # doctor with valid vault — should be all-pass or warn-only
-# (skillwiki is globally installed on sg01, so cli_on_path should pass)
+# (sg01 has 2 expected warns: vault_git_remote (no git on S3 mount) + s3_mount_perf (cold cache))
 run_cli ssh "$SSH_HOST" "NO_UPDATE_NOTIFIER=1 WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI doctor"
 assert_exit 0 "$RUN_RC" "remote doctor exits 0 (all pass)"
 assert_json_contains "$RUN_OUTPUT" "ok"                "true" "remote doctor returns ok"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0"   "remote doctor reports 0 errors"
-assert_json_contains "$RUN_OUTPUT" "data.summary.warn"  "0"   "remote doctor reports 0 warns"
+assert_json_contains "$RUN_OUTPUT" "data.summary.warn"  "2"   "remote doctor reports 2 warns (vault_git_remote + s3_mount_perf — expected on sg01)"
 
 # Verify exactly 9 checks
 checks_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "
