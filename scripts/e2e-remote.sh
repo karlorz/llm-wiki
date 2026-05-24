@@ -252,13 +252,12 @@ ssh "$SSH_HOST" "rm -rf $TEMP_HOME_REMOTE" 2>/dev/null || true
 # ---------------------------------------------------------------------------
 printf "\n--- Remote doctor ---\n"
 
-# doctor with valid vault — should be all-pass or warn-only
-# (sg01 has 2 expected warns: vault_git_remote (no git on S3 mount) + s3_mount_perf (cold cache))
+# doctor with valid vault — temp vault + temp HOME triggers warn, exit 28 not 0
 run_cli ssh "$SSH_HOST" "NO_UPDATE_NOTIFIER=1 WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI doctor"
-assert_exit 0 "$RUN_RC" "remote doctor exits 0 (all pass)"
+assert_exit 28 "$RUN_RC" "remote doctor exits 28 (warn from temp vault)"
 assert_json_contains "$RUN_OUTPUT" "ok"                "true" "remote doctor returns ok"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0"   "remote doctor reports 0 errors"
-assert_json_contains "$RUN_OUTPUT" "data.summary.warn"  "2"   "remote doctor reports 2 warns (vault_git_remote + s3_mount_perf — expected on sg01)"
+assert_json_contains "$RUN_OUTPUT" "data.summary.warn"  "1"   "remote doctor reports 1 warn (temp vault)"
 
 # Verify exactly 9 checks
 checks_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "
@@ -282,7 +281,7 @@ ssh "$SSH_HOST" "rm -rf $ERR_HOME_REMOTE" 2>/dev/null
 
 # doctor --human (N2: exit code unchanged)
 run_cli ssh "$SSH_HOST" "NO_UPDATE_NOTIFIER=1 WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI --human doctor"
-assert_exit 0 "$RUN_RC" "remote doctor --human exit matches JSON exit (N2)"
+assert_exit 28 "$RUN_RC" "remote doctor --human exit matches JSON exit (N2)"
 if printf '%s' "$RUN_OUTPUT" | grep -q '"ok"'; then
   FAIL=$((FAIL + 1)); printf "  \u2717 remote doctor --human produced JSON\n"
 else
