@@ -533,10 +533,12 @@ export function runSyncLock(input: SyncLockInput): { exitCode: number; result: R
 export interface SyncUnlockInput {
   vault: string;
   sessionId?: string;
+  force?: boolean;
 }
 
 export interface SyncUnlockOutput {
   released: boolean;
+  prior?: { session_id: string; pid: number; summary: string };
   humanHint: string;
 }
 
@@ -551,13 +553,31 @@ export function runSyncUnlock(input: SyncUnlockInput): { exitCode: number; resul
     };
   }
 
-  const result = releaseLock(vault, { sessionId: input.sessionId });
+  const result = releaseLock(vault, { sessionId: input.sessionId, force: input.force });
+
+  let humanHint: string;
+  if (result.released && result.prior) {
+    humanHint = `lock force-released (was held by session ${result.prior.session_id}, PID ${result.prior.pid})`;
+  } else if (result.released) {
+    humanHint = "lock released";
+  } else {
+    humanHint = "lock not held by this session (no-op)";
+  }
+
+  const output: SyncUnlockOutput = {
+    released: result.released,
+    humanHint,
+  };
+  if (result.prior) {
+    output.prior = {
+      session_id: result.prior.session_id,
+      pid: result.prior.pid,
+      summary: result.prior.summary,
+    };
+  }
 
   return {
     exitCode: ExitCode.OK,
-    result: ok({
-      released: result.released,
-      humanHint: result.released ? "lock released" : "lock not held by this session (no-op)",
-    }),
+    result: ok(output),
   };
 }

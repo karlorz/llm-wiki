@@ -478,6 +478,44 @@ describe("runSyncUnlock", () => {
     // Verify file still exists
     expect(existsSync(join(dir, ".skillwiki", "sync.lock"))).toBe(true);
   });
+
+  it("force unlock with no peer is no-op", () => {
+    const dir = makeTempDir();
+    const { exitCode, result } = runSyncUnlock({ vault: dir, force: true });
+    expect(exitCode).toBe(ExitCode.OK);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.released).toBe(false);
+      expect(result.data.prior).toBeUndefined();
+    }
+  });
+
+  it("force unlock releases peer-held lock and surfaces prior holder", () => {
+    const dir = makeTempDir();
+    mkdirSync(join(dir, ".skillwiki"), { recursive: true });
+    const peerLock = {
+      session_id: "stale-peer",
+      pid: 47225,
+      cwd: "/other/path",
+      summary: "stale lock from yesterday",
+      acquired: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(),
+      expires: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+    };
+    writeFileSync(join(dir, ".skillwiki", "sync.lock"), JSON.stringify(peerLock, null, 2));
+    const { exitCode, result } = runSyncUnlock({ vault: dir, force: true });
+    expect(exitCode).toBe(ExitCode.OK);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.released).toBe(true);
+      expect(result.data.prior).toBeDefined();
+      expect(result.data.prior?.session_id).toBe("stale-peer");
+      expect(result.data.prior?.pid).toBe(47225);
+      expect(result.data.humanHint).toContain("force-released");
+      expect(result.data.humanHint).toContain("stale-peer");
+    }
+    // Lockfile is gone
+    expect(existsSync(join(dir, ".skillwiki", "sync.lock"))).toBe(false);
+  });
 });
 
 describe("runSyncPeers", () => {

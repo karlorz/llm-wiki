@@ -612,11 +612,12 @@ syncCmd
 syncCmd
   .command("unlock [vault]")
   .description("release advisory lock on vault")
+  .option("--force", "release lock regardless of holder", false)
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(runSyncUnlock({ vault: v.vault }));
+    else emit(runSyncUnlock({ vault: v.vault, force: !!opts.force }));
   });
 
 syncCmd

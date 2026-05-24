@@ -143,8 +143,15 @@ function writeLockedFile(path: string, lock: LockFile): void {
 /**
  * Release lock if held by this session. Returns { released: true } if deleted,
  * { released: false } if not held by us (no-op).
+ *
+ * With { force: true }, releases the lock regardless of holder. When the lock
+ * was held by another session, the prior LockFile is returned so the caller
+ * can surface holder info to the operator.
  */
-export function releaseLock(vault: string, opts: { sessionId?: string } = {}): { released: boolean } {
+export function releaseLock(
+  vault: string,
+  opts: { sessionId?: string; force?: boolean } = {},
+): { released: boolean; prior?: LockFile } {
   const path = lockPath(vault);
   if (!existsSync(path)) {
     return { released: false };
@@ -152,6 +159,18 @@ export function releaseLock(vault: string, opts: { sessionId?: string } = {}): {
 
   const sessionId = opts.sessionId ?? getSessionId();
   const existing = readLock(vault);
+
+  if (opts.force) {
+    try {
+      unlinkSync(path);
+      // prior is only meaningful when the lock was held by someone else
+      const prior =
+        existing && existing.session_id !== sessionId ? existing : undefined;
+      return { released: true, prior };
+    } catch {
+      return { released: false };
+    }
+  }
 
   if (!existing || existing.session_id !== sessionId) {
     // Not held by us; don't delete
