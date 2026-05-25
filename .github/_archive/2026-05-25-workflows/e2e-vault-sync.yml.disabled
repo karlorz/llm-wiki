@@ -1,0 +1,98 @@
+name: e2e-vault-sync
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target host for remote e2e (sg01, sg02, lxc)'
+        required: false
+        type: choice
+        options:
+          - sg02
+          - sg01
+          - lxc
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-local:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+      - run: npm ci
+      - run: npm run -w skillwiki build
+      - name: Run vault-sync local e2e
+        run: bash scripts/e2e-vault-sync-local.sh
+
+  e2e-sg02:
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.target == 'sg02')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+      - run: npm ci
+      - name: Validate e2e-vault-sync-remote.sh syntax
+        run: bash -n scripts/e2e-vault-sync-remote.sh
+
+  e2e-sg01-readonly:
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'sg01'
+    runs-on: ubuntu-latest
+    environment: sg01
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+      - name: Run vault-sync read-only verify on sg01
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SSH_PRIVATE_KEY" ]; then
+            echo "::error::SSH_PRIVATE_KEY not set — cannot run sg01 readonly verification"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H sg01 >> ~/.ssh/known_hosts 2>/dev/null || true
+          HOST_ENV=scripts/hosts/sg01.env bash scripts/e2e-vault-sync-remote.sh
+
+  e2e-lxc:
+    if: github.event_name == 'workflow_dispatch' && inputs.target == 'lxc'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+      - name: Run vault-sync on LXC host
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY_LXC }}
+        run: |
+          if [ -z "$SSH_PRIVATE_KEY_LXC" ]; then
+            echo "::warning::SSH_PRIVATE_KEY_LXC not set — cannot run LXC e2e"
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY_LXC" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # LXC hosts use dynamic env — verify it exists or prompt
+          if [ ! -f scripts/hosts/lxc-test.env ]; then
+            echo "::warning::scripts/hosts/lxc-test.env not found — LXC host not provisioned yet"
+            echo "Provision a devsh VM first, then create the env file per scripts/hosts/README.md"
+            exit 0
+          fi
+          HOST_ENV=scripts/hosts/lxc-test.env bash scripts/e2e-vault-sync-remote.sh

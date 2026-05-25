@@ -1,0 +1,10 @@
+[Unit]
+Description=vault-sync push (rclone copy + git push)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=@SCRIPT_DIR@/wiki-push.sh
+RuntimeMaxSec=300
+Nice=10

@@ -1,38 +1,51 @@
 #!/usr/bin/env bash
 # scripts/e2e-remote.sh
-# End-to-end smoke tests for the skillwiki CLI on a remote Debian host (sg01).
+# End-to-end smoke tests for the skillwiki CLI on a remote Debian host.
+#
+# Reads HOST_ENV to select the target host. Default: scripts/hosts/sg02.env.
+# (sg01 is production — only run against it with explicit READONLY_VERIFY=true.)
 #
 # Prerequisites:
-#   - ssh sg01 works with key auth
+#   - ssh <SSH_HOST> works with key auth (from .env)
 #   - Remote host has Node.js 20+
 #   - skillwiki installed globally (auto-installed from package.json version)
 #
 # Usage:
+#   # Default sg02 (dev-linux):
 #   ./scripts/e2e-remote.sh
+#
+#   # Explicit host:
+#   HOST_ENV=scripts/hosts/sg02.env bash scripts/e2e-remote.sh
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# 1. Source shared helpers
+# 1. Source shared helpers and host-env
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "$SCRIPT_DIR/e2e-common.sh"
+source "$SCRIPT_DIR/lib/host-env.sh"
 
 # ---------------------------------------------------------------------------
-# 2. Read expected version from package.json (no manual updates needed)
+# 2. Load host env (default: sg02.dev — NOT sg01)
+# ---------------------------------------------------------------------------
+HOST_ENV="${HOST_ENV:-$SCRIPT_DIR/hosts/sg02.env}"
+host_env_load "$HOST_ENV"
+
+# ---------------------------------------------------------------------------
+# 3. Read expected version from package.json (no manual updates needed)
 # ---------------------------------------------------------------------------
 EXPECTED_VERSION=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 
 # ---------------------------------------------------------------------------
-# 3. Setup
+# 4. Setup
 # ---------------------------------------------------------------------------
-SSH_HOST="sg01"
 REMOTE_CLI="skillwiki"
 VAULT_NAME="skillwiki-e2e-$(date +%s)"
 VAULT_REMOTE="/tmp/$VAULT_NAME"
 INSTALL_TARGET="/tmp/skillwiki-install-$(date +%s)"
 
-printf "\n=== Remote E2E (sg01) ===\n"
+printf "\n=== Remote E2E (%s) ===\n" "$SSH_HOST"
 printf "Vault : %s\n" "$VAULT_REMOTE"
 printf "Target: %s\n" "$INSTALL_TARGET"
 

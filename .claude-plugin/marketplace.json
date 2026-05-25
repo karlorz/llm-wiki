@@ -30,6 +30,29 @@
         "skills",
         "karpathy"
       ]
+    },
+    {
+      "name": "vault-sync",
+      "description": "5 skills (vault-sync-install, vault-sync-status, vault-sync-uninstall, vault-presync, vault-snapshot) for cross-platform vault sync: rclone push, fetch-notify, presync, snapshot. macOS launchd + Linux systemd.",
+      "version": "0.6.2-beta.1",
+      "source": "./packages/vault-sync",
+      "strict": true,
+      "author": {
+        "name": "karlorz",
+        "url": "https://github.com/karlorz"
+      },
+      "homepage": "https://github.com/karlorz/llm-wiki",
+      "repository": "https://github.com/karlorz/llm-wiki",
+      "license": "MIT",
+      "keywords": [
+        "vault",
+        "sync",
+        "rclone",
+        "git",
+        "skillwiki",
+        "launchd",
+        "systemd"
+      ]
     }
   ]
 }

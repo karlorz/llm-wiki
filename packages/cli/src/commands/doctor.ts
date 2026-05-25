@@ -1,7 +1,8 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { existsSync, lstatSync, readlinkSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readlinkSync, readdirSync, statSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execSync } from "node:child_process";
+import { platform } from "node:os";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 import { parseDotenvFile } from "../utils/dotenv.js";
 import { configPath } from "./config.js";
@@ -553,12 +554,12 @@ function checkRcloneFlagAudit(resolvedPath: string | undefined): CheckResult {
 }
 
 /** Check B: rclone version — does it support --vfs-write-wait? */
-function checkRcloneVersion(resolvedPath: string | undefined): CheckResult {
-  if (!resolvedPath) {
+function checkRcloneVersion(resolvedPath: string | undefined, vaultSyncInstalled: boolean): CheckResult {
+  if (!resolvedPath && !vaultSyncInstalled) {
     return check("pass", "rclone_version", "rclone version", "No vault path — check skipped");
   }
-  const fuse = detectFuseMount(resolvedPath);
-  if (!fuse) {
+  const fuse = resolvedPath ? detectFuseMount(resolvedPath) : null;
+  if (!fuse && !vaultSyncInstalled) {
     return check("pass", "rclone_version", "rclone version", "local disk — check skipped");
   }
 
@@ -664,6 +665,250 @@ function checkVfsCacheHealth(resolvedPath: string | undefined): CheckResult {
     `${stats.files} files, ${(stats.bytesUsed / 1024 / 1024).toFixed(1)}MB — clean (0 errored, 0 pending)`);
 }
 
+// ── Vault sync health checks (5 checks) ──────────────────────
+
+/** Read vault_sync.* keys from the .env file bypassing the whitelist filter. */
+function readVaultSyncConfig(home: string): { installed: boolean; role?: string } {
+  try {
+    const content = readFileSync(join(home, ".skillwiki", ".env"), "utf8");
+    let installed = false;
+    let role: string | undefined;
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      const k = trimmed.slice(0, eq).trim();
+      const v = trimmed.slice(eq + 1).trim();
+      if (v.length === 0) continue;
+      if (k === "vault_sync.installed" && v === "true") installed = true;
+      if (k === "vault_sync.role") role = v;
+    }
+    return { installed, role };
+  } catch {
+    return { installed: false };
+  }
+}
+
+interface VaultSyncInput {
+  home: string;
+  vaultSyncInstalled: boolean;
+  vaultSyncRole?: string;
+  os?: string;
+  logDir?: string;
+  shareDir?: string;
+  filterPath?: string;
+  snapshotScriptPath?: string;
+}
+
+/**
+ * Five vault-sync health checks.
+ *
+ * All checks are info/warn severity. None affect doctor's exit code
+ * (matching the existing s3_mount_* skip pattern).
+ *
+ * Top-level skip: if vault_sync.installed is not true, all 5 return
+ * pass-with-skip-detail.
+ */
+function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
+  const os = input.os ?? platform();
+  const home = input.home;
+
+  // ── Top-level skip gate ──────────────────────────────────────
+  if (!input.vaultSyncInstalled) {
+    const skip = (id: string, label: string) =>
+      check("pass", id, label, "vault-sync not installed — check skipped");
+    return [
+      skip("vault_sync_installed", "Vault sync installed"),
+      skip("vault_sync_jobs_enabled", "Vault sync jobs enabled"),
+      skip("vault_sync_last_push_age", "Vault sync last push recency"),
+      skip("vault_sync_last_fetch_status", "Vault sync last fetch status"),
+      skip("vault_sync_filter_present", "Vault sync filter file present"),
+      skip("vault_sync_snapshot_guard", "Snapshot script guard"),
+    ];
+  }
+
+  // ── Default paths (platform-aware) ──────────────────────────────
+  const isMac = os === "darwin";
+  const logDir =
+    input.logDir ??
+    (isMac
+      ? join(home, "Library", "Logs")
+      : join(home, ".local", "state", "vault-sync", "log"));
+  const shareDir =
+    input.shareDir ??
+    (isMac
+      ? join(home, "Library", "Application Support", "vault-sync", "bin")
+      : join(home, ".local", "share", "vault-sync", "bin"));
+  const filterPath =
+    input.filterPath ?? join(home, ".config", "rclone", "wiki-push-filters.txt");
+  const snapshotPath =
+    input.snapshotScriptPath ?? "/root/.hermes/scripts/wiki-snapshot-v3.sh";
+
+  // ── Check 1: vault_sync_installed ──────────────────────────────
+  const pushScriptPath = join(shareDir, "wiki-push.sh");
+  const c1 = existsSync(pushScriptPath)
+    ? check("pass", "vault_sync_installed", "Vault sync installed", `Found: ${pushScriptPath}`)
+    : check("error", "vault_sync_installed", "Vault sync installed", `Script not found at ${pushScriptPath} — run vault-sync-install`);
+
+  // ── Check 2: vault_sync_jobs_enabled ───────────────────────────
+  let c2: CheckResult;
+  try {
+    if (isMac) {
+      const uidStr = execSync("id -u", {
+        encoding: "utf8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      const uid = parseInt(uidStr, 10);
+      execSync(`launchctl print gui/${uid}/com.karlchow.wiki-push`, {
+        encoding: "utf8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"],
+      });
+      c2 = check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
+        "launchd: com.karlchow.wiki-push loaded");
+    } else {
+      const out = execSync("systemctl --user is-enabled wiki-push.timer", {
+        encoding: "utf8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      if (out === "enabled") {
+        c2 = check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
+          "systemd: wiki-push.timer enabled");
+      } else {
+        c2 = check("error", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
+          `systemd: wiki-push.timer is ${out} — run vault-sync-install`);
+      }
+    }
+  } catch {
+    c2 = check("error", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
+      "Scheduler check failed — run vault-sync-install");
+  }
+
+  // ── Check 3: vault_sync_last_push_age ──────────────────────────
+  const logFile = join(logDir, "wiki-push.log");
+  let c3: CheckResult;
+  try {
+    const logContent = readFileSync(logFile, "utf8");
+    const lines = logContent.trim().split("\n").filter(Boolean);
+    if (lines.length === 0) {
+      c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+        "Log file is empty");
+    } else {
+      const lastLine = lines[lines.length - 1];
+      if (/FAIL/.test(lastLine)) {
+        c3 = check("error", "vault_sync_last_push_age", "Vault sync last push recency",
+          `Last push failed: ${lastLine}`);
+      } else if (/OK push/.test(lastLine)) {
+        const tsMatch = lastLine.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/);
+        if (tsMatch) {
+          const lastPush = new Date(tsMatch[1]).getTime();
+          const ageSec = (Date.now() - lastPush) / 1000;
+          if (ageSec <= 180) {
+            c3 = check("pass", "vault_sync_last_push_age", "Vault sync last push recency",
+              `Last push ${ageSec.toFixed(0)}s ago`);
+          } else {
+            c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+              `Last push ${Math.round(ageSec)}s ago (>3 min)`);
+          }
+        } else {
+          c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+          `Unparseable push line: ${lastLine.slice(0, 80)}`);
+        }
+      } else {
+        c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+          `Last log entry: ${lastLine.slice(0, 80)}`);
+      }
+    }
+  } catch {
+    c3 = existsSync(logDir)
+      ? check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+        `Log file not found at ${logFile}`)
+      : check("error", "vault_sync_last_push_age", "Vault sync last push recency",
+        `Log directory not found at ${logDir}`);
+  }
+
+  // ── Check 4: vault_sync_last_fetch_status ──────────────────────
+  // Separated from push because fetch and push are independent failure modes
+  // (fetch never writes; push may fail while fetch succeeds, or vice versa).
+  const fetchLogFile = join(logDir, "wiki-fetch.log");
+  let cFetch: CheckResult;
+  try {
+    const logContent = readFileSync(fetchLogFile, "utf8");
+    const lines = logContent.trim().split("\n").filter(Boolean);
+    if (lines.length === 0) {
+      cFetch = check("warn", "vault_sync_last_fetch_status", "Vault sync last fetch status",
+        "Fetch log file is empty");
+    } else {
+      const lastLine = lines[lines.length - 1];
+      if (/fetch failed/i.test(lastLine)) {
+        cFetch = check("error", "vault_sync_last_fetch_status", "Vault sync last fetch status",
+          `Last fetch failed: ${lastLine.slice(0, 100)}`);
+      } else if (/OK/.test(lastLine)) {
+        cFetch = check("pass", "vault_sync_last_fetch_status", "Vault sync last fetch status",
+          lastLine.slice(0, 100));
+      } else {
+        cFetch = check("warn", "vault_sync_last_fetch_status", "Vault sync last fetch status",
+          `Last fetch log entry: ${lastLine.slice(0, 80)}`);
+      }
+    }
+  } catch {
+    cFetch = check("warn", "vault_sync_last_fetch_status", "Vault sync last fetch status",
+      `Fetch log not found at ${fetchLogFile}`);
+  }
+
+  // ── Check 5: vault_sync_filter_present ─────────────────────────
+  let c4: CheckResult;
+  try {
+    if (!existsSync(filterPath)) {
+      c4 = check("error", "vault_sync_filter_present", "Vault sync filter file present",
+        `Filter file not found at ${filterPath}`);
+    } else {
+      const content = readFileSync(filterPath, "utf8");
+      const requiredExcludes = [
+        "remotely-save/data.json",
+        ".skillwiki/sync.lock",
+        ".claude/settings.local.json",
+      ];
+      const missing = requiredExcludes.filter(ex => !content.includes(ex));
+      if (missing.length > 0) {
+        c4 = check("warn", "vault_sync_filter_present", "Vault sync filter file present",
+          `Missing required excludes: ${missing.join(", ")}`);
+      } else {
+        c4 = check("pass", "vault_sync_filter_present", "Vault sync filter file present",
+          `Found with required excludes at ${filterPath}`);
+      }
+    }
+  } catch {
+    c4 = check("error", "vault_sync_filter_present", "Vault sync filter file present",
+      `Cannot read filter file at ${filterPath}`);
+  }
+
+  // ── Check 6: vault_sync_snapshot_guard (snapshotter only) ─────
+  let c5: CheckResult;
+  if (input.vaultSyncRole !== "snapshotter") {
+    c5 = check("pass", "vault_sync_snapshot_guard", "Snapshot script guard",
+      "Not a snapshotter host — check skipped");
+  } else {
+    try {
+      if (!existsSync(snapshotPath)) {
+        c5 = check("error", "vault_sync_snapshot_guard", "Snapshot script guard",
+          `Snapshot script not found at ${snapshotPath}`);
+      } else {
+        const content = readFileSync(snapshotPath, "utf8");
+        if (!content.includes("--max-delete")) {
+          c5 = check("error", "vault_sync_snapshot_guard", "Snapshot script guard",
+            `${snapshotPath} is missing --max-delete guard — dangerous without it`);
+        } else {
+          c5 = check("pass", "vault_sync_snapshot_guard", "Snapshot script guard",
+            `--max-delete present in ${snapshotPath}`);
+        }
+      }
+    } catch {
+      c5 = check("error", "vault_sync_snapshot_guard", "Snapshot script guard",
+        `Cannot read ${snapshotPath}`);
+    }
+  }
+
+  return [c1, c2, c3, cFetch, c4, c5];
+}
+
 function findSkillMd(dir: string): string[] {
   const results: string[] = [];
   let entries;
@@ -704,6 +949,9 @@ export async function runDoctor(
 ): Promise<{ exitCode: number; result: Result<DoctorOutput> }> {
   const checks: CheckResult[] = [];
 
+  // Read vault-sync config once at the top for all checks that need it
+  const vsConfig = readVaultSyncConfig(input.home);
+
   checks.push(checkNodeVersion());
   checks.push(checkCliChannels(input.argv, input.home));
   checks.push(await checkConfigFile(input.home));
@@ -726,13 +974,20 @@ export async function runDoctor(
   checks.push(checkDotStoreClean(resolvedPath));
   checks.push(checkS3MountPerf(resolvedPath));
   checks.push(checkRcloneFlagAudit(resolvedPath));
-  checks.push(checkRcloneVersion(resolvedPath));
+  checks.push(checkRcloneVersion(resolvedPath, vsConfig.installed));
   checks.push(checkWriteTest(resolvedPath));
   checks.push(checkVfsCacheHealth(resolvedPath));
   checks.push(checkSkillsInstalled(input.home, input.cwd));
   checks.push(checkDuplicateSkills(input.home));
   checks.push(checkNpmUpdate(input.home, input.currentVersion));
   checks.push(checkPluginVersionDrift(input.home, input.currentVersion));
+
+  // Vault-sync checks (5 checks, all info/warn, no exit code impact)
+  checks.push(...vaultSyncChecks({
+    home: input.home,
+    vaultSyncInstalled: vsConfig.installed,
+    vaultSyncRole: vsConfig.role,
+  }));
 
   const summary = {
     pass: checks.filter(c => c.status === "pass").length,

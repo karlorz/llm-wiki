@@ -23,10 +23,12 @@ This repo ships the `skillwiki` CLI and 18 prompt-only SKILL.md files.
 
 Four scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 
-- **`verify-manifests.sh`** — validates manifest consistency: version sync across 6 files, skill count in descriptions matches actual, every skill dir has SKILL.md. Runs as a CI gate before build.
+- **`verify-manifests.sh`** — validates manifest consistency: version sync across 9 files, skill count in descriptions matches actual, every skill dir has SKILL.md. Runs as a CI gate before build.
 - **`e2e-local.sh`** — builds from source, runs all CLI commands locally (130 assertions). No network required.
-- **`e2e-remote.sh`** — upgrades skillwiki on sg01 via `npm install -g skillwiki@latest`, then runs the full CLI suite over SSH (48 assertions).
+- **`e2e-remote.sh`** — upgrades skillwiki on the target host (default sg02) via `npm install -g skillwiki@latest`, then runs the full CLI suite over SSH. Host selection via `HOST_ENV=scripts/hosts/<name>.env`.
 - **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 18 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
+- **`e2e-vault-sync-local.sh`** — macOS-only vault-sync install/uninstall e2e. **Local invocation only — NOT a CI gate.** Dry-run by default; set `LOCAL_LIFECYCLE=true` for full lifecycle on fresh hosts.
+- **`e2e-vault-sync-remote.sh`** — generic remote vault-sync e2e (reads `HOST_ENV`, sg01 runs read-only branch). **Local invocation only — NOT a CI gate** (SSH-out from GitHub Actions is not used; see `.github/_archive/2026-05-25-workflows/`).
 
 Assertion counts are approximate — they include loop-expanded iterations (e.g., a `for` loop over 10 skills produces 10 runtime assertions from 1 source line). Hard Rule 15: counts are not a contract; only exit code matters.
 
@@ -41,7 +43,7 @@ Assertion counts are approximate — they include loop-expanded iterations (e.g.
 - Claude marketplace manifest: `.claude-plugin/marketplace.json` (repo root). Skill discovery is driven by `plugin.json`'s `"skills": "./"` field; `marketplace.json` points the plugin source at `./packages/skills`.
 - Codex plugin manifest: `packages/skills/.codex-plugin/plugin.json`.
 - Codex marketplace manifest: `.agents/plugins/marketplace.json` (repo root). Plugin discovery in Codex is driven by marketplace entries that point at `./packages/skills`.
-- Version bump: `npm run bump <version>` — syncs version across all 7 manifests (`scripts/bump-version.sh`).
+- Version bump: `npm run bump <version>` — syncs version across all 9 manifests (`scripts/bump-version.sh`).
 
 ## Distribution channels
 
@@ -50,6 +52,7 @@ The skills ship through three independent channels — keep all three working:
 1. **Claude Code plugin** — `/plugin marketplace add karlorz/llm-wiki` then `/plugin install skillwiki@llm-wiki`. Discovery is driven by `packages/skills/.claude-plugin/plugin.json` with a SessionStart hook that auto-injects the `using-skillwiki` onboarding skill. The `bin/skillwiki` npx wrapper is auto-injected into PATH when the plugin is enabled.
 2. **Codex plugin marketplace** — `codex plugin marketplace add karlorz/llm-wiki@dev` (GitHub source) or `codex plugin marketplace add /path/to/llm-wiki` (local source). Then open Codex TUI (`codex`), run `/plugins`, select marketplace `llm-wiki`, and install plugin `skillwiki`. Discovery is driven by `.agents/plugins/marketplace.json` and `packages/skills/.codex-plugin/plugin.json`.
 3. **npm CLI installer** — `npx skillwiki install` copies SKILL.md files and the `bin/skillwiki` wrapper into `~/.claude/skills/` via the `install` subcommand (see `packages/cli/src/commands/install.ts`).
+4. **vault-sync plugin** — `claude plugin install vault-sync@llm-wiki`. Sibling plugin to skillwiki, ships the cross-platform sync infrastructure (rclone push, fetch-notify, presync, snapshot). Installed via `/vault-sync-install`; OS-detects launchd vs systemd-user.
 
 Changing the layout under `packages/skills/<skill>/` requires updating `packages/skills/.claude-plugin/plugin.json`, `packages/skills/.codex-plugin/plugin.json`, and the `install` subcommand's directory scan. If the plugin root path changes, update both marketplace manifests (`.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`).
 
@@ -132,30 +135,31 @@ Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift
 
 ## Vault sync infrastructure (macOS dev host)
 
-Two launchd jobs keep `~/wiki` in sync with the canonical stores. Reference: `~/wiki/projects/llm-wiki/architecture/2026-05-23-vault-sync-topology.md`.
+Two launchd jobs keep `~/wiki` in sync with the canonical stores. Source-of-truth for all sync scripts is now `packages/vault-sync/`. Reference: `~/wiki/projects/llm-wiki/architecture/2026-05-23-vault-sync-topology.md`.
 
-- **`com.karlchow.wiki-push`** (`~/bin/wiki-push.sh`, every 60 s) — pushes macOS file changes to SeaweedFS S3 via `rclone copy --update`. Push-only; never deletes on remote. Filter file `~/.config/rclone/wiki-push-filters.txt` excludes credentials (`remotely-save/data.json`), advisory locks (`.skillwiki/sync.lock`), `.claude/settings.local.json`, and noise.
-- **`com.karlchow.wiki-fetch`** (`~/bin/wiki-fetch-notify.sh`, every 5 min) — read-only `git fetch origin main`; fires `osascript` notification only on positive delta. No working-tree writes.
-- **`wiki-presync` skill** (`~/wiki/.claude/skills/wiki-presync/`) — vault-local skill (not in this repo's plugin) that runs lint gate + collision dedup + `git pull --rebase`. Invoke manually before pushing.
+- **`com.karlchow.wiki-push`** (installed by `vault-sync-install`, source `packages/vault-sync/scripts/wiki-push.sh`, every 60 s) — pushes macOS file changes to SeaweedFS S3 via `rclone copy --update`. Push-only; never deletes on remote. Filter file `~/.config/rclone/wiki-push-filters.txt` excludes credentials (`remotely-save/data.json`), advisory locks (`.skillwiki/sync.lock`), `.claude/settings.local.json`, and noise.
+- **`com.karlchow.wiki-fetch`** (installed by `vault-sync-install`, source `packages/vault-sync/scripts/wiki-fetch-notify.sh`, every 5 min) — read-only `git fetch origin main`; fires notification only on positive delta. No working-tree writes.
+- **`vault-presync` skill** (now in `vault-sync` plugin, was vault-local `wiki-presync`) — runs lint gate + collision dedup + `git pull --rebase`. Invoke manually before pushing via `/vault-presync --execute`.
 - **Retired**: `com.karlchow.seaweedfs-bisync.plist.disabled` — bidirectional bisync, killed 2026-05-23. Do not re-enable. Tombstone: see `~/wiki/raw/transcripts/2026-05-23-task-tombstone-bisync-plist.md`.
 
 ## Cross-host sync gotchas (read before touching sg01)
 
-- **sg01 `wiki-snapshot-v3.sh` uses `rclone sync` (destructive)** — `/root/.hermes/scripts/wiki-snapshot-v3.sh`. A `--max-delete 10` guard was added 2026-05-23 to abort the cycle before mass deletions. **Do not remove this flag without a deliberate replacement** — without it, any momentary S3 inconsistency mass-deletes files from GitHub (this happened during 2026-05-23 session, see `raw/transcripts/2026-05-23-bug-sg01-snapshot-destructive-rclone-sync.md`). Backup of original: `/root/.hermes/scripts/wiki-snapshot-v3.sh.bak.20260523-180658`.
-- **Single-writer-git is enforced by convention**: only sg01 produces "Snapshot $DATE" commits; macOS pushes its own edits. See `queries/multi-writer-git-sync-conflict-prevention.md`.
+- **sg01 `wiki-snapshot-v3.sh` source-of-truth is now `packages/vault-sync/scripts/wiki-snapshot.sh`** — uses `rclone sync` (destructive). A `--max-delete 10` guard was added 2026-05-23 to abort the cycle before mass deletions. **Do not remove this flag without a deliberate replacement** — without it, any momentary S3 inconsistency mass-deletes files from GitHub (this happened during 2026-05-23 session, see `raw/transcripts/2026-05-23-bug-sg01-snapshot-destructive-rclone-sync.md`). Backup of original: `/root/.hermes/scripts/wiki-snapshot-v3.sh.bak.20260523-180658`.
+- **sg01 is `protected: true` in `fleet.yaml`** — CI cannot run install/uninstall against sg01. Only read-only verify via `workflow_dispatch`. See `projects/llm-wiki/architecture/fleet.yaml`.
+- **Single-writer-git is enforced by `fleet.yaml`**: only sg01 produces "Snapshot $DATE" commits; macOS pushes its own edits. See `queries/multi-writer-git-sync-conflict-prevention.md`.
 - **GitHub is canonical for promoted typed-knowledge**; S3 is canonical for agent-edit transients. See `concepts/vault-write-authority-model.md`.
 
-## Current counts (2026-05-22)
+## Current counts (2026-05-25)
 
-- 18 SKILL.md files in `packages/skills/`
+- 18 + 5 SKILL.md files (skillwiki + vault-sync)
 - 43 command files in `packages/cli/src/commands/`, 21 utilities in `src/utils/`
 - 74 test files in cli (46 commands, 19 utils, 5 parsers, 2 integration, 1 skills, 1 smoke) + 10 shared
-- 917 tests passing
+- 947 tests passing
 - Lint buckets: 0 error, 0 warning (clean vault), 8 info (incl. `bridges`, `orphaned_citations`, `missing_tldr`, `stale_sections`, `cli_refs`); `missing_diagram` is warning severity for architecture-tagged pages
 - Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`, `missing_tldr`
 - Lint --only supports: any valid bucket name (e.g., `lint --only cli_refs`)
 - Stale --project supports: scope to a single project (e.g., `stale --project llm-wiki`)
 - Exit codes: 49 total; highest: `BODY_TRUNCATION_GUARD (47)`
 - Config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`; `AUTO_COMMIT` (default: enabled, opt-out — **only triggers on skillwiki CLI writes, NOT on Edit/Write tool calls or bash `mv`/`rm`. Plain file edits leave a dirty working tree.**)
-- `doctor` checks: 21 (incl. 4 new S3 mount health checks: `rclone_flags`, `rclone_version`, `s3_write_test`, `vfs_cache_health` — skip on local disk, activate on FUSE mounts); `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code
+- `doctor` checks: 26 (incl. 4 S3 mount health checks + 5 vault_sync_* checks); `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code
 - Page-rewriting commands (`frontmatter-fix`, `tag-sync`, `migrate-citations`, `lint --fix`, `drift`) use `safeWritePage` (atomic temp+rename, body-shrink guard at 0.5 ratio) as defense-in-depth against the 2026-05-22 SeaweedFS rclone VFS write-back race.

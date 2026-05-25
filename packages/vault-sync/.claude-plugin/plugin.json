@@ -1,0 +1,22 @@
+{
+  "name": "vault-sync",
+  "version": "0.6.2-beta.1",
+  "description": "Cross-platform vault sync infrastructure for skillwiki: rclone push, GitHub fetch-notify, presync, snapshot. macOS launchd + Linux systemd.",
+  "author": {
+    "name": "karlorz",
+    "url": "https://github.com/karlorz"
+  },
+  "homepage": "https://github.com/karlorz/llm-wiki",
+  "repository": "https://github.com/karlorz/llm-wiki",
+  "license": "MIT",
+  "keywords": [
+    "vault",
+    "sync",
+    "rclone",
+    "git",
+    "skillwiki",
+    "launchd",
+    "systemd"
+  ],
+  "skills": "./skills"
+}

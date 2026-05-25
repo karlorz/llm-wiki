@@ -4,7 +4,7 @@ set -euo pipefail
 # verify-manifests.sh — Validate manifest consistency across distribution channels.
 #
 # Checks:
-#   1. Version field is identical across all 7 manifest files
+#   1. Version field is identical across all 9 manifest files
 #   2. Every skill directory has a SKILL.md
 #   3. Skill count in plugin descriptions/marketplace matches actual count
 #   4. Claude marketplace version matches Claude plugin version
@@ -19,7 +19,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 ERRORS=0
 
-# ---- 1. Version consistency across all 7 manifests ----
+# ---- 1. Version consistency across all 9 manifests ----
 
 CLI_VER=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 SKILLS_PKG_VER=$(grep '"version"' "$REPO_ROOT/packages/skills/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
@@ -27,6 +27,8 @@ SHARED_VER=$(grep '"version"' "$REPO_ROOT/packages/shared/package.json" | head -
 ROOT_VER=$(grep '"version"' "$REPO_ROOT/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 PLUGIN_VER=$(grep '"version"' "$REPO_ROOT/packages/skills/.claude-plugin/plugin.json" | head -1 | sed 's/.*: *"//;s/".*//')
 CODEX_PLUGIN_VER=$(grep '"version"' "$REPO_ROOT/packages/skills/.codex-plugin/plugin.json" | head -1 | sed 's/.*: *"//;s/".*//')
+VAULT_SYNC_CLAUDE_VER=$(grep '"version"' "$REPO_ROOT/packages/vault-sync/.claude-plugin/plugin.json" | head -1 | sed 's/.*: *"//;s/".*//')
+VAULT_SYNC_CODEX_VER=$(grep '"version"' "$REPO_ROOT/packages/vault-sync/.codex-plugin/plugin.json" | head -1 | sed 's/.*: *"//;s/".*//')
 MARKET_VER=$(python3 -c "import json; d=json.load(open('$REPO_ROOT/.claude-plugin/marketplace.json')); print(d['metadata']['version'])")
 
 check_version() {
@@ -43,10 +45,12 @@ check_version "packages/shared/package.json" "$SHARED_VER"
 check_version "package.json (root)" "$ROOT_VER"
 check_version "packages/skills/.claude-plugin/plugin.json" "$PLUGIN_VER"
 check_version "packages/skills/.codex-plugin/plugin.json" "$CODEX_PLUGIN_VER"
+check_version "packages/vault-sync/.claude-plugin/plugin.json" "$VAULT_SYNC_CLAUDE_VER"
+check_version "packages/vault-sync/.codex-plugin/plugin.json" "$VAULT_SYNC_CODEX_VER"
 check_version ".claude-plugin/marketplace.json metadata.version" "$MARKET_VER"
 
 if [ "$ERRORS" -eq 0 ]; then
-  echo "✓ All 7 manifests at version $CLI_VER"
+  echo "✓ All 9 manifests at version $CLI_VER"
 fi
 
 # ---- 2. Skill directories have SKILL.md ----
