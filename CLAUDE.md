@@ -27,8 +27,8 @@ Four scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 - **`e2e-local.sh`** — builds from source, runs all CLI commands locally (130 assertions). No network required.
 - **`e2e-remote.sh`** — upgrades skillwiki on the target host (default sg02) via `npm install -g skillwiki@latest`, then runs the full CLI suite over SSH. Host selection via `HOST_ENV=scripts/hosts/<name>.env`.
 - **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 18 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
-- **`e2e-vault-sync-local.sh`** — macOS-only vault-sync install/uninstall e2e.
-- **`e2e-vault-sync-remote.sh`** — generic remote vault-sync e2e (reads `HOST_ENV`, sg01 runs read-only branch).
+- **`e2e-vault-sync-local.sh`** — macOS-only vault-sync install/uninstall e2e. **Local invocation only — NOT a CI gate.** Dry-run by default; set `LOCAL_LIFECYCLE=true` for full lifecycle on fresh hosts.
+- **`e2e-vault-sync-remote.sh`** — generic remote vault-sync e2e (reads `HOST_ENV`, sg01 runs read-only branch). **Local invocation only — NOT a CI gate** (SSH-out from GitHub Actions is not used; see `.github/_archive/2026-05-25-workflows/`).
 
 Assertion counts are approximate — they include loop-expanded iterations (e.g., a `for` loop over 10 skills produces 10 runtime assertions from 1 source line). Hard Rule 15: counts are not a contract; only exit code matters.
 
