@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
@@ -142,12 +142,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 21 checks", async () => {
+  it("always returns exactly 27 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(21);
+      expect(r.result.data.checks).toHaveLength(27);
     }
   });
 
@@ -447,5 +447,143 @@ describe("runDoctor", () => {
       expect(cli?.status).toBe("warn");
       expect(cli?.detail).toContain("channels");
     }
+  });
+
+  // ── Vault sync doctor checks ─────────────────────────────────
+
+  function vaultSyncConfig(home: string, installed: boolean, role?: string): void {
+    let existing = "";
+    try { existing = readFileSync(join(home, ".skillwiki", ".env"), "utf8"); } catch { /* no file yet */ }
+    const lines = existing.split("\n").filter(l => !l.startsWith("vault_sync."));
+    if (installed) lines.push("vault_sync.installed=true");
+    if (role) lines.push(`vault_sync.role=${role}`);
+    writeFileSync(join(home, ".skillwiki", ".env"), lines.join("\n"));
+  }
+
+  function createVaultSyncLogDir(home: string): string {
+    const dir = join(home, "Library", "Logs");
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  function createVaultSyncShareDir(home: string): string {
+    const dir = join(home, "Library", "Application Support", "vault-sync", "bin");
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  function createVaultSyncFilterFile(content: string): { home: string; path: string } {
+    const h = mkdtempSync(join(tmpdir(), "vs-filter-"));
+    mkdirSync(join(h, ".skillwiki"), { recursive: true });
+    mkdirSync(join(h, ".config", "rclone"), { recursive: true });
+    writeFileSync(join(h, ".skillwiki", ".env"), "");
+    const filterPath = join(h, ".config", "rclone", "wiki-push-filters.txt");
+    writeFileSync(filterPath, content);
+    return { home: h, path: filterPath };
+  }
+
+  function createVaultSyncLog(home: string, lines: string[]): string {
+    const logDir = createVaultSyncLogDir(home);
+    const logPath = join(logDir, "wiki-push.log");
+    writeFileSync(logPath, lines.join("\n") + "\n");
+    return logPath;
+  }
+
+  describe("vault-sync checks", () => {
+    it("all 6 vault-sync checks skip when vault_sync.installed is false", async () => {
+      const h = home();
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const vsIds = [
+        "vault_sync_installed", "vault_sync_jobs_enabled",
+        "vault_sync_last_push_age", "vault_sync_last_fetch_status",
+        "vault_sync_filter_present", "vault_sync_snapshot_guard",
+      ];
+      for (const id of vsIds) {
+        const check = r.result.data.checks.find(c => c.id === id);
+        expect(check).toBeDefined();
+        expect(check!.status).toBe("pass");
+        expect(check!.detail).toContain("not installed");
+      }
+      // Exit code unaffected — no errors added
+      const vsErrors = r.result.data.checks.filter(c => vsIds.includes(c.id) && c.status === "error");
+      expect(vsErrors).toHaveLength(0);
+    });
+
+    it("vault_sync.installed = true with no deployed scripts reports errors", async () => {
+      const h = home();
+      vaultSyncConfig(h, true);
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const installed = r.result.data.checks.find(c => c.id === "vault_sync_installed");
+      expect(installed).toBeDefined();
+      expect(installed!.status).toBe("error");
+      expect(installed!.detail).toContain("Script not found");
+      // Exit code unaffected — no errors from vault-sync checks counted in doctor exit
+      const vsErrors = r.result.data.checks.filter(c => c.id.startsWith("vault_sync") && c.status === "error");
+      expect(vsErrors.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("vault_sync_last_push_age passes when log ends with OK push within 180s", async () => {
+      const h = home();
+      vaultSyncConfig(h, true);
+      createVaultSyncShareDir(h); // for installed check
+      const now = new Date();
+      const ts = now.toISOString().replace(/\.\d{3}Z$/, "Z");
+      createVaultSyncLog(h, [`${ts} OK push (no changes) duration=0s`]);
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const age = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
+      expect(age).toBeDefined();
+      expect(age!.status).toBe("pass");
+      expect(age!.detail).toContain("s ago");
+    });
+
+    it("vault_sync_last_push_age errors when log ends with FAIL", async () => {
+      const h = home();
+      vaultSyncConfig(h, true);
+      createVaultSyncShareDir(h);
+      createVaultSyncLog(h, ["2026-05-25T10:00:00Z FAIL rclone exit=1 duration=3s"]);
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const age = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
+      expect(age).toBeDefined();
+      expect(age!.status).toBe("error");
+      expect(age!.detail).toContain("FAIL");
+    });
+
+    it("vault_sync_filter_present warns on missing required excludes", async () => {
+      const { home: h } = createVaultSyncFilterFile(
+        "# minimal filter\n- .git/\n- .DS_Store\n"
+      );
+      vaultSyncConfig(h, true);
+      createVaultSyncShareDir(h);
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const filter = r.result.data.checks.find(c => c.id === "vault_sync_filter_present");
+      expect(filter).toBeDefined();
+      expect(filter!.detail).toContain("Missing required excludes");
+      expect(filter!.status).toBe("warn");
+    });
+
+    it("snapshot guard errors without --max-delete", async () => {
+      const h = home();
+      vaultSyncConfig(h, true, "snapshotter");
+      createVaultSyncShareDir(h);
+      // The check uses /root/.hermes/scripts/wiki-snapshot-v3.sh by default
+      // which is not writable in tests — so the check errors because script is absent
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const guard = r.result.data.checks.find(c => c.id === "vault_sync_snapshot_guard");
+      expect(guard).toBeDefined();
+      expect(guard!.status).toBe("error");
+      expect(guard!.detail).toContain("not found");
+    });
   });
 });

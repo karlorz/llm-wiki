@@ -1,0 +1,41 @@
+# Rclone filters for ~/wiki one-way push (wiki-push.sh)
+# Extends the bisync filter list with additional security and noise exclusions.
+#
+# CRITICAL — security exclusions:
+#   .obsidian/plugins/remotely-save/data.json  → contains S3 credentials
+#   .claude/settings.local.json                 → machine-local config
+#
+# Coordination exclusions:
+#   .skillwiki/sync.lock                        → wiki-sync v0.6.0 advisory lock
+#   .skillwiki/graph.json                       → local-only graph cache
+#
+# Noise exclusions (regenerable / per-machine state):
+#   .obsidian/workspace.json                    → Obsidian window state
+#   .obsidian/plugins/*/main.js                 → plugin code (large, version-managed by Obsidian)
+#   .pytest_cache/                              → Python test cache
+#   .snapshots/                                 → local snapshot metadata
+#
+# Standard (mirrors bisync-filters.txt):
+- .git/
+- .DS_Store
+- ._*
+- .Trashes
+- .fseventsd
+- .Spotlight-V100
+- __pycache__/
+- *.pyc
+- .mypy_cache/
+- node_modules/
+- .rclone-bisync/
+- *.conflict-*
+- .conflict*
+
+# Push-specific additions (DO NOT add to bisync-filters; bisync needs different semantics):
+- .obsidian/plugins/remotely-save/data.json
+- .claude/settings.local.json
+- .skillwiki/sync.lock
+- .skillwiki/graph.json
+- .obsidian/workspace.json
+- .obsidian/plugins/*/main.js
+- .pytest_cache/
+- .snapshots/

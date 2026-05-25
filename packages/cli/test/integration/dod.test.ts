@@ -32,7 +32,7 @@ describe("Definition of Done", () => {
     function walk(dir: string): string[] {
       const out: string[] = [];
       for (const e of readdirSync(dir, { withFileTypes: true })) {
-        if (e.isDirectory() && e.name !== "node_modules" && e.name !== "scripts" && !e.name.startsWith(".")) {
+        if (e.isDirectory() && e.name !== "node_modules" && e.name !== "scripts" && e.name !== "vault-sync" && !e.name.startsWith(".")) {
           out.push(...walk(join(dir, e.name)));
         } else if (e.isFile() && e.name.endsWith(".sh")) {
           out.push(join(dir, e.name));

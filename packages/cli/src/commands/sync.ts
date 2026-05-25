@@ -280,6 +280,7 @@ export interface SyncPullOutput {
   pulled: boolean;
   files_updated: number;
   conflicts: number;
+  auto_resolved: number;
   lint_errors: number;
   lint_warnings: number;
   humanHint: string;
@@ -308,10 +309,11 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
     };
   }
 
-  // 3. Pull with rebase
+  // 3. Pull with rebase (auto-resolve conflict storms for archive/snapshot commits)
   let pulled = false;
   let conflicts = 0;
   let filesUpdated = 0;
+  let autoResolved = 0;
   try {
     const pullOutput = gitStrict(vault, ["pull", "--rebase", "origin", "HEAD"]);
     pulled = true;
@@ -319,28 +321,86 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
     const fileMatch = pullOutput.match(/(\d+) file[s]? changed/);
     if (fileMatch) filesUpdated = parseInt(fileMatch[1]!, 10);
   } catch (e: unknown) {
-    // Check for rebase conflicts
     const errString = String(e);
     if (errString.includes("conflict")) {
-      const porcelain = git(vault, ["diff", "--name-only", "--diff-filter=U"]);
-      conflicts = porcelain ? porcelain.split("\n").filter((l) => l.trim().length > 0).length : 0;
+      // Enter conflict-resolution loop for archive/snapshot conflict storms
+      let inConflict = true;
+      while (inConflict) {
+        // Detect if the current rebase commit is archive-only or a snapshot
+        const stoppedSha = git(vault, ["rev-parse", "--verify", "REBASE_HEAD"]);
+        let commitMsg = "";
+        if (stoppedSha) {
+          commitMsg = git(vault, ["log", "--format=%s", "-1", stoppedSha]);
+        }
+
+        const isArchiveOrSnapshot = commitMsg.startsWith("archive: moved") || commitMsg.startsWith("Snapshot ");
+
+        const conflictedFiles = git(vault, ["diff", "--name-only", "--diff-filter=U"]);
+        const conflictedList = conflictedFiles ? conflictedFiles.split("\n").filter((l) => l.trim().length > 0) : [];
+
+        if (conflictedList.length === 0) {
+          // No file-level conflicts — try to continue rebase
+          try {
+            gitStrict(vault, ["rebase", "--continue"]);
+            inConflict = true; // Check for next conflict in chain
+          } catch {
+            inConflict = false;
+          }
+          continue;
+        }
+
+        if (isArchiveOrSnapshot) {
+          // Auto-resolve: keep HEAD (origin/main + snapshots) for all conflicts
+          for (const f of conflictedList) {
+            try {
+              gitStrict(vault, ["checkout", "--ours", f]);
+              gitStrict(vault, ["add", f]);
+            } catch { /* skip files that can't be resolved */ }
+          }
+          autoResolved += conflictedList.length;
+
+          // Continue rebase to next commit
+          try {
+            gitStrict(vault, ["rebase", "--continue"]);
+          } catch (continueErr: unknown) {
+            // rebase --continue failed — might be another conflict or done
+            continue;
+          }
+        } else {
+          // Non-archive conflict — surface to user
+          conflicts = conflictedList.length;
+          return {
+            exitCode: ExitCode.SYNC_PULL_FAILED,
+            result: ok({
+              fetched,
+              pulled: false,
+              files_updated: 0,
+              conflicts,
+              auto_resolved: 0,
+              lint_errors: 0,
+              lint_warnings: 0,
+              humanHint: `pull failed with ${conflicts} conflict(s) on non-archive commit "${commitMsg}" — resolve manually`,
+            }),
+          };
+        }
+      }
+      // Rebase completed after auto-resolution
+      if (autoResolved > 0) {
+        // Count files updated from final diff
+        const diffOutput = git(vault, ["diff", "--stat", "HEAD@{1}..HEAD"]);
+        if (diffOutput) {
+          const fileMatch = diffOutput.match(/(\d+) file[s]? changed/);
+          if (fileMatch) filesUpdated = parseInt(fileMatch[1]!, 10);
+        }
+        pulled = true;
+        conflicts = 0;
+      }
+    } else {
       return {
         exitCode: ExitCode.SYNC_PULL_FAILED,
-        result: ok({
-          fetched,
-          pulled: false,
-          files_updated: 0,
-          conflicts,
-          lint_errors: 0,
-          lint_warnings: 0,
-          humanHint: `pull failed with ${conflicts} conflict(s) — resolve manually`,
-        }),
+        result: err("GIT_PULL_FAILED", { message: errString }),
       };
     }
-    return {
-      exitCode: ExitCode.SYNC_PULL_FAILED,
-      result: err("GIT_PULL_FAILED", { message: errString }),
-    };
   }
 
   // 4. Run lint after pull
@@ -355,6 +415,7 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
   const hintParts: string[] = [];
   if (filesUpdated > 0) hintParts.push(`updated ${filesUpdated} file(s)`);
   else hintParts.push("already up to date");
+  if (autoResolved > 0) hintParts.push(`${autoResolved} conflict(s) auto-resolved`);
   if (lintErrors > 0) hintParts.push(`${lintErrors} lint error(s)`);
   if (lintWarnings > 0) hintParts.push(`${lintWarnings} lint warning(s)`);
 
@@ -371,6 +432,7 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
       pulled,
       files_updated: filesUpdated,
       conflicts,
+      auto_resolved: autoResolved,
       lint_errors: lintErrors,
       lint_warnings: lintWarnings,
       humanHint: hintParts.join(", "),
