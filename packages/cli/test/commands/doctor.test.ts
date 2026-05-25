@@ -461,13 +461,19 @@ describe("runDoctor", () => {
   }
 
   function createVaultSyncLogDir(home: string): string {
-    const dir = join(home, "Library", "Logs");
+    const isMac = process.platform === "darwin";
+    const dir = isMac
+      ? join(home, "Library", "Logs")
+      : join(home, ".local", "state", "vault-sync", "log");
     mkdirSync(dir, { recursive: true });
     return dir;
   }
 
   function createVaultSyncShareDir(home: string): string {
-    const dir = join(home, "Library", "Application Support", "vault-sync", "bin");
+    const isMac = process.platform === "darwin";
+    const dir = isMac
+      ? join(home, "Library", "Application Support", "vault-sync", "bin")
+      : join(home, ".local", "share", "vault-sync", "bin");
     mkdirSync(dir, { recursive: true });
     return dir;
   }
