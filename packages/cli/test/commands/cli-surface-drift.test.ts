@@ -12,6 +12,12 @@ import { buildCliSurface } from "../../src/utils/cli-surface.js";
  * because execSync with relative paths fails in CI (different cwd context).
  * The known set is maintained here — when a new command is added to cli.ts,
  * this test should be updated too.
+ *
+ * Intentionally excluded from known set: lint-internal sub-modules
+ * (e.g., path-too-long, raw-body-dedup) — these are wired into the
+ * lint.ts orchestrator as buckets/fix handlers, not standalone CLI
+ * commands, and are NOT registered in cli.ts. They should NOT be added
+ * to the knownCommands arrays below.
  */
 describe("cli-surface drift detection", () => {
   it("surface includes all known top-level commands", () => {
