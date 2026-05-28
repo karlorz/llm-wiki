@@ -8,7 +8,7 @@ Capture ad-hoc ideas, bugs, tasks, and notes into the vault. Three entry points 
 | Entry | When | What happens |
 |-------|------|-------------|
 | `/wiki-add-task <text>` | You're in a Claude Code session (NOT Hermes compact) | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with ad-hoc capture frontmatter |
-| `skillwiki add-task <text>` | Hermes Agent compact mode | Same as above — compact-compatible CLI trigger |
+| Filesystem drop | Hermes Agent compact mode (no slash commands available) | Same as above — create `.md` in `raw/transcripts/`, dev-loop discovers it |
 | Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create any `.md` file in `raw/transcripts/` using the vault template — dev-loop discovers it on next cycle |
 | Dev-loop discovery | Automatic, next cycle | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |
 **Path Rule:** Captures ALWAYS go to `$(skillwiki path)/raw/transcripts/` (Layer 1). Never under `projects/{slug}/raw/` — that violates SCHEMA.md Layer 1 immutability.
