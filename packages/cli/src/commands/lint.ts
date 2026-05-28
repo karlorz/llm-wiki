@@ -1,6 +1,6 @@
 import { ok, ExitCode, type ExitCodeValue, type Result } from "@skillwiki/shared";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { runLinks } from "./links.js";
 import { runTagAudit } from "./tag-audit.js";
@@ -16,6 +16,7 @@ import { runDedup } from "./dedup.js";
 import { safeWritePage } from "../utils/safe-write.js";
 import { runRawBodyDedup } from "./raw-body-dedup.js";
 import { validateCompoundReferences } from "./audit.js";
+import { runPathTooLong, truncateFilename } from "./path-too-long.js";
 import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
 import { isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations } from "../parsers/citations.js";
@@ -83,7 +84,7 @@ export interface LintOutput {
   humanHint: string;
 }
 
-const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "broken_sources", "tag_not_in_taxonomy"] as const;
+const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "broken_sources", "tag_not_in_taxonomy", "path_too_long"] as const;
 const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file_source_url", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram"] as const;
 const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
 
@@ -156,6 +157,9 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
 
   const compoundRefs = await validateCompoundReferences(input.vault);
   if (compoundRefs.ok && compoundRefs.data.length > 0) buckets.compound_refs = compoundRefs.data;
+
+  const pathCheck = await runPathTooLong({ vault: input.vault });
+  if (pathCheck.result.ok && pathCheck.result.data.violations.length > 0) buckets.path_too_long = pathCheck.result.data.violations;
 
   // Citation style + page structure check
   const scan = await scanVault(input.vault);
@@ -701,6 +705,59 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
         const remaining = fileSourceUrlFlags.filter(p => !fixedSet.has(p));
         if (remaining.length > 0) buckets.file_source_url = remaining;
         else delete buckets.file_source_url;
+      }
+    }
+
+    // --fix: auto-fix path_too_long by truncating filename + rewiring citations
+    const pathViolations = buckets.path_too_long as Array<{ relPath: string; length: number }> | undefined;
+    if (input.fix && pathViolations && pathViolations.length > 0) {
+      const pathFixed: string[] = [];
+      for (const v of pathViolations) {
+        try {
+          const absPath = `${input.vault}/${v.relPath}`;
+          const newRelPath = truncateFilename(v.relPath);
+          const newAbsPath = `${input.vault}/${newRelPath}`;
+
+          // Rename the file (content unchanged, so raw rename is safe — no body-shrink risk)
+          await rename(absPath, newAbsPath);
+
+          // Rewire citations and wikilinks across all vault pages
+          const oldPathEscaped = v.relPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+          for (const page of allPages) {
+            // Skip the renamed file itself — it no longer exists at the old path
+            if (page.relPath === v.relPath) continue;
+            const content = await readFile(page.absPath, "utf8");
+            if (!content.includes(v.relPath)) continue;
+
+            let updated = content;
+            // Rewire ^[old/path] citations
+            const citationRe = new RegExp(`\\^\\[${oldPathEscaped}\\]`, "g");
+            updated = updated.replace(citationRe, `^[${newRelPath}]`);
+            // Rewire [[old/path]] and [[old/path|alias]] wikilinks
+            const wikilinkRe = new RegExp(`\\[\\[${oldPathEscaped}(\\|[^\\]]*)?\\]\\]`, "g");
+            updated = updated.replace(wikilinkRe, (_m, alias) => `[[${newRelPath}${alias ?? ""}]]`);
+
+            if (updated !== content) {
+              const w = await safeWritePage(page.absPath, updated);
+              if (!w.ok) { unresolved.push(`${page.relPath} (rewire)`); }
+            }
+          }
+
+          pathFixed.push(v.relPath);
+        } catch {
+          unresolved.push(v.relPath);
+        }
+      }
+
+      fixed.push(...pathFixed);
+
+      // Re-scan: remove fixed pages from the bucket
+      if (pathFixed.length > 0) {
+        const fixedSet = new Set(pathFixed);
+        const remaining = pathViolations.filter(v => !fixedSet.has(v.relPath));
+        if (remaining.length > 0) buckets.path_too_long = remaining;
+        else delete buckets.path_too_long;
       }
     }
   }

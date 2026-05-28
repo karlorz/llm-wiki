@@ -336,7 +336,7 @@ program
   .option("--days <n>", "stale threshold", (s) => parseInt(s, 10), 90)
   .option("--lines <n>", "pagesize threshold", (s) => parseInt(s, 10), 200)
   .option("--log-threshold <n>", "log rotation threshold", (s) => parseInt(s, 10), 500)
-  .option("--fix", "auto-fix legacy_citation_style violations")
+  .option("--fix", "auto-fix supported lint violations")
   .option("--only <bucket>", "run only the specified lint bucket")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {

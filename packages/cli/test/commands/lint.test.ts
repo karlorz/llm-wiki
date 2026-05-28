@@ -1294,4 +1294,114 @@ same body content here
       }
     });
   });
+
+  describe("path_too_long", () => {
+    it("detects files with paths exceeding 240 chars", async () => {
+      const v = vault();
+      // concepts/ = 9 chars, .md = 3 chars → need name ≥ 229 chars for path > 240
+      const longName = "a".repeat(229) + ".md"; // 9 + 229 + 3 = 241 chars
+      const relPath = `concepts/${longName}`;
+      const absPath = join(v, relPath);
+      mkdirSync(join(v, "concepts"), { recursive: true });
+      writeFileSync(absPath, FM(["model"]) + "> **TL;DR:** body.\n\n## Overview\n\nContent.\n");
+      writeFileSync(join(v, "index.md"), `# Index\n\n## Concepts\n- [[${longName.replace(".md", "")}]]\n`);
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r.result.ok) {
+        expect(r.result.data.summary.errors).toBeGreaterThan(0);
+        const errorKinds = r.result.data.by_severity.error.map(b => b.kind);
+        expect(errorKinds).toContain("path_too_long");
+      }
+    });
+
+    it("does not flag paths at exactly 240 chars", async () => {
+      const v = vault();
+      const prefixLen = "concepts/".length;
+      const nameLen = 240 - prefixLen - 3; // -3 for .md
+      const name = "b".repeat(nameLen);
+      const relPath = `concepts/${name}.md`;
+      expect(relPath.length).toBe(240);
+
+      const absPath = join(v, relPath);
+      mkdirSync(join(v, "concepts"), { recursive: true });
+      writeFileSync(absPath, FM(["model"]) + "> **TL;DR:** body.\n\n## Overview\n\nContent.\n");
+      writeFileSync(join(v, "index.md"), `# Index\n\n## Concepts\n- [[${name}]]\n`);
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r.result.ok) {
+        const errorKinds = r.result.data.by_severity.error.map(b => b.kind);
+        expect(errorKinds).not.toContain("path_too_long");
+      }
+    });
+
+    it("does not flag short paths", async () => {
+      const v = vault();
+      writeFileSync(join(v, "concepts", "short.md"), FM(["model"]) + "body\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      if (r.result.ok) {
+        const errorKinds = r.result.data.by_severity.error.map(b => b.kind);
+        expect(errorKinds).not.toContain("path_too_long");
+      }
+    });
+
+    it("--fix truncates filename and rewires citations", async () => {
+      const v = vault();
+      // concepts/ = 9, .md = 3 → need name ≥ 229 for path > 240
+      const longName = "x".repeat(229) + ".md"; // 9 + 229 + 3 = 241 chars
+      const relPath = `concepts/${longName}`;
+      const absPath = join(v, relPath);
+      mkdirSync(join(v, "concepts"), { recursive: true });
+      // Lint-clean page body to avoid residual warnings after fix
+      const cleanBody = "> **TL;DR:** Long path content.\n\n## Overview\n\nLong path content.\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[citing]]\n";
+      writeFileSync(absPath, FM(["model"]) + cleanBody);
+
+      // Create a page that cites the long-path file
+      const citingContent = FM(["model"]) + `> **TL;DR:** ref.\n\n## Overview\n\nRef page.\n\n## Details\n\nSee ^[${relPath}] and [[${relPath}|the page]].\n\n## Related\n\n- [[citing]]\n`;
+      writeFileSync(join(v, "concepts", "citing.md"), citingContent);
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[citing]]\n");
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
+      if (r.result.ok) {
+        expect(r.result.data.fixed).toContain(relPath);
+        // path_too_long error should be gone
+        const errKinds = r.result.data.by_severity.error.map(b => b.kind);
+        expect(errKinds).not.toContain("path_too_long");
+      }
+
+      // Verify citing page was rewired
+      const citingAfter = readFileSync(join(v, "concepts", "citing.md"), "utf8");
+      expect(citingAfter).not.toContain(relPath);
+      // Should contain the truncated path
+      expect(citingAfter).toMatch(/\^\[concepts\/x+-\w{8}\.md\]/);
+      expect(citingAfter).toMatch(/\[\[concepts\/x+-\w{8}\.md\|the page\]\]/);
+    });
+
+    it("--only path_too_long filters correctly", async () => {
+      const v = vault();
+      const longName = "y".repeat(229) + ".md"; // 9 + 229 + 3 = 241 chars
+      const relPath = `concepts/${longName}`;
+      const absPath = join(v, relPath);
+      mkdirSync(join(v, "concepts"), { recursive: true });
+      writeFileSync(absPath, FM(["model"]) + "body\n");
+      writeFileSync(join(v, "index.md"), "# Index\n");
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "path_too_long" });
+      expect(r.exitCode).toBe(23);
+      if (r.result.ok) {
+        expect(r.result.data.by_severity.error.length).toBe(1);
+        expect(r.result.data.by_severity.error[0]!.kind).toBe("path_too_long");
+        expect(r.result.data.by_severity.warning.length).toBe(0);
+        expect(r.result.data.by_severity.info.length).toBe(0);
+      }
+    });
+
+    it("--only rejects unknown bucket", async () => {
+      const v = vault();
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "nonexistent_bucket" });
+      expect(r.exitCode).toBe(46); // USAGE
+      if (!r.result.ok) {
+        expect(r.result.error).toBe("UNKNOWN_BUCKET");
+      }
+    });
+  });
 });
