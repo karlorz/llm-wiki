@@ -161,5 +161,5 @@ Two launchd jobs keep `~/wiki` in sync with the canonical stores. Source-of-trut
 - Stale --project supports: scope to a single project (e.g., `stale --project llm-wiki`)
 - Exit codes: 50 total; highest: `LOG_APPEND_LOCK_HELD (49)`
 - Config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`; `AUTO_COMMIT` (default: enabled, opt-out — **only triggers on skillwiki CLI writes, NOT on Edit/Write tool calls or bash `mv`/`rm`. Plain file edits leave a dirty working tree.**)
-- `doctor` checks: 26 (incl. 4 S3 mount health checks + 5 vault_sync_* checks); `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code
+- `doctor` checks: 31 (incl. 4 S3 mount health checks + 5 vault_sync_* checks + 5 vault_metric_* info rows); `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code
 - Page-rewriting commands (`frontmatter-fix`, `tag-sync`, `migrate-citations`, `lint --fix`, `drift`) use `safeWritePage` (atomic temp+rename, body-shrink guard at 0.5 ratio) as defense-in-depth against the 2026-05-22 SeaweedFS rclone VFS write-back race.
