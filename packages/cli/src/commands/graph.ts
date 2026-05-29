@@ -1,9 +1,8 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault, readPage } from "../utils/vault.js";
-import { extractBodyWikilinks } from "../parsers/wikilinks.js";
-import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { scanVault } from "../utils/vault.js";
+import { buildWikilinkAdjacency } from "../utils/community.js";
 
 export interface GraphBuildInput { vault: string; out: string }
 export interface GraphBuildOutput { out_path: string; node_count: number; edge_count: number; humanHint: string }
@@ -12,22 +11,7 @@ export async function runGraphBuild(input: GraphBuildInput): Promise<{ exitCode:
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  const adjacency: Record<string, string[]> = {};
-  const slugToPath: Record<string, string> = {};
-  for (const p of scan.data.typedKnowledge) {
-    const slug = p.relPath.replace(/\.md$/, "").split("/").pop()!;
-    slugToPath[slug] = p.relPath;
-  }
-
-  for (const p of scan.data.typedKnowledge) {
-    const text = await readPage(p);
-    const split = splitFrontmatter(text);
-    const body = split.ok ? split.data.body : text;
-    const links = extractBodyWikilinks(body);
-    adjacency[p.relPath] = links
-      .map(slug => slugToPath[slug.split("/").pop()!])
-      .filter((x): x is string => Boolean(x));
-  }
+  const adjacency = await buildWikilinkAdjacency(scan.data.typedKnowledge);
 
   const adamicAdar = computeAdamicAdar(adjacency);
   const edge_count = Object.values(adjacency).reduce((acc, arr) => acc + arr.length, 0);

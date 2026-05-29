@@ -1196,6 +1196,23 @@ same body content here
     });
   });
 
+  describe("sparse_community", () => {
+    it("surfaces a large low-density cluster as an info bucket via --only", async () => {
+      const v = vault();
+      const leaves: string[] = [];
+      for (let i = 0; i < 13; i++) leaves.push(`l${i}`);
+      writeFileSync(join(v, "concepts", "center.md"), FM(["model"]) + leaves.map(l => `See [[${l}]].`).join("\n") + "\n");
+      for (const l of leaves) writeFileSync(join(v, "concepts", `${l}.md`), FM(["model"]) + "See [[center]].\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "sparse_community" });
+      expect(r.result.ok).toBe(true);
+      if (r.result.ok) {
+        expect(r.result.data.summary.info).toBeGreaterThan(0);
+        const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+        expect(infoKinds).toContain("sparse_community");
+      }
+    });
+  });
+
   describe("stale_sections", () => {
     it("reports stale_sections info when expiry annotations are expired", async () => {
       const v = vault();

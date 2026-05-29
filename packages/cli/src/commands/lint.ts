@@ -10,6 +10,7 @@ import { appendLastOp } from "../utils/last-op.js";
 import { runPagesize } from "./pagesize.js";
 import { runLogRotate } from "./log-rotate.js";
 import { runOrphans } from "./orphans.js";
+import { runSparseCommunity } from "./sparse-community.js";
 import { runTopicMapCheck } from "./topic-map-check.js";
 import { runIndexLinkFormat } from "./index-link-format.js";
 import { runDedup } from "./dedup.js";
@@ -86,7 +87,7 @@ export interface LintOutput {
 
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "broken_sources", "tag_not_in_taxonomy", "path_too_long"] as const;
 const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file_source_url", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram"] as const;
-const INFO_ORDER = ["bridges", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
+const INFO_ORDER = ["bridges", "sparse_community", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
   const buckets: Record<string, unknown[]> = {};
@@ -137,6 +138,11 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
   if (orphans.result.ok) {
     if (orphans.result.data.orphans.length > 0) buckets.orphans = orphans.result.data.orphans;
     if (orphans.result.data.bridges.length > 0) buckets.bridges = orphans.result.data.bridges;
+  }
+
+  const sparse = await runSparseCommunity({ vault: input.vault });
+  if (sparse.result.ok && sparse.result.data.communities.length > 0) {
+    buckets.sparse_community = sparse.result.data.communities;
   }
 
   const topicMap = await runTopicMapCheck({ vault: input.vault });
