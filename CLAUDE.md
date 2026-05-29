@@ -149,17 +149,17 @@ Two launchd jobs keep `~/wiki` in sync with the canonical stores. Source-of-trut
 - **Single-writer-git is enforced by `fleet.yaml`**: only sg01 produces "Snapshot $DATE" commits; macOS pushes its own edits. See `queries/multi-writer-git-sync-conflict-prevention.md`.
 - **GitHub is canonical for promoted typed-knowledge**; S3 is canonical for agent-edit transients. See `concepts/vault-write-authority-model.md`.
 
-## Current counts (2026-05-25)
+## Current counts (2026-05-30)
 
 - 18 + 5 SKILL.md files (skillwiki + vault-sync)
-- 43 command files in `packages/cli/src/commands/`, 21 utilities in `src/utils/`
-- 74 test files in cli (46 commands, 19 utils, 5 parsers, 2 integration, 1 skills, 1 smoke) + 10 shared
-- 947 tests passing
+- 45 command files in `packages/cli/src/commands/`, 23 utilities in `src/utils/`
+- 77 test files in cli + 10 shared
+- 1046 tests passing
 - Lint buckets: 0 error, 0 warning (clean vault), 8 info (incl. `bridges`, `orphaned_citations`, `missing_tldr`, `stale_sections`, `cli_refs`); `missing_diagram` is warning severity for architecture-tagged pages
 - Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`, `missing_tldr`
 - Lint --only supports: any valid bucket name (e.g., `lint --only cli_refs`)
 - Stale --project supports: scope to a single project (e.g., `stale --project llm-wiki`)
-- Exit codes: 49 total; highest: `BODY_TRUNCATION_GUARD (47)`
+- Exit codes: 50 total; highest: `LOG_APPEND_LOCK_HELD (49)`
 - Config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`; `AUTO_COMMIT` (default: enabled, opt-out — **only triggers on skillwiki CLI writes, NOT on Edit/Write tool calls or bash `mv`/`rm`. Plain file edits leave a dirty working tree.**)
 - `doctor` checks: 26 (incl. 4 S3 mount health checks + 5 vault_sync_* checks); `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code
 - Page-rewriting commands (`frontmatter-fix`, `tag-sync`, `migrate-citations`, `lint --fix`, `drift`) use `safeWritePage` (atomic temp+rename, body-shrink guard at 0.5 ratio) as defense-in-depth against the 2026-05-22 SeaweedFS rclone VFS write-back race.
