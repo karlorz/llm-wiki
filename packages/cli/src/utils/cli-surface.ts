@@ -42,6 +42,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("claim").option("--project <slug>").option("--slug <slug>").option("--wiki <name>");
   program.command("pagesize").option("--lines <n>").option("--wiki <name>");
   program.command("log-rotate").option("--threshold <n>").option("--apply").option("--wiki <name>");
+  program.command("log-append").requiredOption("--content <text>").option("--wiki <name>");
   program.command("lint").option("--days <n>").option("--lines <n>").option("--log-threshold <n>").option("--fix").option("--only <bucket>").option("--wiki <name>");
   program.command("config"); // has subcommands
   program.command("doctor");

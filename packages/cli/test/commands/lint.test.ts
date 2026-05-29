@@ -1183,7 +1183,7 @@ same body content here
       const v = vault();
       writeFileSync(
         join(v, "concepts", "bad-cli-ref.md"),
-        FM(["model"]) + "## TL;DR\n\n- test\n\n## Overview\n\nRun `skillwiki log-append`.\n"
+        FM(["model"]) + "## TL;DR\n\n- test\n\n## Overview\n\nRun `skillwiki frobnicate`.\n"
       );
       writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[bad-cli-ref]]\n");
       const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "cli_refs" });
