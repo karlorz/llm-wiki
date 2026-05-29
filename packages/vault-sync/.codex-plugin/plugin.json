@@ -1,6 +1,6 @@
 {
   "name": "vault-sync",
-  "version": "0.8.1-beta.2",
+  "version": "0.8.1-beta.3",
   "description": "Cross-platform vault sync infrastructure for Codex: rclone push, GitHub fetch-notify, presync, snapshot. macOS launchd + Linux systemd.",
   "author": {
     "name": "karlorz",
