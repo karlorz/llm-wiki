@@ -46,7 +46,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("config"); // has subcommands
   program.command("doctor");
   program.command("status").option("--wiki <name>");
-  program.command("archive").option("--wiki <name>");
+  program.command("archive").option("--wiki <name>").option("--cascade").option("--apply");
   program.command("drift").option("--apply").option("--new <date>").option("--wiki <name>");
   program.command("dedup").option("--apply").option("--wiki <name>");
   program.command("migrate-citations").option("--dry-run").option("--wiki <name>");
@@ -85,6 +85,9 @@ export function buildCliSurface(): Map<string, Set<string>> {
   syncCmd.command("status").option("--wiki <name>");
   syncCmd.command("push").option("--wiki <name>");
   syncCmd.command("pull").option("--wiki <name>");
+  syncCmd.command("lock").option("--summary <text>").option("--ttl-minutes <n>").option("--force").option("--wiki <name>");
+  syncCmd.command("unlock").option("--force").option("--wiki <name>");
+  syncCmd.command("peers").option("--wiki <name>");
 
   const backupCmd = program.commands.find(c => c.name() === "backup")!;
   backupCmd.command("sync").option("--dry-run").option("--bucket <name>").option("--endpoint <url>").option("--region <region>").option("--prune").option("--wiki <name>");

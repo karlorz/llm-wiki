@@ -355,10 +355,13 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     }
     if (orphanedProjectPages.length > 0) buckets.orphaned_project_pages = orphanedProjectPages;
 
-    // CLI reference validation
+    // CLI reference validation (actionable scope):
+    // - Include typed knowledge pages only.
+    // - Exclude raw/ and project work artifacts where stale CLI references are
+    //   common in historical specs/plans and are not operationally actionable.
     const cliRefFlags: string[] = [];
     const cliSurface = buildCliSurface();
-    const allScanPages = [...scan.data.typedKnowledge, ...scan.data.raw, ...scan.data.workItems, ...scan.data.compound];
+    const allScanPages = [...scan.data.typedKnowledge];
     for (const page of allScanPages) {
       const text = await readPage(page);
       const violations = validateCliRefs(text, page.relPath, cliSurface);

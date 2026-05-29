@@ -1164,6 +1164,36 @@ same body content here
         expect(r.result.data.summary.info).toBe(0);
       }
     });
+
+    it("ignores cli_refs violations in raw pages (immutable historical scope)", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "transcripts"), { recursive: true });
+      writeFileSync(
+        join(v, "raw", "transcripts", "2026-05-30-idea-legacy-cli.md"),
+        `---\nsource_url: null\ningested: 2026-05-30\nkind: idea\n---\n\nLegacy note: \`skillwiki sync peers\`.\n`
+      );
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "cli_refs" });
+      expect(r.result.ok).toBe(true);
+      if (r.result.ok) {
+        expect(r.result.data.summary.info).toBe(0);
+      }
+    });
+
+    it("still reports cli_refs violations in typed knowledge pages", async () => {
+      const v = vault();
+      writeFileSync(
+        join(v, "concepts", "bad-cli-ref.md"),
+        FM(["model"]) + "## TL;DR\n\n- test\n\n## Overview\n\nRun `skillwiki log-append`.\n"
+      );
+      writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[bad-cli-ref]]\n");
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "cli_refs" });
+      expect(r.result.ok).toBe(true);
+      if (r.result.ok) {
+        expect(r.result.data.summary.info).toBeGreaterThan(0);
+        const infoKinds = r.result.data.by_severity.info.map(b => b.kind);
+        expect(infoKinds).toContain("cli_refs");
+      }
+    });
   });
 
   describe("stale_sections", () => {

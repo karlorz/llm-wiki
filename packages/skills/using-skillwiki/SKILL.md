@@ -1,13 +1,24 @@
 ---
-version: 0.2.1
+version: 0.2.2
 name: using-skillwiki
-description: Invoke at session start or when knowledge-base tasks arise — maps all skillwiki skills and teaches the skillwiki CLI workflow
+description: Invoke at session start or when knowledge-base tasks arise — maps skillwiki skills, dev-loop alignment, and PRD/TDD routing with plan-mode gate checks
 ---
 <SUBAGENT-STOP>
 If you were dispatched as a subagent to execute a specific task, skip this skill.
 </SUBAGENT-STOP>
 # using-skillwiki
 You have skillwiki — a project-aware Karpathy-style knowledge base for Claude Code.
+
+## Last Hook Gate (SessionStart)
+
+This skill is injected by the plugin SessionStart hook on `startup|clear|compact`.
+Treat this section as the final gate before planning work:
+
+1. If the task requires spec/plan work, route through PRD skills (not built-in plan mode).
+2. If `prd_layer` is `superpowers` or `tdd`, ensure `EnterPlanMode` is gated (`wiki-gate-plan-mode on` or `status` if uncertain).
+3. If `prd_layer` is `manual` or `none`, do not force the gate; follow project policy.
+4. Always apply the PRD bridge: spec/plan outputs go to vault work-item paths, never `docs/superpowers/`.
+
 ## When to Use These Skills
 Invoke a skillwiki skill when the user:
 - Wants to create, build, or start a vault/wiki/knowledge base
@@ -24,6 +35,7 @@ Invoke a skillwiki skill when the user:
 - Wants to sync vault changes to/from a git remote
 - Wants to visualize the vault graph as an Obsidian Canvas
 - Wants to run a research scan of repo and vault health
+
 ## Vault Structure
 A skillwiki vault has three layers. The canonical architecture lives in `SCHEMA.md` at the vault root — read it before creating any new directories.
 **Layer 1 — Raw (`raw/`):** Immutable source material. Never modify after ingest. `raw/transcripts/` doubles as the ad-hoc capture point for meeting notes and unprocessed ideas.
@@ -51,6 +63,7 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 | `/wiki-add-task <text>` | You're in a Claude session | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with ad-hoc capture frontmatter |
 | Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create/edit any `.md` file in `raw/transcripts/` — dev-loop discovers it on next cycle |
 | Dev-loop discovery | Automatic, next cycle | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |
+
 ## Skill Map
 | Skill | When to Invoke |
 |-------|----------------|
@@ -72,10 +85,33 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 | `proj-decide` | Write an Architectural Decision Record (ADR) |
 | `wiki-gate-plan-mode` | Toggle EnterPlanMode gating — force superpowers planning instead of built-in plan mode |
 | `dev-loop:research` | Research agent for dev-loop IDLE — scans repo + vault health, outputs prioritized work-item recommendations (formerly `/dev-loop-research`) |
+
+## dev-loop Alignment
+
+Use these skills as the knowledge layer in dev-loop. The loop remains capability-based:
+branch on capabilities (`BACKEND_CAPS`, `PRD_CAPS`), not backend names.
+
+Typical sequence with PRD enabled:
+`REFRESH → QUERY → WORK → SPEC → PLAN → EXECUTE → SIMPLIFY → MERGE → SAVE → RETRO`.
+
+- `QUERY/WORK/SAVE/RETRO` map naturally to `wiki-query`, `proj-work`, `wiki-crystallize`, and vault logs.
+- `SIMPLIFY` is a quality gate before merge; keep it in the loop even for small changes.
+- For no-work cycles, run maintenance (`wiki-lint`, `wiki-audit`, `proj-distill`, `dev-loop:research`).
+
+## PRD/TDD Compatibility
+
+Use `prd_layer` + `prd_pipeline` from `.claude/dev-loop.config.md` as source of truth:
+
+- `superpowers` + `full`: brainstorming/spec/plan/execute/review; route spec+plan through `proj-work`.
+- `tdd` + `tdd-first`: plan-first then test-driven execute; still route artifacts through `proj-work`.
+- `single-pass` or `debug-only`: may skip formal spec/plan, but if generated they still belong in vault work items.
+- `manual` / `none`: no forced PRD skills; preserve skillwiki logging and provenance discipline.
+
 ## CLI Backbone
 All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, and linting. Skills invoke it via Bash for the mechanical parts and use Claude for the creative parts.
 Key CLI subcommands: `init`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `graph build`, `archive`, `drift`, `compound`, `tag-sync`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
 Run `skillwiki doctor` to diagnose setup issues. Run `skillwiki config list` to see current configuration.
+
 ## Typical Workflow
 1. **Init** (`wiki-init`) — create vault, set domain and taxonomy
 2. **Ingest** (`wiki-ingest`) — add sources, build pages
@@ -85,6 +121,7 @@ Run `skillwiki doctor` to diagnose setup issues. Run `skillwiki config list` to 
 6. **Audit** (`wiki-audit`) — verify source integrity
 For longer-running project work, use `proj-init` → `proj-work` → `proj-distill` / `proj-decide`.
 Maintenance: **Archive** (`wiki-archive`) superseded pages, **Drift** (`wiki-reingest`) to detect stale sources, **Adapter** (`wiki-adapter-prd`) for foreign PRD format ingestion.
+
 ## Troubleshooting Version Drift
 skillwiki has three distribution channels that can drift:
 | Channel | Location | Update Command |
@@ -96,6 +133,7 @@ skillwiki has three distribution channels that can drift:
 **Check versions:** `skillwiki doctor` reports "Plugin/CLI version" mismatch warnings.
 **Common issue:** npm package ships SKILL.md files with older `version:` frontmatter than CLI code. This creates false-positive "version warnings" in `skillwiki doctor` — the CLI is newer but skills report older version.
 **Fix:** If developing locally, use `npm link` from the git repo. If using released versions, wait for maintainer to bump SKILL.md versions in source and republish.
+
 ## Multi-Wiki Profiles
 skillwiki supports named wiki profiles for working with multiple vaults. Set `WIKI_DEFAULT` to control which wiki all skills target by default.
 **Manage profiles:**
@@ -104,16 +142,17 @@ skillwiki supports named wiki profiles for working with multiple vaults. Set `WI
 - `skillwiki config list --profiles` — list all profiles
 - `skillwiki --wiki <name> lint` — override per-command
 **Project-local override:** Place a `./skillwiki/.env` in a project root to bind that project to a specific wiki. Skills will use it automatically when running from that directory.
+
 ## PRD Bridge — Redirect Spec/Plan Output to Vault
-When skillwiki is installed, **all spec and plan documents must land in the vault**, not in repo-local directories like `docs/superpowers/`. This applies to any PRD/design skill (superpowers:brainstorming, superpowers:writing-plans, CodeStable, AIDE, Hermes, etc.).
+When skillwiki is installed, **all spec and plan documents must land in the vault**, not in repo-local directories like `docs/superpowers/`. This applies to PRD and TDD workflows (superpowers, codestable, AIDE, Hermes, manual templates).
 **Rule:** Before a PRD skill writes a spec or plan file, redirect its save path:
 1. Resolve the vault path: `skillwiki path`
 2. If the cwd is inside a project (check for `projects/{slug}/` via `skillwiki path --init-time` or look for `./skillwiki/.env`), use that project's work directory
 3. Create or locate the work item via `proj-work`, which emits redirect paths for `spec.md` and `plan.md`
-4. Pass those vault paths to the PRD skill as its save location
+4. Pass those vault paths to the PRD/TDD skill as its save location
 **Concrete overrides for superpowers:**
 - `superpowers:brainstorming` step 6: override `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` → vault work-item `spec.md` path from `proj-work`
 - `superpowers:writing-plans` header: override `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md` → vault work-item `plan.md` path from `proj-work`
-Both skills say "User preferences for spec location override this default" — the vault work-item path IS the override.
+Both skills say "User preferences for spec location override this default" — the vault work-item path IS the override. Apply the same override pattern to any TDD-oriented planner that emits spec/plan artifacts.
 **If no project context exists** (standalone vault, not inside a project), default to the `playground` project slug. Invoke `proj-work` with `playground` as the slug so redirect paths are emitted normally and the PRD bridge chain works. The `playground` project is a pre-initialized catch-all workspace at `projects/playground/` for exploratory work, experiments, and unclassified features. Work items that mature can be moved to a real project later.
 **Never create `docs/superpowers/` in any repo.**

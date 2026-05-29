@@ -113,7 +113,14 @@ assert_exit 28 "$RUN_RC" "doctor exits 28 (skills_installed warn)"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0" "doctor 0 errors"
 assert_json_contains "$RUN_OUTPUT" "data.summary.warn" "2" "doctor 2 warns (skills_installed + temp vault)"
 
-# ---- 6. Cleanup ----
+# ---- 6. CI guard: canonical typed-knowledge CLI refs ----
+printf "\n--- cli_refs guard (canonical vault) ---\n"
+CANONICAL_VAULT="/root/wiki"
+run_cli ssh "$SSH_HOST" "$REMOTE_CLI lint $CANONICAL_VAULT --only cli_refs"
+assert_exit 0 "$RUN_RC" "canonical vault has zero typed-knowledge cli_refs"
+assert_json_contains "$RUN_OUTPUT" "data.summary.info" "0" "cli_refs summary info is zero"
+
+# ---- 7. Cleanup ----
 ssh "$SSH_HOST" "rm -rf $VAULT $TEMP_HOME" 2>/dev/null || true
 
 # ---- Summary ----

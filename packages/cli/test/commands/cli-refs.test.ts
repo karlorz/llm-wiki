@@ -15,6 +15,9 @@ describe("buildCliSurface", () => {
     expect(surface.has("graph.build")).toBe(true);
     expect(surface.has("sync.status")).toBe(true);
     expect(surface.has("sync.push")).toBe(true);
+    expect(surface.has("sync.lock")).toBe(true);
+    expect(surface.has("sync.unlock")).toBe(true);
+    expect(surface.has("sync.peers")).toBe(true);
     expect(surface.has("config.get")).toBe(true);
     expect(surface.has("config.set")).toBe(true);
     expect(surface.has("compound.promote")).toBe(true);
@@ -32,6 +35,11 @@ describe("buildCliSurface", () => {
     expect(surface.get("lint")!.has("--days")).toBe(true);
     expect(surface.get("init")!.has("--force")).toBe(true);
     expect(surface.get("init")!.has("--domain")).toBe(true);
+    expect(surface.get("archive")!.has("--cascade")).toBe(true);
+    expect(surface.get("archive")!.has("--apply")).toBe(true);
+    expect(surface.get("sync.lock")!.has("--summary")).toBe(true);
+    expect(surface.get("sync.lock")!.has("--ttl-minutes")).toBe(true);
+    expect(surface.get("sync.unlock")!.has("--force")).toBe(true);
   });
 
   it("includes --human flag inherited from root on all commands", () => {
@@ -127,6 +135,16 @@ describe("validateCliRefs", () => {
 
   it("accepts --dry-run on compound promote", () => {
     const text = "Run `skillwiki compound promote --project llm-wiki --dry-run`.";
+    expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
+  });
+
+  it("accepts sync lock/unlock/peers current command surface", () => {
+    const text = "Run `skillwiki sync lock --summary test --ttl-minutes 30` then `skillwiki sync peers` and `skillwiki sync unlock --force`.";
+    expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
+  });
+
+  it("accepts archive cascade/apply flags", () => {
+    const text = "Run `skillwiki archive concepts/foo.md --cascade --apply`.";
     expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
   });
 });
