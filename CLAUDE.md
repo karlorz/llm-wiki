@@ -155,7 +155,7 @@ Two launchd jobs keep `~/wiki` in sync with the canonical stores. Source-of-trut
 - 45 command files in `packages/cli/src/commands/`, 23 utilities in `src/utils/`
 - 77 test files in cli + 10 shared
 - 1046 tests passing
-- Lint buckets: 0 error, 0 warning (clean vault), 8 info (incl. `bridges`, `orphaned_citations`, `missing_tldr`, `stale_sections`, `cli_refs`); `missing_diagram` is warning severity for architecture-tagged pages
+- Lint buckets: 0 error, 0 warning (clean vault), 9 info (incl. `bridges`, `sparse_community`, `orphaned_citations`, `missing_tldr`, `stale_sections`, `cli_refs`); `missing_diagram` is warning severity for architecture-tagged pages
 - Lint --fix supports: `legacy_citation_style`, `wikilink_citation`, `missing_overview`, `missing_tldr`
 - Lint --only supports: any valid bucket name (e.g., `lint --only cli_refs`)
 - Stale --project supports: scope to a single project (e.g., `stale --project llm-wiki`)
