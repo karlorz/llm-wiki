@@ -23,6 +23,7 @@ import { runStale } from "./commands/stale.js";
 import { runClaim } from "./commands/claim.js";
 import { runPagesize } from "./commands/pagesize.js";
 import { runLogRotate } from "./commands/log-rotate.js";
+import { runLogAppend } from "./commands/log-append.js";
 import { runLint } from "./commands/lint.js";
 import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "./commands/config.js";
 import { runDoctor } from "./commands/doctor.js";
@@ -328,6 +329,17 @@ program
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runLogRotate({ vault: v.vault, threshold: opts.threshold, apply: !!opts.apply }), v.vault);
+  });
+
+program
+  .command("log-append [vault]")
+  .description("append a single entry to the vault log under a short advisory lock")
+  .requiredOption("--content <text>", "log entry text to append")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runLogAppend({ vault: v.vault, content: opts.content }), v.vault);
   });
 
 program

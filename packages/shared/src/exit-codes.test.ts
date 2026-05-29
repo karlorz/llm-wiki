@@ -45,6 +45,8 @@ describe("exit-codes", () => {
     expect(ExitCode.COMPOUND_PROMOTED).toBe(39);
     expect(ExitCode.SKILL_VERSION_MISMATCH).toBe(40);
     expect(ExitCode.INGEST_VALIDATION_FAILED).toBe(41);
+    expect(ExitCode.SYNC_LOCK_HELD).toBe(48);
+    expect(ExitCode.LOG_APPEND_LOCK_HELD).toBe(49);
   });
 
   it("exposes a stable name for every code (non-empty, unique)", () => {
