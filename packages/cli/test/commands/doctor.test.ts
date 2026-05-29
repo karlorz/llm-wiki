@@ -142,12 +142,38 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 27 checks", async () => {
+  it("always returns exactly 32 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(27);
+      expect(r.result.data.checks).toHaveLength(32);
+    }
+  });
+
+  it("emits 5 vault metric rows (info severity) on a valid vault", async () => {
+    const h = home();
+    const v = fullVault();
+    const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const metricIds = ["vault_metric_pages", "vault_metric_orphans", "vault_metric_bridges", "vault_metric_cohesion", "vault_metric_log_size"];
+      for (const id of metricIds) {
+        const row = r.result.data.checks.find(c => c.id === id);
+        expect(row, `missing metric ${id}`).toBeDefined();
+        expect(row!.status).toBe("info");
+      }
+    }
+  });
+
+  it("emits 5 vault metric rows even with no vault configured", async () => {
+    const h = home();
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const metricRows = r.result.data.checks.filter(c => c.id.startsWith("vault_metric_"));
+      expect(metricRows).toHaveLength(5);
+      for (const row of metricRows) expect(row.status).toBe("info");
     }
   });
 
