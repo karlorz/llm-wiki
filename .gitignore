@@ -11,3 +11,4 @@ coverage/
 packages/cli/skills/
 .claude/scheduled_tasks.json
 scripts/hosts/lxc-test.env
+logs/
