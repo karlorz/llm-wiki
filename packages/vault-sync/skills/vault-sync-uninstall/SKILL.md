@@ -19,7 +19,7 @@ Remove vault-sync from the current host. Stops scheduler jobs, removes deployed 
 1. **Check installed state** — `skillwiki config get vault_sync.installed`. If false: exit 0 with message.
 2. **Stop + remove scheduler units**:
    - macOS: `launchctl bootout gui/$UID/<label>` then `rm ~/Library/LaunchAgents/com.karlchow.wiki-*.plist`.
-   - Linux: `systemctl --user disable --now wiki-push.timer wiki-fetch.timer` then remove unit files.
+   - Linux: `systemctl --user disable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer` then remove unit files.
 3. **Create tombstone** `*.RETIRED.md` next to each removed unit (ADR D7 pattern):
    ```markdown
    # RETIRED — com.karlchow.wiki-push

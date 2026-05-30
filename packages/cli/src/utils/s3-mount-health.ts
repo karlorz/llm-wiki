@@ -270,6 +270,56 @@ export function writeTest(dir: string): WriteTestResult {
   return { success: true, writeMs, readMs: Date.now() - readStart, size: Buffer.byteLength(payload, "utf8") };
 }
 
+// ─── Duration parsing helpers ────────────────────────────────
+
+const DURATION_UNIT_SECONDS: Record<string, number> = {
+  ms: 1 / 1000,
+  s: 1,
+  m: 60,
+  h: 3600,
+  d: 86400,
+  w: 604800,
+};
+
+/**
+ * Parse an rclone/Go-style duration into seconds.
+ *
+ * Supports:
+ *   - plain numeric seconds ("10")
+ *   - unit-suffixed values ("10m", "1.5h", "500ms")
+ *   - compound forms ("1h30m", "2m10s")
+ *
+ * Returns `null` when parsing fails.
+ */
+export function parseDurationSeconds(raw: string): number | null {
+  const input = raw.trim().toLowerCase();
+  if (!input) return null;
+
+  // Bare numbers are treated as seconds.
+  if (/^\d+(?:\.\d+)?$/.test(input)) {
+    const num = parseFloat(input);
+    return Number.isFinite(num) ? num : null;
+  }
+
+  const re = /(\d+(?:\.\d+)?)(ms|s|m|h|d|w)/g;
+  let total = 0;
+  let consumed = 0;
+
+  for (const match of input.matchAll(re)) {
+    const full = match[0];
+    const value = parseFloat(match[1]);
+    const unit = match[2];
+    if (!Number.isFinite(value)) return null;
+    const factor = DURATION_UNIT_SECONDS[unit];
+    if (factor === undefined) return null;
+    total += value * factor;
+    consumed += full.length;
+  }
+
+  if (consumed !== input.length) return null;
+  return total;
+}
+
 // ─── rclone flag safety thresholds ───────────────────────────
 
 /** Minimum recommended values for critical rclone VFS flags. */

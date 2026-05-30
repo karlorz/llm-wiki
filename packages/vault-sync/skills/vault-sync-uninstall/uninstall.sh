@@ -245,6 +245,8 @@ if ! is_installed "$SHARE_BIN"; then
       log "[dry-run] remove $HOME/.config/systemd/user/wiki-push.timer"
       log "[dry-run] remove $HOME/.config/systemd/user/wiki-fetch.service"
       log "[dry-run] remove $HOME/.config/systemd/user/wiki-fetch.timer"
+      log "[dry-run] remove $HOME/.config/systemd/user/wiki-fuse-refresh.service"
+      log "[dry-run] remove $HOME/.config/systemd/user/wiki-fuse-refresh.timer"
     fi
     log "[dry-run] remove $SHARE_BIN"
   else
@@ -279,13 +281,13 @@ if [ "$VS_OS" = "macos" ]; then
 else
   SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
   if [ "$DRY_RUN" -eq 1 ]; then
-    log "[dry-run] systemctl --user disable --now wiki-push.timer wiki-fetch.timer"
+    log "[dry-run] systemctl --user disable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer"
     log "[dry-run] systemctl --user daemon-reload"
   else
-    systemctl --user disable --now wiki-push.timer wiki-fetch.timer >/dev/null 2>&1 || true
+    systemctl --user disable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer >/dev/null 2>&1 || true
   fi
 
-  for unit_name in wiki-push.service wiki-push.timer wiki-fetch.service wiki-fetch.timer; do
+  for unit_name in wiki-push.service wiki-push.timer wiki-fetch.service wiki-fetch.timer wiki-fuse-refresh.service wiki-fuse-refresh.timer; do
     unit_path="$SYSTEMD_USER_DIR/$unit_name"
     if [ -f "$unit_path" ]; then
       run_cmd rm -f "$unit_path"
@@ -303,12 +305,15 @@ if [ -d "$SHARE_BIN" ]; then
 fi
 
 if [ "$PURGE_LOGS" -eq 1 ]; then
-  run_cmd rm -f "$LOG_DIR"/wiki-push.log* "$LOG_DIR"/wiki-fetch.log* "$LOG_DIR"/wiki-pull.log* 2>/dev/null || true
+  run_cmd rm -f "$LOG_DIR"/wiki-push.log* "$LOG_DIR"/wiki-fetch.log* "$LOG_DIR"/wiki-pull.log* "$LOG_DIR"/wiki-fuse-refresh.log* 2>/dev/null || true
 fi
 
 set_vault_config "vault_sync.installed" "false"
 set_vault_config "vault_sync.role" "none"
 set_vault_config "vault_sync.scheduler" "none"
+set_vault_config "vault_sync.fuse_refresh_enabled" "false"
+set_vault_config "vault_sync.fuse_refresh_interval" "none"
+set_vault_config "vault_sync.fuse_max_dir_cache" "none"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   log "Dry-run only: no files or services were removed."

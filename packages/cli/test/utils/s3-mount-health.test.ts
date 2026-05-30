@@ -10,6 +10,7 @@ import {
   detectFuseMount,
   getRcloneVersion,
   writeTest,
+  parseDurationSeconds,
   FLAG_THRESHOLDS,
   MIN_RCLONE_VERSION,
 } from "../../src/utils/s3-mount-health.js";
@@ -110,5 +111,29 @@ describe("constants", () => {
 
   it("MIN_RCLONE_VERSION is 1.65.0", () => {
     expect(MIN_RCLONE_VERSION).toEqual({ major: 1, minor: 65, patch: 0 });
+  });
+});
+
+describe("parseDurationSeconds", () => {
+  it("parses plain numeric seconds", () => {
+    expect(parseDurationSeconds("10")).toBe(10);
+    expect(parseDurationSeconds("0.5")).toBe(0.5);
+  });
+
+  it("parses unit-suffixed durations", () => {
+    expect(parseDurationSeconds("10m")).toBe(600);
+    expect(parseDurationSeconds("1.5h")).toBe(5400);
+    expect(parseDurationSeconds("500ms")).toBe(0.5);
+  });
+
+  it("parses compound durations", () => {
+    expect(parseDurationSeconds("1h30m")).toBe(5400);
+    expect(parseDurationSeconds("2m10s")).toBe(130);
+  });
+
+  it("returns null for invalid durations", () => {
+    expect(parseDurationSeconds("")).toBeNull();
+    expect(parseDurationSeconds("abc")).toBeNull();
+    expect(parseDurationSeconds("1h30")).toBeNull();
   });
 });

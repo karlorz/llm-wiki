@@ -211,6 +211,28 @@ else
   fi
 fi
 
+# Check 2b: fuse refresh timer enabled (Linux only)
+if [ "$VS_OS" = "macos" ]; then
+  add_check "vault_sync_fuse_refresh_job" "Vault sync fuse refresh job" "pass" "macOS host — check skipped"
+else
+  if [ "$READ_ONLY" -eq 1 ]; then
+    fuse_timer="$HOME/.config/systemd/user/wiki-fuse-refresh.timer"
+    fuse_service="$HOME/.config/systemd/user/wiki-fuse-refresh.service"
+    if [ -f "$fuse_timer" ] && [ -f "$fuse_service" ]; then
+      add_check "vault_sync_fuse_refresh_job" "Vault sync fuse refresh job" "pass" "wiki-fuse-refresh unit files present (read-only mode)"
+    else
+      add_check "vault_sync_fuse_refresh_job" "Vault sync fuse refresh job" "warn" "wiki-fuse-refresh unit files missing (read-only mode)"
+    fi
+  else
+    fuse_job_json=$(platform_job_status "wiki-fuse-refresh")
+    if printf '%s' "$fuse_job_json" | grep -q '"enabled": true'; then
+      add_check "vault_sync_fuse_refresh_job" "Vault sync fuse refresh job" "pass" "Scheduler reports wiki-fuse-refresh enabled"
+    else
+      add_check "vault_sync_fuse_refresh_job" "Vault sync fuse refresh job" "warn" "Scheduler reports wiki-fuse-refresh disabled"
+    fi
+  fi
+fi
+
 # Check 3: last push recency/result
 classify_log_tail "$LOG_DIR/wiki-push.log" "vault_sync_last_push_age" "Vault sync last push recency" 'OK push'
 

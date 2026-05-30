@@ -125,7 +125,7 @@ fi
 
 # 10. Scripts pass bash -n (syntax check)
 SYNTAX_FAIL=0
-for script in "$SCRIPT_DIR/../scripts/wiki-push.sh" "$SCRIPT_DIR/../scripts/wiki-fetch-notify.sh" "$SCRIPT_DIR/../scripts/wiki-pull-with-auto-resolve.sh"; do
+for script in "$SCRIPT_DIR/../scripts/wiki-push.sh" "$SCRIPT_DIR/../scripts/wiki-fetch-notify.sh" "$SCRIPT_DIR/../scripts/wiki-pull-with-auto-resolve.sh" "$SCRIPT_DIR/../scripts/wiki-fuse-refresh.sh"; do
   if ! bash -n "$script" 2>/dev/null; then
     printf "FAIL: syntax check %s\n" "$(basename "$script")"
     SYNTAX_FAIL=$((SYNTAX_FAIL + 1))

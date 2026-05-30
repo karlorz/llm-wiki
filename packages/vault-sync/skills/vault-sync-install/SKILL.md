@@ -1,6 +1,6 @@
 ---
 name: vault-sync-install
-description: Install vault-sync on the current host. Detects OS, deploys scripts, registers scheduler jobs (launchd or systemd-user), runs loginctl enable-linger on Linux. Idempotent.
+description: Install vault-sync on the current host. Detects OS, deploys scripts, registers scheduler jobs (launchd or systemd-user), including Linux FUSE refresh timer, and runs loginctl enable-linger on Linux. Idempotent.
 argument-hint: "[--role=leaf|snapshotter] [--dry-run] [--override-snapshotter]"
 ---
 
@@ -41,13 +41,17 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    ```
 6. **Install scheduler units**:
    - macOS: render `.plist.tmpl` files with `@SCRIPT_DIR@` → `$(platform_share_dir)/bin`, `@LOG_DIR@` → `$(platform_log_dir)`. Write to `~/Library/LaunchAgents/`. Run `launchctl bootstrap gui/$UID <plist>`.
-   - Linux: render `.service` + `.timer` with `@SCRIPT_DIR@` → `$(platform_share_dir)/bin`. Write to `~/.config/systemd/user/`. Run `systemctl --user daemon-reload && systemctl --user enable --now wiki-push.timer wiki-fetch.timer`.
+   - Linux: render `.service` + `.timer` with `@SCRIPT_DIR@` → `$(platform_share_dir)/bin`. Write to `~/.config/systemd/user/`. Run `systemctl --user daemon-reload && systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer`.
+   - Linux post-check: run `wiki-fuse-refresh.sh --check-only --max-dir-cache 15m` and surface a warning if the active mount exceeds the freshness envelope.
    - Linux only: `loginctl enable-linger $USER`. If this fails, surface as a hard error — without it, headless LXC will silently not sync.
 7. **Register in skillwiki config**:
    ```
    skillwiki config set vault_sync.installed true
    skillwiki config set vault_sync.role <role>
    skillwiki config set vault_sync.scheduler <launchd|systemd>
+   skillwiki config set vault_sync.fuse_refresh_enabled <true|false>
+   skillwiki config set vault_sync.fuse_refresh_interval 300s   # Linux only
+   skillwiki config set vault_sync.fuse_max_dir_cache 15m       # Linux only
    ```
 8. **`--dry-run` mode**: print the entire plan (paths, commands, fleet.yaml diff) but execute nothing.
 

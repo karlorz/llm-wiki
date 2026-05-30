@@ -1,7 +1,7 @@
 {
   "name": "vault-sync",
-  "version": "0.8.1-beta.4",
-  "description": "Cross-platform vault sync infrastructure for Codex: rclone push, GitHub fetch-notify, presync, snapshot. macOS launchd + Linux systemd.",
+  "version": "0.8.1-beta.5",
+  "description": "Cross-platform vault sync infrastructure for Codex: rclone push, GitHub fetch-notify, presync, snapshot, and Linux FUSE freshness refresh.",
   "author": {
     "name": "karlorz",
     "url": "https://github.com/karlorz"
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Vault Sync",
     "shortDescription": "Cross-platform vault sync infrastructure for Codex agents",
-    "longDescription": "5 skills (vault-sync-install, vault-sync-status, vault-sync-uninstall, vault-presync, vault-snapshot) for managing rclone push, git fetch-notify, presync lint/rebase, and snapshot promotion across macOS and Linux hosts.",
+    "longDescription": "6 skills (vault-sync-install, vault-sync-status, vault-sync-uninstall, vault-presync, vault-snapshot, vault-fuse-freshness) for managing rclone push, git fetch-notify, presync lint/rebase, snapshot promotion, and Linux FUSE freshness refresh across macOS and Linux hosts.",
     "developerName": "karlorz",
     "category": "Productivity",
     "capabilities": [
@@ -32,6 +32,7 @@
     "defaultPrompt": [
       "Install vault-sync on this host with leaf role.",
       "Show vault-sync health status.",
+      "Run a FUSE freshness audit and refresh if needed.",
       "Run presync lint gate and rebase before pushing."
     ],
     "brandColor": "#2ea043"

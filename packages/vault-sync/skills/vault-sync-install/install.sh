@@ -260,6 +260,7 @@ if [ "$VS_OS" = "macos" ]; then
   log "Plan: render launchd units in $HOME/Library/LaunchAgents"
 else
   log "Plan: render systemd user units in $HOME/.config/systemd/user"
+  log "Plan: install wiki-fuse-refresh.timer (5min)"
   log "Plan: run loginctl enable-linger $USER"
 fi
 
@@ -306,21 +307,40 @@ else
   replace_template "$SYSTEMD_SRC_DIR/wiki-push.timer" "$SYSTEMD_USER_DIR/wiki-push.timer"
   replace_template "$SYSTEMD_SRC_DIR/wiki-fetch.service" "$SYSTEMD_USER_DIR/wiki-fetch.service"
   replace_template "$SYSTEMD_SRC_DIR/wiki-fetch.timer" "$SYSTEMD_USER_DIR/wiki-fetch.timer"
+  replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.service" "$SYSTEMD_USER_DIR/wiki-fuse-refresh.service"
+  replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.timer" "$SYSTEMD_USER_DIR/wiki-fuse-refresh.timer"
 
   if [ "$DRY_RUN" -eq 1 ]; then
     log "[dry-run] loginctl enable-linger $USER"
     log "[dry-run] systemctl --user daemon-reload"
-    log "[dry-run] systemctl --user enable --now wiki-push.timer wiki-fetch.timer"
+    log "[dry-run] systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer"
+    log "[dry-run] $BIN_DIR/wiki-fuse-refresh.sh --check-only --max-dir-cache 15m"
   else
     loginctl enable-linger "$USER" || fatal "loginctl enable-linger $USER failed"
     systemctl --user daemon-reload
-    systemctl --user enable --now wiki-push.timer wiki-fetch.timer
+    systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer
+    if [ -x "$BIN_DIR/wiki-fuse-refresh.sh" ]; then
+      if "$BIN_DIR/wiki-fuse-refresh.sh" --check-only --max-dir-cache 15m >/dev/null 2>&1; then
+        log "Validated fuse freshness envelope (<=15m) via wiki-fuse-refresh --check-only"
+      else
+        warn "Fuse freshness validation reported drift (>15m or no rc visibility). Run: $BIN_DIR/wiki-fuse-refresh.sh --check-only"
+      fi
+    else
+      warn "Missing $BIN_DIR/wiki-fuse-refresh.sh; cannot validate fuse freshness envelope"
+    fi
   fi
 fi
 
 set_vault_config "vault_sync.installed" "true"
 set_vault_config "vault_sync.role" "$ROLE"
 set_vault_config "vault_sync.scheduler" "$SCHEDULER"
+if [ "$VS_OS" = "linux" ]; then
+  set_vault_config "vault_sync.fuse_refresh_enabled" "true"
+  set_vault_config "vault_sync.fuse_refresh_interval" "300s"
+  set_vault_config "vault_sync.fuse_max_dir_cache" "15m"
+else
+  set_vault_config "vault_sync.fuse_refresh_enabled" "false"
+fi
 
 log "Install plan complete."
 if [ "$DRY_RUN" -eq 1 ]; then

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run vault-sync FUSE refresh every 5min
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=300s
+AccuracySec=10s
+Unit=wiki-fuse-refresh.service
+
+[Install]
+WantedBy=timers.target

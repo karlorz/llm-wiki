@@ -52,7 +52,7 @@ The skills ship through three independent channels — keep all three working:
 1. **Claude Code plugin** — `/plugin marketplace add karlorz/llm-wiki` then `/plugin install skillwiki@llm-wiki`. Discovery is driven by `packages/skills/.claude-plugin/plugin.json` with a SessionStart hook that auto-injects the `using-skillwiki` onboarding skill. The `bin/skillwiki` npx wrapper is auto-injected into PATH when the plugin is enabled.
 2. **Codex plugin marketplace** — `codex plugin marketplace add karlorz/llm-wiki@dev` (GitHub source) or `codex plugin marketplace add /path/to/llm-wiki` (local source). Then open Codex TUI (`codex`), run `/plugins`, select marketplace `llm-wiki`, and install plugin `skillwiki`. Discovery is driven by `.agents/plugins/marketplace.json` and `packages/skills/.codex-plugin/plugin.json`.
 3. **npm CLI installer** — `npx skillwiki install` copies SKILL.md files and the `bin/skillwiki` wrapper into `~/.claude/skills/` via the `install` subcommand (see `packages/cli/src/commands/install.ts`).
-4. **vault-sync plugin** — `claude plugin install vault-sync@llm-wiki`. Sibling plugin to skillwiki, ships the cross-platform sync infrastructure (rclone push, fetch-notify, presync, snapshot). Installed via `/vault-sync-install`; OS-detects launchd vs systemd-user.
+4. **vault-sync plugin** — `claude plugin install vault-sync@llm-wiki`. Sibling plugin to skillwiki, ships the cross-platform sync infrastructure (rclone push, fetch-notify, presync, snapshot, Linux FUSE freshness refresh). Installed via `/vault-sync-install`; OS-detects launchd vs systemd-user.
 
 Changing the layout under `packages/skills/<skill>/` requires updating `packages/skills/.claude-plugin/plugin.json`, `packages/skills/.codex-plugin/plugin.json`, and the `install` subcommand's directory scan. If the plugin root path changes, update both marketplace manifests (`.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`).
 
@@ -151,7 +151,7 @@ Two launchd jobs keep `~/wiki` in sync with the canonical stores. Source-of-trut
 
 ## Current counts (2026-05-30)
 
-- 18 + 5 SKILL.md files (skillwiki + vault-sync)
+- 18 + 6 SKILL.md files (skillwiki + vault-sync)
 - 45 command files in `packages/cli/src/commands/`, 23 utilities in `src/utils/`
 - 77 test files in cli + 10 shared
 - 1046 tests passing
@@ -161,5 +161,5 @@ Two launchd jobs keep `~/wiki` in sync with the canonical stores. Source-of-trut
 - Stale --project supports: scope to a single project (e.g., `stale --project llm-wiki`)
 - Exit codes: 50 total; highest: `LOG_APPEND_LOCK_HELD (49)`
 - Config keys: `BACKUP_ENDPOINT`, `BACKUP_BUCKET`, `BACKUP_REGION`, `BACKUP_ACCESS_KEY_ID`, `BACKUP_SECRET_ACCESS_KEY`; `AUTO_COMMIT` (default: enabled, opt-out — **only triggers on skillwiki CLI writes, NOT on Edit/Write tool calls or bash `mv`/`rm`. Plain file edits leave a dirty working tree.**)
-- `doctor` checks: 31 (incl. 4 S3 mount health checks + 5 vault_sync_* checks + 5 vault_metric_* info rows); `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code
+- `doctor` checks: 33 (incl. 5 S3 mount health checks + 6 vault_sync_* checks + 5 vault_metric_* info rows); `CheckStatus` includes `info` severity (pass < info < warn < error); `info` does not affect exit code
 - Page-rewriting commands (`frontmatter-fix`, `tag-sync`, `migrate-citations`, `lint --fix`, `drift`) use `safeWritePage` (atomic temp+rename, body-shrink guard at 0.5 ratio) as defense-in-depth against the 2026-05-22 SeaweedFS rclone VFS write-back race.

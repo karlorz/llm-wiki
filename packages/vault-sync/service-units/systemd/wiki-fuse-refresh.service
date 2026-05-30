@@ -1,0 +1,10 @@
+[Unit]
+Description=vault-sync fuse refresh (rclone rc vfs/refresh)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=@SCRIPT_DIR@/wiki-fuse-refresh.sh
+RuntimeMaxSec=120
+Nice=10

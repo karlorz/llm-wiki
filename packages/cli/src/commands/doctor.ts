@@ -20,6 +20,7 @@ import {
   queryRcloneRC,
   detectFuseMount,
   writeTest,
+  parseDurationSeconds,
   FLAG_THRESHOLDS,
   MIN_RCLONE_VERSION,
 } from "../utils/s3-mount-health.js";
@@ -495,7 +496,85 @@ function checkS3MountPerf(resolvedPath: string | undefined): CheckResult {
   );
 }
 
-// ── S3 mount health checks (A–D) ────────────────────────────
+const MAX_DIR_CACHE_TIME_SECONDS = 15 * 60;
+
+function formatDurationForHumans(seconds: number): string {
+  if (!Number.isFinite(seconds)) return `${seconds}s`;
+  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)}h`;
+  if (seconds >= 60) return `${(seconds / 60).toFixed(1)}m`;
+  if (seconds >= 1) return `${seconds.toFixed(1)}s`;
+  return `${Math.round(seconds * 1000)}ms`;
+}
+
+/** Check freshness envelope for cross-device S3 visibility (dir-cache-time). */
+function checkS3MountFreshness(resolvedPath: string | undefined): CheckResult {
+  if (!resolvedPath) {
+    return check("pass", "s3_mount_freshness", "S3 visibility freshness", "No vault path — check skipped");
+  }
+
+  const fuse = detectFuseMount(resolvedPath);
+  if (!fuse) {
+    return check("pass", "s3_mount_freshness", "S3 visibility freshness", "local disk — check skipped");
+  }
+
+  const pid = findRcloneMountPid();
+  if (pid === null) {
+    return check(
+      "warn",
+      "s3_mount_freshness",
+      "S3 visibility freshness",
+      `S3 FUSE mount (${fuse.mountPoint}) but no rclone process found — cannot audit --dir-cache-time`
+    );
+  }
+
+  const flags = parseRcloneFlags(pid);
+  if (flags.size === 0) {
+    return check(
+      "warn",
+      "s3_mount_freshness",
+      "S3 visibility freshness",
+      `rclone PID ${pid} found but could not parse flags`
+    );
+  }
+
+  const raw = flags.get("--dir-cache-time");
+  if (!raw) {
+    return check(
+      "pass",
+      "s3_mount_freshness",
+      "S3 visibility freshness",
+      "PID " + pid + ": --dir-cache-time not set (rclone default 5m, within <=15m SLA)"
+    );
+  }
+
+  const seconds = parseDurationSeconds(raw);
+  if (seconds === null) {
+    return check(
+      "warn",
+      "s3_mount_freshness",
+      "S3 visibility freshness",
+      `PID ${pid}: could not parse --dir-cache-time=${raw}`
+    );
+  }
+
+  if (seconds > MAX_DIR_CACHE_TIME_SECONDS) {
+    return check(
+      "warn",
+      "s3_mount_freshness",
+      "S3 visibility freshness",
+      `PID ${pid}: --dir-cache-time=${raw} (${formatDurationForHumans(seconds)}) exceeds 15m SLA — external S3 changes may remain invisible`
+    );
+  }
+
+  return check(
+    "pass",
+    "s3_mount_freshness",
+    "S3 visibility freshness",
+    `PID ${pid}: --dir-cache-time=${raw} (${formatDurationForHumans(seconds)}), within <=15m SLA`
+  );
+}
+
+// ── S3 mount health checks (A–E) ────────────────────────────
 
 /** Check A: rclone flag audit — are critical VFS flags set to safe values? */
 function checkRcloneFlagAudit(resolvedPath: string | undefined): CheckResult {
@@ -524,12 +603,8 @@ function checkRcloneFlagAudit(resolvedPath: string | undefined): CheckResult {
       warnings.push(`${flag} not set (default may be unsafe)`);
       continue;
     }
-    const value = parseFloat(raw);
-    if (isNaN(value)) continue;
-    // Normalize to seconds for comparison
-    let inSeconds = value;
-    if (raw.endsWith("h")) inSeconds = value * 3600;
-    else if (raw.endsWith("m")) inSeconds = value * 60;
+    const inSeconds = parseDurationSeconds(raw);
+    if (inSeconds === null) continue;
     const thresholdSec = threshold.unit === "h" ? threshold.min * 3600 : threshold.unit === "m" ? threshold.min * 60 : threshold.min;
     if (inSeconds < thresholdSec) {
       warnings.push(`${flag}=${raw} (recommended ≥${threshold.min}${threshold.unit})`);
@@ -704,12 +779,12 @@ interface VaultSyncInput {
 }
 
 /**
- * Five vault-sync health checks.
+ * Six vault-sync health checks.
  *
  * All checks are info/warn severity. None affect doctor's exit code
  * (matching the existing s3_mount_* skip pattern).
  *
- * Top-level skip: if vault_sync.installed is not true, all 5 return
+ * Top-level skip: if vault_sync.installed is not true, all 6 return
  * pass-with-skip-detail.
  */
 function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
@@ -1038,6 +1113,7 @@ export async function runDoctor(
   checks.push(checkSyncLastPush(resolvedPath));
   checks.push(checkDotStoreClean(resolvedPath));
   checks.push(checkS3MountPerf(resolvedPath));
+  checks.push(checkS3MountFreshness(resolvedPath));
   checks.push(checkRcloneFlagAudit(resolvedPath));
   checks.push(checkRcloneVersion(resolvedPath, vsConfig.installed));
   checks.push(checkWriteTest(resolvedPath));
@@ -1047,7 +1123,7 @@ export async function runDoctor(
   checks.push(checkNpmUpdate(input.home, input.currentVersion));
   checks.push(checkPluginVersionDrift(input.home, input.currentVersion));
 
-  // Vault-sync checks (5 checks, all info/warn, no exit code impact)
+  // Vault-sync checks (6 checks, no exit code impact)
   checks.push(...vaultSyncChecks({
     home: input.home,
     vaultSyncInstalled: vsConfig.installed,

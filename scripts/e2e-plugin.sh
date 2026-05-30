@@ -13,6 +13,7 @@ source "$SCRIPT_DIR/e2e-common.sh"
 
 SSH_HOST="sg01"
 REMOTE_CLI="skillwiki"
+CLAUDE_E2E_MODEL="${CLAUDE_E2E_MODEL:-sonnet}"
 
 # Read expected version from package.json (no manual updates needed)
 EXPECTED_VERSION=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
@@ -44,7 +45,7 @@ else
 fi
 
 # Verify skill discovery via claude (using-skillwiki is hook-injected, not listed by /skills)
-DISCOVERED=$(ssh "$SSH_HOST" "claude -p 'list skills starting with wiki- or proj-. names only, one per line, nothing else.' 2>&1")
+DISCOVERED=$(ssh "$SSH_HOST" "claude -p --model '$CLAUDE_E2E_MODEL' 'list skills starting with wiki- or proj-. names only, one per line, nothing else.' 2>&1")
 DISC_COUNT=$(printf '%s' "$DISCOVERED" | grep -cE '^(wiki-|proj-)' || true)
 if [ "$DISC_COUNT" -eq "$EXPECTED_DISC" ]; then
   PASS=$((PASS + 1)); printf "  \u2713 claude discovers all %s CLI skills\n" "$EXPECTED_DISC"

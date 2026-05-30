@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Single-plugin marketplace for skillwiki — project-aware Karpathy-style knowledge base for Claude Code.",
-    "version": "0.8.1-beta.4"
+    "version": "0.8.1-beta.5"
   },
   "plugins": [
     {
       "name": "skillwiki",
       "description": "18 prompt-only skills (wiki-*, proj-*, using-skillwiki) backed by the deterministic skillwiki CLI.",
-      "version": "0.8.1-beta.4",
+      "version": "0.8.1-beta.5",
       "source": "./packages/skills",
       "strict": true,
       "author": {
@@ -33,8 +33,8 @@
     },
     {
       "name": "vault-sync",
-      "description": "5 skills (vault-sync-install, vault-sync-status, vault-sync-uninstall, vault-presync, vault-snapshot) for cross-platform vault sync: rclone push, fetch-notify, presync, snapshot. macOS launchd + Linux systemd.",
-      "version": "0.8.1-beta.4",
+      "description": "6 skills (vault-sync-install, vault-sync-status, vault-sync-uninstall, vault-presync, vault-snapshot, vault-fuse-freshness) for cross-platform vault sync: rclone push, fetch-notify, presync, snapshot, and Linux FUSE freshness refresh.",
+      "version": "0.8.1-beta.5",
       "source": "./packages/vault-sync",
       "strict": true,
       "author": {

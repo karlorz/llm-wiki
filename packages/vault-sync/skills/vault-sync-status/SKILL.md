@@ -1,12 +1,12 @@
 ---
 name: vault-sync-status
-description: Health snapshot of vault-sync — jobs enabled, last-run age, last exit, rclone version, git state, lockfile age, filter presence. JSON + human output.
+description: Health snapshot of vault-sync — scheduler health, push/fetch recency, filter integrity, snapshot guard, and Linux fuse-refresh timer status. JSON + human output.
 argument-hint: "[--read-only] [--json]"
 ---
 
 # vault-sync-status
 
-One-shot detailed health report of vault-sync on the current host. Reports scheduler state, log tail analysis, filter integrity, and snapshot guard presence.
+One-shot detailed health report of vault-sync on the current host. Reports scheduler state, log tail analysis, filter integrity, snapshot guard presence, and Linux fuse-refresh timer status.
 
 ## When to use
 
