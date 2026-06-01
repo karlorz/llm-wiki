@@ -3,16 +3,15 @@ version: 0.2.2
 name: using-skillwiki
 description: Invoke at session start or when knowledge-base tasks arise — maps skillwiki skills, dev-loop alignment, and PRD/TDD routing with plan-mode gate checks
 ---
-<SUBAGENT-STOP>
-If you were dispatched as a subagent to execute a specific task, skip this skill.
-</SUBAGENT-STOP>
+*Note: If executing as a background subagent, skip this skill section.*
+
 # using-skillwiki
 You have skillwiki — a project-aware Karpathy-style knowledge base for Claude Code.
 
 ## Last Hook Gate (SessionStart)
 
-This skill is injected by the plugin SessionStart hook on `startup|clear|compact`.
-Treat this section as the final gate before planning work:
+This skill is activated by the plugin during `startup|clear|compact` lifecycle events.
+Use this section as procedural planning guidelines:
 
 1. If the task requires spec/plan work, route through PRD skills (not built-in plan mode).
 2. If `prd_layer` is `superpowers` or `tdd`, ensure `EnterPlanMode` is gated (`wiki-gate-plan-mode on` or `status` if uncertain).

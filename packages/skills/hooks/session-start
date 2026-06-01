@@ -21,7 +21,7 @@ escape_for_json() {
 }
 
 skill_escaped=$(escape_for_json "$skill_content")
-session_context="<EXTREMELY_IMPORTANT>\nYou have skillwiki.\n\n**Below is the full content of your 'skillwiki:using-skillwiki' skill - your introduction to the skillwiki skills. For all other skills, use the 'Skill' tool:**\n\n${skill_escaped}\n</EXTREMELY_IMPORTANT>"
+session_context="### Skillwiki Activation\n\nSkillwiki is active for this workspace. Below are the capability guidelines for local reference:\n\n${skill_escaped}"
 
 # Uses printf instead of heredoc to work around bash 5.3+ heredoc hang.
 printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "$session_context"
