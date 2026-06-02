@@ -244,7 +244,7 @@ describe("runSyncPush", () => {
     }
   });
 
-  it("auto-fixes long markdown paths before committing a clean vault", async () => {
+  it("auto-fixes long markdown paths before staging vault changes", async () => {
     const remoteDir = makeTempDir();
     git(remoteDir, "init --bare");
 
@@ -256,17 +256,17 @@ describe("runSyncPush", () => {
     writeFileSync(join(dir, "SCHEMA.md"), "# Vault Schema\n");
     writeFileSync(join(dir, "index.md"), "# Index\n");
     writeFileSync(join(dir, "log.md"), "# Log\n");
+    git(dir, "add .");
+    git(dir, 'commit -m "init vault"');
+    git(dir, "branch -M main");
+    git(dir, "push -u origin main");
+    expect(execSync("git status --porcelain", { cwd: dir }).toString()).toBe("");
+
     const archiveDir = join(dir, "_archive", "raw-dedup-2026-05-28", "articles");
     mkdirSync(archiveDir, { recursive: true });
     const longName = "w".repeat(200) + ".md";
     const relPath = `_archive/raw-dedup-2026-05-28/articles/${longName}`;
     writeFileSync(join(dir, relPath), "---\ntitle: archived\n---\n\nbody\n");
-
-    git(dir, "add .");
-    git(dir, 'commit -m "init vault with long path"');
-    git(dir, "branch -M main");
-    git(dir, "push -u origin main");
-    expect(execSync("git status --porcelain", { cwd: dir }).toString()).toBe("");
 
     const { exitCode, result } = await runSyncPush({ vault: dir });
     expect(exitCode).toBe(ExitCode.OK);
