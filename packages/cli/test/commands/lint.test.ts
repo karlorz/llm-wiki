@@ -1442,6 +1442,24 @@ same body content here
       }
     });
 
+    it("--fix --only path_too_long does not run unrelated fixers", async () => {
+      const v = vault();
+      const longName = "z".repeat(229) + ".md"; // 9 + 229 + 3 = 241 chars
+      const relPath = `concepts/${longName}`;
+      mkdirSync(join(v, "concepts"), { recursive: true });
+      writeFileSync(join(v, relPath), FM(["model"]) + "> **TL;DR:** long.\n\n## Overview\n\nContent.\n\n## Details\n\nMore.\n\n## Related\n\n- [[short]]\n");
+
+      const shortPath = join(v, "concepts", "short.md");
+      const shortBefore = FM(["model"]) + "Body without generated sections.\n";
+      writeFileSync(shortPath, shortBefore);
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true, only: "path_too_long" });
+      if (r.result.ok) {
+        expect(r.result.data.fixed).toContain(relPath);
+      }
+      expect(readFileSync(shortPath, "utf8")).toBe(shortBefore);
+    });
+
     it("--only rejects unknown bucket", async () => {
       const v = vault();
       const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "nonexistent_bucket" });

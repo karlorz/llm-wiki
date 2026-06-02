@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runPathTooLong, truncateFilename } from "../../src/commands/path-too-long.js";
+import { fixPathTooLong, runPathTooLong, truncateFilename } from "../../src/commands/path-too-long.js";
 
 const SCHEMA = `# Vault Schema
 
@@ -61,6 +61,97 @@ describe("runPathTooLong", () => {
     const r = await runPathTooLong({ vault: v });
     if (r.result.ok) {
       expect(r.result.data.violations.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("includes archived markdown files in scan", async () => {
+    const v = vault();
+    const archiveDir = join(v, "_archive", "raw-dedup-2026-05-28", "articles");
+    mkdirSync(archiveDir, { recursive: true });
+    const longName = "archived-source-".repeat(13) + ".md";
+    const relPath = `_archive/raw-dedup-2026-05-28/articles/${longName}`;
+    writeFileSync(join(v, relPath), "---\ntitle: archived\n---\n\nbody\n");
+
+    const r = await runPathTooLong({ vault: v });
+    expect(r.exitCode).toBe(23);
+    if (r.result.ok) {
+      expect(r.result.data.violations.map(v => v.relPath)).toContain(relPath);
+      expect(r.result.data.violations[0]!.suggestedRelPath.length).toBeLessThanOrEqual(240);
+    }
+  });
+});
+
+describe("fixPathTooLong", () => {
+  it("renames long files and rewires index stem wikilinks", async () => {
+    const v = vault();
+    const longStem = "windows-hostile-long-note-name-".repeat(8);
+    const relPath = `concepts/${longStem}.md`;
+    writeFileSync(join(v, relPath), "---\ntitle: t\n---\n\nbody\n");
+    writeFileSync(join(v, "index.md"), `# Index\n\n## Concepts\n- [[${longStem}]]\n`);
+
+    const r = await fixPathTooLong({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.fixed).toHaveLength(1);
+      const fixed = r.result.data.fixed[0]!;
+      expect(fixed.from).toBe(relPath);
+      expect(fixed.to.length).toBeLessThanOrEqual(240);
+      expect(existsSync(join(v, fixed.from))).toBe(false);
+      expect(existsSync(join(v, fixed.to))).toBe(true);
+
+      const newStem = fixed.to.split("/").pop()!.replace(/\.md$/, "");
+      const index = readFileSync(join(v, "index.md"), "utf8");
+      expect(index).not.toContain(`[[${longStem}]]`);
+      expect(index).toContain(`[[${newStem}]]`);
+    }
+  });
+
+  it("dedupes to an existing identical shortened target instead of creating suffix variants", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles", "obsidian-import"), { recursive: true });
+    const longStem = "duplicate-windows-hostile-note-name-".repeat(6);
+    const relPath = `raw/articles/obsidian-import/${longStem}.md`;
+    const preferred = truncateFilename(relPath);
+    const content = "---\ntitle: t\n---\n\nsame body\n";
+    writeFileSync(join(v, relPath), content);
+    writeFileSync(join(v, preferred), content);
+    writeFileSync(join(v, "index.md"), `# Index\n\n## Concepts\n- [[${longStem}]]\n`);
+
+    const r = await fixPathTooLong({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.fixed).toEqual([{ from: relPath, to: preferred }]);
+      expect(existsSync(join(v, relPath))).toBe(false);
+      expect(existsSync(join(v, preferred))).toBe(true);
+      const suffixVariant = preferred.replace(/\.md$/, "-2.md");
+      expect(existsSync(join(v, suffixVariant))).toBe(false);
+
+      const newStem = preferred.split("/").pop()!.replace(/\.md$/, "");
+      const index = readFileSync(join(v, "index.md"), "utf8");
+      expect(index).toContain(`[[${newStem}]]`);
+    }
+  });
+
+  it("uses a suffix variant when the shortened target exists with different content", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles", "obsidian-import"), { recursive: true });
+    const longStem = "collision-windows-hostile-note-name-".repeat(6);
+    const relPath = `raw/articles/obsidian-import/${longStem}.md`;
+    const preferred = truncateFilename(relPath);
+    writeFileSync(join(v, relPath), "---\ntitle: t\n---\n\nsource body\n");
+    writeFileSync(join(v, preferred), "---\ntitle: t\n---\n\ndifferent body\n");
+
+    const r = await fixPathTooLong({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.fixed).toHaveLength(1);
+      const fixed = r.result.data.fixed[0]!;
+      expect(fixed.from).toBe(relPath);
+      expect(fixed.to).not.toBe(preferred);
+      expect(fixed.to.length).toBeLessThanOrEqual(240);
+      expect(existsSync(join(v, preferred))).toBe(true);
+      expect(readFileSync(join(v, preferred), "utf8")).toContain("different body");
+      expect(readFileSync(join(v, fixed.to), "utf8")).toContain("source body");
     }
   });
 });

@@ -2,7 +2,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { runLint } from "./lint.js";
-import { readLastOp, clearLastOp } from "../utils/last-op.js";
+import { fixPathTooLong } from "./path-too-long.js";
+import { appendLastOp, readLastOp, clearLastOp } from "../utils/last-op.js";
 import { git, gitStrict } from "../utils/git.js";
 import { acquireLock, releaseLock, readLock, getSessionId, getCwdHash, type LockFile } from "../utils/sync-lock.js";
 
@@ -137,6 +138,7 @@ export interface SyncPushOutput {
   files_committed: number;
   commit_message: string;
   pushed: boolean;
+  path_fixes: number;
   humanHint: string;
 }
 
@@ -151,7 +153,22 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
     };
   }
 
-  // 2. Check for changes
+  // 2. Fix Windows-hostile long markdown paths before deciding whether there
+  // is anything to commit. This lets a clean-but-incompatible vault create the
+  // corrective rename commit instead of pushing/preserving bad paths.
+  let pathFixes = 0;
+  const pathFix = await fixPathTooLong({ vault });
+  if (pathFix.result.ok && pathFix.result.data.fixed.length > 0) {
+    pathFixes = pathFix.result.data.fixed.length;
+    appendLastOp(vault, {
+      operation: "lint-fix",
+      summary: `fixed ${pathFixes} long path(s)`,
+      files: pathFix.result.data.fixed.flatMap(f => [f.from, f.to]),
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  // 3. Check for changes
   const porcelain = git(vault, ["status", "--porcelain"]);
   const dirtyFiles = porcelain ? porcelain.split("\n").filter((l) => l.trim().length > 0) : [];
 
@@ -162,12 +179,13 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
         files_committed: 0,
         commit_message: "",
         pushed: false,
+        path_fixes: pathFixes,
         humanHint: "nothing to commit, working tree clean",
       }),
     };
   }
 
-  // 3. Run lint — abort on errors
+  // 4. Run lint — abort on errors
   const lintResult = await runLint({ vault, days: 90, lines: 200, logThreshold: 500 });
   if (lintResult.result.ok && lintResult.result.data.summary.errors > 0) {
     return {
@@ -179,7 +197,7 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
     };
   }
 
-  // 4. Stage all
+  // 5. Stage all
   try {
     gitStrict(vault, ["add", "-A"]);
     // Unstage last-op.json if it was staged (it should not be committed)
@@ -191,7 +209,7 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
     };
   }
 
-  // 5. Commit
+  // 6. Commit
   const lastOps = readLastOp(vault);
   let commitMessage: string;
   if (lastOps.length > 0) {
@@ -212,7 +230,7 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
   // Clear last-op after successful commit
   clearLastOp(vault);
 
-  // 6. Push
+  // 7. Push
   let pushed = false;
   try {
     gitStrict(vault, ["push", "origin", "HEAD"]);
@@ -225,7 +243,8 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
         files_committed: dirtyFiles.length,
         commit_message: commitMessage,
         pushed: false,
-        humanHint: `committed ${dirtyFiles.length} file(s) but push failed: ${String(e)}`,
+        path_fixes: pathFixes,
+        humanHint: `committed ${dirtyFiles.length} file(s)${pathFixes > 0 ? ` after ${pathFixes} long-path fix(es)` : ""} but push failed: ${String(e)}`,
       }),
     };
   }
@@ -236,7 +255,8 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
       files_committed: dirtyFiles.length,
       commit_message: commitMessage,
       pushed,
-      humanHint: `committed and pushed ${dirtyFiles.length} file(s)`,
+      path_fixes: pathFixes,
+      humanHint: `committed and pushed ${dirtyFiles.length} file(s)${pathFixes > 0 ? ` after ${pathFixes} long-path fix(es)` : ""}`,
     }),
   };
 }
@@ -403,7 +423,11 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
     }
   }
 
-  // 4. Run lint after pull
+  // 4. Fix long paths after pull, then run lint.
+  const pathFix = await fixPathTooLong({ vault });
+  const pathFixCount = pathFix.result.ok ? pathFix.result.data.fixed.length : 0;
+
+  // 5. Run lint after pull
   let lintErrors = 0;
   let lintWarnings = 0;
   const lintResult = await runLint({ vault, days: 90, lines: 200, logThreshold: 500 });
@@ -416,6 +440,7 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
   if (filesUpdated > 0) hintParts.push(`updated ${filesUpdated} file(s)`);
   else hintParts.push("already up to date");
   if (autoResolved > 0) hintParts.push(`${autoResolved} conflict(s) auto-resolved`);
+  if (pathFixCount > 0) hintParts.push(`${pathFixCount} long path(s) fixed`);
   if (lintErrors > 0) hintParts.push(`${lintErrors} lint error(s)`);
   if (lintWarnings > 0) hintParts.push(`${lintWarnings} lint warning(s)`);
 

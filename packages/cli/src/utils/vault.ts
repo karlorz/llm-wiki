@@ -5,6 +5,7 @@ import { ok, err, type Result } from "@skillwiki/shared";
 export interface VaultPage { absPath: string; relPath: string }
 export interface VaultScan {
   root: string;
+  allMarkdown: VaultPage[];
   typedKnowledge: VaultPage[];
   raw: VaultPage[];
   workItems: VaultPage[];
@@ -12,6 +13,7 @@ export interface VaultScan {
 }
 
 const TYPED_DIRS = ["entities", "concepts", "comparisons", "queries", "meta"];
+const SKIP_DIRS = new Set([".git", "node_modules"]);
 
 export async function scanVault(root: string): Promise<Result<VaultScan>> {
   try {
@@ -23,6 +25,7 @@ export async function scanVault(root: string): Promise<Result<VaultScan>> {
   const rels = all.map(p => ({ absPath: p, relPath: relative(root, p).split(sep).join("/") }));
   return ok({
     root,
+    allMarkdown: rels,
     typedKnowledge: rels.filter(p => TYPED_DIRS.some(d => p.relPath.startsWith(d + "/"))),
     raw: rels.filter(p => p.relPath.startsWith("raw/")),
     workItems: rels.filter(p => /^projects\/[^/]+\/work\/[^/]+\/(spec|plan|log)\.md$/.test(p.relPath)),
@@ -35,7 +38,10 @@ async function walk(dir: string): Promise<string[]> {
   const out: string[] = [];
   for (const e of entries) {
     const p = join(dir, e.name);
-    if (e.isDirectory()) out.push(...await walk(p));
+    if (e.isDirectory()) {
+      if (SKIP_DIRS.has(e.name)) continue;
+      out.push(...await walk(p));
+    }
     else if (e.isFile() && e.name.endsWith(".md")) out.push(p);
   }
   return out;

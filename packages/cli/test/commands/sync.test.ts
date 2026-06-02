@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -241,6 +241,46 @@ describe("runSyncPush", () => {
     if (result.ok) {
       expect(result.data.commit_message).toBe("ingest: added test-concept (1 files); archive: moved old-page (1 files)");
     }
+  });
+
+  it("auto-fixes long markdown paths before committing a clean vault", async () => {
+    const remoteDir = makeTempDir();
+    git(remoteDir, "init --bare");
+
+    const dir = makeTempDir();
+    git(dir, `clone ${remoteDir} .`);
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+
+    writeFileSync(join(dir, "SCHEMA.md"), "# Vault Schema\n");
+    writeFileSync(join(dir, "index.md"), "# Index\n");
+    writeFileSync(join(dir, "log.md"), "# Log\n");
+    const archiveDir = join(dir, "_archive", "raw-dedup-2026-05-28", "articles");
+    mkdirSync(archiveDir, { recursive: true });
+    const longName = "windows-pull-filename-too-long-".repeat(8) + ".md";
+    const relPath = `_archive/raw-dedup-2026-05-28/articles/${longName}`;
+    writeFileSync(join(dir, relPath), "---\ntitle: archived\n---\n\nbody\n");
+
+    git(dir, "add .");
+    git(dir, 'commit -m "init vault with long path"');
+    git(dir, "branch -M main");
+    git(dir, "push -u origin main");
+    expect(execSync("git status --porcelain", { cwd: dir }).toString()).toBe("");
+
+    const { exitCode, result } = await runSyncPush({ vault: dir });
+    expect(exitCode).toBe(ExitCode.OK);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.pushed).toBe(true);
+      expect(result.data.path_fixes).toBe(1);
+      expect(result.data.commit_message).toContain("fixed 1 long path");
+    }
+
+    expect(existsSync(join(dir, relPath))).toBe(false);
+    const renamed = readdirSync(archiveDir).filter(name => name.endsWith(".md"));
+    expect(renamed).toHaveLength(1);
+    expect(`_archive/raw-dedup-2026-05-28/articles/${renamed[0]!}`.length).toBeLessThanOrEqual(240);
+    expect(execSync("git status --porcelain", { cwd: dir }).toString()).toBe("");
   });
 });
 

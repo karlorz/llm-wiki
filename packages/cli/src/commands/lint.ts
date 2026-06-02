@@ -1,6 +1,6 @@
 import { ok, ExitCode, type ExitCodeValue, type Result } from "@skillwiki/shared";
 import { existsSync } from "node:fs";
-import { readFile, rename } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runLinks } from "./links.js";
 import { runTagAudit } from "./tag-audit.js";
@@ -17,7 +17,7 @@ import { runDedup } from "./dedup.js";
 import { safeWritePage } from "../utils/safe-write.js";
 import { runRawBodyDedup } from "./raw-body-dedup.js";
 import { validateCompoundReferences } from "./audit.js";
-import { runPathTooLong, truncateFilename } from "./path-too-long.js";
+import { fixPathTooLong, runPathTooLong } from "./path-too-long.js";
 import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
 import { isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations } from "../parsers/citations.js";
@@ -88,8 +88,18 @@ export interface LintOutput {
 const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "broken_sources", "tag_not_in_taxonomy", "path_too_long"] as const;
 const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file_source_url", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram"] as const;
 const INFO_ORDER = ["bridges", "sparse_community", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
+const KNOWN_BUCKETS = [...ERROR_ORDER, ...WARNING_ORDER, ...INFO_ORDER] as const;
 
 export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
+  if (input.only && !(KNOWN_BUCKETS as readonly string[]).includes(input.only)) {
+    return {
+      exitCode: ExitCode.USAGE,
+      result: { ok: false, error: "UNKNOWN_BUCKET", detail: `Unknown bucket "${input.only}". Valid: ${KNOWN_BUCKETS.join(", ")}` }
+    };
+  }
+
+  const shouldFix = (bucket: string): boolean => !!input.fix && (!input.only || input.only === bucket);
+
   const buckets: Record<string, unknown[]> = {};
   const fixed: string[] = [];
   const unresolved: string[] = [];
@@ -400,7 +410,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     if (staleSectionFlags.length > 0) buckets.stale_sections = staleSectionFlags;
 
     // --fix: auto-fix legacy_citation_style by moving inline ^[raw/...] to ## Sources
-    if (input.fix && legacyPages.length > 0) {
+    if (shouldFix("legacy_citation_style") && legacyPages.length > 0) {
       const FENCE_RE = /```[\s\S]*?```/g;
       const INLINE_MARKER = /\^\[raw\/[^\]]+\]/g;
       for (const relPath of legacyPages) {
@@ -506,7 +516,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     }
 
     // --fix: auto-fix missing_overview by inserting ## Overview stub after frontmatter
-    if (input.fix && noOverview.length > 0) {
+    if (shouldFix("missing_overview") && noOverview.length > 0) {
       for (const relPath of noOverview) {
         try {
           const absPath = `${input.vault}/${relPath}`;
@@ -540,7 +550,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     }
 
     // --fix: auto-fix missing_tldr by inserting > **TL;DR:** stub after title heading
-    if (input.fix && missingTldrFlags.length > 0) {
+    if (shouldFix("missing_tldr") && missingTldrFlags.length > 0) {
       for (const relPath of missingTldrFlags) {
         try {
           const absPath = `${input.vault}/${relPath}`;
@@ -587,7 +597,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     }
 
     // --fix: auto-fix wikilink_citation by removing [[raw/...]] and adding ^[raw/...] to ## Sources
-    if (input.fix && wikilinkCitationFlags.length > 0) {
+    if (shouldFix("wikilink_citation") && wikilinkCitationFlags.length > 0) {
       const WIKILINK_RE = /\[\[raw\/([^\]|]+)(?:\|[^\]]*)?\]\]/g;
       const FENCE_RE = /```[\s\S]*?```/g;
       const wikilinkFixed: string[] = [];
@@ -676,7 +686,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     }
 
     // --fix: auto-fix file_source_url by extracting web URL from body source: field
-    if (input.fix && fileSourceUrlFlags.length > 0) {
+    if (shouldFix("file_source_url") && fileSourceUrlFlags.length > 0) {
       const FILE_FIXED: string[] = [];
       for (const relPath of fileSourceUrlFlags) {
         try {
@@ -717,47 +727,13 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       }
     }
 
-    // --fix: auto-fix path_too_long by truncating filename + rewiring citations
+    // --fix: auto-fix path_too_long by truncating filename + rewiring references
     const pathViolations = buckets.path_too_long as Array<{ relPath: string; length: number }> | undefined;
-    if (input.fix && pathViolations && pathViolations.length > 0) {
-      const pathFixed: string[] = [];
-      for (const v of pathViolations) {
-        try {
-          const absPath = `${input.vault}/${v.relPath}`;
-          const newRelPath = truncateFilename(v.relPath);
-          const newAbsPath = `${input.vault}/${newRelPath}`;
-
-          // Rename the file (content unchanged, so raw rename is safe — no body-shrink risk)
-          await rename(absPath, newAbsPath);
-
-          // Rewire citations and wikilinks across all vault pages
-          const oldPathEscaped = v.relPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-          for (const page of allPages) {
-            // Skip the renamed file itself — it no longer exists at the old path
-            if (page.relPath === v.relPath) continue;
-            const content = await readFile(page.absPath, "utf8");
-            if (!content.includes(v.relPath)) continue;
-
-            let updated = content;
-            // Rewire ^[old/path] citations
-            const citationRe = new RegExp(`\\^\\[${oldPathEscaped}\\]`, "g");
-            updated = updated.replace(citationRe, `^[${newRelPath}]`);
-            // Rewire [[old/path]] and [[old/path|alias]] wikilinks
-            const wikilinkRe = new RegExp(`\\[\\[${oldPathEscaped}(\\|[^\\]]*)?\\]\\]`, "g");
-            updated = updated.replace(wikilinkRe, (_m, alias) => `[[${newRelPath}${alias ?? ""}]]`);
-
-            if (updated !== content) {
-              const w = await safeWritePage(page.absPath, updated);
-              if (!w.ok) { unresolved.push(`${page.relPath} (rewire)`); }
-            }
-          }
-
-          pathFixed.push(v.relPath);
-        } catch {
-          unresolved.push(v.relPath);
-        }
-      }
+    if (shouldFix("path_too_long") && pathViolations && pathViolations.length > 0) {
+      const pathFix = await fixPathTooLong({ vault: input.vault });
+      const pathFixed = pathFix.result.ok ? pathFix.result.data.fixed.map(f => f.from) : [];
+      if (pathFix.result.ok) unresolved.push(...pathFix.result.data.unresolved);
+      else unresolved.push(...pathViolations.map(v => v.relPath));
 
       fixed.push(...pathFixed);
 
@@ -777,13 +753,6 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
 
   // --only: filter to a single bucket
   if (input.only) {
-    const allKnown = [...ERROR_ORDER, ...WARNING_ORDER, ...INFO_ORDER];
-    if (!allKnown.includes(input.only as typeof allKnown[number])) {
-      return {
-        exitCode: ExitCode.USAGE,
-        result: { ok: false, error: "UNKNOWN_BUCKET", detail: `Unknown bucket "${input.only}". Valid: ${allKnown.join(", ")}` }
-      };
-    }
     const match = [...errorOut, ...warningOut, ...infoOut].filter(b => b.kind === input.only);
     const severity = (ERROR_ORDER as readonly string[]).includes(input.only) ? "error"
       : (WARNING_ORDER as readonly string[]).includes(input.only) ? "warning" : "info";
