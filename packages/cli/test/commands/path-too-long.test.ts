@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fixPathTooLong, runPathTooLong, truncateFilename } from "../../src/commands/path-too-long.js";
 
 const SCHEMA = `# Vault Schema
@@ -14,6 +14,9 @@ taxonomy:
 \`\`\`
 `;
 
+const MAX_PATH_LENGTH = 240;
+const WINDOWS_ABSOLUTE_PATH_LIMIT = 259;
+
 function vault(): string {
   const v = mkdtempSync(join(tmpdir(), "vault-pl-"));
   writeFileSync(join(v, "SCHEMA.md"), SCHEMA);
@@ -21,6 +24,13 @@ function vault(): string {
     mkdirSync(join(v, d), { recursive: true });
   }
   return v;
+}
+
+function expectedFixMaxLength(vaultRoot: string): number {
+  if (process.platform !== "win32") return MAX_PATH_LENGTH;
+  const root = resolve(vaultRoot);
+  const separatorBudget = root.endsWith("\\") || root.endsWith("/") ? 0 : 1;
+  return Math.max(1, Math.min(MAX_PATH_LENGTH, WINDOWS_ABSOLUTE_PATH_LIMIT - root.length - separatorBudget));
 }
 
 describe("runPathTooLong", () => {
@@ -111,7 +121,7 @@ describe("fixPathTooLong", () => {
     mkdirSync(join(v, "raw", "articles", "obsidian-import"), { recursive: true });
     const longStem = "duplicate-windows-hostile-note-name-".repeat(6);
     const relPath = `raw/articles/obsidian-import/${longStem}.md`;
-    const preferred = truncateFilename(relPath);
+    const preferred = truncateFilename(relPath, expectedFixMaxLength(v));
     const content = "---\ntitle: t\n---\n\nsame body\n";
     writeFileSync(join(v, relPath), content);
     writeFileSync(join(v, preferred), content);
@@ -137,7 +147,7 @@ describe("fixPathTooLong", () => {
     mkdirSync(join(v, "raw", "articles", "obsidian-import"), { recursive: true });
     const longStem = "collision-windows-hostile-note-name-".repeat(6);
     const relPath = `raw/articles/obsidian-import/${longStem}.md`;
-    const preferred = truncateFilename(relPath);
+    const preferred = truncateFilename(relPath, expectedFixMaxLength(v));
     writeFileSync(join(v, relPath), "---\ntitle: t\n---\n\nsource body\n");
     writeFileSync(join(v, preferred), "---\ntitle: t\n---\n\ndifferent body\n");
 
