@@ -1,11 +1,12 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, unlink } from "node:fs/promises";
-import { dirname, join, posix } from "node:path";
+import { dirname, join, posix, resolve } from "node:path";
 import { safeWritePage } from "../utils/safe-write.js";
 import { scanVault, type VaultPage } from "../utils/vault.js";
 
 export const MAX_PATH_LENGTH = 240;
+const WINDOWS_ABSOLUTE_PATH_LIMIT = 259;
 
 export interface PathTooLongInput { vault: string }
 export interface PathTooLongViolation {
@@ -34,7 +35,7 @@ export async function runPathTooLong(input: PathTooLongInput): Promise<{ exitCod
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  const violations = findPathTooLongViolations(scan.data.allMarkdown);
+  const violations = findPathTooLongViolations(scan.data.allMarkdown, MAX_PATH_LENGTH);
 
   if (violations.length > 0) {
     return {
@@ -53,13 +54,14 @@ export async function fixPathTooLong(input: PathTooLongInput): Promise<{ exitCod
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  const violations = findPathTooLongViolations(scan.data.allMarkdown);
+  const maxFixLength = maxFixPathLength(input.vault);
+  const violations = findPathTooLongViolations(scan.data.allMarkdown, maxFixLength);
   const fixed: PathTooLongFix[] = [];
   const unresolved: string[] = [];
 
   for (const violation of violations) {
-    const target = await resolveFixTarget(input.vault, violation.relPath, violation.suggestedRelPath);
-    if (!target || target.relPath === violation.relPath || target.relPath.length > MAX_PATH_LENGTH) {
+    const target = await resolveFixTarget(input.vault, violation.relPath, violation.suggestedRelPath, maxFixLength);
+    if (!target || target.relPath === violation.relPath || target.relPath.length > maxFixLength) {
       unresolved.push(violation.relPath);
       continue;
     }
@@ -115,14 +117,25 @@ export async function fixPathTooLong(input: PathTooLongInput): Promise<{ exitCod
   };
 }
 
-function findPathTooLongViolations(pages: VaultPage[]): PathTooLongViolation[] {
+function findPathTooLongViolations(pages: VaultPage[], maxLength: number): PathTooLongViolation[] {
   return pages
-    .filter(page => page.relPath.length > MAX_PATH_LENGTH)
+    .filter(page => page.relPath.length > maxLength)
     .map(page => ({
       relPath: page.relPath,
       length: page.relPath.length,
-      suggestedRelPath: truncateFilename(page.relPath),
+      suggestedRelPath: truncateFilename(page.relPath, maxLength),
     }));
+}
+
+function maxFixPathLength(vault: string): number {
+  if (process.platform !== "win32") return MAX_PATH_LENGTH;
+
+  // Git for Windows can still reject a path whose relative length is within
+  // MAX_PATH_LENGTH when the vault root makes the absolute path exceed MAX_PATH.
+  const root = resolve(vault);
+  const separatorBudget = root.endsWith("\\") || root.endsWith("/") ? 0 : 1;
+  const absoluteSafeRelLength = WINDOWS_ABSOLUTE_PATH_LIMIT - root.length - separatorBudget;
+  return Math.max(1, Math.min(MAX_PATH_LENGTH, absoluteSafeRelLength));
 }
 
 /**
@@ -164,9 +177,9 @@ interface FixTarget {
   mode: "rename" | "dedupe";
 }
 
-async function resolveFixTarget(vault: string, original: string, preferred: string): Promise<FixTarget | null> {
-  for (const candidate of candidateRelPaths(preferred)) {
-    if (candidate === original || candidate.length > MAX_PATH_LENGTH) continue;
+async function resolveFixTarget(vault: string, original: string, preferred: string, maxLength: number): Promise<FixTarget | null> {
+  for (const candidate of candidateRelPaths(preferred, maxLength)) {
+    if (candidate === original || candidate.length > maxLength) continue;
     const candidatePath = join(vault, candidate);
     if (!existsSync(candidatePath)) return { relPath: candidate, mode: "rename" };
     if (await hasSameContent(join(vault, original), candidatePath)) {
@@ -176,9 +189,9 @@ async function resolveFixTarget(vault: string, original: string, preferred: stri
   return null;
 }
 
-function candidateRelPaths(preferred: string): string[] {
+function candidateRelPaths(preferred: string, maxLength: number): string[] {
   const candidates = [preferred];
-  if (preferred.length > MAX_PATH_LENGTH) return candidates;
+  if (preferred.length > maxLength) return candidates;
 
   const dir = posix.dirname(preferred) === "." ? "" : posix.dirname(preferred);
   const filename = posix.basename(preferred);
@@ -188,7 +201,7 @@ function candidateRelPaths(preferred: string): string[] {
 
   for (let i = 2; i < 100; i++) {
     const suffix = `-${i}${ext}`;
-    const prefixBudget = MAX_PATH_LENGTH - dirPrefix.length - suffix.length;
+    const prefixBudget = maxLength - dirPrefix.length - suffix.length;
     if (prefixBudget <= 0) break;
     candidates.push(`${dirPrefix}${base.slice(0, prefixBudget).replace(/[-_\s]+$/, "")}${suffix}`);
   }

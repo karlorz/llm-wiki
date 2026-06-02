@@ -48,6 +48,7 @@ export function runSyncStatus(input: SyncStatusInput): { exitCode: number; resul
       }),
     };
   }
+  enableGitLongPathsOnWindows(vault);
 
   // 2. git status --porcelain → count dirty files
   const porcelain = git(vault, ["status", "--porcelain"]);
@@ -152,6 +153,7 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
       result: err("NOT_A_GIT_REPO", { path: vault }),
     };
   }
+  enableGitLongPathsOnWindows(vault);
 
   // 2. Fix Windows-hostile long markdown paths before deciding whether there
   // is anything to commit. This lets a clean-but-incompatible vault create the
@@ -291,6 +293,11 @@ function enumerateStashes(vault: string): StashEntry[] {
   return stashes;
 }
 
+function enableGitLongPathsOnWindows(vault: string): void {
+  if (process.platform !== "win32") return;
+  git(vault, ["config", "core.longpaths", "true"]);
+}
+
 export interface SyncPullInput {
   vault: string;
 }
@@ -316,6 +323,7 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
       result: err("NOT_A_GIT_REPO", { path: vault }),
     };
   }
+  enableGitLongPathsOnWindows(vault);
 
   // 2. Fetch
   let fetched = false;
