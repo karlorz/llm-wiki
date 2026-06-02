@@ -89,6 +89,7 @@ describe("runSyncStatus", () => {
     git(dir, `clone ${remoteDir} .`);
     git(dir, 'config user.email "t@t"');
     git(dir, 'config user.name "t"');
+    git(dir, "config core.longpaths true");
     writeFileSync(join(dir, "README.md"), "hello");
     git(dir, "add .");
     git(dir, 'commit -m init');
@@ -257,7 +258,7 @@ describe("runSyncPush", () => {
     writeFileSync(join(dir, "log.md"), "# Log\n");
     const archiveDir = join(dir, "_archive", "raw-dedup-2026-05-28", "articles");
     mkdirSync(archiveDir, { recursive: true });
-    const longName = "windows-pull-filename-too-long-".repeat(8) + ".md";
+    const longName = "w".repeat(200) + ".md";
     const relPath = `_archive/raw-dedup-2026-05-28/articles/${longName}`;
     writeFileSync(join(dir, relPath), "---\ntitle: archived\n---\n\nbody\n");
 
