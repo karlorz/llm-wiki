@@ -216,21 +216,21 @@ function checkSkillsInstalled(home: string, cwd?: string): CheckResult {
   // Check CWD source tree first (for dev/project runs)
   const srcDir = cwd ? join(cwd, "packages", "skills") : undefined;
   if (srcDir && existsSync(srcDir)) {
-    const found = findSkillMd(srcDir);
+    const found = findInstalledSkillMd(srcDir);
     if (found.length > 0) {
       return check("pass", "skills_installed", "Skills installed", `${found.length} SKILL.md file(s) found (source)`);
     }
   }
   const plugin = findPlugin(home);
   if (plugin) {
-    const found = findSkillMd(plugin.installPath);
+    const found = findInstalledSkillMd(plugin.installPath);
     if (found.length > 0) {
       return check("pass", "skills_installed", "Skills installed", `${found.length} SKILL.md file(s) found (plugin v${plugin.version})`);
     }
   }
   const skillsDir = join(home, ".claude", "skills");
   if (existsSync(skillsDir)) {
-    const found = findSkillMd(skillsDir);
+    const found = findInstalledSkillMd(skillsDir);
     if (found.length > 0) {
       return check("pass", "skills_installed", "Skills installed", `${found.length} SKILL.md file(s) found (CLI install)`);
     }
@@ -1002,6 +1002,11 @@ function findSkillMd(dir: string): string[] {
     }
   }
   return results;
+}
+
+function findInstalledSkillMd(dir: string): string[] {
+  const directSkills = findSkillNames(dir).map(name => join(dir, name, "SKILL.md"));
+  return directSkills.length > 0 ? directSkills : findSkillMd(dir);
 }
 
 /** Return skill directory names (e.g. "wiki-init", "proj-decide") that contain a SKILL.md. */

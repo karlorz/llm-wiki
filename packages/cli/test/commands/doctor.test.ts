@@ -252,6 +252,27 @@ describe("runDoctor", () => {
     }
   });
 
+  it("skills_installed counts direct source skills before Codex mirror skills", async () => {
+    const h = home();
+    const cwd = mkdtempSync(join(tmpdir(), "project-"));
+    const skillsRoot = join(cwd, "packages", "skills");
+
+    for (const skill of ["wiki-init", "wiki-query"]) {
+      mkdirSync(join(skillsRoot, skill), { recursive: true });
+      writeFileSync(join(skillsRoot, skill, "SKILL.md"), `# ${skill}\n`);
+      mkdirSync(join(skillsRoot, "skills", skill), { recursive: true });
+      writeFileSync(join(skillsRoot, "skills", skill, "SKILL.md"), `# ${skill}\n`);
+    }
+
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15", cwd });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const skills = r.result.data.checks.find(c => c.id === "skills_installed");
+      expect(skills?.status).toBe("pass");
+      expect(skills?.detail).toBe("2 SKILL.md file(s) found (source)");
+    }
+  });
+
   it("reports profiles when configured", async () => {
     const h = mkdtempSync(join(tmpdir(), "home-"));
     mkdirSync(join(h, ".skillwiki"), { recursive: true });
