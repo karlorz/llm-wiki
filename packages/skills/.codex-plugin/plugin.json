@@ -1,6 +1,6 @@
 {
   "name": "skillwiki",
-  "version": "0.8.1-beta.6",
+  "version": "0.8.1-beta.7",
   "description": "Project-aware Karpathy-style knowledge base for Codex with 18 prompt-only skills backed by the deterministic skillwiki CLI.",
   "author": {
     "name": "karlorz",
@@ -17,7 +17,7 @@
     "obsidian",
     "karpathy"
   ],
-  "skills": "./",
+  "skills": "./skills/",
   "interface": {
     "displayName": "SkillWiki",
     "shortDescription": "Project-aware wiki skills for Codex agents",

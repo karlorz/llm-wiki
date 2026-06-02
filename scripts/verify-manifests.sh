@@ -9,6 +9,7 @@ set -euo pipefail
 #   3. Skill count in plugin descriptions/marketplace matches actual count
 #   4. Claude marketplace version matches Claude plugin version
 #   5. Codex marketplace wiring points to ./packages/skills for skillwiki
+#   6. Codex plugin layout mirrors top-level skills under ./skills/
 #
 # Exit 0 if all pass, non-zero with descriptive errors if any fail.
 #
@@ -124,6 +125,57 @@ else
   fi
   if [ "$CODEX_SOURCE_TYPE" = "local" ] && [ "$CODEX_SOURCE_PATH" = "./packages/skills" ]; then
     echo "✓ Codex marketplace points skillwiki to ./packages/skills"
+  fi
+fi
+
+# ---- 6. Codex plugin skill layout ----
+
+CODEX_SKILLS_FIELD=$(python3 -c "import json; d=json.load(open('$REPO_ROOT/packages/skills/.codex-plugin/plugin.json')); print(d.get('skills', ''))")
+
+if [ "$CODEX_SKILLS_FIELD" != "./skills/" ]; then
+  echo "✗ Codex plugin skills path is $CODEX_SKILLS_FIELD (expected ./skills/)" >&2
+  ERRORS=$((ERRORS + 1))
+else
+  echo "✓ Codex plugin skills path points to ./skills/"
+fi
+
+CODEX_MIRROR_DIR="$SKILLS_DIR/skills"
+if [ ! -d "$CODEX_MIRROR_DIR" ]; then
+  echo "✗ Codex skills mirror missing: packages/skills/skills" >&2
+  ERRORS=$((ERRORS + 1))
+else
+  CODEX_LAYOUT_ERRORS=0
+  for dir in "$SKILLS_DIR"/*/; do
+    name=$(basename "$dir")
+    if [ "$name" = "skills" ]; then
+      continue
+    fi
+    if [ ! -f "$dir/SKILL.md" ]; then
+      continue
+    fi
+    if [ ! -f "$CODEX_MIRROR_DIR/$name/SKILL.md" ]; then
+      echo "✗ Codex mirror missing skill: $name" >&2
+      CODEX_LAYOUT_ERRORS=$((CODEX_LAYOUT_ERRORS + 1))
+      continue
+    fi
+    if ! cmp -s "$dir/SKILL.md" "$CODEX_MIRROR_DIR/$name/SKILL.md"; then
+      echo "✗ Codex mirror drift for skill: $name" >&2
+      CODEX_LAYOUT_ERRORS=$((CODEX_LAYOUT_ERRORS + 1))
+    fi
+  done
+
+  for dir in "$CODEX_MIRROR_DIR"/*/; do
+    name=$(basename "$dir")
+    if [ -f "$dir/SKILL.md" ] && [ ! -f "$SKILLS_DIR/$name/SKILL.md" ]; then
+      echo "✗ Codex mirror has extra skill: $name" >&2
+      CODEX_LAYOUT_ERRORS=$((CODEX_LAYOUT_ERRORS + 1))
+    fi
+  done
+
+  if [ "$CODEX_LAYOUT_ERRORS" -eq 0 ]; then
+    echo "✓ Codex skills mirror matches canonical top-level skills"
+  else
+    ERRORS=$((ERRORS + CODEX_LAYOUT_ERRORS))
   fi
 fi
 

@@ -1,11 +1,12 @@
 {
   "name": "@skillwiki/skills",
-  "version": "0.8.1-beta.6",
+  "version": "0.8.1-beta.7",
   "private": true,
   "files": [
     "wiki-*",
     "proj-*",
     "using-skillwiki",
+    "skills",
     ".claude-plugin",
     ".codex-plugin",
     "hooks",

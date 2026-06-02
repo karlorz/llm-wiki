@@ -18,8 +18,11 @@ CLAUDE_E2E_MODEL="${CLAUDE_E2E_MODEL:-sonnet}"
 # Read expected version from package.json (no manual updates needed)
 EXPECTED_VERSION=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 
-# Count expected skills dynamically from repo (no manual updates needed)
+# Count expected Claude and Codex skill layouts dynamically from repo
+# (no manual updates needed). Claude discovers the root-level skill folders;
+# Codex discovers the mirrored skills/<skill>/SKILL.md subtree.
 EXPECTED_SKILLS=$(find "$REPO_ROOT/packages/skills" -maxdepth 2 -name 'SKILL.md' | wc -l | tr -d ' ')
+EXPECTED_CODEX_SKILLS=$(find "$REPO_ROOT/packages/skills/skills" -maxdepth 2 -name 'SKILL.md' 2>/dev/null | wc -l | tr -d ' ')
 
 # Count discoverable CLI skills (wiki-*, proj-*) dynamically (no manual updates needed)
 EXPECTED_DISC=$(ls "$REPO_ROOT/packages/skills" | grep -cE '^(wiki-|proj-)')
@@ -37,11 +40,18 @@ fi
 
 # ---- 1. Verify plugin installed with expected skills ----
 printf "%s\n" "--- Plugin installation ---"
-SKILL_COUNT=$(ssh "$SSH_HOST" "find /root/.claude/plugins/cache/llm-wiki/skillwiki/ -name 'SKILL.md' 2>/dev/null | wc -l")
+SKILL_COUNT=$(ssh "$SSH_HOST" "find /root/.claude/plugins/cache/llm-wiki/skillwiki/ -maxdepth 2 -name 'SKILL.md' 2>/dev/null | wc -l")
 if [ "$SKILL_COUNT" -eq "$EXPECTED_SKILLS" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 plugin has %s SKILL.md files\n" "$SKILL_COUNT"
+  PASS=$((PASS + 1)); printf "  \u2713 plugin has %s root-level SKILL.md files\n" "$SKILL_COUNT"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s SKILL.md files, expected %s\n" "$SKILL_COUNT" "$EXPECTED_SKILLS"
+  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s root-level SKILL.md files, expected %s\n" "$SKILL_COUNT" "$EXPECTED_SKILLS"
+fi
+
+CODEX_SKILL_COUNT=$(ssh "$SSH_HOST" "find /root/.claude/plugins/cache/llm-wiki/skillwiki/skills -maxdepth 2 -name 'SKILL.md' 2>/dev/null | wc -l")
+if [ "$CODEX_SKILL_COUNT" -eq "$EXPECTED_CODEX_SKILLS" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 plugin has %s Codex mirror SKILL.md files\n" "$CODEX_SKILL_COUNT"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s Codex mirror SKILL.md files, expected %s\n" "$CODEX_SKILL_COUNT" "$EXPECTED_CODEX_SKILLS"
 fi
 
 # Verify skill discovery via claude (using-skillwiki is hook-injected, not listed by /skills)
