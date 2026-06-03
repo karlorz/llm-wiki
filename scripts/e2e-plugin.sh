@@ -20,9 +20,9 @@ EXPECTED_VERSION=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | hea
 
 # Count expected Claude and Codex skill layouts dynamically from repo
 # (no manual updates needed). Claude discovers the root-level skill folders;
-# Codex discovers the mirrored skills/<skill>/SKILL.md subtree.
+# Codex discovers the packages/codex-skills/skills mirror.
 EXPECTED_SKILLS=$(find "$REPO_ROOT/packages/skills" -maxdepth 2 -name 'SKILL.md' | wc -l | tr -d ' ')
-EXPECTED_CODEX_SKILLS=$(find "$REPO_ROOT/packages/skills/skills" -maxdepth 2 -name 'SKILL.md' 2>/dev/null | wc -l | tr -d ' ')
+EXPECTED_CODEX_SKILLS=$(find -L "$REPO_ROOT/packages/codex-skills/skills" -maxdepth 2 -name 'SKILL.md' 2>/dev/null | wc -l | tr -d ' ')
 
 # Count discoverable CLI skills (wiki-*, proj-*) dynamically (no manual updates needed)
 EXPECTED_DISC=$(ls "$REPO_ROOT/packages/skills" | grep -cE '^(wiki-|proj-)')

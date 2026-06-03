@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# SessionStart hook for skillwiki plugin
+# Codex SessionStart hook for skillwiki plugin.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+PLUGIN_ROOT="${PLUGIN_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
 source "${SCRIPT_DIR}/session-context"
 
-skill_content=$(read_skill_content "${PLUGIN_ROOT}/using-skillwiki/SKILL.md")
+skill_content=$(read_skill_content "${PLUGIN_ROOT}/skills/using-skillwiki/SKILL.md")
 session_context=$(build_skillwiki_session_context "$skill_content")
 print_session_start_json "$session_context"
 

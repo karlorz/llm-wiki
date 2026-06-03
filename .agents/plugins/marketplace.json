@@ -8,7 +8,7 @@
       "name": "skillwiki",
       "source": {
         "source": "local",
-        "path": "./packages/skills"
+        "path": "./packages/codex-skills"
       },
       "policy": {
         "installation": "AVAILABLE",

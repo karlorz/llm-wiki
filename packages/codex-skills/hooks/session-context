@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Shared SessionStart context helpers for skillwiki hook entrypoints.
+
+read_config_value() {
+    local file="$1"
+    local key="$2"
+    local line
+
+    line=$(grep -E "^[[:space:]]*${key}:" "$file" 2>/dev/null | head -n 1 || true)
+    [[ -n "$line" ]] || return 0
+
+    printf '%s' "$line" \
+        | sed -E "s/^[[:space:]]*${key}:[[:space:]]*//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//; s/^['\"]//; s/['\"]$//"
+}
+
+find_dev_loop_config() {
+    local dir="${PWD}"
+
+    while [[ -n "$dir" && "$dir" != "/" ]]; do
+        if [[ -f "${dir}/.claude/dev-loop.config.md" ]]; then
+            printf '%s' "${dir}/.claude/dev-loop.config.md"
+            return 0
+        fi
+        dir=$(dirname "$dir")
+    done
+
+    return 0
+}
+
+build_project_prd_context() {
+    local config_path
+    config_path=$(find_dev_loop_config)
+    [[ -n "$config_path" ]] || return 0
+
+    local prd_layer
+    local prd_pipeline
+    prd_layer=$(read_config_value "$config_path" "prd_layer")
+    prd_pipeline=$(read_config_value "$config_path" "prd_pipeline")
+
+    [[ -n "$prd_layer" || -n "$prd_pipeline" ]] || return 0
+
+    prd_layer="${prd_layer:-unspecified}"
+    prd_pipeline="${prd_pipeline:-unspecified}"
+
+    cat <<EOF
+## Project PRD Mode
+
+Detected \`.claude/dev-loop.config.md\` for this workspace:
+- \`prd_layer\`: \`${prd_layer}\`
+- \`prd_pipeline\`: \`${prd_pipeline}\`
+
+Use this detected PRD mode as the source of truth. Route generated spec/plan artifacts through \`proj-work\`, and do not write them under \`docs/superpowers/\`. If \`prd_layer\` is \`superpowers\` or \`tdd\`, ensure \`EnterPlanMode\` is gated with \`wiki-gate-plan-mode\`. Do not assume \`superpowers/full\` unless the config says so.
+EOF
+}
+
+escape_for_json() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+read_skill_content() {
+    local skill_path="$1"
+    cat "$skill_path" 2>/dev/null || echo "Error reading using-skillwiki skill"
+}
+
+build_skillwiki_session_context() {
+    local skill_content="$1"
+    local project_prd_context
+    local session_context
+
+    project_prd_context=$(build_project_prd_context)
+
+    session_context=$'### Skillwiki Activation\n\nSkillwiki is active for this workspace. Below are the capability guidelines for local reference:'
+    if [[ -n "$project_prd_context" ]]; then
+        session_context+=$'\n\n'
+        session_context+="$project_prd_context"
+    fi
+    session_context+=$'\n\n'
+    session_context+="$skill_content"
+
+    printf '%s' "$session_context"
+}
+
+print_session_start_json() {
+    local session_context
+    session_context=$(escape_for_json "$1")
+
+    # Uses printf instead of heredoc to work around bash 5.3+ heredoc hang.
+    printf '{\n  "hookSpecificOutput": {\n    "hookEventName": "SessionStart",\n    "additionalContext": "%s"\n  }\n}\n' "$session_context"
+}

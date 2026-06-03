@@ -7,15 +7,16 @@
 # Updates version in these files:
 #   1. packages/cli/package.json          (npm-published CLI)
 #   2. packages/skills/.claude-plugin/plugin.json  (Claude plugin)
-#   3. packages/skills/.codex-plugin/plugin.json   (Codex plugin)
-#   4. packages/skills/package.json        (skills package)
-#   5. .claude-plugin/marketplace.json     (metadata.version + plugins[*].version)
-#   6. packages/shared/package.json        (shared types — internal)
-#   7. package.json                        (monorepo root — internal)
-#   8. packages/vault-sync/.claude-plugin/plugin.json (vault-sync Claude plugin)
-#   9. packages/vault-sync/.codex-plugin/plugin.json  (vault-sync Codex plugin)
+#   3. packages/skills/.codex-plugin/plugin.json   (canonical Codex plugin)
+#   4. packages/codex-skills/.codex-plugin/plugin.json (materialized Codex root)
+#   5. packages/skills/package.json        (skills package)
+#   6. .claude-plugin/marketplace.json     (metadata.version + plugins[*].version)
+#   7. packages/shared/package.json        (shared types — internal)
+#   8. package.json                        (monorepo root — internal)
+#   9. packages/vault-sync/.claude-plugin/plugin.json (vault-sync Claude plugin)
+#   10. packages/vault-sync/.codex-plugin/plugin.json (vault-sync Codex plugin)
 #
-# After editing, verifies all 7 files have the new version.
+# After editing, verifies all manifest files have the new version.
 
 set -euo pipefail
 
@@ -47,6 +48,7 @@ bump_file() {
 bump_file "packages/cli/package.json"              "${REPO_ROOT}/packages/cli/package.json"
 bump_file "packages/skills/.claude-plugin/plugin.json" "${REPO_ROOT}/packages/skills/.claude-plugin/plugin.json"
 bump_file "packages/skills/.codex-plugin/plugin.json" "${REPO_ROOT}/packages/skills/.codex-plugin/plugin.json"
+bump_file "packages/codex-skills/.codex-plugin/plugin.json" "${REPO_ROOT}/packages/codex-skills/.codex-plugin/plugin.json"
 bump_file "packages/skills/package.json"           "${REPO_ROOT}/packages/skills/package.json"
 bump_file ".claude-plugin/marketplace.json (×2)"   "${REPO_ROOT}/.claude-plugin/marketplace.json" "g"
 bump_file "packages/shared/package.json"           "${REPO_ROOT}/packages/shared/package.json"
@@ -61,6 +63,7 @@ EXPECTED_FILES=(
   "${REPO_ROOT}/packages/cli/package.json"
   "${REPO_ROOT}/packages/skills/.claude-plugin/plugin.json"
   "${REPO_ROOT}/packages/skills/.codex-plugin/plugin.json"
+  "${REPO_ROOT}/packages/codex-skills/.codex-plugin/plugin.json"
   "${REPO_ROOT}/packages/skills/package.json"
   "${REPO_ROOT}/packages/shared/package.json"
   "${REPO_ROOT}/package.json"
@@ -82,9 +85,9 @@ if ! grep -q "\"version\": \"${VERSION}\"" "${REPO_ROOT}/.claude-plugin/marketpl
 fi
 
 if [ "$MISSING" -eq 0 ]; then
-  echo "  ✓ All 9 manifest version fields updated to ${VERSION}"
+  echo "  ✓ All 10 manifest version fields updated to ${VERSION}"
 else
-  echo "  ⚠ Expected 9 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
+  echo "  ⚠ Expected 10 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
   exit 1
 fi
 
