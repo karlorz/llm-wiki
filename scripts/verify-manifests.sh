@@ -23,6 +23,15 @@ CODEX_PLUGIN_ROOT="$REPO_ROOT/packages/codex-skills"
 
 ERRORS=0
 
+# ---- 0. Materialized plugin assets are current ----
+
+if ! "$REPO_ROOT/scripts/materialize-plugin-assets.sh" --check; then
+  echo "✗ Plugin materialized assets drift check failed" >&2
+  ERRORS=$((ERRORS + 1))
+else
+  echo "✓ Plugin materialized assets are current"
+fi
+
 # ---- 1. Version consistency across all 12 manifests ----
 
 CLI_VER=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')

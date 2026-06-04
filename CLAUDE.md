@@ -44,6 +44,7 @@ Assertion counts are approximate — they include loop-expanded iterations (e.g.
 - Codex plugin manifest: `packages/codex-skills/.codex-plugin/plugin.json` (materialized copy of `packages/skills/.codex-plugin/plugin.json`).
 - Codex marketplace manifest: `.agents/plugins/marketplace.json` (repo root). Plugin discovery in Codex is driven by marketplace entries that point at the Codex-native root `./packages/codex-skills`, which exposes `skills/` and `hooks/hooks-codex.json` but not the Claude default `hooks/hooks.json`.
 - Antigravity/`agy` root plugin manifests: `plugin.json` (local validation/path installs) and `.claude-plugin/plugin.json` (GitHub URL installs). Direct install is `agy plugin install https://github.com/karlorz/llm-wiki`; root `skills/`, `agents/`, and `hooks.json` are materialized mirrors of the canonical files under `packages/skills/`.
+- Materialize mirrors: `npm run materialize:plugins` regenerates Codex and root `agy` mirrors from `packages/skills`; `npm run materialize:plugins:check` is the read-only drift check used by `scripts/verify-manifests.sh`.
 - Version bump: `npm run bump <version>` — syncs version across all 12 manifests (`scripts/bump-version.sh`).
 
 ## Distribution channels
@@ -56,7 +57,7 @@ The skills ship through multiple independent channels — keep them all working:
 4. **npm CLI installer** — `npx skillwiki install` copies SKILL.md files and the `bin/skillwiki` wrapper into `~/.claude/skills/` via the `install` subcommand (see `packages/cli/src/commands/install.ts`).
 5. **vault-sync plugin** — `claude plugin install vault-sync@llm-wiki`. Sibling plugin to skillwiki, ships the cross-platform sync infrastructure (rclone push, fetch-notify, presync, snapshot, Linux FUSE freshness refresh). Installed via `/vault-sync-install`; OS-detects launchd vs systemd-user.
 
-Changing the layout under `packages/skills/<skill>/` requires updating `packages/skills/.claude-plugin/plugin.json`, `packages/skills/.codex-plugin/plugin.json`, the materialized `packages/codex-skills` layout, the materialized root `agy` layout (`skills/`, `agents/`, `plugin.json`, `.claude-plugin/plugin.json`), and the `install` subcommand's directory scan. If the plugin root path changes, update both marketplace manifests (`.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`).
+Changing the layout under `packages/skills/<skill>/` requires updating `packages/skills/.claude-plugin/plugin.json`, `packages/skills/.codex-plugin/plugin.json`, running `npm run materialize:plugins` for the materialized `packages/codex-skills` layout and root `agy` layout (`skills/`, `agents/`, `hooks.json`, `.claude-plugin/plugin.json`), and checking the `install` subcommand's directory scan. If the plugin root path changes, update both marketplace manifests (`.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`).
 
 ## Dev vs prod plugin source
 

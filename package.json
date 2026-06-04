@@ -12,6 +12,8 @@
     "test": "npm run -ws --if-present test",
     "lint": "npm run -ws --if-present lint",
     "bump": "bash scripts/bump-version.sh",
+    "materialize:plugins": "bash scripts/materialize-plugin-assets.sh",
+    "materialize:plugins:check": "bash scripts/materialize-plugin-assets.sh --check",
     "clean": "rm -rf packages/*/dist packages/*/.tsbuildinfo"
   },
   "engines": {

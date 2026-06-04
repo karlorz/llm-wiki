@@ -7,7 +7,9 @@ This repository includes a Codex-ready plugin marketplace package for
 
 - Marketplace manifest: `.agents/plugins/marketplace.json`
 - Codex plugin manifest: `packages/skills/.codex-plugin/plugin.json`
-- Plugin skills root: `packages/skills/` (zero-copy, shared with Claude channel)
+- Canonical skill source: `packages/skills/<skill>/SKILL.md`
+- Codex plugin root: `packages/codex-skills/`
+- Codex skills mirror: `packages/codex-skills/skills/<skill>/SKILL.md`
 
 ## What is supported
 
@@ -66,12 +68,15 @@ cd /path/to/llm-wiki
 cat .agents/plugins/marketplace.json
 
 # 2) Codex plugin manifest
-cat packages/skills/.codex-plugin/plugin.json
+cat packages/codex-skills/.codex-plugin/plugin.json
 
 # 3) Skill count served by plugin root (must be 18)
-find packages/skills -mindepth 1 -maxdepth 1 -type d -exec test -f '{}/SKILL.md' ';' -print | wc -l
+find packages/codex-skills/skills -mindepth 2 -maxdepth 2 -name SKILL.md -print | wc -l
 
-# 4) Optional: check configured marketplaces
+# 4) Mirror drift check
+npm run materialize:plugins:check
+
+# 5) Optional: check configured marketplaces
 rg "marketplaces\\.llm-wiki" ~/.codex/config.toml
 ```
 
@@ -79,7 +84,12 @@ rg "marketplaces\\.llm-wiki" ~/.codex/config.toml
 
 - `packages/skills/.codex-plugin/plugin.json` is the Codex plugin entry point.
 - `.agents/plugins/marketplace.json` exposes one plugin: `skillwiki`.
-- `source.path` is `./packages/skills`, so both Claude and Codex load the same
-  skill files.
-- Adding/removing a skill under `packages/skills/` is zero-copy across both
-  plugin channels; there is no sync directory.
+- `source.path` is `./packages/codex-skills`, because Codex discovers
+  multi-skill plugins reliably from `skills/<skill>/SKILL.md`.
+- `packages/skills/<skill>/SKILL.md` remains the canonical authored source.
+- `packages/skills/skills/`, `packages/codex-skills/skills/`, root `skills/`,
+  root `agents/`, and root `hooks.json` are materialized mirrors for platform
+  compatibility.
+- Run `npm run materialize:plugins` after changing canonical skill, agent, or
+  hook assets. Run `npm run materialize:plugins:check` for read-only drift
+  detection.

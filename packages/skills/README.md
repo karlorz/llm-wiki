@@ -16,3 +16,7 @@ copies this package's `.codex-plugin/` manifest, `skills/` mirror, and
 Codex-specific hook files. That root exposes `hooks/hooks-codex.json` and
 `hooks/session-start-codex` without exposing the Claude default
 `hooks/hooks.json`.
+
+Run `npm run materialize:plugins` from the repository root after changing
+canonical skill, agent, or hook assets. Run
+`npm run materialize:plugins:check` for read-only drift detection.

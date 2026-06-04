@@ -33,6 +33,14 @@ The repository root includes an `agy`-compatible `plugin.json` plus a matching `
 agy plugin validate .
 ```
 
+After changing canonical skill, agent, or hook assets under `packages/skills/`,
+regenerate install-facing mirrors before validating:
+
+```bash
+npm run materialize:plugins
+npm run materialize:plugins:check
+```
+
 ## Skills
 
 | Namespace | Skills |
@@ -91,6 +99,7 @@ All subcommands emit JSON by default. Pass `--human` for terminal output.
 
 ```bash
 npm install
+npm run materialize:plugins:check
 npm run -w @skillwiki/shared test
 npm run -w skillwiki build
 npm run -w skillwiki test
