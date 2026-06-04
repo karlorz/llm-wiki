@@ -10,7 +10,7 @@ set -euo pipefail
 #   4. Claude marketplace version matches Claude plugin version
 #   5. Codex marketplace wiring points to ./packages/codex-skills for skillwiki
 #   6. Codex plugin layout mirrors top-level skills under ./skills/ and uses native Codex hooks
-#   7. Root agy plugin layout materializes skills/ and agents/ for direct GitHub URL install
+#   7. Root agy plugin layout materializes skills/, agents/, and hooks/ for direct GitHub URL install
 #
 # Exit 0 if all pass, non-zero with descriptive errors if any fail.
 #
@@ -257,6 +257,41 @@ else
     ERRORS=$((ERRORS + 1))
   else
     echo "✓ Root hooks.json matches packages/skills/hooks/hooks.json"
+  fi
+
+  if [ ! -d "$REPO_ROOT/hooks" ]; then
+    echo "✗ Root agy hooks directory missing: hooks/" >&2
+    ERRORS=$((ERRORS + 1))
+  elif [ -L "$REPO_ROOT/hooks" ]; then
+    echo "✗ Root agy hooks directory must be real, not a symlink" >&2
+    ERRORS=$((ERRORS + 1))
+  else
+    ROOT_HOOK_DRIFT=0
+    for hook_file in hooks.json run-hook.cmd session-context session-start; do
+      if [ ! -f "$REPO_ROOT/hooks/$hook_file" ]; then
+        echo "✗ Root agy hooks mirror missing: hooks/$hook_file" >&2
+        ROOT_HOOK_DRIFT=$((ROOT_HOOK_DRIFT + 1))
+      elif [ -L "$REPO_ROOT/hooks/$hook_file" ]; then
+        echo "✗ Root agy hooks mirror must be real file, not symlink: hooks/$hook_file" >&2
+        ROOT_HOOK_DRIFT=$((ROOT_HOOK_DRIFT + 1))
+      elif ! cmp -s "$SKILLS_DIR/hooks/$hook_file" "$REPO_ROOT/hooks/$hook_file"; then
+        echo "✗ Root agy hooks mirror drift: hooks/$hook_file" >&2
+        ROOT_HOOK_DRIFT=$((ROOT_HOOK_DRIFT + 1))
+      fi
+    done
+
+    for codex_only_hook in hooks-codex.json session-start-codex; do
+      if [ -e "$REPO_ROOT/hooks/$codex_only_hook" ]; then
+        echo "✗ Root agy hooks mirror exposes Codex-only asset: hooks/$codex_only_hook" >&2
+        ROOT_HOOK_DRIFT=$((ROOT_HOOK_DRIFT + 1))
+      fi
+    done
+
+    if [ "$ROOT_HOOK_DRIFT" -eq 0 ]; then
+      echo "✓ Root agy hooks mirror exposes Claude hooks under hooks/"
+    else
+      ERRORS=$((ERRORS + ROOT_HOOK_DRIFT))
+    fi
   fi
 fi
 

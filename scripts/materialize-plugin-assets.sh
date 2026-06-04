@@ -190,8 +190,23 @@ fi
 # Root Antigravity/agy direct-install layout.
 sync_skill_mirror "$REPO_ROOT/skills" "root skills"
 sync_dir_exact "$SKILLS_DIR/agents" "$REPO_ROOT/agents" "root agents"
-sync_file "$SKILLS_DIR/hooks/hooks.json" "$REPO_ROOT/hooks.json" "root hooks.json"
+ensure_real_dir "$REPO_ROOT/hooks" "root hooks"
+sync_file "$SKILLS_DIR/hooks/hooks.json" "$REPO_ROOT/hooks/hooks.json" "root hooks/hooks.json"
+sync_file "$SKILLS_DIR/hooks/run-hook.cmd" "$REPO_ROOT/hooks/run-hook.cmd" "root hooks/run-hook.cmd"
+sync_file "$SKILLS_DIR/hooks/session-context" "$REPO_ROOT/hooks/session-context" "root hooks/session-context"
+sync_file "$SKILLS_DIR/hooks/session-start" "$REPO_ROOT/hooks/session-start" "root hooks/session-start"
+sync_file "$SKILLS_DIR/hooks/hooks.json" "$REPO_ROOT/hooks.json" "root hooks.json compatibility copy"
 sync_file "$REPO_ROOT/plugin.json" "$REPO_ROOT/.claude-plugin/plugin.json" "root .claude-plugin/plugin.json"
+
+if [ "$MODE" = "apply" ]; then
+  rm -f "$REPO_ROOT/hooks/hooks-codex.json" "$REPO_ROOT/hooks/session-start-codex"
+else
+  for codex_only_hook in hooks/hooks-codex.json hooks/session-start-codex; do
+    if [ -e "$REPO_ROOT/$codex_only_hook" ]; then
+      fail "root agy layout must not expose Codex-only hook asset: $codex_only_hook"
+    fi
+  done
+fi
 
 if [ "$ERRORS" -ne 0 ]; then
   echo "Plugin asset materialization check failed with $ERRORS error(s)." >&2

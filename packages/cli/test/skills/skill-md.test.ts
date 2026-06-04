@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 const SKILLS_DIR = join(__dirname, "..", "..", "..", "skills");
 const CODEX_PLUGIN_ROOT = join(__dirname, "..", "..", "..", "codex-skills");
+const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const CANONICAL_CODEX_PLUGIN_MANIFEST = join(SKILLS_DIR, ".codex-plugin", "plugin.json");
 const CODEX_PLUGIN_MANIFEST = join(CODEX_PLUGIN_ROOT, ".codex-plugin", "plugin.json");
 const MARKETPLACE = join(__dirname, "..", "..", "..", "..", ".agents", "plugins", "marketplace.json");
@@ -65,6 +66,34 @@ describe("SKILL.md structure", () => {
     expect(manifest.skills).toBe("./skills/");
     expect(manifest.hooks).toBe("./hooks/hooks-codex.json");
     expect(readFileSync(CODEX_PLUGIN_MANIFEST, "utf8")).toBe(readFileSync(CANONICAL_CODEX_PLUGIN_MANIFEST, "utf8"));
+  });
+
+  it("root Antigravity plugin layout exposes Claude hooks under hooks/", () => {
+    const rootHooksDir = join(REPO_ROOT, "hooks");
+
+    expect(existsSync(join(rootHooksDir, "hooks.json"))).toBe(true);
+    expect(existsSync(join(rootHooksDir, "run-hook.cmd"))).toBe(true);
+    expect(existsSync(join(rootHooksDir, "session-context"))).toBe(true);
+    expect(existsSync(join(rootHooksDir, "session-start"))).toBe(true);
+
+    expectNotSymlink(rootHooksDir);
+    expectNotSymlink(join(rootHooksDir, "hooks.json"));
+    expectNotSymlink(join(rootHooksDir, "run-hook.cmd"));
+    expectNotSymlink(join(rootHooksDir, "session-context"));
+    expectNotSymlink(join(rootHooksDir, "session-start"));
+
+    expect(readFileSync(join(rootHooksDir, "hooks.json"), "utf8")).toBe(
+      readFileSync(join(SKILLS_DIR, "hooks", "hooks.json"), "utf8"),
+    );
+    expect(readFileSync(join(rootHooksDir, "run-hook.cmd"), "utf8")).toBe(
+      readFileSync(join(SKILLS_DIR, "hooks", "run-hook.cmd"), "utf8"),
+    );
+    expect(readFileSync(join(rootHooksDir, "session-context"), "utf8")).toBe(
+      readFileSync(join(SKILLS_DIR, "hooks", "session-context"), "utf8"),
+    );
+    expect(readFileSync(join(rootHooksDir, "session-start"), "utf8")).toBe(
+      readFileSync(join(SKILLS_DIR, "hooks", "session-start"), "utf8"),
+    );
   });
 
   it("Codex skills subtree mirrors every canonical top-level skill", () => {

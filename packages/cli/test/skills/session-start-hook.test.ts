@@ -6,9 +6,11 @@ import { join } from "node:path";
 
 const SKILLS_DIR = join(__dirname, "..", "..", "..", "skills");
 const CODEX_PLUGIN_ROOT = join(__dirname, "..", "..", "..", "codex-skills");
+const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
 const CLAUDE_HOOK = join(SKILLS_DIR, "hooks", "session-start");
 const CODEX_RUN_HOOK = join(CODEX_PLUGIN_ROOT, "hooks", "run-hook.cmd");
 const CODEX_HOOKS_MANIFEST = join(CODEX_PLUGIN_ROOT, "hooks", "hooks-codex.json");
+const ROOT_AGY_RUN_HOOK = join(REPO_ROOT, "hooks", "run-hook.cmd");
 
 function tempProject(): string {
   const project = mkdtempSync(join(tmpdir(), "skillwiki-hook-project-"));
@@ -47,6 +49,18 @@ function runCodexHook(cwd: string): string {
       ...process.env,
       PLUGIN_ROOT: CODEX_PLUGIN_ROOT,
       CLAUDE_PLUGIN_ROOT: "",
+    },
+    encoding: "utf8",
+  });
+  return parseAdditionalContext(output);
+}
+
+function runRootAgyHook(cwd: string): string {
+  const output = execFileSync("bash", [ROOT_AGY_RUN_HOOK, "session-start"], {
+    cwd,
+    env: {
+      ...process.env,
+      CLAUDE_PLUGIN_ROOT: REPO_ROOT,
     },
     encoding: "utf8",
   });
@@ -109,5 +123,15 @@ describe("SessionStart hook", () => {
     expect(context).toContain("- `prd_pipeline`: `tdd-first`");
     expect(context).toContain("Skillwiki is active for this workspace.");
     expect(context).toContain("name: using-skillwiki");
+  });
+
+  it("root Antigravity hook reads using-skillwiki from the root skills mirror", () => {
+    const project = tempProject();
+
+    const context = runRootAgyHook(project);
+
+    expect(context).toContain("Skillwiki is active for this workspace.");
+    expect(context).toContain("name: using-skillwiki");
+    expect(context).not.toContain("Error reading using-skillwiki skill");
   });
 });

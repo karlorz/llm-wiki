@@ -8,7 +8,7 @@ PLUGIN_ROOT="${PLUGIN_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 
 source "${SCRIPT_DIR}/session-context"
 
-skill_content=$(read_skill_content "${PLUGIN_ROOT}/skills/using-skillwiki/SKILL.md")
+skill_content=$(read_skill_content "$(resolve_skill_path "$PLUGIN_ROOT" "using-skillwiki")")
 session_context=$(build_skillwiki_session_context "$skill_content")
 print_session_start_json "$session_context"
 
