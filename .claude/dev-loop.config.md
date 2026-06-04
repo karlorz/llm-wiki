@@ -58,7 +58,7 @@ e2e_scripts:
 ```yaml
 bump_script: ./scripts/bump-version.sh
 publish_via: ci-tag-trigger
-manifests_count: 7        # bump-version.sh updates 7 manifests (cli, claude-plugin, codex-plugin, skills, shared, root, marketplace)
+manifests_count: 11       # bump-version.sh updates 11 manifests across CLI, plugin, package, marketplace, vault-sync, and root agy channels
 deploy_script: ""         # sg01 is a plugin-test host, not a deploy target — DEPLOY step is a no-op
 remote_hosts: [sg01]      # kept for context (e2e-remote/e2e-plugin targets), not used by DEPLOY step
 
@@ -131,9 +131,11 @@ notes:
     A cycle that only edits vault/, docs, or CLAUDE.md should commit (MERGE)
     but skip PUSH. The trigger_globs / skip_globs lists encode this decision.
   distribution: |
-    Two channels:
+    Distribution channels:
     1. Claude Code plugin via marketplace.json + plugin.json.
-    2. npm CLI via `npx skillwiki install`.
+    2. Codex plugin marketplace via .agents/plugins/marketplace.json + packages/codex-skills.
+    3. Antigravity CLI via repo-root plugin.json (`agy plugin install https://github.com/karlorz/llm-wiki`).
+    4. npm CLI via `npx skillwiki install`.
     Plugin cache doesn't auto-update on test hosts — git fetch + reset + reinstall.
   cli_fallback: |
     When the installed `skillwiki` binary returns a placeholder, use

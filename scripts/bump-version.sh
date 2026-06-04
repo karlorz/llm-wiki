@@ -15,6 +15,7 @@
 #   8. package.json                        (monorepo root — internal)
 #   9. packages/vault-sync/.claude-plugin/plugin.json (vault-sync Claude plugin)
 #   10. packages/vault-sync/.codex-plugin/plugin.json (vault-sync Codex plugin)
+#   11. plugin.json                        (root agy plugin)
 #
 # After editing, verifies all manifest files have the new version.
 
@@ -55,6 +56,7 @@ bump_file "packages/shared/package.json"           "${REPO_ROOT}/packages/shared
 bump_file "package.json (root)"                    "${REPO_ROOT}/package.json"
 bump_file "packages/vault-sync/.claude-plugin/plugin.json" "${REPO_ROOT}/packages/vault-sync/.claude-plugin/plugin.json"
 bump_file "packages/vault-sync/.codex-plugin/plugin.json"  "${REPO_ROOT}/packages/vault-sync/.codex-plugin/plugin.json"
+bump_file "plugin.json (root agy plugin)"          "${REPO_ROOT}/plugin.json"
 
 echo ""
 echo "Verifying all files..."
@@ -69,6 +71,7 @@ EXPECTED_FILES=(
   "${REPO_ROOT}/package.json"
   "${REPO_ROOT}/packages/vault-sync/.claude-plugin/plugin.json"
   "${REPO_ROOT}/packages/vault-sync/.codex-plugin/plugin.json"
+  "${REPO_ROOT}/plugin.json"
 )
 
 MISSING=0
@@ -85,9 +88,9 @@ if ! grep -q "\"version\": \"${VERSION}\"" "${REPO_ROOT}/.claude-plugin/marketpl
 fi
 
 if [ "$MISSING" -eq 0 ]; then
-  echo "  ✓ All 10 manifest version fields updated to ${VERSION}"
+  echo "  ✓ All 11 manifest version fields updated to ${VERSION}"
 else
-  echo "  ⚠ Expected 10 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
+  echo "  ⚠ Expected 11 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
   exit 1
 fi
 

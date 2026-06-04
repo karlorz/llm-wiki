@@ -1,0 +1,25 @@
+{
+  "name": "skillwiki",
+  "version": "0.8.1-beta.11",
+  "description": "Project-aware Karpathy-style knowledge base for agentic coding tools: 18 prompt-only skills (wiki-*, proj-*, using-skillwiki) backed by the deterministic skillwiki CLI.",
+  "author": {
+    "name": "karlorz",
+    "url": "https://github.com/karlorz"
+  },
+  "homepage": "https://github.com/karlorz/llm-wiki",
+  "repository": "https://github.com/karlorz/llm-wiki",
+  "license": "MIT",
+  "keywords": [
+    "knowledge-base",
+    "wiki",
+    "obsidian",
+    "skills",
+    "agents",
+    "karpathy",
+    "markdown",
+    "research",
+    "rag-alternative"
+  ],
+  "skills": "./skills/",
+  "agents": "./agents/"
+}

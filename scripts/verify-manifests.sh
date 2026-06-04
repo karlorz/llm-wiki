@@ -4,12 +4,13 @@ set -euo pipefail
 # verify-manifests.sh — Validate manifest consistency across distribution channels.
 #
 # Checks:
-#   1. Version field is identical across all 10 manifest files
+#   1. Version field is identical across all 11 manifest files
 #   2. Every skill directory has a SKILL.md
 #   3. Skill count in plugin descriptions/marketplace matches actual count
 #   4. Claude marketplace version matches Claude plugin version
 #   5. Codex marketplace wiring points to ./packages/codex-skills for skillwiki
 #   6. Codex plugin layout mirrors top-level skills under ./skills/ and uses native Codex hooks
+#   7. Root agy plugin layout exposes skills/ and agents/ for direct GitHub URL install
 #
 # Exit 0 if all pass, non-zero with descriptive errors if any fail.
 #
@@ -22,7 +23,7 @@ CODEX_PLUGIN_ROOT="$REPO_ROOT/packages/codex-skills"
 
 ERRORS=0
 
-# ---- 1. Version consistency across all 10 manifests ----
+# ---- 1. Version consistency across all 11 manifests ----
 
 CLI_VER=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 SKILLS_PKG_VER=$(grep '"version"' "$REPO_ROOT/packages/skills/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
@@ -33,6 +34,7 @@ CODEX_PLUGIN_VER=$(grep '"version"' "$REPO_ROOT/packages/skills/.codex-plugin/pl
 CODEX_ROOT_PLUGIN_VER=$(grep '"version"' "$CODEX_PLUGIN_ROOT/.codex-plugin/plugin.json" 2>/dev/null | head -1 | sed 's/.*: *"//;s/".*//' || true)
 VAULT_SYNC_CLAUDE_VER=$(grep '"version"' "$REPO_ROOT/packages/vault-sync/.claude-plugin/plugin.json" | head -1 | sed 's/.*: *"//;s/".*//')
 VAULT_SYNC_CODEX_VER=$(grep '"version"' "$REPO_ROOT/packages/vault-sync/.codex-plugin/plugin.json" | head -1 | sed 's/.*: *"//;s/".*//')
+ROOT_AGY_VER=$(grep '"version"' "$REPO_ROOT/plugin.json" 2>/dev/null | head -1 | sed 's/.*: *"//;s/".*//' || true)
 MARKET_VER=$(python3 -c "import json; d=json.load(open('$REPO_ROOT/.claude-plugin/marketplace.json')); print(d['metadata']['version'])")
 
 check_version() {
@@ -52,10 +54,11 @@ check_version "packages/skills/.codex-plugin/plugin.json" "$CODEX_PLUGIN_VER"
 check_version "packages/codex-skills/.codex-plugin/plugin.json" "$CODEX_ROOT_PLUGIN_VER"
 check_version "packages/vault-sync/.claude-plugin/plugin.json" "$VAULT_SYNC_CLAUDE_VER"
 check_version "packages/vault-sync/.codex-plugin/plugin.json" "$VAULT_SYNC_CODEX_VER"
+check_version "plugin.json (root agy plugin)" "$ROOT_AGY_VER"
 check_version ".claude-plugin/marketplace.json metadata.version" "$MARKET_VER"
 
 if [ "$ERRORS" -eq 0 ]; then
-  echo "✓ All 10 manifests at version $CLI_VER"
+  echo "✓ All 11 manifests at version $CLI_VER"
 fi
 
 # ---- 2. Skill directories have SKILL.md ----
@@ -103,6 +106,90 @@ if [ "$MARKET_DESC_COUNT" != "$ACTUAL_COUNT" ]; then
   ERRORS=$((ERRORS + 1))
 else
   echo "✓ Claude marketplace.json skill count ($MARKET_DESC_COUNT) matches actual ($ACTUAL_COUNT)"
+fi
+
+# ---- 3b. Root agy plugin manifest ----
+
+ROOT_AGY_PLUGIN="$REPO_ROOT/plugin.json"
+if [ ! -f "$ROOT_AGY_PLUGIN" ]; then
+  echo "✗ Root agy plugin manifest missing: plugin.json" >&2
+  ERRORS=$((ERRORS + 1))
+elif [ -L "$ROOT_AGY_PLUGIN" ]; then
+  echo "✗ Root agy plugin manifest must be a real file, not a symlink" >&2
+  ERRORS=$((ERRORS + 1))
+else
+  ROOT_AGY_STATUS=$(python3 -c "import json; d=json.load(open('$ROOT_AGY_PLUGIN')); print('|'.join([str(d.get('skills', '')), str(d.get('agents', '')), str(d.get('description', ''))]))")
+  ROOT_AGY_SKILLS_FIELD=$(printf '%s' "$ROOT_AGY_STATUS" | cut -d'|' -f1)
+  ROOT_AGY_AGENTS_FIELD=$(printf '%s' "$ROOT_AGY_STATUS" | cut -d'|' -f2)
+  ROOT_AGY_DESC=$(printf '%s' "$ROOT_AGY_STATUS" | cut -d'|' -f3-)
+  ROOT_AGY_DESC_COUNT=$(printf '%s' "$ROOT_AGY_DESC" | grep -oE '[0-9]+ prompt-only skills' | head -1 | grep -oE '^[0-9]+' || echo "0")
+
+  if [ "$ROOT_AGY_SKILLS_FIELD" != "./skills/" ]; then
+    echo "✗ Root agy plugin skills path is $ROOT_AGY_SKILLS_FIELD (expected ./skills/)" >&2
+    ERRORS=$((ERRORS + 1))
+  else
+    echo "✓ Root agy plugin skills path points to ./skills/"
+  fi
+
+  if [ "$ROOT_AGY_AGENTS_FIELD" != "./agents/" ]; then
+    echo "✗ Root agy plugin agents path is $ROOT_AGY_AGENTS_FIELD (expected ./agents/)" >&2
+    ERRORS=$((ERRORS + 1))
+  else
+    echo "✓ Root agy plugin agents path points to ./agents/"
+  fi
+
+  if [ "$ROOT_AGY_DESC_COUNT" != "$ACTUAL_COUNT" ]; then
+    echo "✗ Root agy plugin.json says $ROOT_AGY_DESC_COUNT skills but found $ACTUAL_COUNT" >&2
+    ERRORS=$((ERRORS + 1))
+  else
+    echo "✓ Root agy plugin.json skill count ($ROOT_AGY_DESC_COUNT) matches actual ($ACTUAL_COUNT)"
+  fi
+
+  if [ ! -d "$REPO_ROOT/skills" ]; then
+    echo "✗ Root agy skills directory missing: skills" >&2
+    ERRORS=$((ERRORS + 1))
+  else
+    ROOT_AGY_SKILL_COUNT=$(find -L "$REPO_ROOT/skills" -mindepth 2 -maxdepth 2 -name SKILL.md -print | wc -l | tr -d ' ')
+    if [ "$ROOT_AGY_SKILL_COUNT" != "$ACTUAL_COUNT" ]; then
+      echo "✗ Root agy skills directory exposes $ROOT_AGY_SKILL_COUNT skills (expected $ACTUAL_COUNT)" >&2
+      ERRORS=$((ERRORS + 1))
+    else
+      echo "✓ Root agy skills directory exposes $ROOT_AGY_SKILL_COUNT skills"
+    fi
+  fi
+
+  if [ ! -d "$REPO_ROOT/agents" ]; then
+    echo "✗ Root agy agents directory missing: agents" >&2
+    ERRORS=$((ERRORS + 1))
+  elif [ ! -L "$REPO_ROOT/agents" ]; then
+    echo "✗ Root agy agents path must be a symlink to packages/skills/agents" >&2
+    ERRORS=$((ERRORS + 1))
+  elif [ "$(readlink "$REPO_ROOT/agents")" != "packages/skills/agents" ]; then
+    echo "✗ Root agy agents symlink points to $(readlink "$REPO_ROOT/agents") (expected packages/skills/agents)" >&2
+    ERRORS=$((ERRORS + 1))
+  else
+    ROOT_AGY_AGENT_COUNT=$(find -L "$REPO_ROOT/agents" -maxdepth 1 -type f -name '*.md' -print | wc -l | tr -d ' ')
+    CANONICAL_AGENT_COUNT=$(find "$SKILLS_DIR/agents" -maxdepth 1 -type f -name '*.md' -print | wc -l | tr -d ' ')
+    if [ "$ROOT_AGY_AGENT_COUNT" != "$CANONICAL_AGENT_COUNT" ]; then
+      echo "✗ Root agy agents directory exposes $ROOT_AGY_AGENT_COUNT agents (expected $CANONICAL_AGENT_COUNT)" >&2
+      ERRORS=$((ERRORS + 1))
+    else
+      echo "✓ Root agy agents symlink exposes $ROOT_AGY_AGENT_COUNT agents"
+    fi
+  fi
+
+  if [ ! -e "$REPO_ROOT/hooks.json" ]; then
+    echo "✗ Root hook asset missing: hooks.json" >&2
+    ERRORS=$((ERRORS + 1))
+  elif [ ! -L "$REPO_ROOT/hooks.json" ]; then
+    echo "✗ Root hook asset must be a symlink to packages/skills/hooks/hooks.json" >&2
+    ERRORS=$((ERRORS + 1))
+  elif [ "$(readlink "$REPO_ROOT/hooks.json")" != "packages/skills/hooks/hooks.json" ]; then
+    echo "✗ Root hooks.json symlink points to $(readlink "$REPO_ROOT/hooks.json") (expected packages/skills/hooks/hooks.json)" >&2
+    ERRORS=$((ERRORS + 1))
+  else
+    echo "✓ Root hooks.json symlink points to packages/skills/hooks/hooks.json"
+  fi
 fi
 
 # ---- 4. Claude marketplace version matches Claude plugin version ----

@@ -21,6 +21,18 @@ npx skillwiki@latest install
 
 This copies 18 SKILL.md files into `~/.claude/skills/` and writes `.claude/skills/wiki-manifest.json`. Use this when you want the skills available outside a Claude Code plugin context, or to seed `~/.claude/skills/` for tools that scan it directly.
 
+### Option C — Antigravity CLI (`agy`)
+
+```bash
+agy plugin install https://github.com/karlorz/llm-wiki
+```
+
+The repository root includes an `agy`-compatible `plugin.json` plus root `skills/` and `agents` entries that point at the canonical files under `packages/skills/`. Local validation should report 18 processed skills and 16 processed agents:
+
+```bash
+agy plugin validate .
+```
+
 ## Skills
 
 | Namespace | Skills |
