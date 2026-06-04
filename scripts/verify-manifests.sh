@@ -10,7 +10,7 @@ set -euo pipefail
 #   4. Claude marketplace version matches Claude plugin version
 #   5. Codex marketplace wiring points to ./packages/codex-skills for skillwiki
 #   6. Codex plugin layout mirrors top-level skills under ./skills/ and uses native Codex hooks
-#   7. Root agy plugin layout exposes skills/ and agents/ for direct GitHub URL install
+#   7. Root agy plugin layout materializes skills/ and agents/ for direct GitHub URL install
 #
 # Exit 0 if all pass, non-zero with descriptive errors if any fail.
 #
@@ -148,47 +148,104 @@ else
   if [ ! -d "$REPO_ROOT/skills" ]; then
     echo "✗ Root agy skills directory missing: skills" >&2
     ERRORS=$((ERRORS + 1))
+  elif [ -L "$REPO_ROOT/skills" ]; then
+    echo "✗ Root agy skills path must be a real directory, not a symlink" >&2
+    ERRORS=$((ERRORS + 1))
+  elif find "$REPO_ROOT/skills" -mindepth 1 -maxdepth 1 -type l | grep -q .; then
+    echo "✗ Root agy skills directory must contain real skill directories, not symlinks" >&2
+    ERRORS=$((ERRORS + 1))
   else
-    ROOT_AGY_SKILL_COUNT=$(find -L "$REPO_ROOT/skills" -mindepth 2 -maxdepth 2 -name SKILL.md -print | wc -l | tr -d ' ')
+    ROOT_AGY_SKILL_COUNT=$(find "$REPO_ROOT/skills" -mindepth 2 -maxdepth 2 -name SKILL.md -print | wc -l | tr -d ' ')
     if [ "$ROOT_AGY_SKILL_COUNT" != "$ACTUAL_COUNT" ]; then
       echo "✗ Root agy skills directory exposes $ROOT_AGY_SKILL_COUNT skills (expected $ACTUAL_COUNT)" >&2
       ERRORS=$((ERRORS + 1))
     else
       echo "✓ Root agy skills directory exposes $ROOT_AGY_SKILL_COUNT skills"
     fi
+
+    ROOT_SKILL_DRIFT=0
+    for skill_file in "$SKILLS_DIR"/*/SKILL.md; do
+      name=$(basename "$(dirname "$skill_file")")
+      root_skill_file="$REPO_ROOT/skills/$name/SKILL.md"
+      if [ ! -f "$root_skill_file" ]; then
+        echo "✗ Root agy skills mirror missing skill: $name" >&2
+        ROOT_SKILL_DRIFT=$((ROOT_SKILL_DRIFT + 1))
+      elif ! cmp -s "$skill_file" "$root_skill_file"; then
+        echo "✗ Root agy skills mirror drift for skill: $name" >&2
+        ROOT_SKILL_DRIFT=$((ROOT_SKILL_DRIFT + 1))
+      fi
+    done
+
+    for root_skill_file in "$REPO_ROOT"/skills/*/SKILL.md; do
+      name=$(basename "$(dirname "$root_skill_file")")
+      if [ ! -f "$SKILLS_DIR/$name/SKILL.md" ]; then
+        echo "✗ Root agy skills mirror has extra skill: $name" >&2
+        ROOT_SKILL_DRIFT=$((ROOT_SKILL_DRIFT + 1))
+      fi
+    done
+
+    if [ "$ROOT_SKILL_DRIFT" -eq 0 ]; then
+      echo "✓ Root agy skills mirror matches canonical top-level skills"
+    else
+      ERRORS=$((ERRORS + ROOT_SKILL_DRIFT))
+    fi
   fi
 
   if [ ! -d "$REPO_ROOT/agents" ]; then
     echo "✗ Root agy agents directory missing: agents" >&2
     ERRORS=$((ERRORS + 1))
-  elif [ ! -L "$REPO_ROOT/agents" ]; then
-    echo "✗ Root agy agents path must be a symlink to packages/skills/agents" >&2
-    ERRORS=$((ERRORS + 1))
-  elif [ "$(readlink "$REPO_ROOT/agents")" != "packages/skills/agents" ]; then
-    echo "✗ Root agy agents symlink points to $(readlink "$REPO_ROOT/agents") (expected packages/skills/agents)" >&2
+  elif [ -L "$REPO_ROOT/agents" ]; then
+    echo "✗ Root agy agents path must be a real directory, not a symlink" >&2
     ERRORS=$((ERRORS + 1))
   else
-    ROOT_AGY_AGENT_COUNT=$(find -L "$REPO_ROOT/agents" -maxdepth 1 -type f -name '*.md' -print | wc -l | tr -d ' ')
+    ROOT_AGY_AGENT_COUNT=$(find "$REPO_ROOT/agents" -maxdepth 1 -type f -name '*.md' -print | wc -l | tr -d ' ')
     CANONICAL_AGENT_COUNT=$(find "$SKILLS_DIR/agents" -maxdepth 1 -type f -name '*.md' -print | wc -l | tr -d ' ')
     if [ "$ROOT_AGY_AGENT_COUNT" != "$CANONICAL_AGENT_COUNT" ]; then
       echo "✗ Root agy agents directory exposes $ROOT_AGY_AGENT_COUNT agents (expected $CANONICAL_AGENT_COUNT)" >&2
       ERRORS=$((ERRORS + 1))
     else
-      echo "✓ Root agy agents symlink exposes $ROOT_AGY_AGENT_COUNT agents"
+      echo "✓ Root agy agents directory exposes $ROOT_AGY_AGENT_COUNT agents"
+    fi
+
+    ROOT_AGENT_DRIFT=0
+    for agent_file in "$SKILLS_DIR"/agents/*.md; do
+      name=$(basename "$agent_file")
+      root_agent_file="$REPO_ROOT/agents/$name"
+      if [ ! -f "$root_agent_file" ]; then
+        echo "✗ Root agy agents mirror missing agent: $name" >&2
+        ROOT_AGENT_DRIFT=$((ROOT_AGENT_DRIFT + 1))
+      elif ! cmp -s "$agent_file" "$root_agent_file"; then
+        echo "✗ Root agy agents mirror drift for agent: $name" >&2
+        ROOT_AGENT_DRIFT=$((ROOT_AGENT_DRIFT + 1))
+      fi
+    done
+
+    for root_agent_file in "$REPO_ROOT"/agents/*.md; do
+      name=$(basename "$root_agent_file")
+      if [ ! -f "$SKILLS_DIR/agents/$name" ]; then
+        echo "✗ Root agy agents mirror has extra agent: $name" >&2
+        ROOT_AGENT_DRIFT=$((ROOT_AGENT_DRIFT + 1))
+      fi
+    done
+
+    if [ "$ROOT_AGENT_DRIFT" -eq 0 ]; then
+      echo "✓ Root agy agents mirror matches packages/skills/agents"
+    else
+      ERRORS=$((ERRORS + ROOT_AGENT_DRIFT))
     fi
   fi
 
   if [ ! -e "$REPO_ROOT/hooks.json" ]; then
     echo "✗ Root hook asset missing: hooks.json" >&2
     ERRORS=$((ERRORS + 1))
-  elif [ ! -L "$REPO_ROOT/hooks.json" ]; then
-    echo "✗ Root hook asset must be a symlink to packages/skills/hooks/hooks.json" >&2
+  elif [ -L "$REPO_ROOT/hooks.json" ]; then
+    echo "✗ Root hook asset must be a real file, not a symlink" >&2
     ERRORS=$((ERRORS + 1))
-  elif [ "$(readlink "$REPO_ROOT/hooks.json")" != "packages/skills/hooks/hooks.json" ]; then
-    echo "✗ Root hooks.json symlink points to $(readlink "$REPO_ROOT/hooks.json") (expected packages/skills/hooks/hooks.json)" >&2
+  elif ! cmp -s "$SKILLS_DIR/hooks/hooks.json" "$REPO_ROOT/hooks.json"; then
+    echo "✗ Root hooks.json differs from packages/skills/hooks/hooks.json" >&2
     ERRORS=$((ERRORS + 1))
   else
-    echo "✓ Root hooks.json symlink points to packages/skills/hooks/hooks.json"
+    echo "✓ Root hooks.json matches packages/skills/hooks/hooks.json"
   fi
 fi
 
