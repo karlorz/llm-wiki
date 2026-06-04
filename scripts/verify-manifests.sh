@@ -4,7 +4,7 @@ set -euo pipefail
 # verify-manifests.sh — Validate manifest consistency across distribution channels.
 #
 # Checks:
-#   1. Version field is identical across all 11 manifest files
+#   1. Version field is identical across all 12 manifest files
 #   2. Every skill directory has a SKILL.md
 #   3. Skill count in plugin descriptions/marketplace matches actual count
 #   4. Claude marketplace version matches Claude plugin version
@@ -23,7 +23,7 @@ CODEX_PLUGIN_ROOT="$REPO_ROOT/packages/codex-skills"
 
 ERRORS=0
 
-# ---- 1. Version consistency across all 11 manifests ----
+# ---- 1. Version consistency across all 12 manifests ----
 
 CLI_VER=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 SKILLS_PKG_VER=$(grep '"version"' "$REPO_ROOT/packages/skills/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
@@ -35,6 +35,7 @@ CODEX_ROOT_PLUGIN_VER=$(grep '"version"' "$CODEX_PLUGIN_ROOT/.codex-plugin/plugi
 VAULT_SYNC_CLAUDE_VER=$(grep '"version"' "$REPO_ROOT/packages/vault-sync/.claude-plugin/plugin.json" | head -1 | sed 's/.*: *"//;s/".*//')
 VAULT_SYNC_CODEX_VER=$(grep '"version"' "$REPO_ROOT/packages/vault-sync/.codex-plugin/plugin.json" | head -1 | sed 's/.*: *"//;s/".*//')
 ROOT_AGY_VER=$(grep '"version"' "$REPO_ROOT/plugin.json" 2>/dev/null | head -1 | sed 's/.*: *"//;s/".*//' || true)
+ROOT_AGY_REMOTE_VER=$(grep '"version"' "$REPO_ROOT/.claude-plugin/plugin.json" 2>/dev/null | head -1 | sed 's/.*: *"//;s/".*//' || true)
 MARKET_VER=$(python3 -c "import json; d=json.load(open('$REPO_ROOT/.claude-plugin/marketplace.json')); print(d['metadata']['version'])")
 
 check_version() {
@@ -55,10 +56,11 @@ check_version "packages/codex-skills/.codex-plugin/plugin.json" "$CODEX_ROOT_PLU
 check_version "packages/vault-sync/.claude-plugin/plugin.json" "$VAULT_SYNC_CLAUDE_VER"
 check_version "packages/vault-sync/.codex-plugin/plugin.json" "$VAULT_SYNC_CODEX_VER"
 check_version "plugin.json (root agy plugin)" "$ROOT_AGY_VER"
+check_version ".claude-plugin/plugin.json (root agy URL marker)" "$ROOT_AGY_REMOTE_VER"
 check_version ".claude-plugin/marketplace.json metadata.version" "$MARKET_VER"
 
 if [ "$ERRORS" -eq 0 ]; then
-  echo "✓ All 11 manifests at version $CLI_VER"
+  echo "✓ All 12 manifests at version $CLI_VER"
 fi
 
 # ---- 2. Skill directories have SKILL.md ----
@@ -247,6 +249,22 @@ else
   else
     echo "✓ Root hooks.json matches packages/skills/hooks/hooks.json"
   fi
+fi
+
+# ---- 3c. Root agy URL-install marker ----
+
+ROOT_AGY_REMOTE_PLUGIN="$REPO_ROOT/.claude-plugin/plugin.json"
+if [ ! -f "$ROOT_AGY_REMOTE_PLUGIN" ]; then
+  echo "✗ Root agy URL marker missing: .claude-plugin/plugin.json" >&2
+  ERRORS=$((ERRORS + 1))
+elif [ -L "$ROOT_AGY_REMOTE_PLUGIN" ]; then
+  echo "✗ Root agy URL marker must be a real file, not a symlink" >&2
+  ERRORS=$((ERRORS + 1))
+elif ! cmp -s "$ROOT_AGY_PLUGIN" "$ROOT_AGY_REMOTE_PLUGIN"; then
+  echo "✗ Root agy URL marker differs from plugin.json" >&2
+  ERRORS=$((ERRORS + 1))
+else
+  echo "✓ Root agy URL marker matches plugin.json"
 fi
 
 # ---- 4. Claude marketplace version matches Claude plugin version ----

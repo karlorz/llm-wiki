@@ -27,7 +27,7 @@ This copies 18 SKILL.md files into `~/.claude/skills/` and writes `.claude/skill
 agy plugin install https://github.com/karlorz/llm-wiki
 ```
 
-The repository root includes an `agy`-compatible `plugin.json` plus materialized root `skills/` and `agents/` mirrors of the canonical files under `packages/skills/`. Local validation should report 18 processed skills and 16 processed agents:
+The repository root includes an `agy`-compatible `plugin.json` plus a matching `.claude-plugin/plugin.json` marker for GitHub URL installs. Root `skills/` and `agents/` are materialized mirrors of the canonical files under `packages/skills/`. Local validation should report 18 processed skills and 16 processed agents:
 
 ```bash
 agy plugin validate .

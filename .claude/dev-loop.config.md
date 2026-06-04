@@ -58,7 +58,7 @@ e2e_scripts:
 ```yaml
 bump_script: ./scripts/bump-version.sh
 publish_via: ci-tag-trigger
-manifests_count: 11       # bump-version.sh updates 11 manifests across CLI, plugin, package, marketplace, vault-sync, and root agy channels
+manifests_count: 12       # bump-version.sh updates 12 manifests across CLI, plugin, package, marketplace, vault-sync, and root agy channels
 deploy_script: ""         # sg01 is a plugin-test host, not a deploy target — DEPLOY step is a no-op
 remote_hosts: [sg01]      # kept for context (e2e-remote/e2e-plugin targets), not used by DEPLOY step
 
@@ -118,7 +118,7 @@ notes:
     1. Compute next version: read current root package.json version (e.g. 0.6.0),
        then list existing tags `git tag --list 'v<base>-beta.*'`, increment -beta.N
        (e.g. v0.6.1-beta.1, then -beta.2). Stable bumps require explicit user request.
-    2. Bump all 7 manifests in lock-step via bump_script.
+    2. Bump all 12 manifests in lock-step via bump_script.
     3. Commit (`chore: bump version to <X.Y.Z-beta.N>`) and push to dev branch
        — this push IS the plugin release (Claude Code plugin uses HEAD of dev).
     4. Tag `v<version>` and push the tag → publish.yml fires via OIDC → npm publish --tag beta.

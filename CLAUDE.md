@@ -23,7 +23,7 @@ This repo ships the `skillwiki` CLI and 18 prompt-only SKILL.md files.
 
 Four scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 
-- **`verify-manifests.sh`** — validates manifest consistency: version sync across 9 files, skill count in descriptions matches actual, every skill dir has SKILL.md. Runs as a CI gate before build.
+- **`verify-manifests.sh`** — validates manifest consistency: version sync across 12 files, skill count in descriptions matches actual, every skill dir has SKILL.md. Runs as a CI gate before build.
 - **`e2e-local.sh`** — builds from source, runs all CLI commands locally (130 assertions). No network required.
 - **`e2e-remote.sh`** — upgrades skillwiki on the target host (default sg02) via `npm install -g skillwiki@latest`, then runs the full CLI suite over SSH. Host selection via `HOST_ENV=scripts/hosts/<name>.env`.
 - **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 18 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
@@ -43,8 +43,8 @@ Assertion counts are approximate — they include loop-expanded iterations (e.g.
 - Claude marketplace manifest: `.claude-plugin/marketplace.json` (repo root). Skill discovery is driven by `plugin.json`'s `"skills": "./"` field; `marketplace.json` points the plugin source at `./packages/skills`.
 - Codex plugin manifest: `packages/codex-skills/.codex-plugin/plugin.json` (materialized copy of `packages/skills/.codex-plugin/plugin.json`).
 - Codex marketplace manifest: `.agents/plugins/marketplace.json` (repo root). Plugin discovery in Codex is driven by marketplace entries that point at the Codex-native root `./packages/codex-skills`, which exposes `skills/` and `hooks/hooks-codex.json` but not the Claude default `hooks/hooks.json`.
-- Antigravity/`agy` root plugin manifest: `plugin.json` (repo root). Direct install is `agy plugin install https://github.com/karlorz/llm-wiki`; root `skills/`, `agents/`, and `hooks.json` are materialized mirrors of the canonical files under `packages/skills/`.
-- Version bump: `npm run bump <version>` — syncs version across all 11 manifests (`scripts/bump-version.sh`).
+- Antigravity/`agy` root plugin manifests: `plugin.json` (local validation/path installs) and `.claude-plugin/plugin.json` (GitHub URL installs). Direct install is `agy plugin install https://github.com/karlorz/llm-wiki`; root `skills/`, `agents/`, and `hooks.json` are materialized mirrors of the canonical files under `packages/skills/`.
+- Version bump: `npm run bump <version>` — syncs version across all 12 manifests (`scripts/bump-version.sh`).
 
 ## Distribution channels
 
@@ -52,11 +52,11 @@ The skills ship through multiple independent channels — keep them all working:
 
 1. **Claude Code plugin** — `/plugin marketplace add karlorz/llm-wiki` then `/plugin install skillwiki@llm-wiki`. Discovery is driven by `packages/skills/.claude-plugin/plugin.json` with a SessionStart hook that auto-injects the `using-skillwiki` onboarding skill. The `bin/skillwiki` npx wrapper is auto-injected into PATH when the plugin is enabled.
 2. **Codex plugin marketplace** — `codex plugin marketplace add karlorz/llm-wiki@dev` (GitHub source) or `codex plugin marketplace add /path/to/llm-wiki` (local source). Then open Codex TUI (`codex`), run `/plugins`, select marketplace `llm-wiki`, and install plugin `skillwiki`. Discovery is driven by `.agents/plugins/marketplace.json` and `packages/codex-skills/.codex-plugin/plugin.json`; Codex SessionStart bootstrap uses `hooks/hooks-codex.json` and `hooks/session-start-codex`.
-3. **Antigravity CLI (`agy`) root plugin** — `agy plugin install https://github.com/karlorz/llm-wiki`. Discovery is driven by the repo-root `plugin.json`; it points skills to `./skills/` and agents to `./agents/`. `scripts/verify-manifests.sh` guards the materialized root layout and rejects symlink regressions.
+3. **Antigravity CLI (`agy`) root plugin** — `agy plugin install https://github.com/karlorz/llm-wiki`. Local path validation is driven by repo-root `plugin.json`; GitHub URL install requires the matching `.claude-plugin/plugin.json` marker. Both point skills to `./skills/` and agents to `./agents/`. `scripts/verify-manifests.sh` guards the materialized root layout, rejects symlink regressions, and requires both manifests to match.
 4. **npm CLI installer** — `npx skillwiki install` copies SKILL.md files and the `bin/skillwiki` wrapper into `~/.claude/skills/` via the `install` subcommand (see `packages/cli/src/commands/install.ts`).
 5. **vault-sync plugin** — `claude plugin install vault-sync@llm-wiki`. Sibling plugin to skillwiki, ships the cross-platform sync infrastructure (rclone push, fetch-notify, presync, snapshot, Linux FUSE freshness refresh). Installed via `/vault-sync-install`; OS-detects launchd vs systemd-user.
 
-Changing the layout under `packages/skills/<skill>/` requires updating `packages/skills/.claude-plugin/plugin.json`, `packages/skills/.codex-plugin/plugin.json`, the materialized `packages/codex-skills` layout, and the `install` subcommand's directory scan. If the plugin root path changes, update both marketplace manifests (`.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`).
+Changing the layout under `packages/skills/<skill>/` requires updating `packages/skills/.claude-plugin/plugin.json`, `packages/skills/.codex-plugin/plugin.json`, the materialized `packages/codex-skills` layout, the materialized root `agy` layout (`skills/`, `agents/`, `plugin.json`, `.claude-plugin/plugin.json`), and the `install` subcommand's directory scan. If the plugin root path changes, update both marketplace manifests (`.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`).
 
 ## Dev vs prod plugin source
 
