@@ -5,6 +5,7 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'        # v0.2.0 → latest
       - 'v[0-9]+.[0-9]+.[0-9]+-beta.*' # v0.2.0-beta.1 → beta
+  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -20,6 +21,12 @@ jobs:
           node-version: 22.x
           cache: npm
           registry-url: https://registry.npmjs.org
+      - name: Validate release ref
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-beta\..+)?$ ]]; then
+            echo "::error::Publish must run from a release tag, got '${GITHUB_REF_NAME}'"
+            exit 1
+          fi
       - run: npm ci
       - run: npm run -w @skillwiki/shared test
       - run: npm run -w skillwiki build
