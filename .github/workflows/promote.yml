@@ -39,7 +39,7 @@ jobs:
           git add -A
           git commit -m "chore: release v${{ inputs.version }}"
           git tag "v${{ inputs.version }}"
-          git push origin dev --tags
+          git push origin HEAD:main --tags
       - name: Generate release notes
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")

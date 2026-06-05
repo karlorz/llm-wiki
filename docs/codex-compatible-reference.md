@@ -38,9 +38,9 @@ Choose marketplace `llm-wiki`, open `skillwiki`, and select `Install plugin`.
 ### Method B: GitHub source (shared/team)
 
 ```bash
-codex plugin marketplace add karlorz/llm-wiki@dev
+codex plugin marketplace add karlorz/llm-wiki@main
 # equivalent:
-# codex plugin marketplace add https://github.com/karlorz/llm-wiki.git --ref dev
+# codex plugin marketplace add https://github.com/karlorz/llm-wiki.git --ref main
 ```
 
 Then inside Codex TUI:

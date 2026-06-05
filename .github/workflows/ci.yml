@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main]
   pull_request:
 
 jobs:
@@ -14,13 +14,13 @@ jobs:
           fetch-depth: 2
       - name: Validate manifest consistency
         run: bash scripts/verify-manifests.sh
-      - name: Verify plugin.json version bumped on dev
-        if: github.ref == 'refs/heads/dev'
+      - name: Verify plugin.json version bumped on main
+        if: github.ref == 'refs/heads/main'
         run: |
           if git diff HEAD~1 --name-only | grep -q 'packages/skills/.claude-plugin/plugin.json'; then
             echo "plugin.json version changed — OK"
           else
-            echo "::warning::Push to dev without plugin.json version bump — /plugin update won't detect changes"
+            echo "::warning::Push to main without plugin.json version bump — /plugin update won't detect changes"
           fi
 
   build-and-test:
