@@ -76,6 +76,8 @@ Changing the layout under `packages/skills/<skill>/` requires updating `packages
 - **Pushing to `main` = releasing the plugin.** There is no version pinning or channel tag for Claude Code plugins. Every push to the default branch (`main`) is what users get on `plugin install`.
 - **Version gate:** `/plugin update` only detects changes when the `version` field in `plugin.json` is bumped. New commits without a version bump are ignored.
 - **npm is a separate channel:** `npm publish --tag beta` gives CLI users a beta track independent of the plugin channel. Default dist-tag is `latest`; use `--tag beta` in `skillwiki update` for pre-release.
+- **Tag CI/CD:** pushing a valid `vX.Y.Z` or `vX.Y.Z-beta.N` tag runs publish CI, ensures a GitHub Release exists at `https://github.com/karlorz/llm-wiki/releases/tag/<tag>`, then publishes the npm package with the matching dist-tag.
+- **Promote dispatch fallback:** `promote.yml` explicitly dispatches `publish.yml` after it pushes the tag because tags pushed with `GITHUB_TOKEN` do not reliably trigger `on: push: tags` workflows.
 - **Always run `e2e-plugin.sh` before pushing to `main`** — CI runs it automatically when SSH secrets are configured, but run it locally too if you can.
 - **Updating plugin on test hosts:** the marketplace cache at `~/.claude/plugins/marketplaces/<name>/` does NOT auto-update. Run `git fetch origin && git reset --hard origin/main` inside it, then `claude plugin uninstall skillwiki@llm-wiki && rm -rf ~/.claude/plugins/cache/llm-wiki && claude plugin install skillwiki@llm-wiki`.
 - **Shell command, not slash command:** use `claude plugin install` (no slash) from the terminal. The `/plugin` slash command only works inside an interactive Claude session.
