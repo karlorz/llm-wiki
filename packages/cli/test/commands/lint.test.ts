@@ -1342,6 +1342,81 @@ same body content here
     });
   });
 
+  describe("raw_source_identity_conflict bucket", () => {
+    it("flags Hermes-named raw files with Superpowers source and body", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      writeFileSync(join(v, "raw", "articles", "hermes-llm-wiki-SKILL-v2.1.0.md"), `---
+source_url: https://raw.githubusercontent.com/obra/superpowers/main/README.md
+ingested: 2026-06-05
+sha256: ${"a".repeat(64)}
+---
+
+# Superpowers
+
+Superpowers is a complete software development methodology for your coding agents.
+`);
+
+      const r = await runLint({ vault: v, days: 30, lines: 200, logThreshold: 5000 });
+      expect(r.exitCode).toBe(23);
+      if (r.result.ok) {
+        const bucket = r.result.data.by_severity.error.find(b => b.kind === "raw_source_identity_conflict");
+        expect(bucket?.items).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            file: "raw/articles/hermes-llm-wiki-SKILL-v2.1.0.md",
+            status: "conflict",
+          }),
+        ]));
+      }
+    });
+
+    it("does not flag the repaired Hermes llm-wiki raw source", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      writeFileSync(join(v, "raw", "articles", "hermes-llm-wiki-SKILL-v2.1.0.md"), `---
+source_url: https://raw.githubusercontent.com/NousResearch/hermes-agent/main/skills/research/llm-wiki/SKILL.md
+ingested: 2026-06-05
+sha256: ${"a".repeat(64)}
+---
+
+# Karpathy's LLM Wiki
+
+Build and maintain a persistent, compounding knowledge base.
+`);
+
+      const r = await runLint({ vault: v, days: 30, lines: 200, logThreshold: 5000 });
+      if (r.result.ok) {
+        const kinds = r.result.data.by_severity.error.map(b => b.kind);
+        expect(kinds).not.toContain("raw_source_identity_conflict");
+      }
+    });
+
+    it("does not flag Proxmox helper pages that legitimately describe SeaweedFS", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      writeFileSync(join(v, "raw", "articles", "Proxmox VE Helper Scripts.md"), `---
+source_url: https://community-scripts.org/categories?category=files-and-downloads&preview=seaweedfs
+ingested: 2026-06-05
+sha256: ${"a".repeat(64)}
+---
+
+---
+title: "Proxmox VE Helper Scripts"
+---
+
+## SeaweedFS
+
+SeaweedFS is a fast distributed storage system.
+`);
+
+      const r = await runLint({ vault: v, days: 30, lines: 200, logThreshold: 5000 });
+      if (r.result.ok) {
+        const kinds = r.result.data.by_severity.error.map(b => b.kind);
+        expect(kinds).not.toContain("raw_source_identity_conflict");
+      }
+    });
+  });
+
   describe("path_too_long", () => {
     it("detects files with paths exceeding 240 chars", async () => {
       const v = vault();

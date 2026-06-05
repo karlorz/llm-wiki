@@ -5,6 +5,7 @@ import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { runFetchGuardSync } from "./fetch-guard.js";
 import { controlledFetch } from "../utils/fetch.js";
 import { appendLastOp } from "../utils/last-op.js";
+import { assessSourceIdentity } from "../utils/source-identity.js";
 import {
   TypedKnowledgeSchema,
   RawSourceSchema,
@@ -248,6 +249,26 @@ export async function runIngest(
   const typedRelPath = `${typedDir}/${slug}.md`;
   const rawAbsPath = join(input.vault, rawRelPath);
   const typedAbsPath = join(input.vault, typedRelPath);
+
+  const identity = assessSourceIdentity({
+    rawPath: rawRelPath,
+    sourceUrl: sourceUrl ?? undefined,
+    body: sourceContent,
+  });
+  if (identity.status === "conflict") {
+    return {
+      exitCode: ExitCode.INGEST_VALIDATION_FAILED,
+      result: err("INGEST_VALIDATION_FAILED", {
+        message: "source identity conflict",
+        raw_path: rawRelPath,
+        source_url: sourceUrl,
+        reasons: identity.reasons,
+        pathSignals: identity.pathSignals,
+        sourceSignals: identity.sourceSignals,
+        bodySignals: identity.bodySignals,
+      }),
+    };
+  }
 
   // Build file contents
   const rawContent = buildRawContent(sourceUrl, today, sha256, sourceContent);

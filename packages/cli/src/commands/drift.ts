@@ -5,6 +5,7 @@ import { splitFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
 import { controlledFetch, type FetchOptions } from "../utils/fetch.js";
 import { safeWritePage } from "../utils/safe-write.js";
+import { assessSourceIdentity, type SourceIdentityAssessment } from "../utils/source-identity.js";
 
 const FETCH_OPTS: FetchOptions = { timeoutMs: 10000, maxBytes: 5_000_000, maxRedirects: 5 };
 
@@ -20,15 +21,17 @@ export interface DriftSource {
   source_url: string;
   stored_sha256: string;
   current_sha256: string | null;
-  status: "drifted" | "fetch_failed" | "unchanged" | "updated" | "new";
+  status: "drifted" | "fetch_failed" | "unchanged" | "updated" | "new" | "identity_conflict";
   fetch_error?: string;
   ingested?: string;
+  identity?: SourceIdentityAssessment;
 }
 
 export interface DriftOutput {
   scanned: number;
   drifted: DriftSource[];
   fetch_failed: DriftSource[];
+  identity_conflicts: DriftSource[];
   updated: DriftSource[];
   newFiles: DriftSource[];
   unchanged: number;
@@ -93,6 +96,23 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
     }
 
     const currentHash = createHash("sha256").update(Buffer.from(resp.data.body, "utf8")).digest("hex");
+    const identity = assessSourceIdentity({
+      rawPath: raw.relPath,
+      sourceUrl,
+      body: resp.data.body,
+    });
+    if (identity.status === "conflict") {
+      results.push({
+        raw_path: raw.relPath,
+        source_url: sourceUrl,
+        stored_sha256: storedHash,
+        current_sha256: currentHash,
+        status: "identity_conflict",
+        identity,
+      });
+      continue;
+    }
+
     const drifted = currentHash !== storedHash;
 
     if (drifted && input.apply) {
@@ -120,15 +140,22 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
 
   const drifted = results.filter(r => r.status === "drifted");
   const fetchFailed = results.filter(r => r.status === "fetch_failed");
+  const identityConflicts = results.filter(r => r.status === "identity_conflict");
   const updated = results.filter(r => r.status === "updated");
   const unchanged = results.filter(r => r.status === "unchanged").length;
 
-  // Exit 32 if drift detected (not fixed); exit 0 if no drift or all updated via --apply
-  const exitCode = drifted.length > 0 ? ExitCode.DRIFT_DETECTED : ExitCode.OK;
+  // Exit 32 if drift or identity conflicts remain; exit 0 if no drift or all drift was updated via --apply
+  const exitCode = drifted.length > 0 || identityConflicts.length > 0 ? ExitCode.DRIFT_DETECTED : ExitCode.OK;
 
   const hintLines: string[] = [`scanned: ${results.length}, unchanged: ${unchanged}`];
   if (newResults.length > 0) hintLines.push(`new: ${newResults.length}`, ...newResults.map(n => `  ${n.raw_path} (ingested: ${n.ingested})`));
   if (drifted.length > 0) hintLines.push(`drifted: ${drifted.length}`, ...drifted.map(d => `  ${d.raw_path}`));
+  if (identityConflicts.length > 0) {
+    hintLines.push(
+      `identity_conflicts: ${identityConflicts.length}`,
+      ...identityConflicts.map(c => `  ${c.raw_path}: ${c.identity?.reasons.join("; ") ?? "source identity conflict"}`),
+    );
+  }
   if (fetchFailed.length > 0) hintLines.push(`fetch_failed: ${fetchFailed.length}`, ...fetchFailed.map(f => `  ${f.raw_path}: ${f.fetch_error}`));
   if (updated.length > 0) hintLines.push(`updated: ${updated.length}`, ...updated.map(u => `  ${u.raw_path}`));
 
@@ -144,6 +171,6 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
 
   return {
     exitCode,
-    result: ok({ scanned: results.length, drifted, fetch_failed: fetchFailed, updated, newFiles: newResults, unchanged, humanHint: hintLines.join("\n") }),
+    result: ok({ scanned: results.length, drifted, fetch_failed: fetchFailed, identity_conflicts: identityConflicts, updated, newFiles: newResults, unchanged, humanHint: hintLines.join("\n") }),
   };
 }

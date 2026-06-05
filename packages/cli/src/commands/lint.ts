@@ -24,6 +24,7 @@ import { isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations } fro
 import { buildSlugMap } from "../utils/slug.js";
 import { buildCliSurface, validateCliRefs } from "../utils/cli-surface.js";
 import { parseExpiryAnnotations } from "../parsers/expiry-annotations.js";
+import { assessSourceIdentity } from "../utils/source-identity.js";
 
 const STRUCT_MIN_BODY_LINES = 60;
 const STRUCT_MIN_SECTIONS = 3;
@@ -85,7 +86,7 @@ export interface LintOutput {
   humanHint: string;
 }
 
-const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_dedup", "broken_sources", "tag_not_in_taxonomy", "path_too_long"] as const;
+const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_source_identity_conflict", "raw_dedup", "broken_sources", "tag_not_in_taxonomy", "path_too_long"] as const;
 const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file_source_url", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram"] as const;
 const INFO_ORDER = ["bridges", "sparse_community", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
 const KNOWN_BUCKETS = [...ERROR_ORDER, ...WARNING_ORDER, ...INFO_ORDER] as const;
@@ -213,6 +214,7 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
 
     // file:// source_url check: raw files should have a real external source URL, not a local file path
     const fileSourceUrlFlags: string[] = [];
+    const rawIdentityConflicts: unknown[] = [];
     for (const raw of scan.data.raw) {
       const text = await readPage(raw);
       const split = splitFrontmatter(text);
@@ -220,8 +222,25 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
       if (/^source_url:\s*file:\/\//m.test(split.data.rawFrontmatter)) {
         fileSourceUrlFlags.push(raw.relPath);
       }
+      const sourceUrl = split.data.rawFrontmatter.match(/^source_url:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+      const assessment = assessSourceIdentity({
+        rawPath: raw.relPath,
+        sourceUrl,
+        body: split.data.body,
+      });
+      if (assessment.status === "conflict") {
+        rawIdentityConflicts.push({
+          file: raw.relPath,
+          status: assessment.status,
+          reasons: assessment.reasons,
+          pathSignals: assessment.pathSignals,
+          sourceSignals: assessment.sourceSignals,
+          bodySignals: assessment.bodySignals,
+        });
+      }
     }
     if (fileSourceUrlFlags.length > 0) buckets.file_source_url = fileSourceUrlFlags;
+    if (rawIdentityConflicts.length > 0) buckets.raw_source_identity_conflict = rawIdentityConflicts;
 
     const legacyPages: string[] = [];
     const orphanedPages: string[] = [];

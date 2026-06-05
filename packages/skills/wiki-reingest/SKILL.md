@@ -25,6 +25,7 @@ Standard four reads (SCHEMA, index, log, project context if applicable).
 1. Run `skillwiki drift [vault]`. Read the JSON output.
 2. Present findings grouped by status:
    - **drifted:** Source content has changed. Show stored vs current sha256.
+   - **identity_conflicts:** The fetched source no longer matches the raw filename/source identity. STOP and surface the conflict. Do not archive or reingest until a human chooses the correct source/filename pair.
    - **fetch_failed:** Could not re-fetch. Show error details.
    - **unchanged:** No action needed.
 3. For each drifted source, ask the user: archive old + ingest new, or skip?
@@ -51,4 +52,5 @@ Raw files are immutable (N9). Re-ingest never modifies an existing raw file. Ins
 
 - Modifying files in `raw/` directly (N9).
 - Re-ingesting without user approval for each drifted source.
+- Re-ingesting a source listed under `identity_conflicts` without explicit user approval and a corrected target filename/source URL.
 - Skipping the drift check and assuming sources have changed.
