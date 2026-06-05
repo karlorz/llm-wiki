@@ -1,5 +1,4 @@
 ---
-version: 0.2.2
 name: using-skillwiki
 description: Invoke at session start or when knowledge-base tasks arise — maps skillwiki skills, dev-loop alignment, and PRD/TDD routing with plan-mode gate checks
 ---
@@ -122,16 +121,17 @@ For longer-running project work, use `proj-init` → `proj-work` → `proj-disti
 Maintenance: **Archive** (`wiki-archive`) superseded pages, **Drift** (`wiki-reingest`) to detect stale sources, **Adapter** (`wiki-adapter-prd`) for foreign PRD format ingestion.
 
 ## Troubleshooting Version Drift
-skillwiki has three distribution channels that can drift:
+skillwiki has multiple distribution channels that can drift:
 | Channel | Location | Update Command |
 |---------|----------|----------------|
 | npm CLI | `/usr/local/bin/skillwiki` | `npm install -g skillwiki@latest` |
 | npm skills | `/usr/local/lib/node_modules/skillwiki/skills/` | `skillwiki install` (copies to `~/.claude/skills/`) |
 | Claude plugin | `~/.claude/plugins/cache/llm-wiki/` | `claude plugin update skillwiki@llm-wiki` |
-| Local git dev | `~/.hermes/skills/llm-wiki/` | `npm link ./packages/cli` (from repo root) |
-**Check versions:** `skillwiki doctor` reports "Plugin/CLI version" mismatch warnings.
-**Common issue:** npm package ships SKILL.md files with older `version:` frontmatter than CLI code. This creates false-positive "version warnings" in `skillwiki doctor` — the CLI is newer but skills report older version.
-**Fix:** If developing locally, use `npm link` from the git repo. If using released versions, wait for maintainer to bump SKILL.md versions in source and republish.
+| Codex plugin | `~/.codex/plugins/cache/llm-wiki/` | `codex plugin marketplace upgrade llm-wiki`, then reinstall or restart Codex as needed |
+| Local git dev | source repo checkout | `npm link ./packages/cli` (from repo root) |
+**Check versions:** `skillwiki doctor` reports Plugin/CLI version mismatch warnings when installed channels disagree.
+**Authoring rule:** `SKILL.md` frontmatter follows the Agent Skills schema: top-level `name` and `description` plus optional schema fields such as `metadata`. Do not put release version fields at the top level of `SKILL.md`; plugin and package release versions live in `plugin.json` and `package.json`.
+**Fix:** If developing locally, use the repo source plus `npm link`. If using released versions, update the relevant plugin or npm channel; do not infer release freshness from `SKILL.md` frontmatter.
 
 ## Multi-Wiki Profiles
 skillwiki supports named wiki profiles for working with multiple vaults. Set `WIKI_DEFAULT` to control which wiki all skills target by default.

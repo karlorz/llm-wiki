@@ -1,5 +1,4 @@
 ---
-version: 0.2.1
 name: proj-decide
 description: Write an Architectural Decision Record (ADR). If the decision generalizes, also create a concepts/ page.
 ---

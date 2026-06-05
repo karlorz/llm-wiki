@@ -6,11 +6,12 @@ set -euo pipefail
 # Checks:
 #   1. Version field is identical across all 12 manifest files
 #   2. Every skill directory has a SKILL.md
-#   3. Skill count in plugin descriptions/marketplace matches actual count
-#   4. Claude marketplace version matches Claude plugin version
-#   5. Codex marketplace wiring points to ./packages/codex-skills for skillwiki
-#   6. Codex plugin layout mirrors top-level skills under ./skills/ and uses native Codex hooks
-#   7. Root agy plugin layout materializes skills/, agents/, and hooks/ for direct GitHub URL install
+#   3. SKILL.md frontmatter uses Agent Skills schema fields across shipped layouts
+#   4. Skill count in plugin descriptions/marketplace matches actual count
+#   5. Claude marketplace version matches Claude plugin version
+#   6. Codex marketplace wiring points to ./packages/codex-skills for skillwiki
+#   7. Codex plugin layout mirrors top-level skills under ./skills/ and uses native Codex hooks
+#   8. Root agy plugin layout materializes skills/, agents/, and hooks/ for direct GitHub URL install
 #
 # Exit 0 if all pass, non-zero with descriptive errors if any fail.
 #
@@ -82,6 +83,74 @@ for dir in "$SKILLS_DIR"/*/; do
   fi
 done
 echo "✓ $ACTUAL_COUNT skill directories all have SKILL.md"
+
+# ---- 2b. SKILL.md frontmatter uses Agent Skills schema fields ----
+
+check_skill_frontmatter_schema() {
+  local label="$1" root="$2"
+
+  if [ ! -d "$root" ]; then
+    return
+  fi
+
+  local schema_errors=0
+  while IFS= read -r -d '' skill_file; do
+    if ! awk -v file="$skill_file" '
+      BEGIN {
+        allowed["allowed-tools"] = 1
+        allowed["compatibility"] = 1
+        allowed["description"] = 1
+        allowed["license"] = 1
+        allowed["metadata"] = 1
+        allowed["name"] = 1
+        in_frontmatter = 0
+        closed = 0
+        bad = 0
+      }
+      NR == 1 {
+        if ($0 != "---") {
+          printf("✗ %s must start with YAML frontmatter\n", file) > "/dev/stderr"
+          bad = 1
+          exit
+        }
+        in_frontmatter = 1
+        next
+      }
+      in_frontmatter && $0 == "---" {
+        closed = 1
+        exit
+      }
+      in_frontmatter && $0 ~ /^[A-Za-z0-9_-]+:[[:space:]]*/ {
+        key = $0
+        sub(/:.*/, "", key)
+        if (!(key in allowed)) {
+          printf("✗ %s uses unsupported top-level SKILL.md frontmatter field: %s\n", file, key) > "/dev/stderr"
+          bad = 1
+        }
+      }
+      END {
+        if (NR > 0 && !closed) {
+          printf("✗ %s frontmatter is not closed\n", file) > "/dev/stderr"
+          bad = 1
+        }
+        exit bad
+      }
+    ' "$skill_file"; then
+      schema_errors=$((schema_errors + 1))
+    fi
+  done < <(find "$root" -mindepth 2 -maxdepth 2 -name SKILL.md -print0)
+
+  if [ "$schema_errors" -eq 0 ]; then
+    echo "✓ $label SKILL.md frontmatter uses Agent Skills schema fields"
+  else
+    ERRORS=$((ERRORS + schema_errors))
+  fi
+}
+
+check_skill_frontmatter_schema "Canonical" "$SKILLS_DIR"
+check_skill_frontmatter_schema "Claude mirror" "$SKILLS_DIR/skills"
+check_skill_frontmatter_schema "Codex mirror" "$CODEX_PLUGIN_ROOT/skills"
+check_skill_frontmatter_schema "Root agy mirror" "$REPO_ROOT/skills"
 
 # ---- 3. Skill count in plugin descriptors matches actual ----
 

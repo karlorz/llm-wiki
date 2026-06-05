@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import yaml from "js-yaml";
 
 const SKILLS_DIR = join(__dirname, "..", "..", "..", "skills");
 const CODEX_PLUGIN_ROOT = join(__dirname, "..", "..", "..", "codex-skills");
@@ -12,6 +13,14 @@ const ALL = [
   "wiki-init", "wiki-ingest", "wiki-query", "wiki-lint", "wiki-crystallize", "wiki-audit",
   "proj-init", "proj-work", "proj-distill", "proj-decide"
 ];
+const AGENT_SKILLS_FRONTMATTER_FIELDS = new Set([
+  "allowed-tools",
+  "compatibility",
+  "description",
+  "license",
+  "metadata",
+  "name",
+]);
 
 function listTopLevelSkills(): string[] {
   return readdirSync(SKILLS_DIR, { withFileTypes: true })
@@ -25,12 +34,32 @@ function expectNotSymlink(path: string): void {
   expect(lstatSync(path).isSymbolicLink()).toBe(false);
 }
 
+function readSkillFrontmatter(skill: string): Record<string, unknown> {
+  const text = readFileSync(join(SKILLS_DIR, skill, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
+  const match = text.match(/^---\n([\s\S]*?)\n---\n/);
+  expect(match, `${skill} must start with YAML frontmatter`).not.toBeNull();
+  return yaml.load(match![1]) as Record<string, unknown>;
+}
+
 describe("SKILL.md structure", () => {
   it.each(ALL)("%s has frontmatter with name + description", (skill) => {
     const text = readFileSync(join(SKILLS_DIR, skill, "SKILL.md"), "utf8").replace(/\r\n/g, "\n");
     expect(text.startsWith("---\n")).toBe(true);
     expect(text).toMatch(/\nname: /);
     expect(text).toMatch(/\ndescription: /);
+  });
+
+  it("all canonical skill frontmatter uses Agent Skills schema fields", () => {
+    for (const skill of listTopLevelSkills()) {
+      const frontmatter = readSkillFrontmatter(skill);
+      const keys = Object.keys(frontmatter).sort();
+      const unexpected = keys.filter(key => !AGENT_SKILLS_FRONTMATTER_FIELDS.has(key));
+
+      expect(frontmatter.name, `${skill} name must match directory`).toBe(skill);
+      expect(typeof frontmatter.description, `${skill} description must be a string`).toBe("string");
+      expect((frontmatter.description as string).length, `${skill} description must not be empty`).toBeGreaterThan(0);
+      expect(unexpected, `${skill} has unsupported frontmatter keys`).toEqual([]);
+    }
   });
 
   it.each(ALL)("%s declares pre-orientation expectations", (skill) => {

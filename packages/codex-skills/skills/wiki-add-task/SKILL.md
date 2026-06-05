@@ -1,5 +1,4 @@
 ---
-version: 0.2.2
 name: wiki-add-task
 description: Capture ad-hoc ideas, bugs, tasks, or notes into the vault with ad-hoc capture frontmatter and descriptive filenames.
 ---

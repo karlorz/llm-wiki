@@ -1,5 +1,4 @@
 ---
-version: 0.2.1
 name: wiki-init
 description: Bootstrap a CodeWiki vault — domain-aware SCHEMA.md, index.md, log.md, and ~/.skillwiki/.env binding. Use when starting a fresh vault.
 ---

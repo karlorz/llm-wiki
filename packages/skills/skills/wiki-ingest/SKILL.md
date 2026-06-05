@@ -1,5 +1,4 @@
 ---
-version: 0.2.1
 name: wiki-ingest
 description: Convert URLs, files, or pasted text into typed-knowledge pages with raw provenance. Supports single and batch mode.
 ---

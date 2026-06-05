@@ -1,5 +1,4 @@
 ---
-version: 0.2.1
 name: proj-init
 description: Bootstrap a project workspace at projects/{slug}/ with README, requirements/, architecture/, work/, compound/.
 ---

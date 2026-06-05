@@ -1,5 +1,4 @@
 ---
-version: 0.2.1
 name: wiki-reingest
 description: Detect and act on source drift. Runs skillwiki drift, reviews changes, archives old raw + ingests new content.
 ---

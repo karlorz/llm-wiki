@@ -1,5 +1,4 @@
 ---
-version: 0.2.2
 name: proj-work
 description: Open or run a work item under projects/{slug}/work/YYYY-MM-DD-{slug}/. Redirects brainstorming/writing-plans output paths.
 ---

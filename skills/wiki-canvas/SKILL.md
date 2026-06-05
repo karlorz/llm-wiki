@@ -1,5 +1,4 @@
 ---
-version: 0.2.1
 name: wiki-canvas
 description: Generate an Obsidian Canvas visualization of the vault graph. Runs skillwiki graph build then skillwiki canvas generate.
 ---

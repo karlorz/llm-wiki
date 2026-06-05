@@ -1,5 +1,4 @@
 ---
-version: 0.2.1
 name: wiki-gate-plan-mode
 description: Toggle EnterPlanMode gating — force superpowers planning skills instead of built-in plan mode
 ---

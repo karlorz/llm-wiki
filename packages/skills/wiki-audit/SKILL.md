@@ -1,5 +1,4 @@
 ---
-version: 0.2.1
 name: wiki-audit
 description: Verify per-page that every ^[raw/...] resolves and sources frontmatter matches the body.
 ---
