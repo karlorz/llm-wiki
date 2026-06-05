@@ -4,6 +4,7 @@ dist/
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 .claude/dev-loop-work/
+.claude/dev-loop-debug/
 .claude/settings.local.json
 *.tsbuildinfo
 coverage/

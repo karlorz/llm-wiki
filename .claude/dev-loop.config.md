@@ -15,7 +15,7 @@ phase: 3
 ```yaml
 slug: llm-wiki
 vault: ~/wiki
-release_branch: dev
+release_branch: main
 knowledge_layer: skillwiki
 
 # Knowledge backend registry — explicit declaration for BACKEND_CAPS resolution
@@ -28,11 +28,236 @@ knowledge_backends:
     work_dir: .claude/dev-loop-work/
 ```
 
+## Vault Write Hygiene
+
+```yaml
+vault_auto_commit: true
+
+vault_sync:
+  peer_aware: true
+  lock_timeout_seconds: 30
+  retry_budget: 3
+  presync_skill: auto-detect
+```
+
 ## PRD layer
 
 ```yaml
 prd_layer: superpowers
 prd_pipeline: full
+
+prd_disciplines:
+  - skill: superpowers:test-driven-development
+    when: execute
+    mode: mandatory
+    include_paths:
+      - "packages/cli/src/cli.ts"
+      - "packages/cli/src/commands/**"
+      - "packages/shared/src/schemas.ts"
+      - "packages/shared/src/exit-codes.ts"
+      - "packages/skills/**"
+      - "packages/codex-skills/**"
+      - "skills/**"
+      - "agents/**"
+      - "hooks/**"
+      - ".claude-plugin/**"
+      - ".agents/plugins/marketplace.json"
+      - "plugin.json"
+      - "scripts/materialize-plugin-assets.sh"
+      - "scripts/verify-manifests.sh"
+      - "packages/vault-sync/**"
+      - "packages/cli/src/utils/safe-write.ts"
+      - "packages/cli/src/utils/sync-lock.ts"
+      - "packages/cli/src/utils/log-lock.ts"
+      - "packages/cli/src/commands/sync.ts"
+      - "packages/cli/src/commands/drift.ts"
+  - skill: superpowers:test-driven-development
+    when: execute
+    mode: advisory
+  - skill: superpowers:systematic-debugging
+    when: failure
+    mode: reactive
+```
+
+## Interview
+
+```yaml
+interview:
+  setup:
+    skill: setup-dev-loop
+  work_item:
+    default: native
+    upgrade: grill-me
+    source: mattpocock/skills
+    install: "npx skills@latest add mattpocock/skills --skill grill-me -a claude-code -g -y"
+    trigger: auto
+    goal_override: never
+```
+
+## Critical Paths
+
+```yaml
+critical_paths:
+  cli_contracts:
+    code:
+      - "packages/cli/src/cli.ts"
+      - "packages/cli/src/commands/**"
+      - "packages/shared/src/schemas.ts"
+      - "packages/shared/src/exit-codes.ts"
+    vault:
+      - "config-and-doctor"
+      - "devops-automation-patterns"
+    history_pins:
+      - "N1-N18 canonical CLI invariants: stable exit codes, Result<T> envelopes, --human exit-code parity, immutable raw files"
+      - "2026-05-30: safeWritePage/log-lock doctor metrics and body-shrink guards"
+  plugin_distribution:
+    code:
+      - "packages/skills/**"
+      - "packages/codex-skills/**"
+      - "skills/**"
+      - "agents/**"
+      - "hooks/**"
+      - ".claude-plugin/**"
+      - ".agents/plugins/marketplace.json"
+      - "plugin.json"
+      - "scripts/materialize-plugin-assets.sh"
+      - "scripts/verify-manifests.sh"
+    vault:
+      - "plugin-distribution"
+      - "distribution-channels"
+      - "codex-plugin-skills-subtree-layout"
+      - "agent-plugin-discovery-pattern"
+      - "claude-code-plugin-update-workflow"
+    history_pins:
+      - "2026-06-04: materialized plugin mirrors must be regenerated and verified"
+      - "Version bump syncs 12 manifests across CLI, plugin, package, marketplace, vault-sync, and root agy channels"
+  vault_sync_safety:
+    code:
+      - "packages/vault-sync/**"
+      - "packages/cli/src/utils/safe-write.ts"
+      - "packages/cli/src/utils/sync-lock.ts"
+      - "packages/cli/src/utils/log-lock.ts"
+      - "packages/cli/src/commands/sync.ts"
+      - "packages/cli/src/commands/drift.ts"
+    vault:
+      - "destructive-rclone-sync-antipattern"
+      - "wiki-sync-rebase-conflict-storm-pattern"
+      - "multi-writer-git-sync-conflict-prevention"
+      - "vault-sync-mechanisms-tried"
+    history_pins:
+      - "2026-05-23: rclone sync without --max-delete mass-deleted files from the GitHub snapshot path"
+      - "sg01 is protected and plugin E2E must stay read-only there"
+      - "Single-writer git invariant: sg01 is the only snapshotter in fleet.yaml"
+```
+
+## Fact-Check Tier
+
+```yaml
+fact_check:
+  enabled: true
+  source_order:
+    - local_repo
+    - context7
+    - vault_query
+    - web_search
+  web_tools:
+    primary: mcp__grok-search__web_search
+    deep_fetch: mcp__grok-search__web_fetch
+    site_map: mcp__grok-search__web_map
+    plan_first: mcp__grok-search__plan_intent
+  evidence_contract:
+    require_sources_used_section: true
+    cite_session_id: true
+  triggers:
+    - "version claims"
+    - "deprecation notices"
+    - "CVE checks"
+    - "plugin marketplace behavior"
+    - "OpenAI/Codex API behavior"
+```
+
+## Idle Deep-Research
+
+```yaml
+idle_deep_research:
+  enabled: true
+  skill: deep-research
+  trigger:
+    when: idle_after_mechanical_scan
+    if: no_p2_or_higher_findings
+    cooldown: every_3rd_idle_cycle
+    max_per_day: 4
+  topic_seeds:
+    - "skillwiki CLI contract drift and missing command coverage"
+    - "cross-agent plugin distribution compatibility"
+    - "vault sync safety and destructive sync regression prevention"
+    - "Codex and Claude plugin marketplace behavior changes"
+    - "skillwiki vault lint signal quality and false positives"
+  topic_selection:
+    bias_toward: critical_paths
+    skip_if_recent_query_page_exists: 14d
+  output_mode: vault
+  budget:
+    web_searches: 3
+    deep_fetches: 3
+    context7_calls: 3
+  followups:
+    on_finding: schema_compatible_vault_queue
+    p_score_default: P3
+```
+
+## Investigate
+
+```yaml
+investigate:
+  max_items: 5
+  topic_seeds: []  # falls back to idle_deep_research.topic_seeds
+```
+
+## Preflight
+
+```yaml
+preflight:
+  enabled: true
+  default_limit: 5
+  default_lanes: [work, captures, hygiene]
+  require_approved_spec_and_plan: true
+  unattended_not_ready_behavior: skip
+  defaults:
+    compatibility_policy: "Platform compatibility changes are additive unless explicitly scoped otherwise."
+```
+
+## Browser Verification
+
+No `browser_verification` block is configured. No browser framework or Playwright config was detected in this repo, so dev-loop should skip the browser gate.
+
+## Reactive Debugging
+
+```yaml
+reactive_debugging:
+  enabled: true
+  auto_retry_attempts: 2
+  evidence_dir: .claude/dev-loop-debug/
+  evidence_capture:
+    - "npm test 2>&1 | tee {evidence_dir}/{cycle}-test.log"
+    - "git diff > {evidence_dir}/{cycle}-diff.patch"
+    - "git log --oneline -5 > {evidence_dir}/{cycle}-commits.log"
+  fact_check_tool: mcp__grok-search__web_search
+  escalate_after:
+    consecutive_idle_cycles: 3
+    same_error_signature: true
+  escalation_action: surface_p1_finding
+```
+
+## Code Review
+
+```yaml
+code_review:
+  parallel: true
+  codex:
+    enabled_in_normal: false
+    enabled_in_high: false
+    agent: dev-loop:codex-review-worker
 ```
 
 ## Code layout
@@ -96,7 +321,7 @@ release_policy:
 ## CI Configuration
 
 ```yaml
-ci_configured: true                        # .github/workflows/ci.yml present + branch protection on dev
+ci_configured: true                        # .github/workflows/ci.yml present; main is the release branch
 ci_discovery: runtime                       # GitHub branch protection is the source of truth for required checks
 ci_workflow: .github/workflows/ci.yml
 release_workflow: .github/workflows/publish.yml   # fires on v* tag push via OIDC (no NPM_TOKEN needed)
@@ -119,8 +344,8 @@ notes:
        then list existing tags `git tag --list 'v<base>-beta.*'`, increment -beta.N
        (e.g. v0.6.1-beta.1, then -beta.2). Stable bumps require explicit user request.
     2. Bump all 12 manifests in lock-step via bump_script.
-    3. Commit (`chore: bump version to <X.Y.Z-beta.N>`) and push to dev branch
-       — this push IS the plugin release (Claude Code plugin uses HEAD of dev).
+    3. Commit (`chore: bump version to <X.Y.Z-beta.N>`) and push to main branch
+       — this push IS the plugin release (Claude Code plugin uses HEAD of main).
     4. Tag `v<version>` and push the tag → publish.yml fires via OIDC → npm publish --tag beta.
     5. Verify tag landed on remote: `git ls-remote origin refs/tags/v<version>`.
     6. Verify CI: `gh run watch --exit-status` on the publish.yml run.
