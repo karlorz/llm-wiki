@@ -1,11 +1,14 @@
 # Per-host environment files for vault-sync e2e tests
 
-Each `.env` file in this directory defines a target host for the
-`e2e-vault-sync-remote.sh` test script. Select a host via the
+Each `.env` file in this directory defines a target host for remote
+E2E scripts such as `e2e-remote.sh`, `e2e-plugin.sh`, and
+`e2e-vault-sync-remote.sh`. Select a host via the
 `HOST_ENV` environment variable:
 
 ```bash
 HOST_ENV=scripts/hosts/sg02.env bash scripts/e2e-vault-sync-remote.sh
+HOST_ENV=scripts/hosts/sg01.env bash scripts/e2e-plugin.sh   # read-only branch
+HOST_ENV=scripts/hosts/sg02.env bash scripts/e2e-plugin.sh   # full branch only after provisioning Claude/plugin state
 ```
 
 ## Required keys

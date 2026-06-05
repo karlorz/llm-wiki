@@ -77,4 +77,4 @@ jobs:
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H sg01 >> ~/.ssh/known_hosts 2>/dev/null || true
-          bash scripts/e2e-plugin.sh
+          HOST_ENV=scripts/hosts/sg01.env bash scripts/e2e-plugin.sh

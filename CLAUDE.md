@@ -26,7 +26,7 @@ Four scripts in `scripts/`, all sourcing `e2e-common.sh` for shared helpers:
 - **`verify-manifests.sh`** — validates manifest consistency: version sync across 12 files, skill count in descriptions matches actual, every skill dir has SKILL.md. Runs as a CI gate before build.
 - **`e2e-local.sh`** — builds from source, runs all CLI commands locally (130 assertions). No network required.
 - **`e2e-remote.sh`** — upgrades skillwiki on the target host (default sg02) via `npm install -g skillwiki@latest`, then runs the full CLI suite over SSH. Host selection via `HOST_ENV=scripts/hosts/<name>.env`.
-- **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on sg01: version, 18 SKILL.md files, skill discovery via claude, and CLI commands through the plugin path (27 assertions).
+- **`e2e-plugin.sh`** — verifies the Claude Code plugin channel on the target host. The default is sg01 via `HOST_ENV=scripts/hosts/sg01.env`, but sg01 is production/snapshotter infrastructure and only runs the `READONLY_VERIFY=true` branch: plugin version/layout checks plus read-only canonical vault guard. Full plugin exercise (skill discovery via claude, temp vault init/lint/config/doctor) requires an explicitly prepared non-prod host profile.
 - **`e2e-vault-sync-local.sh`** — macOS-only vault-sync install/uninstall e2e. **Local invocation only — NOT a CI gate.** Dry-run by default; set `LOCAL_LIFECYCLE=true` for full lifecycle on fresh hosts.
 - **`e2e-vault-sync-remote.sh`** — generic remote vault-sync e2e (reads `HOST_ENV`, sg01 runs read-only branch). **Local invocation only — NOT a CI gate** (SSH-out from GitHub Actions is not used; see `.github/_archive/2026-05-25-workflows/`).
 
@@ -78,7 +78,7 @@ Changing the layout under `packages/skills/<skill>/` requires updating `packages
 - **npm is a separate channel:** `npm publish --tag beta` gives CLI users a beta track independent of the plugin channel. Default dist-tag is `latest`; use `--tag beta` in `skillwiki update` for pre-release.
 - **Tag CI/CD:** pushing a valid `vX.Y.Z` or `vX.Y.Z-beta.N` tag runs publish CI, ensures a GitHub Release exists at `https://github.com/karlorz/llm-wiki/releases/tag/<tag>`, then publishes the npm package with the matching dist-tag.
 - **Promote dispatch fallback:** `promote.yml` explicitly dispatches `publish.yml` after it pushes the tag because tags pushed with `GITHUB_TOKEN` do not reliably trigger `on: push: tags` workflows.
-- **Always run `e2e-plugin.sh` before pushing to `main`** — CI runs it automatically when SSH secrets are configured, but run it locally too if you can.
+- **Always run `e2e-plugin.sh` before pushing to `main`** — CI runs the sg01 read-only branch automatically when SSH secrets are configured, but run it locally too if you can. Do not refresh or reinstall the plugin on sg01 as part of release validation; run full plugin E2E only on a non-prod host profile.
 - **Updating plugin on test hosts:** the marketplace cache at `~/.claude/plugins/marketplaces/<name>/` does NOT auto-update. Run `git fetch origin && git reset --hard origin/main` inside it, then `claude plugin uninstall skillwiki@llm-wiki && rm -rf ~/.claude/plugins/cache/llm-wiki && claude plugin install skillwiki@llm-wiki`.
 - **Shell command, not slash command:** use `claude plugin install` (no slash) from the terminal. The `/plugin` slash command only works inside an interactive Claude session.
 
@@ -134,7 +134,7 @@ CI runs four validation stages before allowing merge:
 1. **verify-manifests** — version sync, skill count, SKILL.md presence (no build needed, runs first)
 2. **build-and-test** — unit tests across 3 platforms + install --dry-run smoke
 3. **e2e-local** — full CLI E2E against built binary
-4. **e2e-plugin** — plugin channel E2E on sg01 (only when `SSH_PRIVATE_KEY` secret is set; skipped for fork PRs)
+4. **e2e-plugin** — plugin channel read-only E2E on sg01 (only when `SSH_PRIVATE_KEY` secret is set; skipped for fork PRs). Full plugin E2E must run only on a non-prod host profile.
 
 Run `scripts/verify-manifests.sh` locally before pushing to catch manifest drift early.
 
@@ -151,6 +151,7 @@ Two launchd jobs keep `~/wiki` in sync with the canonical stores. Source-of-trut
 
 - **sg01 `wiki-snapshot-v3.sh` source-of-truth is now `packages/vault-sync/scripts/wiki-snapshot.sh`** — uses `rclone sync` (destructive). A `--max-delete 10` guard was added 2026-05-23 to abort the cycle before mass deletions. **Do not remove this flag without a deliberate replacement** — without it, any momentary S3 inconsistency mass-deletes files from GitHub (this happened during 2026-05-23 session, see `raw/transcripts/2026-05-23-bug-sg01-snapshot-destructive-rclone-sync.md`). Backup of original: `/root/.hermes/scripts/wiki-snapshot-v3.sh.bak.20260523-180658`.
 - **sg01 is `protected: true` in `fleet.yaml`** — CI cannot run install/uninstall against sg01. Only read-only verify via `workflow_dispatch`. See `projects/llm-wiki/architecture/fleet.yaml`.
+- **Plugin E2E on sg01 is read-only only** — `scripts/e2e-plugin.sh` defaults to `HOST_ENV=scripts/hosts/sg01.env` and must stay in the read-only branch there: no temp vaults, no config writes, no Claude prompt execution, no plugin install/uninstall. Full plugin E2E belongs on an explicitly prepared non-prod host.
 - **Single-writer-git is enforced by `fleet.yaml`**: only sg01 produces "Snapshot $DATE" commits; macOS pushes its own edits. See `queries/multi-writer-git-sync-conflict-prevention.md`.
 - **GitHub is canonical for promoted typed-knowledge**; S3 is canonical for agent-edit transients. See `concepts/vault-write-authority-model.md`.
 
