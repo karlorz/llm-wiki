@@ -132,6 +132,48 @@ body`);
     }
   });
 
+  it("reports identity_conflicts when fetched drift body disagrees with raw filename", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "hermes-llm-wiki-SKILL-v2.1.0.md"), RAW_FM_TEMPLATE(
+      "https://raw.githubusercontent.com/obra/superpowers/main/README.md",
+      STORED_HASH
+    ));
+
+    const r = await runDrift({
+      vault: dir,
+      fetchFn: async () => ok({ body: "# Superpowers\n\nSuperpowers is a complete software development methodology." }),
+    });
+
+    expect(r.exitCode).toBe(32);
+    if (r.result.ok) {
+      expect(r.result.data.identity_conflicts.length).toBe(1);
+      expect(r.result.data.identity_conflicts[0].raw_path).toBe("raw/articles/hermes-llm-wiki-SKILL-v2.1.0.md");
+      expect(r.result.data.drifted.length).toBe(0);
+    }
+  });
+
+  it("--apply does not update sha256 for identity-conflicted sources", async () => {
+    const dir = makeVault();
+    const srcPath = join(dir, "raw", "articles", "hermes-llm-wiki-SKILL-v2.1.0.md");
+    writeFileSync(srcPath, RAW_FM_TEMPLATE(
+      "https://raw.githubusercontent.com/obra/superpowers/main/README.md",
+      STORED_HASH
+    ));
+
+    const r = await runDrift({
+      vault: dir,
+      apply: true,
+      fetchFn: async () => ok({ body: "# Superpowers\n\nSuperpowers is a complete software development methodology." }),
+    });
+
+    expect(r.exitCode).toBe(32);
+    if (r.result.ok) {
+      expect(r.result.data.identity_conflicts.length).toBe(1);
+      expect(r.result.data.updated.length).toBe(0);
+    }
+    expect(readFileSync(srcPath, "utf8")).toContain(`sha256: ${STORED_HASH}`);
+  });
+
   it("--new lists raw files ingested on/after given date", async () => {
     const dir = makeVault();
     mkdirSync(join(dir, "raw", "transcripts"), { recursive: true });

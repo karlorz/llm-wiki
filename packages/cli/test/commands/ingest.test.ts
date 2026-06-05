@@ -121,6 +121,46 @@ describe("ingest", () => {
     }
   });
 
+  it("rejects URL ingest when title slug conflicts with fetched source identity", async () => {
+    globalThis.fetch = vi.fn(async () => new Response(
+      "# Superpowers\n\nSuperpowers is a complete software development methodology.",
+      { status: 200, headers: { "content-type": "text/markdown" } }
+    )) as typeof fetch;
+
+    const v = vault();
+    const r = await runIngest({
+      source: "https://raw.githubusercontent.com/obra/superpowers/main/README.md",
+      vault: v,
+      type: "concept",
+      title: "Hermes LLM Wiki Skill v2.1.0",
+    });
+
+    expect(r.exitCode).toBe(41);
+    if (!r.result.ok) {
+      expect(r.result.error).toBe("INGEST_VALIDATION_FAILED");
+      expect(r.result.detail).toMatchObject({ message: "source identity conflict" });
+    }
+    expect(existsSync(join(v, "raw/articles/hermes-llm-wiki-skill-v2-1-0.md"))).toBe(false);
+  });
+
+  it("allows URL ingest when title and fetched source identity agree", async () => {
+    globalThis.fetch = vi.fn(async () => new Response(
+      "# Superpowers\n\nSuperpowers is a complete software development methodology.",
+      { status: 200, headers: { "content-type": "text/markdown" } }
+    )) as typeof fetch;
+
+    const v = vault();
+    const r = await runIngest({
+      source: "https://raw.githubusercontent.com/obra/superpowers/main/README.md",
+      vault: v,
+      type: "concept",
+      title: "Superpowers",
+    });
+
+    expect(r.exitCode).toBe(0);
+    expect(existsSync(join(v, "raw/articles/superpowers.md"))).toBe(true);
+  });
+
   it("returns error for missing source", async () => {
     const r = await runIngest({
       source: "",
