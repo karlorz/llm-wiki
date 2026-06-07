@@ -440,6 +440,138 @@ function checkSyncLastPush(resolvedPath: string | undefined): CheckResult {
   return check("pass", "sync_last_push", "Vault sync recency", `Last push: ${dateStr} (${daysSince} day(s) ago)`);
 }
 
+function hasOriginMain(resolvedPath: string): boolean {
+  try {
+    execSync("git rev-parse --verify --quiet origin/main", {
+      cwd: resolvedPath,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function checkVaultGitDirty(resolvedPath: string | undefined): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("pass", "vault_git_dirty", "Vault git dirty state", "No vault path — check skipped");
+  }
+  if (!existsSync(join(resolvedPath, ".git"))) {
+    return check("pass", "vault_git_dirty", "Vault git dirty state", "No git repo — check skipped");
+  }
+  try {
+    const lines = execSync("git status --porcelain", {
+      cwd: resolvedPath,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim().split("\n").filter(Boolean);
+    if (lines.length > 0) {
+      return check("warn", "vault_git_dirty", "Vault git dirty state", `${lines.length} dirty file(s) in vault worktree`);
+    }
+    return check("pass", "vault_git_dirty", "Vault git dirty state", "Clean worktree");
+  } catch {
+    return check("warn", "vault_git_dirty", "Vault git dirty state", "Could not read git status");
+  }
+}
+
+function checkVaultGitAhead(resolvedPath: string | undefined): CheckResult {
+  return checkVaultGitComparison(
+    resolvedPath,
+    "vault_git_ahead",
+    "Vault commits ahead",
+    "origin/main..HEAD",
+    "ahead of origin/main",
+    "0 commits ahead of origin/main",
+  );
+}
+
+function checkVaultGitBehind(resolvedPath: string | undefined): CheckResult {
+  return checkVaultGitComparison(
+    resolvedPath,
+    "vault_git_behind",
+    "Vault commits behind",
+    "HEAD..origin/main",
+    "behind origin/main",
+    "0 commits behind origin/main",
+  );
+}
+
+function checkVaultGitComparison(
+  resolvedPath: string | undefined,
+  id: string,
+  label: string,
+  range: string,
+  nonZeroSuffix: string,
+  zeroDetail: string,
+): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("pass", id, label, "No vault path — check skipped");
+  }
+  if (!existsSync(join(resolvedPath, ".git"))) {
+    return check("pass", id, label, "No git repo — check skipped");
+  }
+  if (!hasOriginMain(resolvedPath)) {
+    return check("pass", id, label, "origin/main unavailable — check skipped");
+  }
+  try {
+    const count = parseInt(execSync(`git rev-list --count ${range}`, {
+      cwd: resolvedPath,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim(), 10);
+    if (count > 0) {
+      return check("warn", id, label, `${count} commit(s) ${nonZeroSuffix}`);
+    }
+    return check("pass", id, label, zeroDetail);
+  } catch {
+    return check("warn", id, label, "Could not compare HEAD with origin/main");
+  }
+}
+
+function pullLogPaths(home: string): string[] {
+  const paths = platform() === "darwin"
+    ? [
+      join(home, "Library", "Logs", "wiki-pull.log"),
+      join(home, ".local", "state", "vault-sync", "log", "wiki-pull.log"),
+    ]
+    : [
+      join(home, ".local", "state", "vault-sync", "log", "wiki-pull.log"),
+      join(home, "Library", "Logs", "wiki-pull.log"),
+    ];
+  return [...new Set(paths)];
+}
+
+function isRecentLogLine(line: string, nowMs: number): boolean {
+  const match = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/);
+  if (!match) return true;
+  const ts = Date.parse(match[1]);
+  if (!Number.isFinite(ts)) return true;
+  return nowMs - ts <= 24 * 60 * 60 * 1000;
+}
+
+function checkVaultGitPullFailures(home: string): CheckResult {
+  const path = pullLogPaths(home).find(p => existsSync(p));
+  if (!path) {
+    return check("pass", "vault_git_pull_failures", "Vault pull failures", "No wiki-pull.log found — check skipped");
+  }
+  try {
+    const lines = readFileSync(path, "utf8").split(/\r?\n/).filter(Boolean);
+    const now = Date.now();
+    const failures = lines.filter(line =>
+      isRecentLogLine(line, now) &&
+      /(pre-push pull failed|FAIL .*pull|FAIL .*rebase|cannot pull with rebase|unstaged changes)/i.test(line)
+    );
+    if (failures.length > 0) {
+      const sample = failures.slice(-2).map(line => line.slice(0, 100)).join(" | ");
+      return check("warn", "vault_git_pull_failures", "Vault pull failures", `${failures.length} recent pull failure(s): ${sample}`);
+    }
+    return check("pass", "vault_git_pull_failures", "Vault pull failures", "No recent pull failures logged");
+  } catch {
+    return check("warn", "vault_git_pull_failures", "Vault pull failures", `Could not read ${path}`);
+  }
+}
+
 function checkS3MountPerf(resolvedPath: string | undefined): CheckResult {
   if (resolvedPath === undefined) {
     return check("pass", "s3_mount_perf", "S3 mount performance", "No vault path — check skipped");
@@ -1116,6 +1248,10 @@ export async function runDoctor(
   checks.push(checkObsidianTemplates(resolvedPath));
   checks.push(checkVaultGitRemote(resolvedPath));
   checks.push(checkSyncLastPush(resolvedPath));
+  checks.push(checkVaultGitDirty(resolvedPath));
+  checks.push(checkVaultGitAhead(resolvedPath));
+  checks.push(checkVaultGitBehind(resolvedPath));
+  checks.push(checkVaultGitPullFailures(input.home));
   checks.push(checkDotStoreClean(resolvedPath));
   checks.push(checkS3MountPerf(resolvedPath));
   checks.push(checkS3MountFreshness(resolvedPath));

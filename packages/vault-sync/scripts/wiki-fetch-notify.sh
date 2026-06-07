@@ -18,6 +18,8 @@ WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
 BRANCH="${WIKI_BRANCH:-main}"
 STATE_DIR="$(platform_cache_dir)/wiki-fetch"
 STATE_FILE="$STATE_DIR/last-behind"
+STALE_STATE_FILE="$STATE_DIR/last-stale-notify"
+STALE_NOTIFY_AFTER_SECONDS="${WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS:-1800}"
 LOG_FILE="$(platform_log_dir)/wiki-fetch.log"
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")"
@@ -59,6 +61,19 @@ fi
 printf '%s' "$BEHIND" >"$STATE_FILE"
 
 DELTA=$(( BEHIND - LAST_BEHIND ))
+NOW=$(date +%s)
+
+LAST_STALE_NOTIFY=0
+if [ -f "$STALE_STATE_FILE" ]; then
+  LAST_STALE_NOTIFY=$(cat "$STALE_STATE_FILE" 2>/dev/null || echo 0)
+  case "$LAST_STALE_NOTIFY" in
+    ''|*[!0-9]*) LAST_STALE_NOTIFY=0 ;;
+  esac
+fi
+
+case "$STALE_NOTIFY_AFTER_SECONDS" in
+  ''|*[!0-9]*) STALE_NOTIFY_AFTER_SECONDS=1800 ;;
+esac
 
 if [ "$DELTA" -gt 0 ]; then
   # New commits arrived since last poll. Notify with delta and total.
@@ -69,8 +84,18 @@ if [ "$DELTA" -gt 0 ]; then
     MSG="$DELTA new ($BEHIND total behind) on origin/$BRANCH"
   fi
   platform_notify "$TITLE" "$MSG — run skillwiki sync"
+  printf '%s' "$NOW" >"$STALE_STATE_FILE"
   log "NOTIFY behind=$BEHIND delta=$DELTA"
+elif [ "$BEHIND" -gt 0 ] && [ $(( NOW - LAST_STALE_NOTIFY )) -ge "$STALE_NOTIFY_AFTER_SECONDS" ]; then
+  TITLE="wiki"
+  MSG="still $BEHIND commit(s) behind origin/$BRANCH"
+  platform_notify "$TITLE" "$MSG — sync may be stuck"
+  printf '%s' "$NOW" >"$STALE_STATE_FILE"
+  log "NOTIFY stale behind=$BEHIND delta=$DELTA"
 else
+  if [ "$BEHIND" -eq 0 ]; then
+    rm -f "$STALE_STATE_FILE" 2>/dev/null || true
+  fi
   log "OK behind=$BEHIND delta=$DELTA (no notify)"
 fi
 

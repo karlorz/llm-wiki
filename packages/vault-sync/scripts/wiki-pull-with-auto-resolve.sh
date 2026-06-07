@@ -42,6 +42,18 @@ fi
 
 log "PULL --rebase ($BEHIND commits behind)"
 
+STASHED=false
+if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+    STASH_MSG="wiki-pull auto-stash $(date -u +%Y-%m-%dT%H:%MZ)"
+    if git stash push -m "$STASH_MSG" 2>>"$LOG_FILE" >/dev/null; then
+        STASHED=true
+        log "STASH local tracked edits before rebase"
+    else
+        log "FAIL stash before rebase"
+        exit 1
+    fi
+fi
+
 # Run rebase with auto-resolve for archive conflict storms
 #
 # GIT_SEQUENCE_EDITOR trick: we use a noop editor and let rebase run.
@@ -114,6 +126,15 @@ while [ $REBASE_RC -ne 0 ]; do
         REBASE_RC=0
     fi
 done
+
+if [ "$STASHED" = true ]; then
+    if git stash pop 2>>"$LOG_FILE" >/dev/null; then
+        log "STASH pop ok"
+    else
+        log "FAIL stash pop after rebase"
+        exit 1
+    fi
+fi
 
 log "OK pull completed"
 exit 0

@@ -52,6 +52,47 @@ function fullVault(): string {
   return v;
 }
 
+function gitCommit(cwd: string, message: string): void {
+  execSync("git add -A", { cwd, stdio: "pipe" });
+  execSync(`git -c user.name=test -c user.email=test@test commit -m "${message}"`, { cwd, stdio: "pipe" });
+}
+
+function fullVaultWithOrigin(): { root: string; vault: string; remote: string } {
+  const root = mkdtempSync(join(tmpdir(), "vault-git-"));
+  const remote = join(root, "origin.git");
+  const vault = join(root, "vault");
+
+  execSync(`git init --bare "${remote}"`, { stdio: "pipe" });
+  mkdirSync(vault, { recursive: true });
+  writeFileSync(join(vault, "SCHEMA.md"), SCHEMA);
+  for (const d of ["raw", "entities", "concepts", "meta"]) mkdirSync(join(vault, d), { recursive: true });
+  execSync("git init", { cwd: vault, stdio: "pipe" });
+  execSync("git branch -M main", { cwd: vault, stdio: "pipe" });
+  execSync(`git remote add origin "${remote}"`, { cwd: vault, stdio: "pipe" });
+  gitCommit(vault, "init");
+  execSync("git push -u origin main", { cwd: vault, stdio: "pipe" });
+
+  return { root, vault, remote };
+}
+
+function createRemoteCommit(root: string, remote: string): void {
+  const clone = join(root, "remote-work");
+  execSync(`git clone "${remote}" "${clone}"`, { stdio: "pipe" });
+  writeFileSync(join(clone, "remote.md"), "remote\n");
+  gitCommit(clone, "remote");
+  execSync("git push origin main", { cwd: clone, stdio: "pipe" });
+}
+
+function createPullLog(home: string, lines: string[]): string {
+  const dir = process.platform === "darwin"
+    ? join(home, "Library", "Logs")
+    : join(home, ".local", "state", "vault-sync", "log");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "wiki-pull.log");
+  writeFileSync(path, lines.join("\n") + "\n");
+  return path;
+}
+
 describe("runDoctor", () => {
   it("all-pass returns exit 0 with git vault", async () => {
     const h = home();
@@ -142,12 +183,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 33 checks", async () => {
+  it("always returns exactly 37 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(33);
+      expect(r.result.data.checks).toHaveLength(37);
       const freshness = r.result.data.checks.find(c => c.id === "s3_mount_freshness");
       expect(freshness).toBeDefined();
       expect(freshness?.status).toBe("pass");
@@ -345,6 +386,81 @@ describe("runDoctor", () => {
       expect(sync?.status).toBe("pass");
       expect(sync?.detail).toContain("Last push:");
       expect(sync?.detail).toContain("day(s) ago");
+    }
+  });
+
+  it("vault_git_dirty warns when the git vault has uncommitted changes", async () => {
+    const h = home();
+    const { vault } = fullVaultWithOrigin();
+    writeFileSync(join(vault, "SCHEMA.md"), SCHEMA + "\n# local edit\n");
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${vault}\n`);
+
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const dirty = r.result.data.checks.find(c => c.id === "vault_git_dirty");
+      expect(dirty).toBeDefined();
+      expect(dirty!.status).toBe("warn");
+      expect(dirty!.detail).toContain("dirty");
+    }
+  });
+
+  it("vault_git_ahead warns when local commits have not been pushed", async () => {
+    const h = home();
+    const { vault } = fullVaultWithOrigin();
+    writeFileSync(join(vault, "local.md"), "local\n");
+    gitCommit(vault, "local");
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${vault}\n`);
+
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const ahead = r.result.data.checks.find(c => c.id === "vault_git_ahead");
+      expect(ahead).toBeDefined();
+      expect(ahead!.status).toBe("warn");
+      expect(ahead!.detail).toContain("1 commit");
+    }
+  });
+
+  it("vault_git_behind warns when origin/main has commits not present locally", async () => {
+    const h = home();
+    const { root, vault, remote } = fullVaultWithOrigin();
+    createRemoteCommit(root, remote);
+    execSync("git fetch origin main", { cwd: vault, stdio: "pipe" });
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${vault}\n`);
+
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const behind = r.result.data.checks.find(c => c.id === "vault_git_behind");
+      expect(behind).toBeDefined();
+      expect(behind!.status).toBe("warn");
+      expect(behind!.detail).toContain("1 commit");
+    }
+  });
+
+  it("vault_git_pull_failures warns when recent pull failures are logged", async () => {
+    const h = home();
+    const v = fullVault();
+    const ts = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    createPullLog(h, [
+      `${ts} FETCH origin/main`,
+      `${ts} FAIL pull (not a rebase conflict, rc=128)`,
+      `${ts} GIT pre-push pull failed (non-blocking)`,
+    ]);
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const failures = r.result.data.checks.find(c => c.id === "vault_git_pull_failures");
+      expect(failures).toBeDefined();
+      expect(failures!.status).toBe("warn");
+      expect(failures!.detail).toContain("2 recent");
     }
   });
 

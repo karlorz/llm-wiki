@@ -104,22 +104,8 @@ fi
 if [ "$GIT_OK" = true ] && [ -d "$WIKI_DIR/.git" ]; then
     cd "$WIKI_DIR" || { log "GIT cd failed"; exit 0; }
 
-    # Pre-push pull with auto-resolve for conflict storms
-    # If sg01 pushed snapshot commits since last cycle, this prevents push rejection.
-    git fetch --quiet origin main 2>>"$LOG_FILE"
-    BEHIND=$(git rev-list --count "HEAD..origin/main" 2>/dev/null || echo 0)
-    if [ "$BEHIND" -gt 0 ]; then
-        # Use the auto-resolve helper script
-        AUTO_RESOLVE="$SCRIPT_DIR/wiki-pull-with-auto-resolve.sh"
-        if [ -x "$AUTO_RESOLVE" ]; then
-            "$AUTO_RESOLVE" origin main 2>>"$LOG_FILE" && log "GIT pre-push pull ok" || log "GIT pre-push pull failed (non-blocking)"
-        else
-            # Fallback: plain rebase
-            git pull --rebase origin main 2>>"$LOG_FILE" && log "GIT pre-push pull ok" || log "GIT pre-push pull failed (non-blocking)"
-        fi
-    fi
-
-    # Check for changes before committing
+    # Commit local edits before any rebase. `git pull --rebase` refuses to
+    # start with dirty tracked changes, so pulling first wedges the pipeline.
     if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
         log "GIT no changes to commit"
     else
@@ -127,13 +113,7 @@ if [ "$GIT_OK" = true ] && [ -d "$WIKI_DIR/.git" ]; then
         git commit -m "auto: wiki sync $(date -u +%Y-%m-%dT%H:%MZ)" 2>>"$LOG_FILE"
         GIT_COMMIT_RC=$?
         if [ "$GIT_COMMIT_RC" -eq 0 ]; then
-            git push origin main 2>>"$LOG_FILE"
-            GIT_PUSH_RC=$?
-            if [ "$GIT_PUSH_RC" -eq 0 ]; then
-                log "OK git push succeeded"
-            else
-                log "FAIL git push exit=$GIT_PUSH_RC (non-blocking)"
-            fi
+            log "GIT commit created"
         elif [ "$GIT_COMMIT_RC" -eq 1 ]; then
             # Exit code 1 from git commit means nothing to commit (shouldn't
             # reach here after the porcelain check, but just in case)
@@ -141,6 +121,36 @@ if [ "$GIT_OK" = true ] && [ -d "$WIKI_DIR/.git" ]; then
         else
             log "FAIL git commit exit=$GIT_COMMIT_RC (non-blocking)"
         fi
+    fi
+
+    # Pre-push pull with auto-resolve for conflict storms. If sg01 pushed
+    # snapshot commits since last cycle, rebase committed local work first so
+    # the subsequent push is fast-forwardable.
+    if git fetch --quiet origin main 2>>"$LOG_FILE"; then
+        BEHIND=$(git rev-list --count "HEAD..origin/main" 2>/dev/null || echo 0)
+        if [ "$BEHIND" -gt 0 ]; then
+            AUTO_RESOLVE="$SCRIPT_DIR/wiki-pull-with-auto-resolve.sh"
+            if [ -x "$AUTO_RESOLVE" ]; then
+                "$AUTO_RESOLVE" origin main 2>>"$LOG_FILE" && log "GIT pre-push pull ok" || log "GIT pre-push pull failed (non-blocking)"
+            else
+                git pull --rebase origin main 2>>"$LOG_FILE" && log "GIT pre-push pull ok" || log "GIT pre-push pull failed (non-blocking)"
+            fi
+        fi
+    else
+        log "GIT fetch failed (non-blocking)"
+    fi
+
+    AHEAD=$(git rev-list --count "origin/main..HEAD" 2>/dev/null || echo 0)
+    if [ "$AHEAD" -gt 0 ]; then
+        git push origin main 2>>"$LOG_FILE"
+        GIT_PUSH_RC=$?
+        if [ "$GIT_PUSH_RC" -eq 0 ]; then
+            log "OK git push succeeded"
+        else
+            log "FAIL git push exit=$GIT_PUSH_RC (non-blocking)"
+        fi
+    else
+        log "GIT no commits to push"
     fi
 fi
 
