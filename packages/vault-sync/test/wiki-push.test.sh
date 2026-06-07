@@ -134,8 +134,42 @@ test_clean_ahead_commit_is_pushed() {
   rm -rf "$root"
 }
 
+test_sync_lock_is_not_committed() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone" "$vault/.skillwiki"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  printf 'local\n' > "$vault/local.md"
+  printf 'lock\n' > "$vault/.skillwiki/sync.lock"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_eq "sync lock remains untracked" "$(git -C "$vault" ls-files .skillwiki/sync.lock)" ""
+  assert_eq "real local edit is pushed" "$(git --git-dir="$root/origin.git" show main:local.md 2>/dev/null || true)" "local"
+  if git --git-dir="$root/origin.git" cat-file -e main:.skillwiki/sync.lock 2>/dev/null; then
+    lock_state="present"
+  else
+    lock_state="absent"
+  fi
+  assert_eq "sync lock is absent from remote" "$lock_state" "absent"
+  rm -rf "$root"
+}
+
 test_pull_helper_sees_clean_tree
 test_clean_ahead_commit_is_pushed
+test_sync_lock_is_not_committed
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
