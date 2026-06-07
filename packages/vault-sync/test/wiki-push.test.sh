@@ -46,6 +46,7 @@ make_script_dir() {
   cp "$SCRIPT_UNDER_TEST" "$script_dir/wiki-push.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/platform.sh" "$script_dir/lib/platform.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/lockfile.sh" "$script_dir/lib/lockfile.sh"
+  cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/git-case.sh" "$script_dir/lib/git-case.sh"
   chmod +x "$script_dir/wiki-push.sh"
   printf '%s\n' "$script_dir"
 }
@@ -55,6 +56,9 @@ write_stub_rclone() {
   mkdir -p "$bin_dir"
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
+if [ -n "${RCLONE_CALLED_FILE:-}" ]; then
+  echo called > "$RCLONE_CALLED_FILE"
+fi
 echo "Transferred:   	    1 B / 1 B, 100%, 1 B/s, ETA 0s"
 exit 0
 STUB
@@ -167,9 +171,45 @@ test_sync_lock_is_not_committed() {
   rm -rf "$root"
 }
 
+test_case_only_collision_blocks_publish() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  local empty_blob
+  empty_blob="$(git -C "$vault" hash-object -w --stdin </dev/null)"
+  git -C "$vault" update-index --add --cacheinfo 100644 "$empty_blob" Case.md
+  git -C "$vault" update-index --add --cacheinfo 100644 "$empty_blob" case.md
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_eq "case-only collision blocks rclone publish" "$(test -f "$root/rclone-called" && echo called || echo skipped)" "skipped"
+  if git --git-dir="$root/origin.git" cat-file -e main:Case.md 2>/dev/null || git --git-dir="$root/origin.git" cat-file -e main:case.md 2>/dev/null; then
+    case_remote_state="present"
+  else
+    case_remote_state="absent"
+  fi
+  assert_eq "case-only collision is absent from remote" "$case_remote_state" "absent"
+  rm -rf "$root"
+}
+
 test_pull_helper_sees_clean_tree
 test_clean_ahead_commit_is_pushed
 test_sync_lock_is_not_committed
+test_case_only_collision_blocks_publish
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

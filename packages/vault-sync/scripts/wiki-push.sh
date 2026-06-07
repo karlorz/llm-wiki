@@ -18,6 +18,7 @@ set -u
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/platform.sh"
 . "$SCRIPT_DIR/lib/lockfile.sh"
+. "$SCRIPT_DIR/lib/git-case.sh"
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
@@ -64,6 +65,12 @@ fi
 
 START=$(date +%s)
 
+if ! CASE_CONFLICTS=$(cd "$WIKI_DIR" && git_case_conflicts); then
+    log "ERROR: case-only path collision detected — refusing rclone/git push"
+    printf '%s\n' "$CASE_CONFLICTS" >>"$LOG_FILE"
+    exit 0
+fi
+
 # rclone copy (NOT sync) → never deletes on remote.
 # --update : only newer source files overwrite remote (mod-time + size based)
 # --filter-from : reuse the bisync filter list
@@ -104,6 +111,14 @@ fi
 if [ "$GIT_OK" = true ] && [ -d "$WIKI_DIR/.git" ]; then
     cd "$WIKI_DIR" || { log "GIT cd failed"; exit 0; }
 
+    if ! CASE_CONFLICTS=$(git_case_conflicts); then
+        log "FAIL git case-only path collision detected (non-blocking)"
+        printf '%s\n' "$CASE_CONFLICTS" >>"$LOG_FILE"
+        GIT_OK=false
+    fi
+fi
+
+if [ "$GIT_OK" = true ] && [ -d "$WIKI_DIR/.git" ]; then
     # Commit local edits before any rebase. `git pull --rebase` refuses to
     # start with dirty tracked changes, so pulling first wedges the pipeline.
     if [ -z "$(git status --porcelain -- . ':!.skillwiki/sync.lock' 2>/dev/null)" ]; then

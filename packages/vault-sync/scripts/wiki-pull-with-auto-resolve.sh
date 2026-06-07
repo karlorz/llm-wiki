@@ -16,6 +16,7 @@ set -u
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/platform.sh"
 . "$SCRIPT_DIR/lib/lockfile.sh"
+. "$SCRIPT_DIR/lib/git-case.sh"
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
@@ -28,6 +29,22 @@ mkdir -p "$(dirname "$LOG_FILE")"
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"; }
 
 cd "$WIKI_DIR" || { log "ERROR: cd $WIKI_DIR failed"; exit 1; }
+
+# Clean up leftover rebase state from a previous failed unattended run. An
+# empty/corrupt rebase-merge directory is enough to block the next pull.
+if [ -d "$WIKI_DIR/.git/rebase-merge" ] || [ -d "$WIKI_DIR/.git/rebase-apply" ]; then
+    log "CLEANUP stale rebase state from previous run"
+    git rebase --abort 2>>"$LOG_FILE" || true
+    if ! git rev-parse -q --verify REBASE_HEAD >/dev/null 2>&1; then
+        rm -rf "$WIKI_DIR/.git/rebase-merge" "$WIKI_DIR/.git/rebase-apply"
+    fi
+fi
+
+if ! CASE_CONFLICTS=$(git_case_conflicts); then
+    log "FAIL case-only path collision detected"
+    printf '%s\n' "$CASE_CONFLICTS" >>"$LOG_FILE"
+    exit 1
+fi
 
 # Do a git fetch first to be safe
 git fetch --quiet "$REMOTE" "$BRANCH" 2>>"$LOG_FILE"
@@ -54,30 +71,28 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; th
     fi
 fi
 
-# Run rebase with auto-resolve for archive conflict storms
-#
-# GIT_SEQUENCE_EDITOR trick: we use a noop editor and let rebase run.
-# When conflicts occur, we check if the commit being applied is an
-# archive-only commit and auto-resolve.
-
-# Set up a rebase helper that fires on each conflict
+# Run rebase with auto-resolve for archive conflict storms.
+# --reapply-cherry-picks prevents git from skipping matching patch-ids and
+# dirtying the working tree mid-rebase.
 export GIT_SEQUENCE_EDITOR=:
-
-# Run rebase with an automatic conflict resolver via rebase --resolv
-# Since git doesn't natively support --ours per commit type, we use a
-# custom merge driver approach: set the rebase to stop on conflicts,
-# then detect and auto-resolve archive commits.
-
-# Use GIT_EDITOR trick: git rebase stops on conflict, we detect and resolve
-git pull --rebase "$REMOTE" "$BRANCH" 2>>"$LOG_FILE"
+git -c rebase.reapplyCherryPicks=true pull --rebase "$REMOTE" "$BRANCH" 2>>"$LOG_FILE"
 REBASE_RC=$?
 
 while [ $REBASE_RC -ne 0 ]; do
     # Check if we're in a rebase conflict state
     if [ ! -d "$WIKI_DIR/.git/rebase-merge" ]; then
-        # Not in a rebase — some other error
-        log "FAIL pull (not a rebase conflict, rc=$REBASE_RC)"
-        exit $REBASE_RC
+        # Rebase failed before starting. Fall back to a normal merge so the
+        # unattended push loop does not wedge on recoverable non-rebase errors.
+        log "REBASE failed to start (rc=$REBASE_RC) — falling back to merge"
+        git rebase --abort 2>/dev/null || true
+        if git merge --no-edit "$REMOTE/$BRANCH" 2>>"$LOG_FILE"; then
+            log "OK fallback merge succeeded"
+            REBASE_RC=0
+        else
+            log "FAIL fallback merge also failed"
+            exit 1
+        fi
+        continue
     fi
 
     # Check if there are actual conflicts

@@ -33,6 +33,29 @@ else
   echo "✓ Plugin materialized assets are current"
 fi
 
+# ---- 0b. Case-only path collision guard ----
+
+CASE_RC=0
+CASE_COLLISIONS=$(git -C "$REPO_ROOT" ls-files | awk '
+  {
+    key = tolower($0)
+    if (seen[key] && seen[key] != $0) {
+      print seen[key] " <-> " $0
+      bad = 1
+    } else if (!seen[key]) {
+      seen[key] = $0
+    }
+  }
+  END { exit bad ? 1 : 0 }
+') || CASE_RC=$?
+if [ "$CASE_RC" -ne 0 ]; then
+  echo "✗ Case-only tracked path collision(s) detected:" >&2
+  printf '%s\n' "$CASE_COLLISIONS" >&2
+  ERRORS=$((ERRORS + 1))
+else
+  echo "✓ No case-only tracked path collisions"
+fi
+
 # ---- 1. Version consistency across all 12 manifests ----
 
 CLI_VER=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')

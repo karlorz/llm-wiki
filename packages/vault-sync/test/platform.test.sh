@@ -11,6 +11,7 @@ LIB_DIR="$SCRIPT_DIR/../scripts/lib"
 
 . "$LIB_DIR/platform.sh"
 platform_detect_os
+. "$LIB_DIR/git-case.sh"
 
 PASS=0
 FAIL=0
@@ -137,6 +138,25 @@ if [ "$SYNTAX_FAIL" -eq 0 ]; then
 else
   FAIL=$((FAIL + SYNTAX_FAIL))
 fi
+
+# 11. Case-only tracked path collisions are detected before sync scripts publish them.
+CASE_ROOT=$(mktemp -d)
+CASE_REPO="$CASE_ROOT/repo"
+git -C "$CASE_ROOT" init repo >/dev/null
+git -C "$CASE_REPO" branch -M main
+EMPTY_BLOB=$(git -C "$CASE_REPO" hash-object -w --stdin </dev/null)
+git -C "$CASE_REPO" update-index --add --cacheinfo 100644 "$EMPTY_BLOB" Case.md
+git -C "$CASE_REPO" update-index --add --cacheinfo 100644 "$EMPTY_BLOB" case.md
+CASE_CONFLICTS=$(cd "$CASE_REPO" && git_case_conflicts)
+CASE_RC=$?
+if [ "$CASE_RC" -ne 0 ] && printf '%s\n' "$CASE_CONFLICTS" | grep -q 'Case.md <-> case.md'; then
+  printf "PASS: case-only path collision detected\n"
+  PASS=$((PASS + 1))
+else
+  printf "FAIL: case-only path collision not detected (rc=%s output=%s)\n" "$CASE_RC" "$CASE_CONFLICTS"
+  FAIL=$((FAIL + 1))
+fi
+rm -rf "$CASE_ROOT"
 
 # Clean up lock test files
 rm -rf "${LOCK_TEST}" "${LOCK_TEST}.d" 2>/dev/null

@@ -32,6 +32,14 @@ elif [ -f "$SCRIPT_DIR/../../scripts/lib/platform.sh" ]; then
 fi
 platform_detect_os
 
+if [ -f "$SCRIPT_DIR/lib/git-case.sh" ]; then
+    source "$SCRIPT_DIR/lib/git-case.sh"
+elif [ -f "$SCRIPT_DIR/scripts/lib/git-case.sh" ]; then
+    source "$SCRIPT_DIR/scripts/lib/git-case.sh"
+elif [ -f "$SCRIPT_DIR/../../scripts/lib/git-case.sh" ]; then
+    source "$SCRIPT_DIR/../../scripts/lib/git-case.sh"
+fi
+
 # ── Guard: Linux-only operation ────────────────────────────
 platform_require linux
 
@@ -163,6 +171,17 @@ cd "$GIT_DIR" || { log "ERROR: Failed to cd to $GIT_DIR"; exit 1; }
 git config user.email "cron@hermes.local" 2>/dev/null || true
 git config user.name "Hermes Snapshot" 2>/dev/null || true
 
+if command -v git_case_assert_clean >/dev/null 2>&1; then
+    if ! CASE_CONFLICTS=$(git_case_conflicts); then
+        log "ERROR: Case-only path collision detected; refusing to commit snapshot"
+        printf '%s\n' "$CASE_CONFLICTS" | tee -a "$LOG_FILE"
+        exit 1
+    fi
+else
+    log "ERROR: git-case helper unavailable; refusing to commit snapshot"
+    exit 1
+fi
+
 # Check if git is in broken state (rebase in progress, merge conflicts, diverged)
 needs_repair=false
 
@@ -217,6 +236,16 @@ fi
 if [ -z "$(git status --porcelain)" ]; then
     log "No changes to commit"
     exit 0
+fi
+
+# Re-check immediately before staging because rclone/repair may have changed the
+# tree after the first guard.
+if command -v git_case_assert_clean >/dev/null 2>&1; then
+    if ! CASE_CONFLICTS=$(git_case_conflicts); then
+        log "ERROR: Case-only path collision detected before git add; refusing to commit snapshot"
+        printf '%s\n' "$CASE_CONFLICTS" | tee -a "$LOG_FILE"
+        exit 1
+    fi
 fi
 
 # Commit
