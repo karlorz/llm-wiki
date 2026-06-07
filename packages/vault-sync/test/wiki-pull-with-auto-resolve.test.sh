@@ -39,7 +39,7 @@ git_commit "$vault" init
 git -C "$vault" push -u origin main >/dev/null
 
 remote_work="$root/remote-work"
-git clone "$remote" "$remote_work" >/dev/null
+git clone --branch main "$remote" "$remote_work" >/dev/null
 printf 'remote\n' > "$remote_work/remote.md"
 git_commit "$remote_work" remote
 git -C "$remote_work" push origin main >/dev/null

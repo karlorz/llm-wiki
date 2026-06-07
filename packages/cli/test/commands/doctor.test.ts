@@ -77,7 +77,7 @@ function fullVaultWithOrigin(): { root: string; vault: string; remote: string } 
 
 function createRemoteCommit(root: string, remote: string): void {
   const clone = join(root, "remote-work");
-  execSync(`git clone "${remote}" "${clone}"`, { stdio: "pipe" });
+  execSync(`git clone --branch main "${remote}" "${clone}"`, { stdio: "pipe" });
   writeFileSync(join(clone, "remote.md"), "remote\n");
   gitCommit(clone, "remote");
   execSync("git push origin main", { cwd: clone, stdio: "pipe" });

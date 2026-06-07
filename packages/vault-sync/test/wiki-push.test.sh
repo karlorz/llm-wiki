@@ -73,7 +73,7 @@ test_pull_helper_sees_clean_tree() {
   write_stub_rclone "$bin_dir"
 
   local remote_work="$root/remote-work"
-  git clone "$root/origin.git" "$remote_work" >/dev/null
+  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
   printf 'remote\n' > "$remote_work/remote.md"
   git_commit "$remote_work" remote
   git -C "$remote_work" push origin main >/dev/null
