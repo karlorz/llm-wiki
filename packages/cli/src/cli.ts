@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Command } from "commander";
 import type { Result, ErrResult } from "@skillwiki/shared";
@@ -53,8 +52,9 @@ import { postCommit } from "./utils/auto-commit.js";
 import { triggerAutoUpdate } from "./utils/auto-update.js";
 import { parseDotenvFile } from "./utils/dotenv.js";
 import { configPath } from "./commands/config.js";
+import { readCliPackageJson } from "./utils/package-info.js";
 
-const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const pkg = readCliPackageJson();
 
 const program = new Command();
 program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version(pkg.version);

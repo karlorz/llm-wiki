@@ -1,9 +1,9 @@
 import { execSync } from "node:child_process";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readCache, writeCache, type UpdateCache } from "../utils/auto-update.js";
 import { normalizeDistTag } from "../utils/update-consts.js";
+import { readCliPackageJson } from "../utils/package-info.js";
 import { runInstall } from "./install.js";
 
 export interface UpdateInput {
@@ -54,9 +54,7 @@ async function refreshInstalledSkills(target: string): Promise<{ warnings: strin
 export async function runUpdate(
   input: UpdateInput
 ): Promise<{ exitCode: number; result: Result<UpdateOutput> }> {
-  const pkg = JSON.parse(
-    readFileSync(new URL("../../package.json", import.meta.url), "utf8")
-  );
+  const pkg = readCliPackageJson();
   const currentVersion: string = pkg.version;
   const tag = normalizeDistTag(input.distTag);
   const target = join(input.home, ".claude", "skills");

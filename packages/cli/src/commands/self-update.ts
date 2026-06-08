@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { join } from "node:path";
 import { normalizeDistTag } from "../utils/update-consts.js";
+import { readCliPackageJson } from "../utils/package-info.js";
 
 /** Default path to local source checkout (the llm-wiki repo root). */
 const DEFAULT_SOURCE_ROOT_SUFFIX = "/Desktop/code/llm-wiki";
@@ -28,9 +29,7 @@ export async function runSelfUpdate(
   input: SelfUpdateInput
 ): Promise<{ exitCode: number; result: Result<SelfUpdateOutput> }> {
   // Current running version
-  const currentVersion: string = JSON.parse(
-    readFileSync(new URL("../../package.json", import.meta.url), "utf8")
-  ).version;
+  const currentVersion = readCliPackageJson().version;
 
   // Resolve the local source checkout root
   const sourceRoot = input.sourceRoot ?? `${input.home}${DEFAULT_SOURCE_ROOT_SUFFIX}`;
