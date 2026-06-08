@@ -40,6 +40,34 @@ function homeWithPlugin(version: string): string {
   return h;
 }
 
+function addCodexPlugin(h: string, version: string, sourceType: "local" | "git" = "local"): void {
+  const pluginDir = join(h, ".codex", "plugins", "cache", "llm-wiki", "skillwiki", version);
+  mkdirSync(join(pluginDir, ".codex-plugin"), { recursive: true });
+  mkdirSync(join(pluginDir, "skills", "using-skillwiki"), { recursive: true });
+  writeFileSync(join(pluginDir, ".codex-plugin", "plugin.json"), JSON.stringify({
+    name: "skillwiki",
+    version,
+    skills: "./skills/",
+  }));
+  writeFileSync(join(pluginDir, "skills", "using-skillwiki", "SKILL.md"), "# Using Skillwiki\n");
+
+  mkdirSync(join(h, ".codex"), { recursive: true });
+  writeFileSync(join(h, ".codex", "config.toml"), `
+[plugins."skillwiki@llm-wiki"]
+enabled = true
+
+[marketplaces.llm-wiki]
+source_type = "${sourceType}"
+source = "/tmp/llm-wiki"
+`);
+}
+
+function homeWithCodexPlugin(version: string, sourceType: "local" | "git" = "local"): string {
+  const h = home();
+  addCodexPlugin(h, version, sourceType);
+  return h;
+}
+
 const SCHEMA = `# Vault Schema\n\n## Tag Taxonomy\n\n\`\`\`yaml\ntaxonomy:\n  - model\n\`\`\`\n`;
 
 function fullVault(): string {
@@ -277,8 +305,48 @@ describe("runDoctor", () => {
     if (r.result.ok) {
       const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
       expect(drift?.status).toBe("warn");
-      expect(drift?.detail).toContain("Plugin v0.2.0-beta.99");
+      expect(drift?.detail).toContain("Claude plugin v0.2.0-beta.99");
       expect(drift?.detail).toContain("CLI v0.2.0-beta.15");
+    }
+  });
+
+  it("plugin_version_drift warns with Codex remediation when Codex plugin cache is stale", async () => {
+    const h = homeWithCodexPlugin("0.2.0-beta.14", "local");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
+      expect(drift?.status).toBe("warn");
+      expect(drift?.detail).toContain("Codex plugin v0.2.0-beta.14");
+      expect(drift?.detail).toContain("CLI v0.2.0-beta.15");
+      expect(drift?.detail).toContain("codex plugin remove skillwiki@llm-wiki && codex plugin add skillwiki@llm-wiki");
+      expect(drift?.detail).not.toContain("claude plugin update");
+    }
+  });
+
+  it("plugin_version_drift passes when only Codex plugin version matches", async () => {
+    const h = homeWithCodexPlugin("0.2.0-beta.15", "local");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
+      expect(drift?.status).toBe("pass");
+      expect(drift?.detail).toContain("Codex plugin and CLI both at v0.2.0-beta.15");
+    }
+  });
+
+  it("plugin_version_drift reports Claude and Codex drift together", async () => {
+    const h = homeWithPlugin("0.2.0-beta.14");
+    addCodexPlugin(h, "0.2.0-beta.13", "git");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
+      expect(drift?.status).toBe("warn");
+      expect(drift?.detail).toContain("Claude plugin v0.2.0-beta.14");
+      expect(drift?.detail).toContain("Codex plugin v0.2.0-beta.13");
+      expect(drift?.detail).toContain("claude plugin update skillwiki@llm-wiki");
+      expect(drift?.detail).toContain("codex plugin marketplace upgrade llm-wiki");
     }
   });
 

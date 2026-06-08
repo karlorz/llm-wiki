@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findPlugin } from "../../src/utils/plugin-registry.js";
+import { findPlugin, findPluginInstallations } from "../../src/utils/plugin-registry.js";
 
 function makeHome(registryJson?: string): string {
   const home = mkdtempSync(join(tmpdir(), "plugin-reg-"));
@@ -136,6 +136,71 @@ describe("findPlugin", () => {
     const home = makeHome("42");
     const result = findPlugin(home);
     expect(result).toBeNull();
+    rmSync(home, { recursive: true, force: true });
+  });
+});
+
+describe("findPluginInstallations", () => {
+  it("returns enabled Codex plugin cache installation", () => {
+    const home = makeHome();
+    const cacheDir = join(home, ".codex", "plugins", "cache", "llm-wiki", "skillwiki", "0.8.4");
+    mkdirSync(cacheDir, { recursive: true });
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex", "config.toml"), `
+[plugins."skillwiki@llm-wiki"]
+enabled = true
+
+[marketplaces.llm-wiki]
+source_type = "local"
+source = "/repo/llm-wiki"
+`);
+
+    const result = findPluginInstallations(home);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      channel: "codex",
+      label: "Codex",
+      pluginName: "skillwiki",
+      marketplace: "llm-wiki",
+      version: "0.8.4",
+      installPath: cacheDir,
+      sourceType: "local",
+      source: "/repo/llm-wiki",
+    });
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("ignores Codex plugin cache when plugin is disabled", () => {
+    const home = makeHome();
+    mkdirSync(join(home, ".codex", "plugins", "cache", "llm-wiki", "skillwiki", "0.8.4"), { recursive: true });
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex", "config.toml"), `
+[plugins."skillwiki@llm-wiki"]
+enabled = false
+`);
+
+    expect(findPluginInstallations(home)).toHaveLength(0);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("returns Claude and Codex installations together", () => {
+    const home = makeHome(
+      JSON.stringify({
+        version: 1,
+        plugins: { "skillwiki@llm-wiki": [VALID_ENTRY] },
+      }),
+    );
+    mkdirSync(join(home, ".codex", "plugins", "cache", "llm-wiki", "skillwiki", "0.8.4"), { recursive: true });
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex", "config.toml"), `
+[plugins."skillwiki@llm-wiki"]
+enabled = true
+`);
+
+    const channels = findPluginInstallations(home).map(plugin => plugin.channel);
+
+    expect(channels).toEqual(["claude", "codex"]);
     rmSync(home, { recursive: true, force: true });
   });
 });

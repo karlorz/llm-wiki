@@ -8,7 +8,7 @@ import { parseDotenvFile } from "../utils/dotenv.js";
 import { configPath } from "./config.js";
 import { latestFromCache } from "../utils/auto-update.js";
 import { semverGt } from "../utils/semver.js";
-import { findPlugin } from "../utils/plugin-registry.js";
+import { findPlugin, findPluginInstallations, type PluginChannelInstall } from "../utils/plugin-registry.js";
 import { scanVault } from "../utils/vault.js";
 import { buildWikilinkAdjacency, toUndirectedWeighted, louvain, communityCohesion } from "../utils/community.js";
 import {
@@ -296,24 +296,46 @@ function checkNpmUpdate(home: string, currentVersion: string): CheckResult {
 }
 
 function checkPluginVersionDrift(home: string, currentVersion: string): CheckResult {
-  const plugin = findPlugin(home);
-  if (!plugin) {
+  const plugins = findPluginInstallations(home);
+  if (plugins.length === 0) {
     return check("pass", "plugin_version_drift", "Plugin/CLI version", "Plugin not installed — CLI only");
   }
-  const pluginVersion = plugin.version;
-  if (pluginVersion === currentVersion) {
-    return check("pass", "plugin_version_drift", "Plugin/CLI version", `Both at v${currentVersion}`);
+
+  const drifted = plugins.filter(plugin => plugin.version !== currentVersion);
+  if (drifted.length === 0) {
+    if (plugins.length === 1 && plugins[0].channel === "claude") {
+      return check("pass", "plugin_version_drift", "Plugin/CLI version", `Both at v${currentVersion}`);
+    }
+    if (plugins.length === 1) {
+      return check("pass", "plugin_version_drift", "Plugin/CLI version", `${plugins[0].label} plugin and CLI both at v${currentVersion}`);
+    }
+    const labels = plugins.map(plugin => `${plugin.label} plugin`).join(", ");
+    return check("pass", "plugin_version_drift", "Plugin/CLI version", `${labels}, and CLI all at v${currentVersion}`);
   }
-  // Versions differ — warn
-  const updateCmd = semverGt(pluginVersion, currentVersion)
-    ? "npm install -g skillwiki@latest"
-    : "claude plugin update skillwiki@llm-wiki";
+
+  const details = drifted.map(plugin => {
+    const updateCmd = pluginUpdateCommand(plugin, currentVersion);
+    return `${plugin.label} plugin v${plugin.version} ≠ CLI v${currentVersion} — run \`${updateCmd}\``;
+  });
   return check(
     "warn",
     "plugin_version_drift",
     "Plugin/CLI version",
-    `Plugin v${pluginVersion} ≠ CLI v${currentVersion} — run \`${updateCmd}\``
+    details.join("; ")
   );
+}
+
+function pluginUpdateCommand(plugin: PluginChannelInstall, currentVersion: string): string {
+  if (semverGt(plugin.version, currentVersion)) {
+    return "npm install -g skillwiki@latest";
+  }
+  if (plugin.channel === "claude") {
+    return "claude plugin update skillwiki@llm-wiki";
+  }
+  if (plugin.sourceType === "git") {
+    return "codex plugin marketplace upgrade llm-wiki && codex plugin remove skillwiki@llm-wiki && codex plugin add skillwiki@llm-wiki";
+  }
+  return "codex plugin remove skillwiki@llm-wiki && codex plugin add skillwiki@llm-wiki";
 }
 
 async function checkProfiles(home: string): Promise<CheckResult> {
