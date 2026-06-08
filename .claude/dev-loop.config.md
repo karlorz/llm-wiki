@@ -295,6 +295,7 @@ release_policy:
     - "packages/skills/**"
     - "packages/cli/**"
     - "packages/shared/**"
+    - "packages/vault-sync/**"
     - ".claude-plugin/marketplace.json"
     - "scripts/bump-version.sh"
   # NOTE: scripts/e2e-*.sh is intentionally NOT in trigger_globs.
