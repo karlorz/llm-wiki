@@ -257,16 +257,18 @@ else
   PASS=$((PASS + 1)); printf "  \u2713 remote config list --human is not JSON\n"
 fi
 
-# Cleanup temp home
-ssh "$SSH_HOST" "rm -rf $TEMP_HOME_REMOTE" 2>/dev/null || true
-
 # ---------------------------------------------------------------------------
 # 11. doctor on remote
 # ---------------------------------------------------------------------------
 printf "\n--- Remote doctor ---\n"
 
-# doctor with valid vault — temp vault + temp HOME triggers warn, exit 28 not 0
-run_cli ssh "$SSH_HOST" "NO_UPDATE_NOTIFIER=1 WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI doctor"
+# Keep doctor isolated from the remote user's real skill install state.
+# The stub SKILL.md prevents the host-dependent skills_installed warning while
+# still exercising doctor against the temp vault.
+ssh "$SSH_HOST" "mkdir -p $TEMP_HOME_REMOTE/.claude/skills/e2e-doctor && printf '# E2E Doctor Skill\n' > $TEMP_HOME_REMOTE/.claude/skills/e2e-doctor/SKILL.md" 2>/dev/null
+
+# doctor with valid vault — temp vault is not git-backed, so exit 28 not 0
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME_REMOTE NO_UPDATE_NOTIFIER=1 WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI doctor"
 assert_exit 28 "$RUN_RC" "remote doctor exits 28 (warn from temp vault)"
 assert_json_contains "$RUN_OUTPUT" "ok"                "true" "remote doctor returns ok"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0"   "remote doctor reports 0 errors"
@@ -293,7 +295,7 @@ assert_json_contains "$RUN_OUTPUT" "data.summary.error" "2" "remote doctor repor
 ssh "$SSH_HOST" "rm -rf $ERR_HOME_REMOTE" 2>/dev/null
 
 # doctor --human (N2: exit code unchanged)
-run_cli ssh "$SSH_HOST" "NO_UPDATE_NOTIFIER=1 WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI --human doctor"
+run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME_REMOTE NO_UPDATE_NOTIFIER=1 WIKI_PATH=$VAULT_REMOTE $REMOTE_CLI --human doctor"
 assert_exit 28 "$RUN_RC" "remote doctor --human exit matches JSON exit (N2)"
 if printf '%s' "$RUN_OUTPUT" | grep -q '"ok"'; then
   FAIL=$((FAIL + 1)); printf "  \u2717 remote doctor --human produced JSON\n"

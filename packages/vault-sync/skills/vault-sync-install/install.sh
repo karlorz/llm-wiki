@@ -90,6 +90,7 @@ replace_template() {
     sed \
       -e "s|@SCRIPT_DIR@|$esc_script|g" \
       -e "s|@LOG_DIR@|$esc_log|g" \
+      -e "s|@HOME@|$esc_home|g" \
       -e "s|/Users/karlchow|$esc_home|g" \
       "$src"
   })"
@@ -144,6 +145,10 @@ set_vault_config() {
 }
 
 ROLE="${VS_ROLE:-leaf}"
+MODE="${VS_MODE:-full}"
+SERVICE_SCOPE="${VS_SERVICE_SCOPE:-auto}"
+VAULT_PATH="${VS_VAULT_PATH:-${WIKI_PATH:-$HOME/wiki}}"
+FUSE_MAX_DIR_CACHE="${VS_FUSE_MAX_DIR_CACHE:-15m}"
 DRY_RUN=0
 if is_true "${VS_DRY_RUN:-0}"; then
   DRY_RUN=1
@@ -158,15 +163,29 @@ usage() {
 Usage: bash install.sh [options]
 
 Options:
+  --mode <full|fuse-only>        Install mode (default: full)
+  --mode=<full|fuse-only>        Same as above
   --role <leaf|snapshotter>       Installation role (default: leaf)
   --role=<leaf|snapshotter>       Same as above
+  --service-scope <auto|user|system>
+                                  systemd scope for Linux FUSE-only installs (default: auto)
+  --service-scope=<auto|user|system>
+                                  Same as above
+  --vault-path <path>             Target wiki path for FUSE-only mount guard (default: ~/wiki)
+  --vault-path=<path>             Same as above
+  --max-dir-cache <duration>      FUSE freshness threshold (default: 15m)
+  --max-dir-cache=<duration>      Same as above
   --dry-run                       Print plan and execute nothing
   --execute                       Force execute mode
   --override-snapshotter          Allow replacing existing snapshotter
   --help                          Show this help
 
 Environment overrides:
+  VS_MODE=full|fuse-only
   VS_ROLE=leaf|snapshotter
+  VS_SERVICE_SCOPE=auto|user|system
+  VS_VAULT_PATH=<path>
+  VS_FUSE_MAX_DIR_CACHE=<duration>
   VS_DRY_RUN=1|0
   VS_OVERRIDE_SNAPSHOTTER=1|0
 USAGE
@@ -174,6 +193,15 @@ USAGE
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --mode)
+      [ "$#" -ge 2 ] || fatal "--mode requires a value"
+      MODE="$2"
+      shift 2
+      ;;
+    --mode=*)
+      MODE="${1#*=}"
+      shift
+      ;;
     --role)
       [ "$#" -ge 2 ] || fatal "--role requires a value"
       ROLE="$2"
@@ -181,6 +209,33 @@ while [ "$#" -gt 0 ]; do
       ;;
     --role=*)
       ROLE="${1#*=}"
+      shift
+      ;;
+    --service-scope)
+      [ "$#" -ge 2 ] || fatal "--service-scope requires a value"
+      SERVICE_SCOPE="$2"
+      shift 2
+      ;;
+    --service-scope=*)
+      SERVICE_SCOPE="${1#*=}"
+      shift
+      ;;
+    --vault-path)
+      [ "$#" -ge 2 ] || fatal "--vault-path requires a value"
+      VAULT_PATH="$2"
+      shift 2
+      ;;
+    --vault-path=*)
+      VAULT_PATH="${1#*=}"
+      shift
+      ;;
+    --max-dir-cache)
+      [ "$#" -ge 2 ] || fatal "--max-dir-cache requires a value"
+      FUSE_MAX_DIR_CACHE="$2"
+      shift 2
+      ;;
+    --max-dir-cache=*)
+      FUSE_MAX_DIR_CACHE="${1#*=}"
       shift
       ;;
     --dry-run)
@@ -205,40 +260,81 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+MODE="$(lower "$MODE")"
+SERVICE_SCOPE="$(lower "$SERVICE_SCOPE")"
+ROLE="$(lower "$ROLE")"
+
+case "$MODE" in
+  full|fuse-only) ;;
+  *) fatal "invalid mode '$MODE' (expected full or fuse-only)" ;;
+esac
+
+case "$SERVICE_SCOPE" in
+  auto|user|system) ;;
+  *) fatal "invalid service scope '$SERVICE_SCOPE' (expected auto, user, or system)" ;;
+esac
+
 case "$ROLE" in
   leaf|snapshotter) ;;
   *) fatal "invalid role '$ROLE' (expected leaf or snapshotter)" ;;
 esac
 
+if [ "$MODE" = "fuse-only" ] && [ "$ROLE" = "snapshotter" ]; then
+  fatal "fuse-only mode does not install snapshotter role"
+fi
+
 platform_detect_os
 [ "$VS_OS" != "unsupported" ] || fatal "unsupported OS: $(uname -s)"
 
-SCHEDULER="$(platform_scheduler)"
-case "$VS_OS" in
-  macos)
-    [ "$SCHEDULER" = "launchd" ] || fatal "launchctl is not available"
-    ;;
-  linux)
-    [ "$SCHEDULER" = "systemd" ] || fatal "systemd --user is not available"
-    command -v loginctl >/dev/null 2>&1 || fatal "loginctl is required on Linux installs"
-    ;;
-esac
+if [ "$MODE" = "fuse-only" ]; then
+  [ "$VS_OS" = "linux" ] || fatal "fuse-only mode requires Linux"
+  command -v systemctl >/dev/null 2>&1 || fatal "systemctl is required for Linux FUSE-only installs"
+  SCHEDULER="systemd"
+  if [ "$SERVICE_SCOPE" = "auto" ]; then
+    if [ "$(id -u)" = "0" ]; then
+      SERVICE_SCOPE="system"
+    else
+      SERVICE_SCOPE="user"
+    fi
+  fi
+  if [ "$SERVICE_SCOPE" = "user" ]; then
+    systemctl --user >/dev/null 2>&1 || fatal "systemd --user is not available"
+    command -v loginctl >/dev/null 2>&1 || fatal "loginctl is required for Linux user installs"
+  elif [ "$DRY_RUN" -eq 0 ] && [ "$(id -u)" != "0" ]; then
+    fatal "system service scope requires root"
+  fi
+else
+  SCHEDULER="$(platform_scheduler)"
+  case "$VS_OS" in
+    macos)
+      [ "$SCHEDULER" = "launchd" ] || fatal "launchctl is not available"
+      ;;
+    linux)
+      [ "$SCHEDULER" = "systemd" ] || fatal "systemd --user is not available"
+      command -v loginctl >/dev/null 2>&1 || fatal "loginctl is required on Linux installs"
+      ;;
+  esac
+fi
 
-command -v git >/dev/null 2>&1 || fatal "git not found in PATH"
+if [ "$MODE" = "full" ]; then
+  command -v git >/dev/null 2>&1 || fatal "git not found in PATH"
+fi
 if ! command -v rclone >/dev/null 2>&1; then
   warn "rclone not found in PATH — install proceeds, but sync jobs will fail until rclone is installed"
 fi
 
 CURRENT_HOST="${VS_HOSTNAME:-$(hostname -s 2>/dev/null || hostname)}"
 
-fleet_load || true
-if [ "$ROLE" = "snapshotter" ]; then
-  if ! fleet_validate_install "$CURRENT_HOST" "$ROLE" "$( [ "$OVERRIDE_SNAPSHOTTER" -eq 1 ] && echo true || echo false )"; then
-    fatal "fleet snapshotter validation failed"
+if [ "$MODE" = "full" ]; then
+  fleet_load || true
+  if [ "$ROLE" = "snapshotter" ]; then
+    if ! fleet_validate_install "$CURRENT_HOST" "$ROLE" "$( [ "$OVERRIDE_SNAPSHOTTER" -eq 1 ] && echo true || echo false )"; then
+      fatal "fleet snapshotter validation failed"
+    fi
   fi
-fi
-if fleet_is_protected "$CURRENT_HOST"; then
-  warn "host '$CURRENT_HOST' is marked protected=true in fleet.yaml"
+  if fleet_is_protected "$CURRENT_HOST"; then
+    warn "host '$CURRENT_HOST' is marked protected=true in fleet.yaml"
+  fi
 fi
 
 SHARE_DIR="$(platform_share_dir)"
@@ -248,12 +344,111 @@ RCLONE_DIR="$(platform_rclone_config_dir)"
 FILTER_SRC="$VAULT_SYNC_ROOT/filters/wiki-push-filters.txt"
 FILTER_DST="$RCLONE_DIR/wiki-push-filters.txt"
 
-[ -f "$FILTER_SRC" ] || fatal "missing filter source file: $FILTER_SRC"
-
 LAUNCHD_SRC_DIR="$VAULT_SYNC_ROOT/service-units/launchd"
 SYSTEMD_SRC_DIR="$VAULT_SYNC_ROOT/service-units/systemd"
 
-log "OS=$VS_OS scheduler=$SCHEDULER role=$ROLE dry_run=$DRY_RUN"
+copy_script_lib() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[dry-run] rm -rf $BIN_DIR/lib"
+    log "[dry-run] cp -R $VAULT_SYNC_ROOT/scripts/lib $BIN_DIR/lib"
+  else
+    rm -rf "$BIN_DIR/lib"
+    cp -R "$VAULT_SYNC_ROOT/scripts/lib" "$BIN_DIR/lib"
+  fi
+  run_cmd chmod +x "$BIN_DIR/lib/"*.sh
+}
+
+guard_fuse_only_target() {
+  command -v findmnt >/dev/null 2>&1 || fatal "findmnt is required for FUSE-only mount guard"
+
+  local fs_type
+  fs_type="$(findmnt -T "$VAULT_PATH" -n -o FSTYPE 2>/dev/null | head -n 1 || true)"
+  if [ "$fs_type" != "fuse.rclone" ]; then
+    fatal "target vault $VAULT_PATH fs type '${fs_type:-unknown}' is not fuse.rclone"
+  fi
+}
+
+require_active_rclone_mount() {
+  command -v pgrep >/dev/null 2>&1 || fatal "pgrep is required to validate the active rclone mount"
+  if ! pgrep -f 'rclone.*mount' >/dev/null 2>&1; then
+    fatal "no active rclone mount process found for FUSE-only install"
+  fi
+}
+
+install_fuse_only() {
+  guard_fuse_only_target
+
+  local systemd_dir enable_cmd daemon_cmd
+  if [ "$SERVICE_SCOPE" = "system" ]; then
+    systemd_dir="/etc/systemd/system"
+    daemon_cmd=(systemctl daemon-reload)
+    enable_cmd=(systemctl enable --now wiki-fuse-refresh.timer)
+  else
+    systemd_dir="$HOME/.config/systemd/user"
+    daemon_cmd=(systemctl --user daemon-reload)
+    enable_cmd=(systemctl --user enable --now wiki-fuse-refresh.timer)
+  fi
+
+  log "OS=$VS_OS scheduler=$SCHEDULER mode=fuse-only service_scope=$SERVICE_SCOPE dry_run=$DRY_RUN"
+  log "Target vault=$VAULT_PATH"
+  log "Plan: deploy wiki-fuse-refresh.sh to $BIN_DIR"
+  log "Plan: render systemd $SERVICE_SCOPE units in $systemd_dir"
+  log "Plan: install wiki-fuse-refresh.timer (5min)"
+
+  run_cmd mkdir -p "$BIN_DIR" "$LOG_DIR" "$systemd_dir"
+  run_cmd cp "$VAULT_SYNC_ROOT/scripts/wiki-fuse-refresh.sh" "$BIN_DIR/wiki-fuse-refresh.sh"
+  copy_script_lib
+  run_cmd chmod +x "$BIN_DIR/wiki-fuse-refresh.sh"
+
+  replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.service" "$systemd_dir/wiki-fuse-refresh.service"
+  replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.timer" "$systemd_dir/wiki-fuse-refresh.timer"
+
+  if [ "$SERVICE_SCOPE" = "user" ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "[dry-run] loginctl enable-linger $USER"
+    else
+      loginctl enable-linger "$USER" || fatal "loginctl enable-linger $USER failed"
+    fi
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[dry-run] verify active rclone mount process exists"
+    log "[dry-run] $BIN_DIR/wiki-fuse-refresh.sh --dry-run --max-dir-cache $FUSE_MAX_DIR_CACHE"
+    log "[dry-run] $(print_cmd "${daemon_cmd[@]}")"
+    log "[dry-run] $(print_cmd "${enable_cmd[@]}")"
+  else
+    require_active_rclone_mount
+    if "$BIN_DIR/wiki-fuse-refresh.sh" --dry-run --max-dir-cache "$FUSE_MAX_DIR_CACHE" >/dev/null 2>&1; then
+      log "Validated fuse refresh prerequisites (<=${FUSE_MAX_DIR_CACHE}, rc available)"
+    else
+      fatal "Fuse refresh validation failed. Run: $BIN_DIR/wiki-fuse-refresh.sh --dry-run --max-dir-cache $FUSE_MAX_DIR_CACHE"
+    fi
+    "${daemon_cmd[@]}"
+    "${enable_cmd[@]}"
+  fi
+
+  set_vault_config "vault_sync.scheduler" "$SCHEDULER"
+  set_vault_config "vault_sync.fuse_refresh_enabled" "true"
+  set_vault_config "vault_sync.fuse_refresh_interval" "300s"
+  set_vault_config "vault_sync.fuse_max_dir_cache" "$FUSE_MAX_DIR_CACHE"
+  set_vault_config "vault_sync.fuse_service_scope" "$SERVICE_SCOPE"
+
+  log "FUSE-only install plan complete."
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "Dry-run only: no files or services were modified."
+  else
+    log "vault-sync FUSE refresh installed successfully."
+  fi
+}
+
+if [ "$MODE" = "fuse-only" ]; then
+  install_fuse_only
+  exit 0
+fi
+
+[ -f "$FILTER_SRC" ] || fatal "missing filter source file: $FILTER_SRC"
+
+log "OS=$VS_OS scheduler=$SCHEDULER mode=full role=$ROLE dry_run=$DRY_RUN"
 log "Plan: deploy scripts to $BIN_DIR"
 log "Plan: deploy filter to $FILTER_DST"
 if [ "$VS_OS" = "macos" ]; then
@@ -266,15 +461,8 @@ fi
 
 run_cmd mkdir -p "$BIN_DIR" "$LOG_DIR" "$RCLONE_DIR"
 run_cmd cp "$VAULT_SYNC_ROOT/scripts/"*.sh "$BIN_DIR/"
-if [ "$DRY_RUN" -eq 1 ]; then
-  log "[dry-run] rm -rf $BIN_DIR/lib"
-  log "[dry-run] cp -R $VAULT_SYNC_ROOT/scripts/lib $BIN_DIR/lib"
-else
-  rm -rf "$BIN_DIR/lib"
-  cp -R "$VAULT_SYNC_ROOT/scripts/lib" "$BIN_DIR/lib"
-fi
+copy_script_lib
 run_cmd chmod +x "$BIN_DIR/"*.sh
-run_cmd chmod +x "$BIN_DIR/lib/"*.sh
 run_cmd cp "$FILTER_SRC" "$FILTER_DST"
 
 if [ "$VS_OS" = "macos" ]; then

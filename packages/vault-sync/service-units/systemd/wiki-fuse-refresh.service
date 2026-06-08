@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+Environment=HOME=@HOME@
 ExecStart=@SCRIPT_DIR@/wiki-fuse-refresh.sh
 RuntimeMaxSec=120
 Nice=10
