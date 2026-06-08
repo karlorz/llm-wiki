@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readCache, writeCache, needsCheck, latestFromCache, cachePath, triggerAutoUpdate } from "../../src/utils/auto-update.js";
+import { readCache, writeCache, needsCheck, latestFromCache, cachePath, distTagFromCache, triggerAutoUpdate } from "../../src/utils/auto-update.js";
 
 function home(): string {
   const h = mkdtempSync(join(tmpdir(), "autoupdate-home-"));
@@ -21,7 +21,7 @@ describe("auto-update utilities", () => {
 
   it("writeCache + readCache round-trips correctly", () => {
     const h = home();
-    const cache = { lastCheck: 1234567890, latestVersion: "0.2.0-beta.16", currentVersion: "0.2.0-beta.15" };
+    const cache = { lastCheck: 1234567890, latestVersion: "0.2.0-beta.16", currentVersion: "0.2.0-beta.15", distTag: "beta" };
     writeCache(h, cache);
     const result = readCache(h);
     expect(result.cache).toEqual(cache);
@@ -48,7 +48,7 @@ describe("auto-update utilities", () => {
 
   it("latestFromCache returns hasUpdate=false when no cache", () => {
     const h = home();
-    expect(latestFromCache(h, "0.2.0-beta.15")).toEqual({ hasUpdate: false, latest: null });
+    expect(latestFromCache(h, "0.2.0-beta.15")).toEqual({ hasUpdate: false, latest: null, distTag: "latest" });
   });
 
   it("latestFromCache returns hasUpdate=true when newer version cached", () => {
@@ -57,17 +57,32 @@ describe("auto-update utilities", () => {
     const result = latestFromCache(h, "0.2.0-beta.15");
     expect(result.hasUpdate).toBe(true);
     expect(result.latest).toBe("0.2.0-beta.16");
+    expect(result.distTag).toBe("latest");
   });
 
   it("latestFromCache returns hasUpdate=false when on same version", () => {
     const h = home();
-    writeCache(h, { lastCheck: Date.now(), latestVersion: "0.2.0-beta.15", currentVersion: "0.2.0-beta.15" });
+    writeCache(h, { lastCheck: Date.now(), latestVersion: "0.2.0-beta.15", currentVersion: "0.2.0-beta.15", distTag: "beta" });
     const result = latestFromCache(h, "0.2.0-beta.15");
     expect(result.hasUpdate).toBe(false);
+    expect(result.distTag).toBe("beta");
   });
 
   it("cachePath resolves to ~/.skillwiki/.update-cache.json", () => {
     expect(cachePath("/home/user")).toBe(join("/home/user", ".skillwiki", ".update-cache.json"));
+  });
+
+  it("distTagFromCache returns cached background auto-update channel", () => {
+    const h = home();
+    writeCache(h, { lastCheck: Date.now() - 25 * 60 * 60 * 1000, latestVersion: "0.2.0-beta.16", currentVersion: "0.2.0-beta.15", distTag: "beta" });
+    expect(distTagFromCache(h)).toBe("beta");
+  });
+
+  it("distTagFromCache defaults unsafe or missing cache channel to latest", () => {
+    const h = home();
+    expect(distTagFromCache(h)).toBe("latest");
+    writeCache(h, { lastCheck: Date.now(), latestVersion: "0.2.0-beta.16", currentVersion: "0.2.0-beta.15", distTag: "beta && npm publish" });
+    expect(distTagFromCache(h)).toBe("latest");
   });
 
   it("triggerAutoUpdate respects NO_UPDATE_NOTIFIER env var", () => {

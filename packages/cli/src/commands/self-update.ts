@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { join } from "node:path";
+import { normalizeDistTag } from "../utils/update-consts.js";
 
 /** Default path to local source checkout (the llm-wiki repo root). */
 const DEFAULT_SOURCE_ROOT_SUFFIX = "/Desktop/code/llm-wiki";
@@ -9,6 +10,7 @@ const DEFAULT_SOURCE_ROOT_SUFFIX = "/Desktop/code/llm-wiki";
 export interface SelfUpdateInput {
   home: string;
   check: boolean;
+  distTag?: string;
   /** Override the local source checkout root (for testing). */
   sourceRoot?: string;
 }
@@ -32,6 +34,7 @@ export async function runSelfUpdate(
 
   // Resolve the local source checkout root
   const sourceRoot = input.sourceRoot ?? `${input.home}${DEFAULT_SOURCE_ROOT_SUFFIX}`;
+  const distTag = normalizeDistTag(input.distTag);
   const localPkgPath = join(sourceRoot, "packages", "cli", "package.json");
   const hasLocalSource = existsSync(localPkgPath);
 
@@ -50,7 +53,7 @@ export async function runSelfUpdate(
     } else {
       source = "npm";
       try {
-        availableVersion = execSync("npm view skillwiki@latest version", {
+        availableVersion = execSync(`npm view skillwiki@${distTag} version`, {
           encoding: "utf8",
           timeout: 15_000,
         }).trim();
@@ -131,10 +134,10 @@ export async function runSelfUpdate(
     };
   }
 
-  // No local source — install from npm (latest channel)
+  // No local source — install from npm dist-tag
   let latestVersion: string;
   try {
-    latestVersion = execSync("npm view skillwiki@latest version", {
+    latestVersion = execSync(`npm view skillwiki@${distTag} version`, {
       encoding: "utf8",
       timeout: 15_000,
     }).trim();
@@ -153,13 +156,13 @@ export async function runSelfUpdate(
         currentVersion,
         availableVersion: latestVersion,
         updateAvailable: false,
-        humanHint: `Already on latest: v${currentVersion}`,
+        humanHint: `Already on ${distTag}: v${currentVersion}`,
       }),
     };
   }
 
   try {
-    execSync("npm install -g skillwiki@latest", {
+    execSync(`npm install -g skillwiki@${distTag}`, {
       stdio: "pipe",
       timeout: 60_000,
     });
@@ -178,7 +181,7 @@ export async function runSelfUpdate(
       availableVersion: latestVersion,
       updateAvailable: true,
       newVersion: latestVersion,
-      humanHint: `Updated skillwiki ${currentVersion} → ${latestVersion} via npm@latest`,
+      humanHint: `Updated skillwiki ${currentVersion} → ${latestVersion} via npm@${distTag}`,
     }),
   };
 }

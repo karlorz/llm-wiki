@@ -11,3 +11,8 @@ export const BG_SCRIPT_TIMEOUT_MS = 30_000;
 // Disable flags
 export const ENV_DISABLE_KEY = "NO_UPDATE_NOTIFIER";
 export const CLI_DISABLE_FLAG = "--no-update-notifier";
+
+export function normalizeDistTag(tag: string | undefined | null): string {
+  const value = (tag ?? DIST_TAG).trim();
+  return /^[A-Za-z0-9._-]+$/.test(value) ? value : DIST_TAG;
+}

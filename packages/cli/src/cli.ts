@@ -481,7 +481,7 @@ program
 // update
 program
   .command("update")
-  .description("update skillwiki CLI to the latest version")
+  .description("update skillwiki CLI from npm dist-tag")
   .option("--tag <tag>", "npm dist-tag", "latest")
   .action(async (opts) => emit(await runUpdate({
     home: process.env.HOME ?? "",
@@ -491,11 +491,13 @@ program
 // self-update
 program
   .command("self-update")
-  .description("update skillwiki CLI from local source or npm@latest")
+  .description("update skillwiki CLI from local source or npm dist-tag")
   .option("--check", "check for updates without installing", false)
+  .option("--tag <tag>", "npm dist-tag", "latest")
   .action(async (opts) => emit(await runSelfUpdate({
     home: process.env.HOME ?? "",
     check: !!opts.check,
+    distTag: opts.tag,
   })));
 
 // transcripts

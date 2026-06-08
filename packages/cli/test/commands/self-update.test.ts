@@ -233,18 +233,18 @@ describe("runSelfUpdate", () => {
       }
     });
 
-    it("uses skillwiki@latest in npm view and install commands", async () => {
+    it("uses requested npm dist-tag in view and install commands", async () => {
       const h = home();
       mockExec.mockReturnValueOnce("0.2.0-beta.99\n");
       mockExec.mockReturnValueOnce(undefined);
 
-      await runSelfUpdate({ home: h, check: false, sourceRoot: "/nonexistent" });
+      await runSelfUpdate({ home: h, check: false, sourceRoot: "/nonexistent", distTag: "beta" });
       expect(mockExec).toHaveBeenCalledWith(
-        "npm view skillwiki@latest version",
+        "npm view skillwiki@beta version",
         expect.any(Object),
       );
       expect(mockExec).toHaveBeenCalledWith(
-        "npm install -g skillwiki@latest",
+        "npm install -g skillwiki@beta",
         expect.any(Object),
       );
     });

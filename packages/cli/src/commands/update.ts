@@ -3,6 +3,7 @@ import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readCache, writeCache, type UpdateCache } from "../utils/auto-update.js";
+import { normalizeDistTag } from "../utils/update-consts.js";
 import { runInstall } from "./install.js";
 
 export interface UpdateInput {
@@ -57,7 +58,7 @@ export async function runUpdate(
     readFileSync(new URL("../../package.json", import.meta.url), "utf8")
   );
   const currentVersion: string = pkg.version;
-  const tag = input.distTag ?? "latest";
+  const tag = normalizeDistTag(input.distTag);
   const target = join(input.home, ".claude", "skills");
 
   let latest: string;
@@ -78,6 +79,7 @@ export async function runUpdate(
     lastCheck: Date.now(),
     latestVersion: latest,
     currentVersion,
+    distTag: tag,
   };
 
   if (latest === currentVersion) {
@@ -90,7 +92,7 @@ export async function runUpdate(
         wasAlreadyLatest: true,
         version_warnings: [],
         skills_refreshed: false,
-        humanHint: `Already on latest ${tag}: v${currentVersion}`,
+        humanHint: `Already on npm@${tag}: v${currentVersion}`,
       }),
     };
   }
@@ -116,7 +118,7 @@ export async function runUpdate(
   const skills_refreshed = installResult.refreshed;
 
   const hintLines = [
-    `Updated skillwiki ${currentVersion} → ${latest}`,
+    `Updated skillwiki ${currentVersion} → ${latest} via npm@${tag}`,
     `skills refreshed: ${skills_refreshed}`,
   ];
   if (version_warnings.length > 0) {

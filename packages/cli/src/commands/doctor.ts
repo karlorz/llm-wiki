@@ -285,14 +285,14 @@ function checkDuplicateSkills(home: string): CheckResult {
 }
 
 function checkNpmUpdate(home: string, currentVersion: string): CheckResult {
-  const { hasUpdate, latest } = latestFromCache(home, currentVersion);
+  const { hasUpdate, latest, distTag } = latestFromCache(home, currentVersion);
   if (!latest) {
-    return check("pass", "npm_update", "npm CLI version", `v${currentVersion} (no cache yet)`);
+    return check("pass", "npm_update", "npm CLI version", `v${currentVersion} (${distTag}: no cache yet)`);
   }
   if (hasUpdate) {
-    return check("warn", "npm_update", "npm CLI version", `v${currentVersion} — update available: v${latest}. Run \`skillwiki update\`.`);
+    return check("warn", "npm_update", "npm CLI version", `v${currentVersion} — ${distTag} update available: v${latest}. Run \`skillwiki update --tag ${distTag}\`.`);
   }
-  return check("pass", "npm_update", "npm CLI version", `v${currentVersion} (latest: v${latest})`);
+  return check("pass", "npm_update", "npm CLI version", `v${currentVersion} (${distTag}: v${latest})`);
 }
 
 function checkPluginVersionDrift(home: string, currentVersion: string): CheckResult {

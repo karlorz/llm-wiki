@@ -276,6 +276,22 @@ describe("runDoctor", () => {
     }
   });
 
+  it("npm_update check reports cached beta update channel", async () => {
+    const h = home();
+    writeFileSync(
+      join(h, ".skillwiki", ".update-cache.json"),
+      JSON.stringify({ lastCheck: Date.now(), latestVersion: "0.2.0-beta.99", currentVersion: "0.2.0-beta.15", distTag: "beta" })
+    );
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const npmUpdate = r.result.data.checks.find(c => c.id === "npm_update");
+      expect(npmUpdate?.status).toBe("warn");
+      expect(npmUpdate?.detail).toContain("beta update available");
+      expect(npmUpdate?.detail).toContain("skillwiki update --tag beta");
+    }
+  });
+
   it("plugin_version_drift check passes when no plugin installed", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });

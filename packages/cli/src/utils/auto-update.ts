@@ -5,14 +5,17 @@ import { semverGt } from "./semver.js";
 import {
   CACHE_FILENAME,
   CHECK_INTERVAL_MS,
+  DIST_TAG,
   ENV_DISABLE_KEY,
   CLI_DISABLE_FLAG,
+  normalizeDistTag,
 } from "./update-consts.js";
 
 export interface UpdateCache {
   lastCheck: number;
   latestVersion: string;
   currentVersion: string;
+  distTag?: string;
   updateAppliedAt?: number;
 }
 
@@ -57,13 +60,19 @@ export function needsCheck(home: string): boolean {
  * Check if cached latest version is newer than current.
  * Uses semantic comparison, not lexical.
  */
-export function latestFromCache(home: string, currentVersion: string): { hasUpdate: boolean; latest: string | null } {
+export function latestFromCache(home: string, currentVersion: string): { hasUpdate: boolean; latest: string | null; distTag: string } {
   const { cache } = readCache(home);
-  if (!cache || !cache.latestVersion) return { hasUpdate: false, latest: null };
+  if (!cache || !cache.latestVersion) return { hasUpdate: false, latest: null, distTag: DIST_TAG };
+  const distTag = normalizeDistTag(cache.distTag);
   return {
     hasUpdate: semverGt(cache.latestVersion, currentVersion),
     latest: cache.latestVersion,
+    distTag,
   };
+}
+
+export function distTagFromCache(home: string): string {
+  return normalizeDistTag(readCacheRaw(home)?.distTag);
 }
 
 function isDisabled(): boolean {
@@ -76,7 +85,7 @@ function isDisabled(): boolean {
 
 /**
  * Trigger a background auto-update check. Spawns a detached child process
- * that queries npm for the latest skillwiki@latest version and installs it
+ * that queries npm for the configured skillwiki dist-tag version and installs it
  * if newer than currentVersion. The current process is NOT blocked.
  *
  * Why 24h: balances freshness with avoiding npm registry load and user annoyance.
@@ -89,11 +98,12 @@ export function triggerAutoUpdate(home: string, currentVersion: string): void {
 
   const { isStale } = readCache(home);
   if (!isStale) return;
+  const distTag = distTagFromCache(home);
 
   const bgScript = new URL("../auto-update-bg.js", import.meta.url).pathname;
   if (!existsSync(bgScript)) return;
 
-  const child = spawn(process.execPath, [bgScript, home, currentVersion], {
+  const child = spawn(process.execPath, [bgScript, home, currentVersion, distTag], {
     detached: true,
     stdio: "ignore",
   });

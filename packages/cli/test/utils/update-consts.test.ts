@@ -9,6 +9,7 @@ import {
   BG_SCRIPT_TIMEOUT_MS,
   ENV_DISABLE_KEY,
   CLI_DISABLE_FLAG,
+  normalizeDistTag,
 } from "../../src/utils/update-consts.js";
 
 describe("update-consts", () => {
@@ -37,5 +38,14 @@ describe("update-consts", () => {
   it("exports disable flags", () => {
     expect(ENV_DISABLE_KEY).toBe("NO_UPDATE_NOTIFIER");
     expect(CLI_DISABLE_FLAG).toBe("--no-update-notifier");
+  });
+
+  it("normalizes unsafe or empty dist-tags to latest", () => {
+    expect(normalizeDistTag("beta")).toBe("beta");
+    expect(normalizeDistTag("next-2026.06")).toBe("next-2026.06");
+    expect(normalizeDistTag(" beta ")).toBe("beta");
+    expect(normalizeDistTag("beta && echo hacked")).toBe("latest");
+    expect(normalizeDistTag("")).toBe("latest");
+    expect(normalizeDistTag(undefined)).toBe("latest");
   });
 });

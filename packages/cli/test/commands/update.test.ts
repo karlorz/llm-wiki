@@ -125,24 +125,29 @@ describe("runUpdate", () => {
     await runUpdate({ home: h, distTag: "latest" });
     const cache = JSON.parse(readFileSync(cachePath(h), "utf8"));
     expect(cache.latestVersion).toBe("0.2.0-beta.16");
+    expect(cache.distTag).toBe("latest");
     expect(cache.updateAppliedAt).toBeDefined();
   });
 
-  it("uses custom distTag in npm commands", async () => {
+  it("uses and persists custom distTag in npm commands", async () => {
     const h = home();
-    // Return a newer version for "latest" tag
-    mockExec.mockReturnValueOnce("0.3.0\n"); // npm view skillwiki@latest version
-    mockExec.mockReturnValueOnce(undefined); // npm install -g skillwiki@latest
+    mockExec.mockReturnValueOnce("0.2.0-beta.16\n"); // npm view skillwiki@beta version
+    mockExec.mockReturnValueOnce(undefined); // npm install -g skillwiki@beta
     mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n"); // npm root -g
     mockInstallSuccess();
 
-    const r = await runUpdate({ home: h, distTag: "latest" });
+    const r = await runUpdate({ home: h, distTag: "beta" });
     expect(r.exitCode).toBe(0);
-    // Verify the custom tag was forwarded to both npm commands
     expect(mockExec).toHaveBeenCalledWith(
-      expect.stringContaining("skillwiki@latest"),
+      "npm view skillwiki@beta version",
       expect.any(Object),
     );
+    expect(mockExec).toHaveBeenCalledWith(
+      "npm install -g skillwiki@beta",
+      expect.any(Object),
+    );
+    const cache = JSON.parse(readFileSync(cachePath(h), "utf8"));
+    expect(cache.distTag).toBe("beta");
   });
 
   it("sets previousVersion to current version in both code paths", async () => {
