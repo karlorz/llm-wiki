@@ -68,7 +68,7 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 | `wiki-init` | Bootstrap a new vault — SCHEMA.md, index.md, log.md, ~/.skillwiki/.env |
 | `wiki-ingest` | Convert URLs, files, or pasted text into typed-knowledge pages |
 | `wiki-query` | Search the vault and synthesize an answer with ranked results |
-| `wiki-lint` | Vault health check (stale pages, oversized pages, log rotation) |
+| `wiki-lint` | Vault health and lint checks; use `health` for whole-system reports and `lint --summary` for bounded lint buckets |
 | `wiki-crystallize` | Distill the current working session into a typed-knowledge page |
 | `wiki-audit` | Verify raw provenance references and source frontmatter integrity |
 | `wiki-archive` | Archive a typed-knowledge page — move to `_archive/`, remove from index |
@@ -106,9 +106,9 @@ Use `prd_layer` + `prd_pipeline` from `.claude/dev-loop.config.md` as source of 
 - `manual` / `none`: no forced PRD skills; preserve skillwiki logging and provenance discipline.
 
 ## CLI Backbone
-All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, and linting. Skills invoke it via Bash for the mechanical parts and use Claude for the creative parts.
-Key CLI subcommands: `init`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `graph build`, `archive`, `drift`, `compound`, `tag-sync`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
-Run `skillwiki doctor` to diagnose setup issues. Run `skillwiki config list` to see current configuration.
+All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, health reporting, and linting. Skills invoke it via Bash for the mechanical parts and use Claude for the creative parts.
+Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `graph build`, `archive`, `drift`, `compound`, `tag-sync`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
+Run `skillwiki health <vault> --out /tmp/skillwiki-health.json --no-fail` for a bounded whole-system report that includes doctor, lint, vault-sync, query-readiness, source-freshness, risk flags, and self-check coverage. Run `skillwiki lint <vault> --summary` for lint-only bucket counts with capped examples and details commands. Run `skillwiki doctor` to diagnose setup/runtime issues only. Run `skillwiki config list` to see current configuration.
 
 ## Typical Workflow
 1. **Init** (`wiki-init`) — create vault, set domain and taxonomy

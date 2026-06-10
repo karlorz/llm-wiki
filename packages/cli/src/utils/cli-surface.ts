@@ -43,8 +43,9 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("pagesize").option("--lines <n>").option("--wiki <name>");
   program.command("log-rotate").option("--threshold <n>").option("--apply").option("--wiki <name>");
   program.command("log-append").requiredOption("--content <text>").option("--wiki <name>");
-  program.command("lint").option("--days <n>").option("--lines <n>").option("--log-threshold <n>").option("--fix").option("--only <bucket>").option("--wiki <name>");
+  program.command("lint").option("--days <n>").option("--lines <n>").option("--log-threshold <n>").option("--fix").option("--only <bucket>").option("--summary").option("--examples <n>").option("--wiki <name>");
   program.command("config"); // has subcommands
+  program.command("health").option("--wiki <name>").option("--sync <mode>").option("--no-fail").option("--out <path>").option("--examples <n>");
   program.command("doctor");
   program.command("status").option("--wiki <name>");
   program.command("archive").option("--wiki <name>").option("--cascade").option("--apply");
