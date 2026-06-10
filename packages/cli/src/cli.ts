@@ -24,6 +24,7 @@ import { runPagesize } from "./commands/pagesize.js";
 import { runLogRotate } from "./commands/log-rotate.js";
 import { runLogAppend } from "./commands/log-append.js";
 import { runLint } from "./commands/lint.js";
+import { runHealth, type SyncMode } from "./commands/health.js";
 import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "./commands/config.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runArchive } from "./commands/archive.js";
@@ -60,9 +61,9 @@ const program = new Command();
 program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version(pkg.version);
 program.option("--human", "render terminal-readable output instead of JSON");
 
-async function emit<T>(r: { exitCode: number; result: Result<T> }, vault?: string): Promise<never> {
+async function emit<T>(r: { exitCode: number; result: Result<T> }, vault?: string, opts?: { postCommit?: boolean }): Promise<never> {
   if (program.opts().human) printHuman(r.result); else printJson(r.result);
-  if (vault) await postCommit(vault, r.exitCode);
+  if (vault && opts?.postCommit !== false) await postCommit(vault, r.exitCode);
   process.exit(r.exitCode);
 }
 
@@ -350,10 +351,23 @@ program
   .option("--log-threshold <n>", "log rotation threshold", (s) => parseInt(s, 10), 500)
   .option("--fix", "auto-fix supported lint violations")
   .option("--only <bucket>", "run only the specified lint bucket")
+  .option("--summary", "emit bounded bucket counts instead of full item arrays", false)
+  .option("--examples <n>", "example count per bucket in summary mode", (s) => parseInt(s, 10), 3)
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (opts.summary) emit(await runLint({
+      vault: v.vault,
+      source: vault ? "flag" : undefined,
+      days: opts.days,
+      lines: opts.lines,
+      logThreshold: opts.logThreshold,
+      fix: opts.fix ?? false,
+      only: opts.only,
+      summary: true,
+      examplesLimit: opts.examples,
+    }), v.vault);
     else emit(await runLint({
       vault: v.vault,
       source: vault ? "flag" : undefined,
@@ -361,8 +375,38 @@ program
       lines: opts.lines,
       logThreshold: opts.logThreshold,
       fix: opts.fix ?? false,
-      only: opts.only
+      only: opts.only,
     }), v.vault);
+  });
+
+program
+  .command("health [vault]")
+  .description("bounded whole-system wiki health report")
+  .option("--wiki <name>", "wiki profile name")
+  .option("--sync <mode>", "vault-sync policy: optional|required|off", "optional")
+  .option("--no-fail", "always exit 0 while reporting status in JSON")
+  .option("--out <path>", "write JSON result envelope to this path")
+  .option("--examples <n>", "example count per lint bucket", (s) => parseInt(s, 10), 3)
+  .action(async (vault, opts) => {
+    const sync = String(opts.sync ?? "optional") as SyncMode;
+    if (!["optional", "required", "off"].includes(sync)) {
+      emit({ exitCode: ExitCode.USAGE, result: { ok: false, error: "USAGE", detail: "--sync must be optional, required, or off" } });
+    }
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runHealth({
+      vault: v.vault,
+      vaultSource: vault ? "flag" : "resolved",
+      home: process.env.HOME ?? "",
+      envValue: process.env.WIKI_PATH,
+      argv: process.argv,
+      currentVersion: pkg.version,
+      cwd: process.cwd(),
+      sync,
+      noFail: opts.fail === false,
+      out: opts.out,
+      examplesLimit: opts.examples,
+    }), undefined, { postCommit: false });
   });
 
 // config — grouped under a parent command

@@ -37,6 +37,35 @@ function vault(): string {
 }
 
 describe("runLint", () => {
+  it("summary mode returns bounded bucket counts without item arrays", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "concepts", "bad-tag.md"), FM(["rogue"]) + "## Overview\n\nBad tag page [[bad-tag]].\n\n## Related\n\n- [[bad-tag]]\n");
+    writeFileSync(join(v, "concepts", "bad-source.md"), FM(["model"]).replace("sources: []", "sources: [raw/articles/missing.md]") + "## Overview\n\nBad source page [[bad-source]].\n\n## Related\n\n- [[bad-source]]\n");
+    writeFileSync(join(v, "concepts", "no-overview.md"), FM(["model"]) + "Body without overview [[no-overview]].\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[bad-tag]]\n- [[bad-source]]\n- [[no-overview]]\n");
+
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, summary: true });
+
+    expect(r.exitCode).toBe(23);
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.details_included).toBe(false);
+      expect(r.result.data.truncated).toBe(false);
+      const errorKinds = r.result.data.buckets.filter(b => b.severity === "error").map(b => b.kind);
+      expect(errorKinds).toContain("tag_not_in_taxonomy");
+      expect(errorKinds).toContain("broken_sources");
+      expect(r.result.data.buckets.every(b => !("items" in b))).toBe(true);
+      const errorTotal = r.result.data.buckets
+        .filter(b => b.severity === "error")
+        .reduce((n, b) => n + b.count, 0);
+      expect(errorTotal).toBe(r.result.data.summary.errors);
+      const tagBucket = r.result.data.buckets.find(b => b.kind === "tag_not_in_taxonomy");
+      expect(tagBucket?.examples.length).toBeGreaterThan(0);
+      expect(tagBucket?.details_command).toContain("--only tag_not_in_taxonomy");
+    }
+  });
+
   it("clean fixture exits 0", async () => {
     const v = vault();
     writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "> **TL;DR:** Summary about alpha.\n\n## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");

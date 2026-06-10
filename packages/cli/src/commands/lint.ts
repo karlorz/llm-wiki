@@ -45,7 +45,7 @@ function hasDuplicateFrontmatter(body: string): boolean {
   return false;
 }
 
-export interface LintInput {
+interface LintBaseInput {
   vault: string;
   source?: string;
   days: number;
@@ -53,6 +53,15 @@ export interface LintInput {
   logThreshold: number;
   fix?: boolean;
   only?: string;
+}
+
+export interface LintInput extends LintBaseInput {
+  summary?: false;
+}
+
+export interface LintSummaryInput extends LintBaseInput {
+  summary: true;
+  examplesLimit?: number;
 }
 
 /** Extract source entry strings from frontmatter, handling both inline and multi-line YAML formats. */
@@ -76,11 +85,35 @@ function extractSourceEntries(rawFm: string): string[] {
   return entries;
 }
 
-interface Bucket { kind: string; items: unknown[] }
+export type LintSeverity = "error" | "warning" | "info";
+
+export interface Bucket { kind: string; items: unknown[] }
+
+export interface LintBucketSummary {
+  kind: string;
+  severity: LintSeverity;
+  count: number;
+  examples: string[];
+  examples_limit: number;
+  sample_truncated: boolean;
+  details_command: string;
+}
+
 export interface LintOutput {
   vault: { path: string; source: string };
   summary: { errors: number; warnings: number; info: number };
   by_severity: { error: Bucket[]; warning: Bucket[]; info: Bucket[] };
+  fixed: string[];
+  unresolved: string[];
+  humanHint: string;
+}
+
+export interface LintSummaryOutput {
+  vault: { path: string; source: string };
+  summary: { errors: number; warnings: number; info: number };
+  buckets: LintBucketSummary[];
+  details_included: false;
+  truncated: false;
   fixed: string[];
   unresolved: string[];
   humanHint: string;
@@ -91,7 +124,65 @@ const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file
 const INFO_ORDER = ["bridges", "sparse_community", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
 const KNOWN_BUCKETS = [...ERROR_ORDER, ...WARNING_ORDER, ...INFO_ORDER] as const;
 
-export async function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }> {
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function formatExample(item: unknown): string {
+  if (typeof item === "string") return item;
+  if (item === null || item === undefined) return String(item);
+  try {
+    return JSON.stringify(item);
+  } catch {
+    return String(item);
+  }
+}
+
+function summarizeBucket(bucket: Bucket, severity: LintSeverity, vaultPath: string, examplesLimit: number): LintBucketSummary {
+  const safeLimit = Math.max(0, Math.min(examplesLimit, 10));
+  const examples = bucket.items.slice(0, safeLimit).map(formatExample);
+  return {
+    kind: bucket.kind,
+    severity,
+    count: bucket.items.length,
+    examples,
+    examples_limit: safeLimit,
+    sample_truncated: bucket.items.length > examples.length,
+    details_command: `skillwiki lint ${shellQuote(vaultPath)} --only ${bucket.kind}`,
+  };
+}
+
+export function summarizeLintOutput(output: LintOutput, examplesLimit = 3): LintSummaryOutput {
+  const buckets = [
+    ...output.by_severity.error.map(bucket => summarizeBucket(bucket, "error", output.vault.path, examplesLimit)),
+    ...output.by_severity.warning.map(bucket => summarizeBucket(bucket, "warning", output.vault.path, examplesLimit)),
+    ...output.by_severity.info.map(bucket => summarizeBucket(bucket, "info", output.vault.path, examplesLimit)),
+  ];
+  const lines: string[] = [];
+  lines.push(`errors: ${output.summary.errors}`);
+  lines.push(`warnings: ${output.summary.warnings}`);
+  lines.push(`info: ${output.summary.info}`);
+  for (const bucket of buckets) {
+    lines.push(`  ${bucket.kind}: ${bucket.count}`);
+    if (bucket.examples.length > 0) {
+      lines.push(`    e.g. ${bucket.examples[0]}`);
+    }
+  }
+  return {
+    vault: output.vault,
+    summary: output.summary,
+    buckets,
+    details_included: false,
+    truncated: false,
+    fixed: output.fixed,
+    unresolved: output.unresolved,
+    humanHint: lines.join("\n"),
+  };
+}
+
+export function runLint(input: LintSummaryInput): Promise<{ exitCode: number; result: Result<LintSummaryOutput> }>;
+export function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }>;
+export async function runLint(input: LintInput | LintSummaryInput): Promise<{ exitCode: number; result: Result<LintOutput | LintSummaryOutput> }> {
   if (input.only && !(KNOWN_BUCKETS as readonly string[]).includes(input.only)) {
     return {
       exitCode: ExitCode.USAGE,
@@ -786,16 +877,17 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     let fExit: ExitCodeValue = ExitCode.OK;
     if (fSummary.errors > 0) fExit = ExitCode.LINT_HAS_ERRORS;
     else if (fSummary.warnings > 0 || fSummary.info > 0) fExit = ExitCode.LINT_HAS_WARNINGS;
+    const output: LintOutput = {
+      vault: { path: input.vault, source: input.source ?? "resolved" },
+      summary: fSummary,
+      by_severity: filtered,
+      fixed,
+      unresolved,
+      humanHint: `--only ${input.only}\n${match.length === 0 ? "0 violations" : match.map(b => `  ${b.kind}: ${b.items.length}`).join("\n")}`
+    };
     return {
       exitCode: fExit,
-      result: ok({
-        vault: { path: input.vault, source: input.source ?? "resolved" },
-        summary: fSummary,
-        by_severity: filtered,
-        fixed,
-        unresolved,
-        humanHint: `--only ${input.only}\n${match.length === 0 ? "0 violations" : match.map(b => `  ${b.kind}: ${b.items.length}`).join("\n")}`
-      })
+      result: ok(input.summary ? summarizeLintOutput(output, input.examplesLimit) : output)
     };
   }
 
@@ -828,15 +920,16 @@ export async function runLint(input: LintInput): Promise<{ exitCode: number; res
     });
   }
 
+  const output: LintOutput = {
+    vault: { path: input.vault, source: input.source ?? "resolved" },
+    summary,
+    by_severity: { error: errorOut, warning: warningOut, info: infoOut },
+    fixed: fixed,
+    unresolved: unresolved,
+    humanHint: hintLines.join("\n")
+  };
   return {
     exitCode,
-    result: ok({
-      vault: { path: input.vault, source: input.source ?? "resolved" },
-      summary,
-      by_severity: { error: errorOut, warning: warningOut, info: infoOut },
-      fixed: fixed,
-      unresolved: unresolved,
-      humanHint: hintLines.join("\n")
-    })
+    result: ok(input.summary ? summarizeLintOutput(output, input.examplesLimit) : output)
   };
 }

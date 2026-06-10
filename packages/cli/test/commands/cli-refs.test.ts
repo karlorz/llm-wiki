@@ -7,6 +7,7 @@ describe("buildCliSurface", () => {
     expect(surface.has("stale")).toBe(true);
     expect(surface.has("lint")).toBe(true);
     expect(surface.has("init")).toBe(true);
+    expect(surface.has("health")).toBe(true);
     expect(surface.has("doctor")).toBe(true);
   });
 
@@ -33,6 +34,11 @@ describe("buildCliSurface", () => {
     expect(surface.get("stale")!.has("--wiki")).toBe(true);
     expect(surface.get("lint")!.has("--fix")).toBe(true);
     expect(surface.get("lint")!.has("--days")).toBe(true);
+    expect(surface.get("lint")!.has("--summary")).toBe(true);
+    expect(surface.get("lint")!.has("--examples")).toBe(true);
+    expect(surface.get("health")!.has("--sync")).toBe(true);
+    expect(surface.get("health")!.has("--no-fail")).toBe(true);
+    expect(surface.get("health")!.has("--out")).toBe(true);
     expect(surface.get("init")!.has("--force")).toBe(true);
     expect(surface.get("init")!.has("--domain")).toBe(true);
     expect(surface.get("archive")!.has("--cascade")).toBe(true);
@@ -67,6 +73,11 @@ describe("validateCliRefs", () => {
 
   it("returns no violations for valid command+flag refs in backticks", () => {
     const text = "Run `skillwiki lint --fix` to auto-fix issues. Also `skillwiki init --force`.";
+    expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
+  });
+
+  it("returns no violations for health and lint summary refs", () => {
+    const text = "Run `skillwiki health --out /tmp/skillwiki-health.json --no-fail` and `skillwiki lint --summary --examples 3`.";
     expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
   });
 

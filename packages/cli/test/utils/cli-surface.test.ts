@@ -7,6 +7,7 @@ describe("buildCliSurface", () => {
   it("registers top-level commands", () => {
     expect(surface.has("stale")).toBe(true);
     expect(surface.has("lint")).toBe(true);
+    expect(surface.has("health")).toBe(true);
     expect(surface.has("doctor")).toBe(true);
     expect(surface.has("log-rotate")).toBe(true);
     expect(surface.has("log-append")).toBe(true);
@@ -33,6 +34,9 @@ describe("buildCliSurface", () => {
     expect(surface.get("stale")!.has("--days")).toBe(true);
     expect(surface.get("stale")!.has("--archive")).toBe(true);
     expect(surface.get("graph.build")!.has("--out")).toBe(true);
+    expect(surface.get("lint")!.has("--summary")).toBe(true);
+    expect(surface.get("health")!.has("--no-fail")).toBe(true);
+    expect(surface.get("health")!.has("--out")).toBe(true);
   });
 
   it("subcommand flag sets inherit parent + root flags", () => {
@@ -56,6 +60,11 @@ describe("validateCliRefs", () => {
 
   it("accepts a log-append reference with --content", () => {
     expect(v("Append via `skillwiki log-append --content x`.")).toEqual([]);
+  });
+
+  it("accepts health and lint summary references", () => {
+    expect(v("Check via `skillwiki health --sync off --no-fail --out /tmp/h.json`.")).toEqual([]);
+    expect(v("Summarize via `skillwiki lint --summary --examples 2`.")).toEqual([]);
   });
 
   it("flags an unknown command", () => {
