@@ -358,6 +358,45 @@ copy_script_lib() {
   run_cmd chmod +x "$BIN_DIR/lib/"*.sh
 }
 
+install_presync_helper() {
+  local src="$VAULT_SYNC_ROOT/skills/vault-presync/wiki-sync.sh"
+  local dst="$BIN_DIR/wiki-sync.sh"
+  local home_bin="$HOME/bin"
+  local home_link="$home_bin/wiki-sync.sh"
+
+  [ -f "$src" ] || fatal "missing presync helper source: $src"
+
+  log "Plan: deploy presync helper to $dst"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[dry-run] cp $(printf '%q' "$src") $(printf '%q' "$dst")"
+    log "[dry-run] chmod +x $(printf '%q' "$dst")"
+  else
+    cp "$src" "$dst"
+    chmod +x "$dst"
+  fi
+
+  if [ -e "$home_bin" ] && [ ! -d "$home_bin" ]; then
+    warn "not creating convenience helper because $home_bin exists and is not a directory"
+    return 0
+  fi
+
+  if [ -e "$home_link" ] && [ ! -L "$home_link" ] && ! cmp -s "$home_link" "$src"; then
+    warn "not replacing non-symlink user file: $home_link"
+    return 0
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[dry-run] mkdir -p $(printf '%q' "$home_bin")"
+    log "[dry-run] ln -sfn $(printf '%q' "$dst") $(printf '%q' "$home_link")"
+  else
+    mkdir -p "$home_bin"
+    if [ -e "$home_link" ] && [ ! -L "$home_link" ]; then
+      rm -f "$home_link"
+    fi
+    ln -sfn "$dst" "$home_link"
+  fi
+}
+
 guard_fuse_only_target() {
   command -v findmnt >/dev/null 2>&1 || fatal "findmnt is required for FUSE-only mount guard"
 
@@ -450,6 +489,7 @@ fi
 
 log "OS=$VS_OS scheduler=$SCHEDULER mode=full role=$ROLE dry_run=$DRY_RUN"
 log "Plan: deploy scripts to $BIN_DIR"
+log "Plan: install wiki-sync helper in $BIN_DIR and $HOME/bin"
 log "Plan: deploy filter to $FILTER_DST"
 if [ "$VS_OS" = "macos" ]; then
   log "Plan: render launchd units in $HOME/Library/LaunchAgents"
@@ -463,6 +503,7 @@ run_cmd mkdir -p "$BIN_DIR" "$LOG_DIR" "$RCLONE_DIR"
 run_cmd cp "$VAULT_SYNC_ROOT/scripts/"*.sh "$BIN_DIR/"
 copy_script_lib
 run_cmd chmod +x "$BIN_DIR/"*.sh
+install_presync_helper
 run_cmd cp "$FILTER_SRC" "$FILTER_DST"
 
 if [ "$VS_OS" = "macos" ]; then

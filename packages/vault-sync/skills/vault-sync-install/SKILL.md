@@ -38,8 +38,12 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    mkdir -p $(platform_share_dir)/bin
    cp packages/vault-sync/scripts/*.sh $(platform_share_dir)/bin/
    cp -r packages/vault-sync/scripts/lib $(platform_share_dir)/bin/
+   cp packages/vault-sync/skills/vault-presync/wiki-sync.sh $(platform_share_dir)/bin/wiki-sync.sh
    chmod +x $(platform_share_dir)/bin/*.sh
    ```
+   For full installs, also create or repair `~/bin/wiki-sync.sh` as a symlink
+   to `$(platform_share_dir)/bin/wiki-sync.sh` when safe. Do not clobber a real
+   non-symlink user file at that path.
 5. **Deploy filter file**:
    ```
    mkdir -p $(platform_rclone_config_dir)

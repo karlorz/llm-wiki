@@ -19,11 +19,14 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
 
 1. **Run vault_sync_* doctor checks** directly (equivalent to `skillwiki doctor --only vault_sync` but available without skillwiki).
 2. **Read scheduler state** via `platform_job_status` for wiki-push and wiki-fetch.
-3. **Tail last 20 lines** of `wiki-push.log` and `wiki-fetch.log`. Classify last lines as OK/FAIL.
-4. **Output**:
+3. **Check terminal helper state** for the installed `wiki-sync.sh` and the
+   convenience `~/bin/wiki-sync.sh` symlink. Warn only; do not repair in status
+   mode.
+4. **Tail last 20 lines** of `wiki-push.log` and `wiki-fetch.log`. Classify last lines as OK/FAIL.
+5. **Output**:
    - Default: human-readable two-column table.
    - `--json`: machine-readable record matching the doctor JSON shape.
-5. **`--read-only` flag**: explicitly forbid any state-changing call. Used by sg01 e2e leg. The skill MUST honor this — no `touch`, no `launchctl print` (which on some platforms can spawn helpers), no service restart.
+6. **`--read-only` flag**: explicitly forbid any state-changing call. Used by sg01 e2e leg. The skill MUST honor this — no `touch`, no `launchctl print` (which on some platforms can spawn helpers), no service restart.
 
 ## Read-only contract
 

@@ -31,3 +31,54 @@ fi
 
 rm -f "$out_file"
 echo "PASS: --read-only refuses state-changing call (--restart-jobs)"
+
+home_dir="$(mktemp -d)"
+trap 'rm -rf "$home_dir"' EXIT
+
+case "$(uname -s)" in
+  Darwin)
+    share_bin="$home_dir/Library/Application Support/vault-sync/bin"
+    log_dir="$home_dir/Library/Logs"
+    unit_dir="$home_dir/Library/LaunchAgents"
+    mkdir -p "$share_bin" "$log_dir" "$unit_dir" "$home_dir/.config/rclone" "$home_dir/bin"
+    touch "$unit_dir/com.karlchow.wiki-push.plist" "$unit_dir/com.karlchow.wiki-fetch.plist"
+    ;;
+  Linux)
+    share_bin="$home_dir/.local/share/vault-sync/bin"
+    log_dir="$home_dir/.local/state/vault-sync/log"
+    unit_dir="$home_dir/.config/systemd/user"
+    mkdir -p "$share_bin" "$log_dir" "$unit_dir" "$home_dir/.config/rclone" "$home_dir/bin"
+    touch "$unit_dir/wiki-push.timer" "$unit_dir/wiki-fetch.timer"
+    ;;
+  *)
+    echo "SKIP: unsupported OS for helper status test"
+    exit 0
+    ;;
+esac
+
+touch "$share_bin/wiki-push.sh"
+chmod +x "$share_bin/wiki-push.sh"
+printf '2026-06-10T00:00:00Z OK push (no changes)\n' > "$log_dir/wiki-push.log"
+printf '2026-06-10T00:00:00Z OK behind=0 delta=0 (no notify)\n' > "$log_dir/wiki-fetch.log"
+printf '%s\n' '- remotely-save/data.json' '- .skillwiki/sync.lock' '- .claude/settings.local.json' > "$home_dir/.config/rclone/wiki-push-filters.txt"
+ln -s "$home_dir/missing/wiki-sync.sh" "$home_dir/bin/wiki-sync.sh"
+
+helper_out="$(mktemp)"
+HOME="$home_dir" VS_READ_ONLY=1 VS_JSON=1 bash "$STATUS_SH" >"$helper_out"
+
+if ! grep -q '"id":"vault_sync_presync_helper"' "$helper_out"; then
+  cat "$helper_out" >&2
+  rm -f "$helper_out"
+  echo "FAIL: expected presync helper status check" >&2
+  exit 1
+fi
+
+if ! grep -q '"status":"warn"' "$helper_out" || ! grep -q 'broken symlink' "$helper_out"; then
+  cat "$helper_out" >&2
+  rm -f "$helper_out"
+  echo "FAIL: expected broken wiki-sync symlink warning" >&2
+  exit 1
+fi
+
+rm -f "$helper_out"
+echo "PASS: --read-only reports broken wiki-sync helper symlink"

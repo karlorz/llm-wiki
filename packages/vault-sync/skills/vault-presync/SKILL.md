@@ -32,16 +32,24 @@ Pre-sync helper that handles the full sync pipeline for the ~/wiki vault: lint g
 ### From terminal (CLI)
 
 ```bash
-# The skill directory is self-contained — script lives alongside SKILL.md
-bash ${CLAUDE_PLUGIN_ROOT}/wiki-sync.sh              # dry-run
-bash ${CLAUDE_PLUGIN_ROOT}/wiki-sync.sh --execute    # dedup + rebase
-bash ${CLAUDE_PLUGIN_ROOT}/wiki-sync.sh --force      # skip lint gate
+# After vault-sync-install, the helper is installed as a terminal command.
+~/bin/wiki-sync.sh              # dry-run
+~/bin/wiki-sync.sh --execute    # dedup + rebase
+~/bin/wiki-sync.sh --force      # skip lint gate
 ```
 
-For convenience, `~/bin/wiki-sync.sh` is a symlink to the vault-presync copy:
+`vault-sync-install` deploys the stable helper to the platform vault-sync bin
+directory and creates/repairs `~/bin/wiki-sync.sh` when it is safe to do so.
+It will not clobber a real non-symlink user file at that path.
+
+For repo/plugin development before install, run the skill-local helper directly:
 ```bash
-ln -sf ${CLAUDE_PLUGIN_ROOT}/wiki-sync.sh ~/bin/wiki-sync.sh
+bash packages/vault-sync/skills/vault-presync/wiki-sync.sh
 ```
+
+Codex plugin install only installs plugin assets; it does not mutate host state,
+`~/bin`, launchd, or systemd. Run `vault-sync-install` to install or repair the
+terminal helper on a host.
 
 ### From Claude Code session
 
@@ -52,7 +60,7 @@ Invoke via the Skill tool — Claude runs the script inline:
 
 Or run directly via Bash within a Claude session:
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/wiki-sync.sh --execute
+bash packages/vault-sync/skills/vault-presync/wiki-sync.sh --execute
 ```
 
 The script auto-detects the vault root from `skillwiki path` → git root → script-relative path → `$HOME/wiki` fallback. No hardcoded paths.

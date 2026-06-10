@@ -163,5 +163,13 @@ assert_exit "fuse-only refuses non-rclone-fuse vault" "$NON_FUSE_RC" 1
 assert_contains "fuse-only names rejected fs type" "$NON_FUSE_OUT" "is not fuse.rclone"
 assert_not_contains "fuse-only refusal does not plan unit install" "$NON_FUSE_OUT" "wiki-fuse-refresh.timer"
 
+FULL_OUT="$TEST_ROOT/full.out"
+run_install "$FULL_OUT" --role leaf --dry-run
+FULL_RC=$?
+assert_exit "full dry-run exits 0" "$FULL_RC" 0
+assert_contains "full install deploys presync helper" "$FULL_OUT" "wiki-sync.sh"
+assert_contains "full install repairs convenience wiki-sync symlink" "$FULL_OUT" "ln -sfn"
+assert_contains "full install targets home bin wiki-sync" "$FULL_OUT" "$TEST_ROOT/home/bin/wiki-sync.sh"
+
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

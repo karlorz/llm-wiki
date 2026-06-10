@@ -176,6 +176,56 @@ else
   add_check "vault_sync_installed" "Vault sync installed" "error" "Script missing: $PUSH_SCRIPT"
 fi
 
+# Check 1b: presync terminal helper
+PRESYNC_HELPER="$SHARE_BIN/wiki-sync.sh"
+HOME_PRESYNC_HELPER="$HOME/bin/wiki-sync.sh"
+presync_status="pass"
+presync_details=()
+
+if [ ! -f "$PRESYNC_HELPER" ]; then
+  presync_status="warn"
+  presync_details+=("installed helper missing: $PRESYNC_HELPER")
+elif [ ! -x "$PRESYNC_HELPER" ]; then
+  presync_status="warn"
+  presync_details+=("installed helper not executable: $PRESYNC_HELPER")
+else
+  presync_details+=("installed helper ok: $PRESYNC_HELPER")
+fi
+
+if [ -L "$HOME_PRESYNC_HELPER" ]; then
+  helper_target="$(readlink "$HOME_PRESYNC_HELPER" 2>/dev/null || true)"
+  if [ ! -e "$HOME_PRESYNC_HELPER" ]; then
+    presync_status="warn"
+    presync_details+=("home helper broken symlink: $HOME_PRESYNC_HELPER -> ${helper_target:-unknown}")
+  elif [ ! -x "$HOME_PRESYNC_HELPER" ]; then
+    presync_status="warn"
+    presync_details+=("home helper target not executable: $HOME_PRESYNC_HELPER -> ${helper_target:-unknown}")
+  else
+    presync_details+=("home helper symlink ok: $HOME_PRESYNC_HELPER -> ${helper_target:-unknown}")
+  fi
+elif [ -e "$HOME_PRESYNC_HELPER" ]; then
+  if [ -x "$HOME_PRESYNC_HELPER" ]; then
+    presync_details+=("home helper custom executable present: $HOME_PRESYNC_HELPER")
+  else
+    presync_status="warn"
+    presync_details+=("home helper non-executable file: $HOME_PRESYNC_HELPER")
+  fi
+else
+  presync_status="warn"
+  presync_details+=("home helper missing: $HOME_PRESYNC_HELPER")
+fi
+
+presync_detail=""
+for detail in "${presync_details[@]}"; do
+  if [ -n "$presync_detail" ]; then
+    presync_detail="$presync_detail; $detail"
+  else
+    presync_detail="$detail"
+  fi
+done
+
+add_check "vault_sync_presync_helper" "Vault sync presync helper" "$presync_status" "$presync_detail"
+
 # Check 2: scheduler enabled
 if [ "$READ_ONLY" -eq 1 ]; then
   if [ "$VS_OS" = "macos" ]; then
