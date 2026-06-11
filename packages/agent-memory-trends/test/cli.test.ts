@@ -108,7 +108,7 @@ describe("agent-memory-trends CLI", () => {
           if (command === "git" && args.join(" ") === "-C /vault push --dry-run origin main") {
             return { exitCode: 0, stdout: "Everything up-to-date", stderr: "" };
           }
-          if (command === "codex" && args.join(" ") === "doctor") {
+          if (command === "codex" && args.join(" ") === "doctor --json") {
             return { exitCode: 0, stdout: "ok", stderr: "" };
           }
           if (command === "skillwiki" && args.join(" ") === "doctor") {
@@ -160,7 +160,7 @@ describe("agent-memory-trends CLI", () => {
       ["api", "rate_limit"],
     ]);
     expect(fixture.toolCalls.map((call) => `${call.command} ${call.args.join(" ")}`)).toEqual([
-      "codex doctor",
+      "codex doctor --json",
       "skillwiki doctor",
       "git -C /vault status --short",
       "git -C /vault push --dry-run origin main",
@@ -240,6 +240,83 @@ describe("agent-memory-trends CLI", () => {
     expect(result.result.data.checks?.find((check) => check.name === "skillwiki_doctor")).toMatchObject({
       status: "warn",
       message: "skillwiki doctor reported 2 warning(s) and 0 error(s)",
+    });
+  });
+
+  it("does not fail doctor when codex doctor only reports a non-interactive terminal failure", async () => {
+    const fixture = successfulDoctorContext();
+    const result = await runAgentMemoryTrendsCli(["doctor", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
+      ...fixture.context,
+      runCommand: async (command, args, options) => {
+        fixture.toolCalls.push({ command, args, cwd: options.cwd });
+        if (command === "codex" && args.join(" ") === "doctor --json") {
+          return {
+            exitCode: 1,
+            stdout: JSON.stringify({
+              overallStatus: "fail",
+              checks: {
+                "auth.credentials": { status: "ok", summary: "auth is configured" },
+                "config.load": { status: "ok", summary: "config loaded" },
+                "runtime.provenance": { status: "ok", summary: "running npm on linux-x64" },
+                "runtime.search": { status: "ok", summary: "search is OK" },
+                "git.environment": { status: "ok", summary: "git version 2.52.0" },
+                "network.provider_reachability": { status: "ok", summary: "active provider endpoints are reachable" },
+                "terminal.env": {
+                  status: "fail",
+                  summary: "TERM=dumb - colors and cursor control are disabled",
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        return fixture.context.runCommand!(command, args, options);
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected doctor success");
+    expect(result.result.data.checks?.find((check) => check.name === "codex_doctor")).toMatchObject({
+      status: "warn",
+      message: "codex doctor reported terminal-only failure: TERM=dumb - colors and cursor control are disabled",
+    });
+  });
+
+  it("fails doctor when codex doctor reports a non-terminal failure", async () => {
+    const fixture = successfulDoctorContext();
+    const result = await runAgentMemoryTrendsCli(["doctor", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
+      ...fixture.context,
+      runCommand: async (command, args, options) => {
+        fixture.toolCalls.push({ command, args, cwd: options.cwd });
+        if (command === "codex" && args.join(" ") === "doctor --json") {
+          return {
+            exitCode: 1,
+            stdout: JSON.stringify({
+              overallStatus: "fail",
+              checks: {
+                "auth.credentials": {
+                  status: "fail",
+                  summary: "auth is not configured",
+                },
+                "terminal.env": {
+                  status: "fail",
+                  summary: "TERM=dumb - colors and cursor control are disabled",
+                },
+              },
+            }),
+            stderr: "",
+          };
+        }
+        return fixture.context.runCommand!(command, args, options);
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected doctor failure");
+    expect(result.result.detail).toMatchObject({
+      failedChecks: ["codex_doctor"],
     });
   });
 

@@ -151,8 +151,8 @@ async function runDoctor(options: ParsedCliOptions, context: AgentMemoryTrendsCo
     });
   }
 
-  const codex = await runCommand("codex", ["doctor"], { cwd: resolved.repo });
-  checks.push(commandCheck("codex_doctor", codex, "codex doctor passed", "codex doctor failed"));
+  const codex = await runCommand("codex", ["doctor", "--json"], { cwd: resolved.repo });
+  checks.push(codexDoctorCheck(codex));
 
   const skillwiki = await runSkillwikiDoctor(resolved.repo, runCommand);
   checks.push(skillwikiDoctorCheck(skillwiki));
@@ -266,6 +266,69 @@ function skillwikiDoctorCheck(result: { exitCode: number; stdout: string; stderr
   }
 
   return commandCheck("skillwiki_doctor", result, "skillwiki doctor passed", "skillwiki doctor failed");
+}
+
+function codexDoctorCheck(result: { exitCode: number; stdout: string; stderr: string }): DoctorCheck {
+  const structured = parseCodexDoctorSummary(result.stdout);
+  if (structured) {
+    if (structured.failingChecks.length === 0) {
+      if (structured.warningCount > 0) {
+        return {
+          name: "codex_doctor",
+          status: "warn",
+          message: `codex doctor reported ${structured.warningCount} warning(s) and 0 failure(s)`,
+        };
+      }
+      return {
+        name: "codex_doctor",
+        status: "pass",
+        message: "codex doctor passed",
+      };
+    }
+
+    if (structured.failingChecks.every((check) => check.id.startsWith("terminal."))) {
+      return {
+        name: "codex_doctor",
+        status: "warn",
+        message: `codex doctor reported terminal-only failure: ${structured.failingChecks.map((check) => check.summary).join("; ")}`,
+      };
+    }
+
+    return {
+      name: "codex_doctor",
+      status: "fail",
+      message: `codex doctor failed: ${structured.failingChecks.map((check) => `${check.id}: ${check.summary}`).join("; ")}`,
+    };
+  }
+
+  return commandCheck("codex_doctor", result, "codex doctor passed", "codex doctor failed");
+}
+
+function parseCodexDoctorSummary(text: string): { failingChecks: Array<{ id: string; summary: string }>; warningCount: number } | undefined {
+  try {
+    const parsed = JSON.parse(text) as {
+      checks?: unknown;
+    };
+    if (!parsed.checks || typeof parsed.checks !== "object" || Array.isArray(parsed.checks)) return undefined;
+
+    const failingChecks: Array<{ id: string; summary: string }> = [];
+    let warningCount = 0;
+    for (const [id, rawCheck] of Object.entries(parsed.checks)) {
+      if (!rawCheck || typeof rawCheck !== "object" || Array.isArray(rawCheck)) continue;
+      const check = rawCheck as { status?: unknown; summary?: unknown };
+      const status = typeof check.status === "string" ? check.status.toLowerCase() : "";
+      const summary = typeof check.summary === "string" && check.summary ? check.summary : id;
+      if (status === "fail" || status === "error") {
+        failingChecks.push({ id, summary });
+      } else if (status === "warning" || status === "warn") {
+        warningCount += 1;
+      }
+    }
+
+    return { failingChecks, warningCount };
+  } catch {
+    return undefined;
+  }
 }
 
 function parseSkillwikiDoctorSummary(text: string): { ok: boolean; warningCount: number; errorCount: number } | undefined {
