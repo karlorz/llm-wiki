@@ -54,9 +54,6 @@ export async function publishGeneratedChanges(input: PublishGeneratedChangesInpu
     const fetch = await runGit(input.git, ["fetch", "origin", "main"]);
     if (!fetch.ok) return fetch;
 
-    const clean = await input.git(["diff", "--quiet"]);
-    if (clean.exitCode !== 0) return err("DIRTY_PREFLIGHT", clean.stderr || "vault working tree is dirty before publish");
-
     const baseCommit = await runGit(input.git, ["rev-parse", "HEAD"]);
     if (!baseCommit.ok) return baseCommit;
 
@@ -219,7 +216,7 @@ function cloneRecord(value: Record<string, unknown>): Record<string, unknown> {
 }
 
 function lines(text: string): string[] {
-  return text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  return text.split(/\r?\n/).filter((line) => line.trim().length > 0);
 }
 
 function filesFromPorcelainStatus(stdout: string): string[] {

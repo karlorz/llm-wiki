@@ -49,7 +49,7 @@ function seedGeneratedVault(): { vault: string; manifestPath: string; changedFil
 }
 
 describe("agent-memory-trends publisher gate", () => {
-  it("fetches, requires clean preflight, validates generated outputs, validates/lints/audits, commits, pulls, and pushes without force", async () => {
+  it("fetches, validates generated outputs, validates/lints/audits, commits, pulls, and pushes without force", async () => {
     const { vault, manifestPath, changedFiles } = seedGeneratedVault();
     const expectedChangedFiles = [...changedFiles, ".skillwiki/agent-memory-trends/latest-run.json"].sort((left, right) => left.localeCompare(right));
     const commands: PublisherCommand[] = [];
@@ -61,12 +61,13 @@ describe("agent-memory-trends publisher gate", () => {
       acquireLock: async () => ({ ok: true, data: { release: async () => undefined } }),
       git: async (args) => {
         commands.push({ tool: "git", args });
-        if (args[0] === "diff" && args.includes("--quiet")) return { exitCode: 0, stdout: "", stderr: "" };
         if (args[0] === "rev-parse") return { exitCode: 0, stdout: "abc123\n", stderr: "" };
         if (args[0] === "status") {
           return {
             exitCode: 0,
-            stdout: changedFiles.map((path) => `?? ${path}`).join("\n") + "\n",
+            stdout: changedFiles
+              .map((path) => path.startsWith("raw/transcripts/") ? `?? ${path}` : ` M ${path}`)
+              .join("\n") + "\n",
             stderr: "",
           };
         }
@@ -86,7 +87,6 @@ describe("agent-memory-trends publisher gate", () => {
     expect(result.data.changedFiles).toEqual(expectedChangedFiles);
     expect(commands).toEqual([
       { tool: "git", args: ["fetch", "origin", "main"] },
-      { tool: "git", args: ["diff", "--quiet"] },
       { tool: "git", args: ["rev-parse", "HEAD"] },
       { tool: "git", args: ["status", "--porcelain", "--untracked-files=all"] },
       { tool: "skillwiki", args: ["validate", join(vault, "raw/articles/2026-06-11-agent-memory-trends-evidence.md")] },
@@ -102,7 +102,7 @@ describe("agent-memory-trends publisher gate", () => {
     expect(commands.some((command) => command.args.includes("--force") || command.args.includes("--force-with-lease"))).toBe(false);
   });
 
-  it("blocks dirty preflight before validating generated output", async () => {
+  it("blocks unrelated dirty files before committing generated output", async () => {
     const { vault, manifestPath } = seedGeneratedVault();
     const result = await publishGeneratedChanges({
       vault,
@@ -110,7 +110,8 @@ describe("agent-memory-trends publisher gate", () => {
       manifestPath,
       acquireLock: async () => ({ ok: true, data: { release: async () => undefined } }),
       git: async (args) => {
-        if (args[0] === "diff" && args.includes("--quiet")) return { exitCode: 1, stdout: "", stderr: "" };
+        if (args[0] === "rev-parse") return { exitCode: 0, stdout: "abc123\n", stderr: "" };
+        if (args[0] === "status") return { exitCode: 0, stdout: " M concepts/unrelated.md\n", stderr: "" };
         return { exitCode: 0, stdout: "", stderr: "" };
       },
       skillwiki: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
@@ -118,8 +119,9 @@ describe("agent-memory-trends publisher gate", () => {
     });
 
     expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("expected dirty preflight failure");
-    expect(result.error).toBe("DIRTY_PREFLIGHT");
+    if (result.ok) throw new Error("expected allowlist failure");
+    expect(result.error).toBe("VALIDATION_FAILED");
+    expect(String(result.detail)).toContain("concepts/unrelated.md is not in generated-output allowlist");
   });
 
   it("detects untracked generated files before validating and committing", async () => {
@@ -137,7 +139,6 @@ describe("agent-memory-trends publisher gate", () => {
       acquireLock: async () => ({ ok: true, data: { release: async () => undefined } }),
       git: async (args) => {
         commands.push({ tool: "git", args });
-        if (args[0] === "diff" && args.includes("--quiet")) return { exitCode: 0, stdout: "", stderr: "" };
         if (args[0] === "rev-parse") return { exitCode: 0, stdout: "abc123\n", stderr: "" };
         if (args[0] === "status") {
           return {
@@ -175,7 +176,6 @@ describe("agent-memory-trends publisher gate", () => {
       acquireLock: async () => ({ ok: true, data: { release: async () => undefined } }),
       git: async (args) => {
         commands.push({ tool: "git", args });
-        if (args[0] === "diff" && args.includes("--quiet")) return { exitCode: 0, stdout: "", stderr: "" };
         if (args[0] === "rev-parse") return { exitCode: 0, stdout: "abc123\n", stderr: "" };
         if (args[0] === "status") {
           return {
@@ -216,7 +216,6 @@ describe("agent-memory-trends publisher gate", () => {
       manifestPath,
       acquireLock: async () => ({ ok: true, data: { release: async () => { released = true; } } }),
       git: async (args) => {
-        if (args[0] === "diff" && args.includes("--quiet")) return { exitCode: 0, stdout: "", stderr: "" };
         if (args[0] === "rev-parse") return { exitCode: 0, stdout: "abc123\n", stderr: "" };
         if (args[0] === "status") {
           return {
