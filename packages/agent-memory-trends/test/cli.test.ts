@@ -67,9 +67,48 @@ function selectedCandidate(): SelectedGithubCandidate {
 }
 
 describe("agent-memory-trends CLI", () => {
-  function successfulDoctorContext() {
+  function successfulDoctorContext(
+    options: {
+      headSha?: string;
+      originSha?: string;
+      headIsAncestorOfOrigin?: boolean;
+      rootVersion?: string;
+      runnerVersion?: string;
+      originRootVersion?: string;
+      originRunnerVersion?: string;
+      sessionBriefJson?: string | null;
+      sessionBriefMeta?: string | null;
+      latestRunJson?: string | null;
+      now?: Date;
+    } = {}
+  ) {
     const toolCalls: Array<{ command: string; args: string[]; cwd: string }> = [];
     const ghCalls: string[][] = [];
+    const headSha = options.headSha ?? "d7ded42d7ded42d7ded42d7ded42d7ded42d";
+    const originSha = options.originSha ?? headSha;
+    const rootVersion = options.rootVersion ?? "0.8.10-beta.1";
+    const runnerVersion = options.runnerVersion ?? rootVersion;
+    const originRootVersion = options.originRootVersion ?? rootVersion;
+    const originRunnerVersion = options.originRunnerVersion ?? runnerVersion;
+    const files = new Map<string, string>([
+      ["/config.yaml", CONFIG],
+      [
+        "/vault/.skillwiki/session-brief.json",
+        options.sessionBriefJson ?? JSON.stringify({ generated_at: "2026-06-10T23:50:00Z" }),
+      ],
+      [
+        "/vault/meta/latest-session-brief.md",
+        options.sessionBriefMeta ?? "---\ngenerated_at: 2026-06-10T23:50:00Z\n---\n# Latest Session Brief\n",
+      ],
+      [
+        "/vault/.skillwiki/agent-memory-trends/latest-run.json",
+        options.latestRunJson ?? JSON.stringify({ finishedAt: "2026-06-10T22:00:00Z" }),
+      ],
+    ]);
+    if (options.sessionBriefJson === null) files.delete("/vault/.skillwiki/session-brief.json");
+    if (options.sessionBriefMeta === null) files.delete("/vault/meta/latest-session-brief.md");
+    if (options.latestRunJson === null) files.delete("/vault/.skillwiki/agent-memory-trends/latest-run.json");
+
     return {
       toolCalls,
       ghCalls,
@@ -78,12 +117,13 @@ describe("agent-memory-trends CLI", () => {
         env: {
           AGENT_MEMORY_TRENDS_HEARTBEAT_URL: "https://kuma.example/push",
         },
-        now: new Date("2026-06-11T00:10:00Z"),
+        now: options.now ?? new Date("2026-06-11T00:10:00Z"),
         readFile: (path: string) => {
-          expect(path).toBe("/config.yaml");
-          return CONFIG;
+          const body = files.get(path);
+          if (body === undefined) throw new Error(`unexpected readFile path: ${path}`);
+          return body;
         },
-        pathExists: (path: string) => path === "/vault" || path === "/repo",
+        pathExists: (path: string) => path === "/vault" || path === "/repo" || files.has(path),
         runGh: async (args: string[]) => {
           ghCalls.push(args);
           if (args[0] === "auth" && args[1] === "status") {
@@ -103,8 +143,32 @@ describe("agent-memory-trends CLI", () => {
           }
           throw new Error(`unexpected gh call: ${args.join(" ")}`);
         },
-        runCommand: async (command: string, args: string[], options: { cwd: string }) => {
-          toolCalls.push({ command, args, cwd: options.cwd });
+        runCommand: async (command: string, args: string[], commandOptions: { cwd: string }) => {
+          toolCalls.push({ command, args, cwd: commandOptions.cwd });
+          if (command === "git" && args.join(" ") === "-C /repo fetch origin main") {
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
+          if (command === "git" && args.join(" ") === "-C /repo rev-parse HEAD") {
+            return { exitCode: 0, stdout: `${headSha}\n`, stderr: "" };
+          }
+          if (command === "git" && args.join(" ") === "-C /repo rev-parse origin/main") {
+            return { exitCode: 0, stdout: `${originSha}\n`, stderr: "" };
+          }
+          if (command === "git" && args.join(" ") === "-C /repo merge-base --is-ancestor HEAD origin/main") {
+            return { exitCode: options.headIsAncestorOfOrigin ?? true ? 0 : 1, stdout: "", stderr: "" };
+          }
+          if (command === process.execPath && args.join(" ") === "-p require('./package.json').version") {
+            return { exitCode: 0, stdout: `${rootVersion}\n`, stderr: "" };
+          }
+          if (command === process.execPath && args.join(" ") === "-p require('./packages/agent-memory-trends/package.json').version") {
+            return { exitCode: 0, stdout: `${runnerVersion}\n`, stderr: "" };
+          }
+          if (command === "git" && args.join(" ") === "-C /repo show origin/main:package.json") {
+            return { exitCode: 0, stdout: JSON.stringify({ version: originRootVersion }), stderr: "" };
+          }
+          if (command === "git" && args.join(" ") === "-C /repo show origin/main:packages/agent-memory-trends/package.json") {
+            return { exitCode: 0, stdout: JSON.stringify({ version: originRunnerVersion }), stderr: "" };
+          }
           if (command === "git" && args.join(" ") === "-C /vault status --short") {
             return { exitCode: 0, stdout: "", stderr: "" };
           }
@@ -121,6 +185,30 @@ describe("agent-memory-trends CLI", () => {
         },
       },
     };
+  }
+
+  function sessionBriefJson(generatedAt: string): string {
+    return JSON.stringify({ generated_at: generatedAt });
+  }
+
+  function sessionBriefMeta(generatedAt: string): string {
+    return `---\ngenerated_at: ${generatedAt}\n---\n# Latest Session Brief\n`;
+  }
+
+  function latestRunJson(finishedAt: string): string {
+    return JSON.stringify({ finishedAt });
+  }
+
+  function doctorChecks(result: Awaited<ReturnType<typeof runAgentMemoryTrendsCli>>) {
+    if (result.result.ok) return result.result.data.checks ?? [];
+    const detail = result.result.detail as { checks?: Array<{ name: string; status: string; message: string }> } | undefined;
+    return detail?.checks ?? [];
+  }
+
+  function doctorCheck(result: Awaited<ReturnType<typeof runAgentMemoryTrendsCli>>, name: string) {
+    const check = doctorChecks(result).find((candidate) => candidate.name === name);
+    expect(check).toBeTruthy();
+    return check;
   }
 
   it.each(["publish"] as const)("supports %s command", async (command) => {
@@ -150,6 +238,9 @@ describe("agent-memory-trends CLI", () => {
       ["config", "pass"],
       ["vault_path", "pass"],
       ["repo_path", "pass"],
+      ["runner_source", "pass"],
+      ["runner_version", "pass"],
+      ["session_brief_freshness", "pass"],
       ["gh_auth", "pass"],
       ["gh_rate_limit", "pass"],
       ["codex_doctor", "pass"],
@@ -163,12 +254,127 @@ describe("agent-memory-trends CLI", () => {
       ["api", "rate_limit"],
     ]);
     expect(fixture.toolCalls.map((call) => `${call.command} ${call.args.join(" ")}`)).toEqual([
+      "git -C /repo fetch origin main",
+      "git -C /repo rev-parse HEAD",
+      "git -C /repo rev-parse origin/main",
+      `${process.execPath} -p require('./package.json').version`,
+      `${process.execPath} -p require('./packages/agent-memory-trends/package.json').version`,
+      "git -C /repo show origin/main:package.json",
+      "git -C /repo show origin/main:packages/agent-memory-trends/package.json",
       "codex doctor --json",
       "skillwiki doctor",
       "git -C /vault status --short",
       "git -C /vault push --dry-run origin main",
     ]);
     expect(result.result.data.humanHint).toContain("doctor: ok");
+  });
+
+  it("fails doctor when the runner checkout is behind origin/main", async () => {
+    const fixture = successfulDoctorContext({
+      headSha: "237a312237a312237a312237a312237a312",
+      originSha: "d7ded42d7ded42d7ded42d7ded42d7ded42d",
+    });
+    const result = await runAgentMemoryTrendsCli(["doctor", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], fixture.context);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    const check = doctorCheck(result, "runner_source");
+    expect(check).toMatchObject({
+      status: "fail",
+      message: "runner checkout is behind origin/main: HEAD 237a312, origin/main d7ded42",
+    });
+    if (result.result.ok) throw new Error("expected doctor failure");
+    expect(result.result.detail).toMatchObject({
+      failedChecks: ["runner_source"],
+    });
+  });
+
+  it("fails doctor when local runner package versions are older than origin/main", async () => {
+    const fixture = successfulDoctorContext({
+      rootVersion: "0.8.9",
+      runnerVersion: "0.8.9",
+      originRootVersion: "0.8.10-beta.1",
+      originRunnerVersion: "0.8.10-beta.1",
+    });
+    const result = await runAgentMemoryTrendsCli(["doctor", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], fixture.context);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    const check = doctorCheck(result, "runner_version");
+    expect(check?.status).toBe("fail");
+    expect(check?.message).toContain("root 0.8.9 < 0.8.10-beta.1");
+    expect(check?.message).toContain("agent-memory-trends 0.8.9 < 0.8.10-beta.1");
+    if (result.result.ok) throw new Error("expected doctor failure");
+    expect(result.result.detail).toMatchObject({
+      failedChecks: ["runner_version"],
+    });
+  });
+
+  it("warns doctor when session brief files are 24 to 72 hours old", async () => {
+    const fixture = successfulDoctorContext({
+      sessionBriefJson: sessionBriefJson("2026-06-09T23:00:00Z"),
+      sessionBriefMeta: sessionBriefMeta("2026-06-09T23:00:00Z"),
+      latestRunJson: latestRunJson("2026-06-09T22:00:00Z"),
+    });
+    const result = await runAgentMemoryTrendsCli(["doctor", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], fixture.context);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    const check = doctorCheck(result, "session_brief_freshness");
+    expect(check?.status).toBe("warn");
+    expect(check?.message).toContain(".skillwiki/session-brief.json 25h old");
+    expect(check?.message).toContain("meta/latest-session-brief.md 25h old");
+  });
+
+  it("fails doctor when session brief files are older than 72 hours", async () => {
+    const fixture = successfulDoctorContext({
+      sessionBriefJson: sessionBriefJson("2026-06-07T23:00:00Z"),
+      sessionBriefMeta: sessionBriefMeta("2026-06-07T23:00:00Z"),
+      latestRunJson: latestRunJson("2026-06-07T22:00:00Z"),
+    });
+    const result = await runAgentMemoryTrendsCli(["doctor", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], fixture.context);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    const check = doctorCheck(result, "session_brief_freshness");
+    expect(check?.status).toBe("fail");
+    expect(check?.message).toContain("session brief file(s) stale");
+    if (result.result.ok) throw new Error("expected doctor failure");
+    expect(result.result.detail).toMatchObject({
+      failedChecks: ["session_brief_freshness"],
+    });
+  });
+
+  it("fails doctor when a session brief file is missing or unparsable", async () => {
+    const fixture = successfulDoctorContext({
+      sessionBriefJson: "{not-json",
+      sessionBriefMeta: null,
+    });
+    const result = await runAgentMemoryTrendsCli(["doctor", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], fixture.context);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    const check = doctorCheck(result, "session_brief_freshness");
+    expect(check).toMatchObject({
+      status: "fail",
+      message: "session brief file(s) missing or generated_at is unparsable: .skillwiki/session-brief.json, meta/latest-session-brief.md",
+    });
+  });
+
+  it("fails doctor when a session brief file is older than the latest digest run", async () => {
+    const fixture = successfulDoctorContext({
+      sessionBriefJson: sessionBriefJson("2026-06-11T00:06:00Z"),
+      sessionBriefMeta: sessionBriefMeta("2026-06-11T00:00:00Z"),
+      latestRunJson: latestRunJson("2026-06-11T00:05:00Z"),
+    });
+    const result = await runAgentMemoryTrendsCli(["doctor", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], fixture.context);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    const check = doctorCheck(result, "session_brief_freshness");
+    expect(check?.status).toBe("fail");
+    expect(check?.message).toContain("older than latest agent-memory run 2026-06-11T00:05:00Z");
+    expect(check?.message).toContain("meta/latest-session-brief.md generated_at 2026-06-11T00:00:00Z");
   });
 
   it("fails doctor when the vault Git push dry-run fails", async () => {

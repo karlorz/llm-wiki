@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectGithubCandidates } from "./github.js";
@@ -149,6 +149,10 @@ async function runDoctor(options: ParsedCliOptions, context: AgentMemoryTrendsCo
     message: pathExists(resolved.repo) ? `repo exists at ${resolved.repo}` : `repo path does not exist: ${resolved.repo}`,
   });
 
+  checks.push(await runnerSourceFreshnessCheck(resolved.repo, runCommand));
+  checks.push(await runnerVersionFreshnessCheck(resolved.repo, runCommand));
+  checks.push(sessionBriefFreshnessCheck(resolved.vault, context));
+
   const ghAuth = await runGh(["auth", "status"]);
   const ghAuthCheck = commandCheck("gh_auth", ghAuth, "gh auth status passed", "gh auth status failed");
   checks.push(ghAuthCheck);
@@ -233,6 +237,156 @@ function commandCheck(
     name,
     status: "fail",
     message: `${failMessage}: ${firstOutputLine(result.stderr || result.stdout)}`,
+  };
+}
+
+async function runnerSourceFreshnessCheck(repo: string, runCommand: CommandRunner): Promise<DoctorCheck> {
+  const fetch = await runCommand("git", ["-C", repo, "fetch", "origin", "main"], { cwd: repo });
+  if (fetch.exitCode !== 0) {
+    return {
+      name: "runner_source",
+      status: "warn",
+      message: `could not fetch origin/main for runner freshness: ${firstOutputLine(fetch.stderr || fetch.stdout)}`,
+    };
+  }
+
+  const head = await runCommand("git", ["-C", repo, "rev-parse", "HEAD"], { cwd: repo });
+  const upstream = await runCommand("git", ["-C", repo, "rev-parse", "origin/main"], { cwd: repo });
+  if (head.exitCode !== 0 || upstream.exitCode !== 0) {
+    return {
+      name: "runner_source",
+      status: "warn",
+      message: `could not resolve runner HEAD/origin-main (${firstOutputLine(head.stderr || head.stdout)}; ${firstOutputLine(upstream.stderr || upstream.stdout)})`,
+    };
+  }
+
+  const headSha = head.stdout.trim();
+  const upstreamSha = upstream.stdout.trim();
+  if (headSha === upstreamSha) {
+    return {
+      name: "runner_source",
+      status: "pass",
+      message: `runner checkout is current at ${shortSha(headSha)} (origin/main)`,
+    };
+  }
+
+  const behind = await runCommand("git", ["-C", repo, "merge-base", "--is-ancestor", "HEAD", "origin/main"], { cwd: repo });
+  if (behind.exitCode === 0) {
+    return {
+      name: "runner_source",
+      status: "fail",
+      message: `runner checkout is behind origin/main: HEAD ${shortSha(headSha)}, origin/main ${shortSha(upstreamSha)}`,
+    };
+  }
+
+  return {
+    name: "runner_source",
+    status: "warn",
+    message: `runner checkout differs from origin/main: HEAD ${shortSha(headSha)}, origin/main ${shortSha(upstreamSha)}`,
+  };
+}
+
+async function runnerVersionFreshnessCheck(repo: string, runCommand: CommandRunner): Promise<DoctorCheck> {
+  const rootVersion = await nodePrint(runCommand, repo, "require('./package.json').version");
+  const runnerVersion = await nodePrint(runCommand, repo, "require('./packages/agent-memory-trends/package.json').version");
+  if (!rootVersion.ok || !runnerVersion.ok) {
+    return {
+      name: "runner_version",
+      status: "fail",
+      message: `could not read runner package versions: ${rootVersion.ok ? "root ok" : rootVersion.detail}; ${runnerVersion.ok ? "agent-memory-trends ok" : runnerVersion.detail}`,
+    };
+  }
+
+  const expectedRoot = await gitShowPackageVersion(runCommand, repo, "package.json");
+  const expectedRunner = await gitShowPackageVersion(runCommand, repo, "packages/agent-memory-trends/package.json");
+  if (!expectedRoot.ok || !expectedRunner.ok) {
+    if (rootVersion.data !== runnerVersion.data) {
+      return {
+        name: "runner_version",
+        status: "fail",
+        message: `runner package versions differ: root ${rootVersion.data}, agent-memory-trends ${runnerVersion.data}`,
+      };
+    }
+    return {
+      name: "runner_version",
+      status: "warn",
+      message: `runner package versions are ${rootVersion.data}, but origin/main expected versions could not be read`,
+    };
+  }
+
+  const staleVersions: string[] = [];
+  if (compareVersions(rootVersion.data, expectedRoot.data) < 0) staleVersions.push(`root ${rootVersion.data} < ${expectedRoot.data}`);
+  if (compareVersions(runnerVersion.data, expectedRunner.data) < 0) {
+    staleVersions.push(`agent-memory-trends ${runnerVersion.data} < ${expectedRunner.data}`);
+  }
+  if (rootVersion.data !== runnerVersion.data) {
+    staleVersions.push(`root ${rootVersion.data} != agent-memory-trends ${runnerVersion.data}`);
+  }
+
+  if (staleVersions.length > 0) {
+    return {
+      name: "runner_version",
+      status: "fail",
+      message: `runner package version drift: ${staleVersions.join("; ")}`,
+    };
+  }
+
+  return {
+    name: "runner_version",
+    status: "pass",
+    message: `runner package versions current: root ${rootVersion.data}, agent-memory-trends ${runnerVersion.data}`,
+  };
+}
+
+function sessionBriefFreshnessCheck(vault: string, context: AgentMemoryTrendsContext): DoctorCheck {
+  const briefs = readSessionBriefGeneratedAts(vault, context);
+  const missing = briefs.filter((brief) => !brief.generatedAt || !brief.raw);
+  if (missing.length > 0) {
+    return {
+      name: "session_brief_freshness",
+      status: "fail",
+      message: `session brief file(s) missing or generated_at is unparsable: ${missing.map((brief) => brief.source).join(", ")}`,
+    };
+  }
+
+  const datedBriefs = briefs.filter(hasGeneratedAt);
+  const latest = readLatestAgentMemoryRunAt(vault, context);
+  const olderThanLatest = latest
+    ? datedBriefs.filter((brief) => brief.generatedAt.getTime() < latest.generatedAt.getTime())
+    : [];
+  if (latest && olderThanLatest.length > 0) {
+    return {
+      name: "session_brief_freshness",
+      status: "fail",
+      message: `session brief file(s) older than latest agent-memory run ${latest.raw} (${latest.source}): ${formatBriefSources(olderThanLatest)}`,
+    };
+  }
+
+  const ages = datedBriefs.map((brief) => ({
+    ...brief,
+    ageHours: (context.now.getTime() - brief.generatedAt.getTime()) / (60 * 60 * 1000),
+  }));
+  const stale = ages.filter((brief) => brief.ageHours > 72);
+  if (stale.length > 0) {
+    return {
+      name: "session_brief_freshness",
+      status: "fail",
+      message: `session brief file(s) stale: ${formatAgedBriefSources(stale)}`,
+    };
+  }
+  const aging = ages.filter((brief) => brief.ageHours >= 24);
+  if (aging.length > 0) {
+    return {
+      name: "session_brief_freshness",
+      status: "warn",
+      message: `session brief file(s) aging: ${formatAgedBriefSources(aging)}`,
+    };
+  }
+
+  return {
+    name: "session_brief_freshness",
+    status: "pass",
+    message: `session brief files are fresh: ${formatAgedBriefSources(ages)}`,
   };
 }
 
@@ -443,8 +597,179 @@ function firstOutputLine(text: string): string {
   return text.trim().split(/\r?\n/, 1)[0] || "no output";
 }
 
+function shortSha(value: string): string {
+  return value.slice(0, 7);
+}
+
 function stringifyDetail(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+async function nodePrint(runCommand: CommandRunner, repo: string, expression: string): Promise<Result<string>> {
+  const result = await runCommand(process.execPath, ["-p", expression], { cwd: repo });
+  if (result.exitCode !== 0) return err("COMMAND_FAILED", firstOutputLine(result.stderr || result.stdout));
+  const value = result.stdout.trim();
+  return value ? ok(value) : err("COMMAND_FAILED", "empty version output");
+}
+
+async function gitShowPackageVersion(runCommand: CommandRunner, repo: string, path: string): Promise<Result<string>> {
+  const result = await runCommand("git", ["-C", repo, "show", `origin/main:${path}`], { cwd: repo });
+  if (result.exitCode !== 0) return err("COMMAND_FAILED", firstOutputLine(result.stderr || result.stdout));
+  try {
+    const parsed = JSON.parse(result.stdout) as { version?: unknown };
+    return typeof parsed.version === "string" && parsed.version ? ok(parsed.version) : err("COMMAND_FAILED", `${path} has no version`);
+  } catch (error) {
+    return err("COMMAND_FAILED", error instanceof Error ? error.message : String(error));
+  }
+}
+
+function compareVersions(left: string, right: string): number {
+  const parsedLeft = parseVersion(left);
+  const parsedRight = parseVersion(right);
+  if (!parsedLeft || !parsedRight) return left.localeCompare(right);
+
+  for (const key of ["major", "minor", "patch"] as const) {
+    if (parsedLeft[key] !== parsedRight[key]) return parsedLeft[key] - parsedRight[key];
+  }
+  if (!parsedLeft.prerelease && parsedRight.prerelease) return 1;
+  if (parsedLeft.prerelease && !parsedRight.prerelease) return -1;
+  return (parsedLeft.prerelease ?? "").localeCompare(parsedRight.prerelease ?? "", undefined, { numeric: true });
+}
+
+function parseVersion(value: string): { major: number; minor: number; patch: number; prerelease?: string } | undefined {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value);
+  if (!match) return undefined;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4],
+  };
+}
+
+function readSessionBriefGeneratedAts(
+  vault: string,
+  context: AgentMemoryTrendsContext
+): Array<{ generatedAt?: Date; raw?: string; source: string }> {
+  return [
+    readSessionBriefJsonGeneratedAt(vault, context),
+    readSessionBriefMarkdownGeneratedAt(vault, context),
+  ];
+}
+
+function readSessionBriefJsonGeneratedAt(
+  vault: string,
+  context: AgentMemoryTrendsContext
+): { generatedAt?: Date; raw?: string; source: string } {
+  const source = ".skillwiki/session-brief.json";
+  const cachePath = join(vault, ".skillwiki", "session-brief.json");
+  const cache = readTextIfExists(cachePath, context);
+  if (!cache) return { source };
+  try {
+    const parsed = JSON.parse(cache) as { generated_at?: unknown };
+    if (typeof parsed.generated_at === "string") {
+      const date = parseDate(parsed.generated_at);
+      if (date) return { generatedAt: date, raw: parsed.generated_at, source };
+    }
+  } catch {
+    return { source };
+  }
+  return { source };
+}
+
+function readSessionBriefMarkdownGeneratedAt(
+  vault: string,
+  context: AgentMemoryTrendsContext
+): { generatedAt?: Date; raw?: string; source: string } {
+  const source = "meta/latest-session-brief.md";
+  const metaPath = join(vault, "meta", "latest-session-brief.md");
+  const meta = readTextIfExists(metaPath, context);
+  const match = meta?.match(/^generated_at:\s*["']?([^"'\n]+)["']?\s*$/m);
+  if (!match) return { source };
+  const date = parseDate(match[1]);
+  return date ? { generatedAt: date, raw: match[1], source } : { source };
+}
+
+function hasGeneratedAt(brief: { generatedAt?: Date; raw?: string; source: string }): brief is { generatedAt: Date; raw: string; source: string } {
+  return Boolean(brief.generatedAt && brief.raw);
+}
+
+function readLatestAgentMemoryRunAt(
+  vault: string,
+  context: AgentMemoryTrendsContext
+): { generatedAt: Date; raw: string; source: string } | undefined {
+  const latestRunPath = join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json");
+  const latestRun = readTextIfExists(latestRunPath, context);
+  if (latestRun) {
+    try {
+      const parsed = JSON.parse(latestRun) as {
+        finished_at?: unknown;
+        finishedAt?: unknown;
+        started_at?: unknown;
+        startedAt?: unknown;
+        run_date?: unknown;
+        runDate?: unknown;
+      };
+      const raw =
+        stringValue(parsed.finished_at) ??
+        stringValue(parsed.finishedAt) ??
+        stringValue(parsed.started_at) ??
+        stringValue(parsed.startedAt) ??
+        runDateToHktStart(stringValue(parsed.run_date) ?? stringValue(parsed.runDate));
+      const date = raw ? parseDate(raw) : undefined;
+      if (date && raw) return { generatedAt: date, raw, source: ".skillwiki/agent-memory-trends/latest-run.json" };
+    } catch {
+      // Fall through to the digest filename fallback below.
+    }
+  }
+
+  try {
+    const entries = readdirSync(join(vault, "queries"), { withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name.match(/^(\d{4}-\d{2}-\d{2})-agent-memory-trends-digest\.md$/)?.[1])
+      .filter((date): date is string => Boolean(date))
+      .sort();
+    const latestDate = entries.at(-1);
+    const raw = runDateToHktStart(latestDate);
+    const date = raw ? parseDate(raw) : undefined;
+    return date && raw ? { generatedAt: date, raw, source: "queries/*-agent-memory-trends-digest.md" } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readTextIfExists(path: string, context: AgentMemoryTrendsContext): string | undefined {
+  const pathExists = context.pathExists ?? existsSync;
+  if (!pathExists(path)) return undefined;
+  try {
+    return context.readFile ? context.readFile(path) : readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function parseDate(value: string): Date | undefined {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return undefined;
+  return new Date(timestamp);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function runDateToHktStart(value: string | undefined): string | undefined {
+  return value ? `${value}T00:00:00+08:00` : undefined;
+}
+
+function formatBriefSources(briefs: Array<{ raw: string; source: string }>): string {
+  return briefs.map((brief) => `${brief.source} generated_at ${brief.raw}`).join("; ");
+}
+
+function formatAgedBriefSources(briefs: Array<{ ageHours: number; raw: string; source: string }>): string {
+  return briefs
+    .map((brief) => `${brief.source} ${Math.max(0, Math.floor(brief.ageHours))}h old (generated_at ${brief.raw})`)
+    .join("; ");
 }
 
 function parseCliOptions(argv: string[]): ParsedCliOptions {
