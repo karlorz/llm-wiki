@@ -46,6 +46,9 @@ describe("buildCliSurface", () => {
     expect(surface.get("sync.lock")!.has("--summary")).toBe(true);
     expect(surface.get("sync.lock")!.has("--ttl-minutes")).toBe(true);
     expect(surface.get("sync.unlock")!.has("--force")).toBe(true);
+    expect(surface.get("session-brief")!.has("--write")).toBe(true);
+    expect(surface.get("session-brief")!.has("--project")).toBe(true);
+    expect(surface.get("session-brief")!.has("--wiki")).toBe(true);
   });
 
   it("includes --human flag inherited from root on all commands", () => {
@@ -156,6 +159,11 @@ describe("validateCliRefs", () => {
 
   it("accepts archive cascade/apply flags", () => {
     const text = "Run `skillwiki archive concepts/foo.md --cascade --apply`.";
+    expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
+  });
+
+  it("accepts session-brief command refs", () => {
+    const text = "Run `skillwiki session-brief --project auto --write` to refresh startup memory.";
     expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
   });
 });

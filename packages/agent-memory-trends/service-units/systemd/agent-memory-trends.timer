@@ -1,0 +1,13 @@
+[Unit]
+Description=Run SkillWiki agent memory trends nightly
+
+[Timer]
+OnCalendar=*-*-* 00:10:00 Asia/Hong_Kong
+RandomizedDelaySec=300
+Persistent=true
+AccuracySec=60s
+Unit=agent-memory-trends.service
+
+[Install]
+WantedBy=timers.target
+

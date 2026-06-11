@@ -100,8 +100,14 @@ export const MetaSchema = z.object({
   tags: z.array(z.string()),
   confidence: z.enum(["high", "medium", "low"]).optional(),
   provenance: z.enum(["research", "project", "mixed"]).optional(),
-  provenance_projects: z.array(wikilink).min(2, "meta pages must reference ≥2 projects")
+  provenance_projects: z.array(wikilink).optional(),
+  generated_by: z.string().min(1).optional(),
+  generated_at: z.string().datetime().optional(),
+  generated_kind: z.enum(["session-brief"]).optional()
 }).superRefine((v, ctx) => {
+  if (v.generated_kind !== "session-brief" && (!v.provenance_projects || v.provenance_projects.length < 2)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["provenance_projects"], message: "meta pages must reference ≥2 projects" });
+  }
   if (v.provenance && v.provenance !== "research" && (!v.provenance_projects || v.provenance_projects.length === 0)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["provenance_projects"], message: "required when provenance != research" });
   }

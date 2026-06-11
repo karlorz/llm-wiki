@@ -5,7 +5,8 @@
   "workspaces": [
     "packages/shared",
     "packages/cli",
-    "packages/skills"
+    "packages/skills",
+    "packages/agent-memory-trends"
   ],
   "scripts": {
     "build": "npm run -ws --if-present build",

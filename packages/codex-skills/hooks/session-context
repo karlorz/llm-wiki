@@ -53,6 +53,136 @@ Use this detected PRD mode as the source of truth. Route generated spec/plan art
 EOF
 }
 
+read_dotenv_key() {
+    local file="$1"
+    local key="$2"
+    local line
+
+    [[ -f "$file" ]] || return 0
+    line=$(grep -E "^[[:space:]]*${key}=" "$file" 2>/dev/null | head -n 1 || true)
+    [[ -n "$line" ]] || return 0
+
+    printf '%s' "$line" \
+        | sed -E "s/^[[:space:]]*${key}=//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//; s/^['\"]//; s/['\"]$//"
+}
+
+resolve_vault_path_for_session() {
+    if [[ -n "${WIKI_PATH:-}" ]]; then
+        printf '%s' "$WIKI_PATH"
+        return 0
+    fi
+
+    local project_env="${PWD}/skillwiki/.env"
+    local project_path
+    project_path=$(read_dotenv_key "$project_env" "WIKI_PATH")
+    if [[ -n "$project_path" ]]; then
+        printf '%s' "$project_path"
+        return 0
+    fi
+
+    local global_path
+    global_path=$(read_dotenv_key "${HOME:-}/.skillwiki/.env" "WIKI_PATH")
+    if [[ -n "$global_path" ]]; then
+        printf '%s' "$global_path"
+        return 0
+    fi
+
+    if command -v skillwiki >/dev/null 2>&1; then
+        skillwiki path 2>/dev/null | sed -n 's/^{"ok":true,"data":{"path":"\([^"]*\)".*$/\1/p' | head -n 1
+    fi
+}
+
+file_mtime_epoch() {
+    local file="$1"
+
+    stat -f %m "$file" 2>/dev/null || stat -c %Y "$file" 2>/dev/null || printf '0'
+}
+
+strip_frontmatter_for_session() {
+    local file="$1"
+
+    awk '
+        NR == 1 && $0 == "---" { in_fm = 1; next }
+        in_fm && $0 == "---" { in_fm = 0; next }
+        !in_fm { print }
+    ' "$file" 2>/dev/null
+}
+
+read_session_brief_candidate() {
+    local vault="$1"
+    local file="$2"
+    local label="$3"
+    local max_age_hours="$4"
+    local strip_frontmatter="${5:-false}"
+
+    [[ -f "$file" ]] || return 1
+
+    local now
+    local mtime
+    local age_seconds
+    local age_hours
+    now=$(date +%s)
+    mtime=$(file_mtime_epoch "$file")
+    [[ "$mtime" =~ ^[0-9]+$ ]] || mtime=0
+    age_seconds=$((now - mtime))
+    if (( age_seconds < 0 )); then age_seconds=0; fi
+    age_hours=$((age_seconds / 3600))
+
+    if (( age_hours > max_age_hours )); then
+        return 1
+    fi
+
+    local freshness="fresh"
+    if (( age_hours >= 24 )); then
+        freshness="stale"
+    fi
+
+    printf '## Dynamic Session Memory\n\n'
+    printf '_Source: %s; Session brief age: %s (%sh)._ \n\n' "$label" "$freshness" "$age_hours"
+
+    if [[ "$strip_frontmatter" == "true" ]]; then
+        strip_frontmatter_for_session "$file"
+    else
+        cat "$file" 2>/dev/null
+    fi
+}
+
+compute_session_brief_readonly() {
+    local vault="$1"
+
+    command -v skillwiki >/dev/null 2>&1 || return 1
+    skillwiki session-brief "$vault" --project auto --human 2>/dev/null || return 1
+}
+
+build_dynamic_session_memory() {
+    local vault
+    vault=$(resolve_vault_path_for_session)
+    [[ -n "$vault" && -d "$vault" ]] || return 0
+
+    local cache_file="${vault}/.skillwiki/session-brief.md"
+    local committed_file="${vault}/meta/latest-session-brief.md"
+    local brief
+
+    if brief=$(read_session_brief_candidate "$vault" "$cache_file" ".skillwiki/session-brief.md" 72 false); then
+        printf '%s' "$brief"
+        return 0
+    fi
+
+    if brief=$(read_session_brief_candidate "$vault" "$committed_file" "meta/latest-session-brief.md" 72 true); then
+        printf '%s' "$brief"
+        return 0
+    fi
+
+    if brief=$(compute_session_brief_readonly "$vault"); then
+        printf '## Dynamic Session Memory\n\n'
+        printf '_Source: read-only `skillwiki session-brief --project auto --human` fallback._\n\n'
+        printf '%s' "$brief"
+        return 0
+    fi
+
+    return 0
+}
+
 escape_for_json() {
     local s="$1"
     s="${s//\\/\\\\}"
@@ -88,11 +218,17 @@ resolve_skill_path() {
 build_skillwiki_session_context() {
     local skill_content="$1"
     local project_prd_context
+    local dynamic_session_memory
     local session_context
 
     project_prd_context=$(build_project_prd_context)
+    dynamic_session_memory=$(build_dynamic_session_memory)
 
     session_context=$'### Skillwiki Activation\n\nSkillwiki is active for this workspace. Below are the capability guidelines for local reference:'
+    if [[ -n "$dynamic_session_memory" ]]; then
+        session_context+=$'\n\n'
+        session_context+="$dynamic_session_memory"
+    fi
     if [[ -n "$project_prd_context" ]]; then
         session_context+=$'\n\n'
         session_context+="$project_prd_context"

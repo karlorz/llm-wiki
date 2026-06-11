@@ -38,6 +38,7 @@ import { runTranscripts } from "./commands/transcripts.js";
 import { runProjectIndex } from "./commands/project-index.js";
 import { runCompound, runCompoundList, runCompoundDelete } from "./commands/compound.js";
 import { runObserve } from "./commands/observe.js";
+import { runSessionBrief } from "./commands/session-brief.js";
 import { runIngest } from "./commands/ingest.js";
 import { runTagSync } from "./commands/tag-sync.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "./commands/sync.js";
@@ -769,6 +770,25 @@ program
       kind: opts.kind,
       project: opts.project
     }), v.vault);
+  });
+
+// session-brief
+program
+  .command("session-brief [vault]")
+  .description("render or refresh the bounded startup session brief")
+  .option("--project <slug>", "project slug, or auto for deterministic detection", "auto")
+  .option("--write", "write meta/latest-session-brief.md and local cache files", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runSessionBrief({
+      vault: v.vault,
+      project: opts.project,
+      write: !!opts.write,
+      cwd: process.cwd(),
+      env: { SKILLWIKI_PROJECT: process.env.SKILLWIKI_PROJECT }
+    }), v.vault, { postCommit: !!opts.write });
   });
 
 // ingest

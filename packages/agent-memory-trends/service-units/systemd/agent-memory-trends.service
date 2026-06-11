@@ -1,0 +1,19 @@
+[Unit]
+Description=SkillWiki agent memory trends daily research
+Documentation=file:/home/agent-memory/llm-wiki/packages/agent-memory-trends/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=agent-memory
+Group=agent-memory
+WorkingDirectory=/home/agent-memory/llm-wiki
+Environment=HOME=/home/agent-memory
+EnvironmentFile=/home/agent-memory/.config/agent-memory-trends/env
+ExecStart=/home/agent-memory/.local/bin/agent-memory-trends-daily
+RuntimeMaxSec=1800
+Nice=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

@@ -15,6 +15,28 @@ describe("MetaSchema", () => {
     expect(MetaSchema.parse(v)).toMatchObject(v);
   });
 
+  it("accepts generated session brief meta without provenance_projects", () => {
+    const generated = {
+      title: "Latest Session Brief",
+      created: "2026-06-11",
+      updated: "2026-06-11",
+      type: "meta" as const,
+      tags: ["generated", "session-brief"],
+      generated_by: "skillwiki session-brief",
+      generated_at: "2026-06-11T00:10:00Z",
+      generated_kind: "session-brief" as const
+    };
+
+    expect(MetaSchema.parse(generated)).toMatchObject(generated);
+  });
+
+  it("rejects unknown generated_kind values", () => {
+    expect(() => MetaSchema.parse({
+      ...v,
+      generated_kind: "daily-digest"
+    })).toThrow();
+  });
+
   it("requires provenance_projects to have min 2 items", () => {
     expect(() => MetaSchema.parse({ ...v, provenance_projects: ["[[cmux]]"] })).toThrow();
     expect(() => MetaSchema.parse({ ...v, provenance_projects: [] })).toThrow();

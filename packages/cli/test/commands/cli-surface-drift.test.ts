@@ -31,7 +31,7 @@ describe("cli-surface drift detection", () => {
       "lint", "config", "health", "doctor", "status", "archive", "drift", "dedup",
       "migrate-citations", "frontmatter-fix", "update", "self-update",
       "transcripts", "project-index", "compound", "tag-sync", "sync",
-      "backup", "seed", "observe", "ingest",
+      "backup", "seed", "observe", "session-brief", "ingest",
     ];
 
     for (const cmd of knownCommands) {
@@ -69,7 +69,7 @@ describe("cli-surface drift detection", () => {
       "lint", "config", "health", "doctor", "status", "archive", "drift", "dedup",
       "migrate-citations", "frontmatter-fix", "update", "self-update",
       "transcripts", "project-index", "compound", "tag-sync", "sync",
-      "backup", "seed", "observe", "ingest",
+      "backup", "seed", "observe", "session-brief", "ingest",
     ]);
 
     const topLevelKeys = [...surface.keys()].filter(k => !k.includes("."));

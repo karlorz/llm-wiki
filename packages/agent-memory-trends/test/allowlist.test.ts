@@ -1,0 +1,166 @@
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  isAllowedGeneratedPath,
+  validateGeneratedChanges,
+  type RunManifest,
+} from "../src/allowlist.js";
+
+function writeVaultFile(vault: string, relPath: string, body: string, mode?: number): void {
+  const fullPath = join(vault, relPath);
+  mkdirSync(dirname(fullPath), { recursive: true });
+  writeFileSync(fullPath, body, "utf8");
+  if (mode !== undefined) chmodSync(fullPath, mode);
+}
+
+function manifest(overrides: Partial<RunManifest> = {}): RunManifest {
+  return {
+    runDate: "2026-06-11",
+    changedFiles: [
+      "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+      "queries/2026-06-11-agent-memory-trends-digest.md",
+      "raw/transcripts/2026-06-11-task-local-agent-memory.md",
+      "meta/latest-session-brief.md",
+      ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      ".skillwiki/agent-memory-trends/latest-run.json",
+    ],
+    outputs: {
+      evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+      digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+      taskCapturePaths: ["raw/transcripts/2026-06-11-task-local-agent-memory.md"],
+      sessionBriefPath: "meta/latest-session-brief.md",
+      runStatePath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      latestRunPath: ".skillwiki/agent-memory-trends/latest-run.json",
+    },
+    webSources: Array.from({ length: 3 }, (_, index) => `https://example.com/source-${index}`),
+    ...overrides,
+  };
+}
+
+describe("agent-memory-trends generated-output allowlist", () => {
+  it("allows only expected generated files for the run date", () => {
+    expect(isAllowedGeneratedPath("raw/articles/2026-06-11-agent-memory-trends-evidence.md", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath("queries/2026-06-11-agent-memory-trends-digest.md", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath("raw/transcripts/2026-06-11-task-memory.md", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath("meta/latest-session-brief.md", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/2026-06-11-input.json", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/2026-06-11-run.json", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/latest-run.json", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath("raw/transcripts/2026-06-10-task-memory.md", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath("raw/articles/existing.md", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath("projects/llm-wiki/work/spec.md", "2026-06-11")).toBe(false);
+  });
+
+  it("accepts a manifest whose declared outputs match the actual diff", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
+    const runManifest = manifest();
+    for (const path of runManifest.changedFiles) {
+      writeVaultFile(vault, path, `generated file ${path}\n`);
+    }
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected generated changes to validate");
+    expect(result.data.typedPagesToValidate).toEqual([
+      "queries/2026-06-11-agent-memory-trends-digest.md",
+      "meta/latest-session-brief.md",
+    ]);
+    expect(result.data.rawPagesToValidate).toEqual([
+      "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+      "raw/transcripts/2026-06-11-task-local-agent-memory.md",
+    ]);
+    expect(result.data.digestPathForAudit).toBe("queries/2026-06-11-agent-memory-trends-digest.md");
+  });
+
+  it("rejects undeclared paths, too many tasks, too many web sources, and existing raw rewrites", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
+    const runManifest = manifest({
+      changedFiles: [
+        "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        "queries/2026-06-11-agent-memory-trends-digest.md",
+        "raw/transcripts/2026-06-11-task-1.md",
+        "raw/transcripts/2026-06-11-task-2.md",
+        "raw/transcripts/2026-06-11-task-3.md",
+        "raw/transcripts/2026-06-11-task-4.md",
+        "raw/articles/existing.md",
+      ],
+      outputs: {
+        evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+        taskCapturePaths: [
+          "raw/transcripts/2026-06-11-task-1.md",
+          "raw/transcripts/2026-06-11-task-2.md",
+          "raw/transcripts/2026-06-11-task-3.md",
+          "raw/transcripts/2026-06-11-task-4.md",
+        ],
+      },
+      webSources: Array.from({ length: 16 }, (_, index) => `https://example.com/source-${index}`),
+    });
+    for (const path of runManifest.changedFiles) writeVaultFile(vault, path, "generated\n");
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: ["raw/articles/existing.md"],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected invalid generated changes");
+    expect(String(result.detail)).toContain("raw/articles/existing.md");
+    expect(String(result.detail)).toContain("0-3 task captures");
+    expect(String(result.detail)).toContain("max 15 web sources");
+  });
+
+  it("rejects symlinks, executable files, oversized files, and secret-like content", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
+    const runManifest = manifest({
+      changedFiles: [
+        "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        "queries/2026-06-11-agent-memory-trends-digest.md",
+        "raw/transcripts/2026-06-11-task-secret.md",
+      ],
+      outputs: {
+        evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+        taskCapturePaths: ["raw/transcripts/2026-06-11-task-secret.md"],
+      },
+    });
+    writeVaultFile(vault, "raw/articles/2026-06-11-agent-memory-trends-evidence.md", "evidence\n");
+    writeVaultFile(vault, "queries/2026-06-11-agent-memory-trends-digest.md", "digest\n", 0o755);
+    writeVaultFile(vault, "raw/transcripts/2026-06-11-task-secret.md", "OPENAI_API_KEY=sk-test-secret\n");
+    symlinkSync(
+      join(vault, "raw/articles/2026-06-11-agent-memory-trends-evidence.md"),
+      join(vault, ".skillwiki-link")
+    );
+    runManifest.changedFiles.push(".skillwiki-link");
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 4,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected invalid generated changes");
+    expect(String(result.detail)).toContain("symlink");
+    expect(String(result.detail)).toContain("executable");
+    expect(String(result.detail)).toContain("oversized");
+    expect(String(result.detail)).toContain("secret");
+  });
+});

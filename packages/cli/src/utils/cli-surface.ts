@@ -63,6 +63,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("backup"); // has subcommands
   program.command("seed").option("--wiki <name>");
   program.command("observe").requiredOption("--text <text>").option("--kind <kind>").option("--project <slug>").option("--wiki <name>");
+  program.command("session-brief").option("--project <slug>").option("--write").option("--wiki <name>");
   program.command("ingest").requiredOption("--vault <path>").requiredOption("--type <type>").requiredOption("--title <title>").option("--tags <csv>").option("--provenance <provenance>").option("--dry-run");
 
   // Subcommands
