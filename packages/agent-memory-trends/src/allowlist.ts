@@ -7,6 +7,8 @@ export interface RunManifestOutputs {
   digestPath?: string;
   taskCapturePaths?: string[];
   sessionBriefPath?: string;
+  sessionBriefCachePaths?: string[];
+  sessionBriefSupportPaths?: string[];
   runStatePath?: string;
   latestRunPath?: string;
   watchlistPath?: string;
@@ -42,13 +44,19 @@ const SECRET_PATTERNS = [
   /AGENT_MEMORY_TRENDS_HEARTBEAT_URL\s*=\s*https?:\/\/\S+/i,
 ];
 
+const SESSION_BRIEF_PATH = "meta/latest-session-brief.md";
+const SESSION_BRIEF_CACHE_PATHS = [".skillwiki/session-brief.md", ".skillwiki/session-brief.json"];
+const SESSION_BRIEF_SUPPORT_PATHS = ["index.md", "log.md"];
+
 export function isAllowedGeneratedPath(path: string, runDate: string): boolean {
   return (
     path === `raw/articles/${runDate}-agent-memory-trends-evidence.md` ||
     new RegExp(`^raw/articles/${escapeRegExp(runDate)}-agent-memory-trends-evidence-[A-Za-z0-9.+-]+\\.md$`).test(path) ||
     path === `queries/${runDate}-agent-memory-trends-digest.md` ||
     (/^raw\/transcripts\/\d{4}-\d{2}-\d{2}-task-[^/]+\.md$/.test(path) && path.startsWith(`raw/transcripts/${runDate}-task-`)) ||
-    path === "meta/latest-session-brief.md" ||
+    path === SESSION_BRIEF_PATH ||
+    SESSION_BRIEF_CACHE_PATHS.includes(path) ||
+    SESSION_BRIEF_SUPPORT_PATHS.includes(path) ||
     path === `.skillwiki/agent-memory-trends/${runDate}-input.json` ||
     path === `.skillwiki/agent-memory-trends/${runDate}-run.json` ||
     path === ".skillwiki/agent-memory-trends/latest-run.json" ||
@@ -88,6 +96,8 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
     input.manifest.outputs.digestPath,
     ...(input.manifest.outputs.taskCapturePaths ?? []),
     input.manifest.outputs.sessionBriefPath,
+    ...(input.manifest.outputs.sessionBriefCachePaths ?? []),
+    ...(input.manifest.outputs.sessionBriefSupportPaths ?? []),
     input.manifest.outputs.runStatePath,
     input.manifest.outputs.latestRunPath,
     input.manifest.outputs.watchlistPath,
@@ -130,6 +140,8 @@ export function parseRunManifest(text: string): Result<RunManifest> {
         digestPath: stringField(outputs.digest_path ?? outputs.digestPath),
         taskCapturePaths: stringArray(outputs.task_capture_paths ?? outputs.taskCapturePaths),
         sessionBriefPath: stringField(outputs.session_brief_path ?? outputs.sessionBriefPath),
+        sessionBriefCachePaths: stringArray(outputs.session_brief_cache_paths ?? outputs.sessionBriefCachePaths),
+        sessionBriefSupportPaths: stringArray(outputs.session_brief_support_paths ?? outputs.sessionBriefSupportPaths),
         runStatePath: stringField(outputs.run_state_path ?? outputs.runStatePath),
         latestRunPath: stringField(outputs.latest_run_path ?? outputs.latestRunPath),
         watchlistPath: stringField(outputs.watchlist_path ?? outputs.watchlistPath),
@@ -175,7 +187,7 @@ function isRawPath(path: string): boolean {
 }
 
 function isTypedPagePath(path: string): boolean {
-  return path.startsWith("queries/") || path === "meta/latest-session-brief.md";
+  return path.startsWith("queries/") || path === SESSION_BRIEF_PATH;
 }
 
 function compareTypedPageValidationOrder(left: string, right: string): number {
@@ -184,7 +196,7 @@ function compareTypedPageValidationOrder(left: string, right: string): number {
 
 function typedPagePriority(path: string): number {
   if (path.startsWith("queries/")) return 0;
-  if (path === "meta/latest-session-brief.md") return 1;
+  if (path === SESSION_BRIEF_PATH) return 1;
   return 2;
 }
 

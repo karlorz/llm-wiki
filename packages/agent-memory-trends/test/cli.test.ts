@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runAgentMemoryTrendsCli } from "../src/cli.js";
 import type { SelectedGithubCandidate } from "../src/github.js";
@@ -453,10 +456,16 @@ describe("agent-memory-trends CLI", () => {
   it("wires live daily through publish without rewriting run-state after the publish commit", async () => {
     const calls: string[] = [];
     const evidencePath = "raw/articles/2026-06-11-agent-memory-trends-evidence-2026-06-11T00-10-00+08-00.md";
+    const sessionBriefFiles = [
+      "meta/latest-session-brief.md",
+      ".skillwiki/session-brief.md",
+      ".skillwiki/session-brief.json",
+    ];
     const publishedFiles = [
       ".skillwiki/agent-memory-trends/2026-06-11-input.json",
       ".skillwiki/agent-memory-trends/2026-06-11-run.json",
       ".skillwiki/agent-memory-trends/latest-run.json",
+      ...sessionBriefFiles,
       "queries/2026-06-11-agent-memory-trends-digest.md",
       evidencePath,
     ];
@@ -480,6 +489,15 @@ describe("agent-memory-trends CLI", () => {
       runCodexSynthesis: async () => {
         calls.push("codex");
         return { ok: true, data: { manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json", stdout: "", stderr: "" } };
+      },
+      refreshSessionBrief: async (input) => {
+        calls.push("refresh-brief");
+        expect(input).toEqual({
+          vault: "/vault",
+          repo: "/repo",
+          project: "llm-wiki",
+        });
+        return { ok: true, data: { filesWritten: sessionBriefFiles } };
       },
       listTrackedRawPaths: async (vault) => {
         expect(vault).toBe("/vault");
@@ -516,11 +534,59 @@ describe("agent-memory-trends CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(result.result.ok).toBe(true);
     if (!result.result.ok) throw new Error("expected daily success");
-    expect(calls).toEqual(["codex", "publish", "heartbeat"]);
+    expect(calls).toEqual(["codex", "refresh-brief", "publish", "heartbeat"]);
     expect(result.result.data.mutations).toEqual([
       "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json",
       ...publishedFiles,
     ]);
+  });
+
+  it("restores last-op scratch state after the default session brief refresh", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-cli-"));
+    const lastOpPath = join(vault, ".skillwiki", "last-op.json");
+    const previousLastOp = '[{"operation":"ingest","summary":"previous op","files":[],"timestamp":"2026-06-10T00:00:00Z"}]\n';
+    mkdirSync(join(vault, ".skillwiki"), { recursive: true });
+    writeFileSync(lastOpPath, previousLastOp, "utf8");
+
+    const calls: string[] = [];
+    const result = await runAgentMemoryTrendsCli(["daily", "--vault", vault, "--repo", "/repo", "--config", "/config.yaml"], {
+      cwd: "/repo",
+      env: {},
+      now: new Date("2026-06-11T00:10:00+08:00"),
+      readFile: () => CONFIG,
+      collectGithubCandidates: async () => ({ ok: true, data: {
+        rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+        apiCallsUsed: 12,
+        rawCandidateCount: 1,
+        selectedCandidates: [selectedCandidate()],
+        runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+      } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+      writeAgentInput: () => ({ ok: true, data: { path: join(vault, ".skillwiki/agent-memory-trends/2026-06-11-input.json") } }),
+      runCodexSynthesis: async () => ({ ok: true, data: { manifestPath: join(vault, ".skillwiki/agent-memory-trends/2026-06-11-run.json"), stdout: "", stderr: "" } }),
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(" ")}`);
+        expect(command).toBe("skillwiki");
+        expect(args).toEqual(["session-brief", vault, "--project", "llm-wiki", "--write"]);
+        writeFileSync(lastOpPath, '[{"operation":"session-brief"}]\n', "utf8");
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      listTrackedRawPaths: async () => ({ ok: true, data: [] }),
+      publishGeneratedChanges: async () => ({
+        ok: true,
+        data: {
+          baseCommit: "abc123",
+          changedFiles: [],
+          commitMessage: "research(agent-memory): daily digest 2026-06-11",
+        },
+      }),
+      maybeSendHeartbeat: async () => ({ ok: true, data: { status: "skipped", reason: "heartbeat URL missing" } }),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    expect(calls).toEqual([`skillwiki session-brief ${vault} --project llm-wiki --write`]);
+    expect(readFileSync(lastOpPath, "utf8")).toBe(previousLastOp);
   });
 
   it("wires publish through the publisher gate and heartbeat when not dry-run", async () => {

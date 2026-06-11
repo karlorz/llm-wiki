@@ -13,12 +13,43 @@ function writeVaultFile(vault: string, relPath: string, body: string): void {
 function seedGeneratedVault(): { vault: string; manifestPath: string; changedFiles: string[] } {
   const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-publish-"));
   const changedFiles = [
+    ".skillwiki/session-brief.json",
+    ".skillwiki/session-brief.md",
+    "index.md",
+    "log.md",
+    "meta/latest-session-brief.md",
     "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
     "queries/2026-06-11-agent-memory-trends-digest.md",
     "raw/transcripts/2026-06-11-task-local-agent-memory.md",
     ".skillwiki/agent-memory-trends/2026-06-11-run.json",
   ];
   writeVaultFile(vault, "raw/articles/2026-06-11-agent-memory-trends-evidence.md", "evidence\n");
+  writeVaultFile(vault, "index.md", "# Index\n\n## Meta\n- [[meta/latest-session-brief]] - Latest Session Brief\n");
+  writeVaultFile(vault, "log.md", "# Log\n\n## [2026-06-11] session-brief | refreshed: meta/latest-session-brief.md\n");
+  writeVaultFile(vault, ".skillwiki/session-brief.md", "# Session Brief\n\nUpdated capsule.\n");
+  writeVaultFile(vault, ".skillwiki/session-brief.json", '{"brief":"Updated capsule."}\n');
+  writeVaultFile(
+    vault,
+    "meta/latest-session-brief.md",
+    [
+      "---",
+      "title: Latest Session Brief",
+      "created: 2026-06-11",
+      "updated: 2026-06-11",
+      "type: meta",
+      "tags: [generated, session-brief]",
+      "confidence: high",
+      "generated_by: skillwiki session-brief",
+      "generated_at: 2026-06-11T00:10:00Z",
+      "generated_kind: session-brief",
+      "---",
+      "",
+      "# Session Brief",
+      "",
+      "Updated capsule.",
+      "",
+    ].join("\n")
+  );
   writeVaultFile(
     vault,
     "queries/2026-06-11-agent-memory-trends-digest.md",
@@ -92,6 +123,7 @@ describe("agent-memory-trends publisher gate", () => {
       { tool: "skillwiki", args: ["validate", join(vault, "raw/articles/2026-06-11-agent-memory-trends-evidence.md")] },
       { tool: "skillwiki", args: ["validate", join(vault, "raw/transcripts/2026-06-11-task-local-agent-memory.md")] },
       { tool: "skillwiki", args: ["validate", join(vault, "queries/2026-06-11-agent-memory-trends-digest.md")] },
+      { tool: "skillwiki", args: ["validate", join(vault, "meta/latest-session-brief.md")] },
       { tool: "skillwiki", args: ["lint", vault, "--summary"] },
       { tool: "skillwiki", args: ["audit", join(vault, "queries/2026-06-11-agent-memory-trends-digest.md")] },
       { tool: "git", args: ["add", "--", ...expectedChangedFiles] },
@@ -242,6 +274,12 @@ describe("agent-memory-trends publisher gate", () => {
     const latest = JSON.parse(readFileSync(join(vault, latestRunPath), "utf8"));
     expect(manifest.changed_files).toContain(latestRunPath);
     expect(manifest.outputs.latest_run_path).toBe(latestRunPath);
+    expect(manifest.outputs.session_brief_path).toBe("meta/latest-session-brief.md");
+    expect(manifest.outputs.session_brief_cache_paths).toEqual([
+      ".skillwiki/session-brief.json",
+      ".skillwiki/session-brief.md",
+    ]);
+    expect(manifest.outputs.session_brief_support_paths).toEqual(["index.md", "log.md"]);
     expect(latest).toEqual(manifest);
   });
 

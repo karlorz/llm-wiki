@@ -45,6 +45,9 @@ interface NormalizedOperationalFiles {
 }
 
 const MAX_GENERATED_FILE_BYTES = 256 * 1024;
+const SESSION_BRIEF_PATH = "meta/latest-session-brief.md";
+const SESSION_BRIEF_CACHE_PATHS = [".skillwiki/session-brief.md", ".skillwiki/session-brief.json"];
+const SESSION_BRIEF_SUPPORT_PATHS = ["index.md", "log.md"];
 
 export async function publishGeneratedChanges(input: PublishGeneratedChangesInput): Promise<Result<PublishGeneratedChangesOutput>> {
   const lock = await input.acquireLock();
@@ -150,10 +153,28 @@ function normalizeManifestForOperationalFiles(
   const manifestChangedFileSet = new Set(manifestFile.manifest.changedFiles);
   if (changedFiles.includes(inputPath)) manifestChangedFileSet.add(inputPath);
   manifestChangedFileSet.add(latestRunPath);
+  for (const path of [SESSION_BRIEF_PATH, ...SESSION_BRIEF_CACHE_PATHS, ...SESSION_BRIEF_SUPPORT_PATHS]) {
+    if (changedFiles.includes(path)) manifestChangedFileSet.add(path);
+  }
 
   const raw = cloneRecord(manifestFile.raw);
   raw.changed_files = [...manifestChangedFileSet].sort((left, right) => left.localeCompare(right));
   const outputs = isRecord(raw.outputs) ? cloneRecord(raw.outputs) : {};
+  if (changedFiles.includes(SESSION_BRIEF_PATH)) {
+    outputs.session_brief_path = SESSION_BRIEF_PATH;
+  }
+  const changedCachePaths = SESSION_BRIEF_CACHE_PATHS.filter((path) => changedFiles.includes(path));
+  if (changedCachePaths.length > 0) {
+    const existingCachePaths = stringArray(outputs.session_brief_cache_paths ?? outputs.sessionBriefCachePaths);
+    outputs.session_brief_cache_paths = [...new Set([...existingCachePaths, ...changedCachePaths])]
+      .sort((left, right) => left.localeCompare(right));
+  }
+  const changedSupportPaths = SESSION_BRIEF_SUPPORT_PATHS.filter((path) => changedFiles.includes(path));
+  if (changedSupportPaths.length > 0) {
+    const existingSupportPaths = stringArray(outputs.session_brief_support_paths ?? outputs.sessionBriefSupportPaths);
+    outputs.session_brief_support_paths = [...new Set([...existingSupportPaths, ...changedSupportPaths])]
+      .sort((left, right) => left.localeCompare(right));
+  }
   if (typeof outputs.run_state_path !== "string" && typeof outputs.runStatePath !== "string") {
     outputs.run_state_path = manifestPath;
   }
@@ -213,6 +234,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function cloneRecord(value: Record<string, unknown>): Record<string, unknown> {
   return { ...value };
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function lines(text: string): string[] {

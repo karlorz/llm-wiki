@@ -29,6 +29,16 @@ export function err(error: string, detail?: unknown): ErrResult {
 
 export type AgentMemoryTrendsCommand = "doctor" | "collect" | "daily" | "publish";
 
+export interface RefreshSessionBriefInput {
+  vault: string;
+  repo: string;
+  project: string;
+}
+
+export interface RefreshSessionBriefOutput {
+  filesWritten: string[];
+}
+
 export interface CommandRunResult {
   exitCode: number;
   stdout: string;
@@ -60,6 +70,7 @@ export interface AgentMemoryTrendsContext {
     tmpDir: string;
     outputLastMessagePath: string;
   }) => Promise<Result<{ manifestPath: string; stdout: string; stderr: string }>>;
+  refreshSessionBrief?: (input: RefreshSessionBriefInput) => Promise<Result<RefreshSessionBriefOutput>>;
   publishGeneratedChanges?: (input: PublishGeneratedChangesInput) => Promise<Result<PublishGeneratedChangesOutput>>;
   listTrackedRawPaths?: (vault: string) => Promise<Result<string[]>>;
   maybeSendHeartbeat?: (input: MaybeSendHeartbeatInput) => Promise<Result<HeartbeatResult>>;

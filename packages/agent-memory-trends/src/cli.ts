@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectGithubCandidates } from "./github.js";
@@ -20,12 +20,25 @@ import {
   type CliRunResult,
   type CommandRunner,
   type DoctorCheck,
+  type RefreshSessionBriefInput,
+  type RefreshSessionBriefOutput,
   type Result,
 } from "./types.js";
 
 const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "publish"]);
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
+const SESSION_BRIEF_FILES = [
+  "meta/latest-session-brief.md",
+  ".skillwiki/session-brief.md",
+  ".skillwiki/session-brief.json",
+];
+
+interface LastOpSnapshot {
+  path: string;
+  existed: boolean;
+  body: string;
+}
 
 export async function runAgentMemoryTrendsCli(
   argv: string[],
@@ -530,6 +543,17 @@ async function runDaily(
   const mutations = [collected.data.inputPath];
 
   if (!dryRun) {
+    const refresher = context.refreshSessionBrief ?? ((input) => refreshSessionBrief(input, context));
+    const refreshed = await refresher({
+      vault: collected.data.options.vault,
+      repo: collected.data.options.repo,
+      project: collected.data.options.project,
+    });
+    if (!refreshed.ok) {
+      writeFailureState(collected.data.options, context, startedAt, "validation");
+      return refreshed;
+    }
+
     const published = await runPublish(options, context, false);
     if (!published.ok) {
       writeFailureState(collected.data.options, context, startedAt, classifyFailure(published.error));
@@ -562,6 +586,56 @@ async function runDaily(
     mutations,
     selectedCandidateCount: collected.data.input.selectedCandidates.length,
   });
+}
+
+async function refreshSessionBrief(
+  input: RefreshSessionBriefInput,
+  context: AgentMemoryTrendsContext
+): Promise<Result<RefreshSessionBriefOutput>> {
+  const runCommand = context.runCommand ?? createCommandRunner();
+  const lastOp = snapshotLastOp(input.vault);
+  let restoreError: unknown;
+  const result = await runCommand(
+    "skillwiki",
+    ["session-brief", input.vault, "--project", input.project, "--write"],
+    { cwd: input.repo }
+  ).finally(() => {
+    try {
+      restoreLastOp(lastOp);
+    } catch (error) {
+      restoreError = error;
+    }
+  });
+  if (restoreError) {
+    return err("SESSION_BRIEF_LAST_OP_RESTORE_FAILED", restoreError instanceof Error ? restoreError.message : String(restoreError));
+  }
+  if (result.exitCode !== 0) {
+    return err("SESSION_BRIEF_FAILED", {
+      stderr: result.stderr,
+      stdout: result.stdout,
+    });
+  }
+  return ok({ filesWritten: SESSION_BRIEF_FILES });
+}
+
+function snapshotLastOp(vault: string): LastOpSnapshot {
+  const path = join(vault, ".skillwiki", "last-op.json");
+  if (!existsSync(path)) return { path, existed: false, body: "" };
+  return { path, existed: true, body: readFileSync(path, "utf8") };
+}
+
+function restoreLastOp(snapshot: LastOpSnapshot): void {
+  if (snapshot.existed) {
+    writeFileSync(snapshot.path, snapshot.body, "utf8");
+    return;
+  }
+
+  try {
+    unlinkSync(snapshot.path);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
+    throw error;
+  }
 }
 
 async function runPublish(
