@@ -124,6 +124,45 @@ describe("agent-memory-trends publisher gate", () => {
     expect(String(result.detail)).toContain("concepts/unrelated.md is not in generated-output allowlist");
   });
 
+  it("rejects generated failure manifests before committing", async () => {
+    const { vault, manifestPath, changedFiles } = seedGeneratedVault();
+    const manifest = JSON.parse(readFileSync(join(vault, manifestPath), "utf8"));
+    manifest.status = "failure";
+    manifest.failure_class = "allowlist";
+    writeVaultFile(vault, manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+    const commands: PublisherCommand[] = [];
+
+    const result = await publishGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      manifestPath,
+      acquireLock: async () => ({ ok: true, data: { release: async () => undefined } }),
+      git: async (args) => {
+        commands.push({ tool: "git", args });
+        if (args[0] === "rev-parse") return { exitCode: 0, stdout: "abc123\n", stderr: "" };
+        if (args[0] === "status") {
+          return {
+            exitCode: 0,
+            stdout: changedFiles.map((path) => ` M ${path}`).join("\n") + "\n",
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      skillwiki: async (args) => {
+        commands.push({ tool: "skillwiki", args });
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      existingRawPaths: [],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failed manifest to be rejected");
+    expect(result.error).toBe("VALIDATION_FAILED");
+    expect(String(result.detail)).toContain("run manifest status failure");
+    expect(commands.some((command) => command.tool === "git" && command.args[0] === "commit")).toBe(false);
+  });
+
   it("detects untracked generated files before validating and committing", async () => {
     const { vault, manifestPath, changedFiles } = seedGeneratedVault();
     const inputPath = ".skillwiki/agent-memory-trends/2026-06-11-input.json";

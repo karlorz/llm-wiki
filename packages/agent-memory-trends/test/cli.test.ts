@@ -375,12 +375,13 @@ describe("agent-memory-trends CLI", () => {
 
   it("wires live daily through publish without rewriting run-state after the publish commit", async () => {
     const calls: string[] = [];
+    const evidencePath = "raw/articles/2026-06-11-agent-memory-trends-evidence-2026-06-11T00-10-00+08-00.md";
     const publishedFiles = [
       ".skillwiki/agent-memory-trends/2026-06-11-input.json",
       ".skillwiki/agent-memory-trends/2026-06-11-run.json",
       ".skillwiki/agent-memory-trends/latest-run.json",
       "queries/2026-06-11-agent-memory-trends-digest.md",
-      "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+      evidencePath,
     ];
     const result = await runAgentMemoryTrendsCli(["daily", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
       cwd: "/repo",
@@ -395,7 +396,10 @@ describe("agent-memory-trends CLI", () => {
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
       } }),
       collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
-      writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
+      writeAgentInput: (input) => {
+        expect(input.allowedOutputs.evidencePath).toBe(evidencePath);
+        return { ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } };
+      },
       runCodexSynthesis: async () => {
         calls.push("codex");
         return { ok: true, data: { manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json", stdout: "", stderr: "" } };

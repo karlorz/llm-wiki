@@ -29,6 +29,9 @@ captures when no new actionable item clears the bar.
   task captures.
 - Do not modify existing raw files. Create new raw evidence and task captures
   only.
+- The evidence path is run-specific for same-day reruns. Use
+  `allowed_outputs.evidence_path` exactly; do not fall back to a date-only raw
+  evidence path.
 
 ## Publisher Gate Contract
 

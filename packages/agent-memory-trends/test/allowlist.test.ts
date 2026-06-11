@@ -42,6 +42,7 @@ function manifest(overrides: Partial<RunManifest> = {}): RunManifest {
 describe("agent-memory-trends generated-output allowlist", () => {
   it("allows only expected generated files for the run date", () => {
     expect(isAllowedGeneratedPath("raw/articles/2026-06-11-agent-memory-trends-evidence.md", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath("raw/articles/2026-06-11-agent-memory-trends-evidence-2026-06-11T14-35-51+08-00.md", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath("queries/2026-06-11-agent-memory-trends-digest.md", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath("raw/transcripts/2026-06-11-task-memory.md", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath("meta/latest-session-brief.md", "2026-06-11")).toBe(true);
@@ -51,6 +52,38 @@ describe("agent-memory-trends generated-output allowlist", () => {
     expect(isAllowedGeneratedPath("raw/transcripts/2026-06-10-task-memory.md", "2026-06-11")).toBe(false);
     expect(isAllowedGeneratedPath("raw/articles/existing.md", "2026-06-11")).toBe(false);
     expect(isAllowedGeneratedPath("projects/llm-wiki/work/spec.md", "2026-06-11")).toBe(false);
+  });
+
+  it("accepts run-specific evidence paths when same-day evidence already exists", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
+    const evidencePath = "raw/articles/2026-06-11-agent-memory-trends-evidence-2026-06-11T14-35-51+08-00.md";
+    const runManifest = manifest({
+      changedFiles: [
+        evidencePath,
+        "queries/2026-06-11-agent-memory-trends-digest.md",
+        ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        ".skillwiki/agent-memory-trends/latest-run.json",
+      ],
+      outputs: {
+        evidencePath,
+        digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+        taskCapturePaths: [],
+        runStatePath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        latestRunPath: ".skillwiki/agent-memory-trends/latest-run.json",
+      },
+    });
+    for (const path of runManifest.changedFiles) writeVaultFile(vault, path, `generated file ${path}\n`);
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: ["raw/articles/2026-06-11-agent-memory-trends-evidence.md"],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(true);
   });
 
   it("accepts a manifest whose declared outputs match the actual diff", () => {

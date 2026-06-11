@@ -418,7 +418,7 @@ async function collectInput(options: ParsedCliOptions, context: AgentMemoryTrend
     runDate: resolved.runDate,
     runId: resolved.runId,
     selectedCandidates: collection.data.selectedCandidates,
-    allowedOutputs: buildAllowedOutputs(resolved.runDate),
+    allowedOutputs: buildAllowedOutputs(resolved.runDate, resolved.runId),
     duplicateSignals: signals.data,
   });
   if (!input.ok) return input;
@@ -576,9 +576,10 @@ function resolveRunOptions(options: ParsedCliOptions, context: AgentMemoryTrends
   return { vault, repo, project, configPath, runDate, runId, manifestPath };
 }
 
-function buildAllowedOutputs(runDate: string): AllowedOutputs {
+function buildAllowedOutputs(runDate: string, runId: string): AllowedOutputs {
+  const safeRunId = runId.replace(/[^A-Za-z0-9.+-]/g, "-");
   return {
-    evidencePath: `raw/articles/${runDate}-agent-memory-trends-evidence.md`,
+    evidencePath: `raw/articles/${runDate}-agent-memory-trends-evidence-${safeRunId}.md`,
     digestPath: `queries/${runDate}-agent-memory-trends-digest.md`,
     taskCaptureGlob: `raw/transcripts/${runDate}-task-*.md`,
     manifestPath: `.skillwiki/agent-memory-trends/${runDate}-run.json`,

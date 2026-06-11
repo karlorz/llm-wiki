@@ -14,6 +14,7 @@ export interface RunManifestOutputs {
 
 export interface RunManifest {
   runDate: string;
+  status?: string;
   changedFiles: string[];
   outputs: RunManifestOutputs;
   webSources: string[];
@@ -44,8 +45,9 @@ const SECRET_PATTERNS = [
 export function isAllowedGeneratedPath(path: string, runDate: string): boolean {
   return (
     path === `raw/articles/${runDate}-agent-memory-trends-evidence.md` ||
+    new RegExp(`^raw/articles/${escapeRegExp(runDate)}-agent-memory-trends-evidence-[A-Za-z0-9.+-]+\\.md$`).test(path) ||
     path === `queries/${runDate}-agent-memory-trends-digest.md` ||
-    /^raw\/transcripts\/\d{4}-\d{2}-\d{2}-task-[^/]+\.md$/.test(path) && path.startsWith(`raw/transcripts/${runDate}-task-`) ||
+    (/^raw\/transcripts\/\d{4}-\d{2}-\d{2}-task-[^/]+\.md$/.test(path) && path.startsWith(`raw/transcripts/${runDate}-task-`)) ||
     path === "meta/latest-session-brief.md" ||
     path === `.skillwiki/agent-memory-trends/${runDate}-input.json` ||
     path === `.skillwiki/agent-memory-trends/${runDate}-run.json` ||
@@ -61,6 +63,9 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
 
   if (input.manifest.runDate !== input.runDate) {
     issues.push(`run manifest date ${input.manifest.runDate} does not match run date ${input.runDate}`);
+  }
+  if (input.manifest.status && input.manifest.status !== "success") {
+    issues.push(`run manifest status ${input.manifest.status} is not publishable`);
   }
 
   if (changedFiles.join("\n") !== manifestChangedFiles.join("\n")) {
@@ -118,6 +123,7 @@ export function parseRunManifest(text: string): Result<RunManifest> {
     const outputs = asRecord(raw.outputs ?? {}, "outputs");
     return ok({
       runDate: stringField(raw.run_date ?? raw.runDate),
+      status: stringField(raw.status),
       changedFiles: stringArray(raw.changed_files ?? raw.changedFiles),
       outputs: {
         evidencePath: stringField(outputs.evidence_path ?? outputs.evidencePath),
@@ -133,6 +139,10 @@ export function parseRunManifest(text: string): Result<RunManifest> {
   } catch (error) {
     return err("MANIFEST_INVALID", error instanceof Error ? error.message : String(error));
   }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function inspectChangedFile(vault: string, path: string, maxFileBytes: number, issues: string[]): void {
