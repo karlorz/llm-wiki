@@ -99,6 +99,27 @@ function fakeSkillwikiBin(script: string): string {
   return bin;
 }
 
+function fakeGnuStatBin(epoch: number): string {
+  const bin = mkdtempSync(join(tmpdir(), "skillwiki-hook-stat-"));
+  const file = join(bin, "stat");
+  writeFileSync(
+    file,
+    `#!/usr/bin/env bash
+if [ "\${1:-}" = "-c" ] && [ "\${2:-}" = "%Y" ]; then
+  printf '${epoch}\\n'
+  exit 0
+fi
+if [ "\${1:-}" = "-f" ] && [ "\${2:-}" = "%m" ]; then
+  printf '/\\n'
+  exit 0
+fi
+exit 64
+`,
+  );
+  chmodSync(file, 0o755);
+  return bin;
+}
+
 describe("SessionStart hook", () => {
   it("injects detected PRD mode from project dev-loop config", () => {
     const project = tempProject();
@@ -214,6 +235,21 @@ Committed memory capsule.
 
     expect(context).toContain("Session brief age: stale");
     expect(context).toContain("Stale but acceptable capsule.");
+  });
+
+  it("reads GNU stat mtime before the BSD stat fallback", () => {
+    const project = tempProject();
+    const vault = tempVault();
+    const statBin = fakeGnuStatBin(Math.floor(Date.now() / 1000));
+    writeCacheBrief(vault, "# Session Brief\n\nLinux cached memory capsule.\n");
+
+    const context = runClaudeHook(project, {
+      WIKI_PATH: vault,
+      PATH: `${statBin}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(context).toContain("## Dynamic Session Memory");
+    expect(context).toContain("Linux cached memory capsule.");
   });
 
   it("Codex hook injects session memory from the Codex-native root", () => {
