@@ -400,8 +400,13 @@ describe("agent-memory-trends CLI", () => {
         calls.push("codex");
         return { ok: true, data: { manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json", stdout: "", stderr: "" } };
       },
-      publishGeneratedChanges: async () => {
+      listTrackedRawPaths: async (vault) => {
+        expect(vault).toBe("/vault");
+        return { ok: true, data: ["raw/articles/2026-06-10-agent-memory-trends-evidence.md"] };
+      },
+      publishGeneratedChanges: async (input) => {
         calls.push("publish");
+        expect(input.existingRawPaths).toEqual(["raw/articles/2026-06-10-agent-memory-trends-evidence.md"]);
         return {
           ok: true,
           data: {
@@ -445,8 +450,13 @@ describe("agent-memory-trends CLI", () => {
         AGENT_MEMORY_TRENDS_HEARTBEAT_URL: "https://kuma.example/push",
       },
       now: new Date("2026-06-11T00:10:00+08:00"),
+      listTrackedRawPaths: async (vault) => {
+        expect(vault).toBe("/vault");
+        return { ok: true, data: ["raw/articles/2026-06-10-agent-memory-trends-evidence.md"] };
+      },
       publishGeneratedChanges: async (input) => {
         calls.push(`publish:${input.manifestPath}`);
+        expect(input.existingRawPaths).toEqual(["raw/articles/2026-06-10-agent-memory-trends-evidence.md"]);
         return {
           ok: true,
           data: {

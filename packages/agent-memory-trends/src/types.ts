@@ -61,6 +61,7 @@ export interface AgentMemoryTrendsContext {
     outputLastMessagePath: string;
   }) => Promise<Result<{ manifestPath: string; stdout: string; stderr: string }>>;
   publishGeneratedChanges?: (input: PublishGeneratedChangesInput) => Promise<Result<PublishGeneratedChangesOutput>>;
+  listTrackedRawPaths?: (vault: string) => Promise<Result<string[]>>;
   maybeSendHeartbeat?: (input: MaybeSendHeartbeatInput) => Promise<Result<HeartbeatResult>>;
   writeRunState?: (vault: string, state: AgentMemoryTrendRunState) => Result<WriteRunStateOutput>;
 }

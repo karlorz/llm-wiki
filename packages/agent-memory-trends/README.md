@@ -38,6 +38,32 @@ The timer runs daily at `00:10` Asia/Hong_Kong with `RandomizedDelaySec=300`, `P
 
 ## Install on sg02
 
+### Pre-flight Checklist
+
+Before running the installer, verify these prerequisites on `sg02`:
+
+1. Target host is `sg02` or another non-production Linux host with systemd and root access; never run this writer on `sg01`.
+2. Node.js 20 or newer and npm are installed for workspace builds and wrapper execution.
+3. `git`, `ssh`, and `rsync` are installed; the vault checkout can fetch and push `origin main`.
+4. GitHub CLI (`gh`) is installed and can authenticate as the `agent-memory` Unix user before live runs.
+5. Codex CLI is installed, logged in as `agent-memory`, and `codex doctor` passes before live runs.
+6. `skillwiki` is installed from npm and its `bin/skillwiki` symlink is on the service PATH. This is load-bearing: the publisher gate shells out to `skillwiki validate`, `skillwiki lint`, and `skillwiki audit`.
+7. The `llm-wiki` repo checkout and wiki vault checkout are present at the paths in `/home/agent-memory/.config/agent-memory-trends/env`.
+8. Optional heartbeat configuration is ready; `AGENT_MEMORY_TRENDS_HEARTBEAT_URL` stays only in the untracked service env file.
+
+Quick tool smoke before installing:
+
+```bash
+export PATH="$HOME/.local/npm/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+for tool in node npm git ssh rsync gh codex skillwiki systemctl; do
+  command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }
+done
+node --version
+npm --version
+codex --version
+skillwiki --version
+```
+
 From a checked-out `llm-wiki` repo on `sg02`:
 
 ```bash
@@ -73,6 +99,8 @@ Authenticate Codex and confirm the non-interactive runner is healthy.
 codex login
 codex doctor
 ```
+
+The nightly runner uses a self-contained `codex exec` invocation with the prompt and input JSON supplied through stdin. It does not require Codex plugins to be installed. Plugin setup is only for manual interactive Codex sessions.
 
 Configure the heartbeat only in the untracked service env file. Do not put secrets in tracked files.
 

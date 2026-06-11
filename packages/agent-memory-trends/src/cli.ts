@@ -514,6 +514,11 @@ async function runPublish(
     });
   }
 
+  const existingRawPaths = context.listTrackedRawPaths
+    ? await context.listTrackedRawPaths(resolved.vault)
+    : await listTrackedRawPaths(resolved.vault, context);
+  if (!existingRawPaths.ok) return existingRawPaths;
+
   const publisher = context.publishGeneratedChanges ?? publishGeneratedChanges;
   const published = await publisher({
     vault: resolved.vault,
@@ -522,7 +527,7 @@ async function runPublish(
     acquireLock: async () => ok({ release: async () => undefined }),
     git: createGitRunner(resolved.vault),
     skillwiki: createSkillwikiRunner(resolved.vault),
-    existingRawPaths: [],
+    existingRawPaths: existingRawPaths.data,
   });
   if (!published.ok) return published;
 
@@ -537,6 +542,19 @@ async function runPublish(
     mutations: published.data.changedFiles,
     heartbeat: heartbeatResult.data,
   });
+}
+
+async function listTrackedRawPaths(vault: string, context: AgentMemoryTrendsContext): Promise<Result<string[]>> {
+  const runCommand = context.runCommand ?? createCommandRunner();
+  const result = await runCommand("git", ["-C", vault, "ls-files", "--", "raw/articles", "raw/transcripts"], { cwd: vault });
+  if (result.exitCode !== 0) {
+    return err("GIT_FAILED", {
+      args: ["-C", vault, "ls-files", "--", "raw/articles", "raw/transcripts"],
+      stderr: result.stderr,
+      stdout: result.stdout,
+    });
+  }
+  return ok(result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
 }
 
 function loadResearchConfig(path: string, context: AgentMemoryTrendsContext): Result<ResearchConfig> {

@@ -65,10 +65,15 @@ describe("sg02 systemd rollout artifacts", () => {
   it("documents the manual rollout gates without tracked secrets", () => {
     const readme = readPackageFile("README.md");
 
+    expect(readme).toContain("Pre-flight Checklist");
+    expect(readme).toContain("export PATH=\"$HOME/.local/npm/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"");
+    expect(readme).toContain("command -v \"$tool\"");
     expect(readme).toContain("gh auth login");
     expect(readme).toContain("Git SSH push");
     expect(readme).toContain("codex login");
     expect(readme).toContain("codex doctor");
+    expect(readme).toContain("does not require Codex plugins");
+    expect(readme).toContain("publisher gate shells out to `skillwiki validate`, `skillwiki lint`, and `skillwiki audit`");
     expect(readme).toContain("AGENT_MEMORY_TRENDS_HEARTBEAT_URL");
     expect(readme).toContain("agent-memory-trends doctor");
     expect(readme).toContain("agent-memory-trends collect --dry-run");
