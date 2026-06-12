@@ -206,10 +206,98 @@ test_case_only_collision_blocks_publish() {
   rm -rf "$root"
 }
 
+test_long_path_fix_runs_before_rclone() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  mkdir -p "$bin_dir" "$home/.config/rclone"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "path_too_long" ] && [ "$5" = "--fix" ]; then
+  echo fixed > "$SKILLWIKI_FIX_MARKER"
+  exit 0
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/skillwiki"
+
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+if [ "$(cat "$SKILLWIKI_FIX_MARKER" 2>/dev/null || true)" = "fixed" ]; then
+  echo ok > "$RCLONE_STATE_FILE"
+  echo "Transferred:   	    1 B / 1 B, 100%, 1 B/s, ETA 0s"
+  exit 0
+fi
+echo missing-fix > "$RCLONE_STATE_FILE"
+exit 9
+STUB
+  chmod +x "$bin_dir/rclone"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    SKILLWIKI_FIX_MARKER="$root/skillwiki-fix" \
+    RCLONE_STATE_FILE="$root/rclone-state" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_eq "long-path fix runs before rclone publish" "$(cat "$root/rclone-state" 2>/dev/null || true)" "ok"
+  rm -rf "$root"
+}
+
+test_long_path_fix_failure_blocks_publish() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  mkdir -p "$bin_dir" "$home/.config/rclone"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "path_too_long" ] && [ "$5" = "--fix" ]; then
+  echo failed
+  exit 23
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/skillwiki"
+
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+echo called > "$RCLONE_CALLED_FILE"
+exit 0
+STUB
+  chmod +x "$bin_dir/rclone"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_eq "long-path fix failure blocks rclone publish" "$(test -f "$root/rclone-called" && echo called || echo skipped)" "skipped"
+  rm -rf "$root"
+}
+
 test_pull_helper_sees_clean_tree
 test_clean_ahead_commit_is_pushed
 test_sync_lock_is_not_committed
 test_case_only_collision_blocks_publish
+test_long_path_fix_runs_before_rclone
+test_long_path_fix_failure_blocks_publish
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

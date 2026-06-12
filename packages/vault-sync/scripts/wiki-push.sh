@@ -71,6 +71,22 @@ if ! CASE_CONFLICTS=$(cd "$WIKI_DIR" && git_case_conflicts); then
     exit 0
 fi
 
+# Fix Windows-hostile markdown paths before publishing to either S3 or GitHub.
+# The skillwiki CLI owns the rename and citation-rewire semantics; this script
+# only gates the unattended push pipeline.
+if command -v skillwiki >/dev/null 2>&1; then
+    PATH_FIX_OUTPUT=$(skillwiki lint "$WIKI_DIR" --only path_too_long --fix 2>&1)
+    PATH_FIX_RC=$?
+    printf '%s\n' "$PATH_FIX_OUTPUT" >>"$LOG_FILE"
+    if [ "$PATH_FIX_RC" -ne 0 ]; then
+        log "ERROR: path_too_long fix failed exit=$PATH_FIX_RC — refusing rclone/git push"
+        exit 0
+    fi
+else
+    log "ERROR: skillwiki CLI not found — refusing push because path_too_long guard cannot run"
+    exit 0
+fi
+
 # rclone copy (NOT sync) → never deletes on remote.
 # --update : only newer source files overwrite remote (mod-time + size based)
 # --filter-from : reuse the bisync filter list
