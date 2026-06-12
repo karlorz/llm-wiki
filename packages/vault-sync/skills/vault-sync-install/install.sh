@@ -75,10 +75,11 @@ write_file() {
 replace_template() {
   local src="$1"
   local dst="$2"
-  local esc_script esc_log esc_home
+  local esc_script esc_log esc_home esc_launchd_path
   esc_script=$(printf '%s' "$BIN_DIR" | sed -e 's/[\/&]/\\&/g')
   esc_log=$(printf '%s' "$LOG_DIR" | sed -e 's/[\/&]/\\&/g')
   esc_home=$(printf '%s' "$HOME" | sed -e 's/[\/&]/\\&/g')
+  esc_launchd_path=$(printf '%s' "$(launchd_path)" | sed -e 's/[\/&]/\\&/g')
 
   if [ "$DRY_RUN" -eq 1 ]; then
     log "[dry-run] render template: $src -> $dst"
@@ -91,11 +92,29 @@ replace_template() {
       -e "s|@SCRIPT_DIR@|$esc_script|g" \
       -e "s|@LOG_DIR@|$esc_log|g" \
       -e "s|@HOME@|$esc_home|g" \
+      -e "s|@LAUNCHD_PATH@|$esc_launchd_path|g" \
       -e "s|/Users/karlchow|$esc_home|g" \
       "$src"
   })"
 
   write_file "$dst" "$rendered"
+}
+
+launchd_path() {
+  local fallback="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  local node_path node_dir
+
+  node_path="$(command -v node 2>/dev/null || true)"
+  if [ -z "$node_path" ]; then
+    printf '%s\n' "$fallback"
+    return 0
+  fi
+
+  node_dir="$(dirname "$node_path")"
+  case ":$fallback:" in
+    *":$node_dir:"*) printf '%s\n' "$fallback" ;;
+    *) printf '%s:%s\n' "$node_dir" "$fallback" ;;
+  esac
 }
 
 set_env_key_raw() {
