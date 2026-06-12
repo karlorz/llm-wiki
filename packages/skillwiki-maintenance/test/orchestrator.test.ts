@@ -7,7 +7,7 @@ import { runStage1Maintenance, type MaintenanceEvent } from "../src/orchestrator
 import type { CommandRunResult } from "../src/types.js";
 
 describe("runStage1Maintenance", () => {
-  it("runs session-brief-refresh through the write transaction and leaves other writing jobs skipped", async () => {
+  it("runs agent-memory-trends-daily through the write transaction and defers later writers after a commit", async () => {
     const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-"));
     const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
     const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
@@ -24,6 +24,20 @@ describe("runStage1Maintenance", () => {
       runCommand: async (command, args, options) => {
         if (command === "npm" && args.join(" ") === "view skillwiki version") return commandResult("0.8.10\n");
         if (command === "skillwiki" && args.join(" ") === "--version") return commandResult("0.8.10\n");
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          writeGeneratedTrendOutputs(vault);
+          return commandResult(JSON.stringify({
+            ok: true,
+            data: {
+              mutations: [
+                ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+                ".skillwiki/agent-memory-trends/latest-run.json",
+                "queries/2026-06-13-agent-memory-trends-digest.md",
+              ],
+              humanHint: "daily: ok (generate-only); selected 1 candidate(s)",
+            },
+          }) + "\n");
+        }
         if (command === "skillwiki" && args[0] === "session-brief") {
           writeSessionBriefOutputs(vault);
           return commandResult(JSON.stringify({ ok: true }) + "\n");
@@ -38,12 +52,12 @@ describe("runStage1Maintenance", () => {
     expect(result.data.checks.map((check) => [check.job, check.status])).toEqual([
       ["self-update-check", "pass"],
       ["vault-sync-preflight", "pass"],
-      ["session-brief-refresh", "pass"],
+      ["agent-memory-trends-daily", "pass"],
     ]);
-    expect(events.find((event) => event.job === "session-brief-refresh" && event.event === "job")?.status).toBe("pass");
-    expect(events.find((event) => event.job === "agent-memory-trends-daily" && event.event === "skip")?.reason).toContain("deferred");
+    expect(events.find((event) => event.job === "agent-memory-trends-daily" && event.event === "job")?.status).toBe("pass");
+    expect(events.find((event) => event.job === "session-brief-refresh" && event.event === "skip")?.reason).toContain("prior writing job already committed");
     expect(events.find((event) => event.job === "health-summary" && event.event === "skip")?.reason).toContain("deferred");
-    expect(git(vault, "log", "-1", "--pretty=%s")).toBe("chore(maintenance): refresh session brief");
+    expect(git(vault, "log", "-1", "--pretty=%s")).toBe("research(agent-memory): daily digest");
   });
 });
 
@@ -130,6 +144,14 @@ function writeSessionBriefOutputs(vault: string): void {
   writeFileSync(join(vault, ".skillwiki", "session-brief.json"), "{\"generated_at\":\"2026-06-13T00:00:00Z\"}\n", "utf8");
   writeFileSync(join(vault, "index.md"), "# Index\n\n## Meta\n- [[meta/latest-session-brief]] — Latest Session Brief\n", "utf8");
   writeFileSync(join(vault, "log.md"), "# Log\n\n## [2026-06-13] session-brief | refreshed: meta/latest-session-brief.md\n", "utf8");
+}
+
+function writeGeneratedTrendOutputs(vault: string): void {
+  mkdirSync(join(vault, ".skillwiki", "agent-memory-trends"), { recursive: true });
+  mkdirSync(join(vault, "queries"), { recursive: true });
+  writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-13-run.json"), "{}\n", "utf8");
+  writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"), "{}\n", "utf8");
+  writeFileSync(join(vault, "queries", "2026-06-13-agent-memory-trends-digest.md"), "# Digest\n", "utf8");
 }
 
 function runGit(args: string[], cwd: string): CommandRunResult {

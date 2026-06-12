@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createCommandRunner } from "./command.js";
 import { parseMaintenanceConfig, type MaintenanceConfig } from "./config.js";
+import { runAgentMemoryTrendsDaily } from "./jobs/agent-memory-trends-daily.js";
 import { runSelfUpdateCheck } from "./jobs/self-update-check.js";
 import { runSessionBriefRefresh } from "./jobs/session-brief-refresh.js";
 import { runVaultSyncPreflight } from "./jobs/vault-sync-preflight.js";
@@ -54,8 +55,25 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
     checks.push(preflight);
     emit({ ts: ts(), event: "job", host_id: input.hostId, job: preflight.job, status: preflight.status, reason: preflight.reason, details: preflight.details });
 
+    let writeCommitted = false;
     for (const job of parsed.data.jobs) {
       if (job === "self-update-check" || job === "vault-sync-preflight") continue;
+      if (writeCommitted) {
+        emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred because a prior writing job already committed in this run" });
+        continue;
+      }
+      if (job === "agent-memory-trends-daily") {
+        const trendsDaily = await runAgentMemoryTrendsDaily({
+          vaultPath: parsed.data.vaultPath,
+          repoPath: parsed.data.repoPath,
+          project: "llm-wiki",
+          runCommand,
+        });
+        checks.push(trendsDaily);
+        writeCommitted = trendsDaily.details.committed;
+        emit({ ts: ts(), event: "job", host_id: input.hostId, job: trendsDaily.job, status: trendsDaily.status, reason: trendsDaily.reason, details: trendsDaily.details });
+        continue;
+      }
       if (job === "session-brief-refresh") {
         const sessionBrief = await runSessionBriefRefresh({
           vaultPath: parsed.data.vaultPath,
@@ -64,6 +82,7 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
           runCommand,
         });
         checks.push(sessionBrief);
+        writeCommitted = sessionBrief.details.committed;
         emit({ ts: ts(), event: "job", host_id: input.hostId, job: sessionBrief.job, status: sessionBrief.status, reason: sessionBrief.reason, details: sessionBrief.details });
         continue;
       }

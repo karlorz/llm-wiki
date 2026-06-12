@@ -56,6 +56,38 @@ describe("runWriteTransaction", () => {
     expect(git(repo, "rev-parse", "HEAD")).toBe(before);
   });
 
+  it("supports bounded filename globs in write allowlists", async () => {
+    const repo = createSyncedRepo();
+
+    const check = await runWriteTransaction({
+      job: "agent-memory-trends-daily",
+      repoPath: repo,
+      allowlist: [
+        ".skillwiki/agent-memory-trends/**",
+        "queries/*-agent-memory-trends-digest.md",
+        "raw/articles/*-agent-memory-trends-evidence*.md",
+      ],
+      commitMessage: "research(agent-memory): daily digest",
+      runCommand: createCommandRunner(),
+      run: async () => {
+        mkdirSync(join(repo, ".skillwiki", "agent-memory-trends"), { recursive: true });
+        mkdirSync(join(repo, "queries"), { recursive: true });
+        mkdirSync(join(repo, "raw", "articles"), { recursive: true });
+        writeFileSync(join(repo, ".skillwiki", "agent-memory-trends", "2026-06-13-run.json"), "{}\n", "utf8");
+        writeFileSync(join(repo, "queries", "2026-06-13-agent-memory-trends-digest.md"), "# Digest\n", "utf8");
+        writeFileSync(join(repo, "raw", "articles", "2026-06-13-agent-memory-trends-evidence-2026-06-13T00.md"), "# Evidence\n", "utf8");
+        return { ok: true, data: {} };
+      },
+    });
+
+    expect(check.status).toBe("pass");
+    expect(check.details.changedFiles).toEqual([
+      ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+      "queries/2026-06-13-agent-memory-trends-digest.md",
+      "raw/articles/2026-06-13-agent-memory-trends-evidence-2026-06-13T00.md",
+    ]);
+  });
+
   it("refuses to run a writing job when the repo starts dirty", async () => {
     const repo = createSyncedRepo();
     let called = false;
