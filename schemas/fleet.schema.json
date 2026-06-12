@@ -72,6 +72,15 @@
               }
             }
           }
+        },
+        "maintenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "skillwiki_satellite": {
+              "$ref": "#/$defs/skillwikiSatellite"
+            }
+          }
         }
       }
     },
@@ -125,6 +134,61 @@
         }
       }
     },
+    "skillwikiSatellite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "user", "vault_path", "repo_path", "ssh_alias", "scheduler", "jobs"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "user": {
+          "$ref": "#/$defs/sshUser"
+        },
+        "vault_path": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "repo_path": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "ssh_alias": {
+          "$ref": "#/$defs/sshAlias"
+        },
+        "scheduler": {
+          "enum": ["systemd"]
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1
+        },
+        "jobs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "self-update-check",
+              "vault-sync-preflight",
+              "agent-memory-trends-daily",
+              "session-brief-refresh",
+              "health-summary"
+            ]
+          }
+        },
+        "cadence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "self_update_check": {
+              "const": "every-4-hours"
+            },
+            "daily_window": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
     "accessProfile": {
       "type": "object",
       "additionalProperties": false,
@@ -173,6 +237,11 @@
       "type": "string",
       "minLength": 1,
       "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^/"
     }
   }
 }

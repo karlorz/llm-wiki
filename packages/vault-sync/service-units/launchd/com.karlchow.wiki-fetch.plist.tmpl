@@ -3,6 +3,7 @@
 <!-- TEMPLATE — placeholders replaced by vault-sync-install:
      @SCRIPT_DIR@      → $HOME/.local/share/vault-sync/bin
      @LOG_DIR@         → $HOME/Library/Logs
+     @LAUNCHD_PATH@    → installer PATH containing node + fallback bins
 -->
 <plist version="1.0">
 <dict>
@@ -24,7 +25,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <string>@LAUNCHD_PATH@</string>
         <key>HOME</key>
         <string>/Users/karlchow</string>
     </dict>

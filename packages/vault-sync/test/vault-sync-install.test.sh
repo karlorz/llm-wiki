@@ -21,10 +21,15 @@ make_fake_bin() {
   cat > "$bin_dir/uname" <<'EOF'
 #!/bin/sh
 if [ "$1" = "-s" ]; then
-  echo Linux
+  echo "${TEST_UNAME_S:-Linux}"
 else
   /usr/bin/uname "$@"
 fi
+EOF
+
+  cat > "$bin_dir/launchctl" <<'EOF'
+#!/bin/sh
+exit 0
 EOF
 
   cat > "$bin_dir/systemctl" <<'EOF'
@@ -80,7 +85,7 @@ run_install() {
 
   HOME="$TEST_ROOT/home" \
   USER=root \
-  PATH="$fake_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+  PATH="$fake_bin:${TEST_EXTRA_PATH:+$TEST_EXTRA_PATH:}/usr/bin:/bin:/usr/sbin:/sbin" \
   VS_HOSTNAME=pvelxc-test \
   bash "$INSTALL_SH" "$@" >"$out_file" 2>&1
 }
@@ -170,6 +175,23 @@ assert_exit "full dry-run exits 0" "$FULL_RC" 0
 assert_contains "full install deploys presync helper" "$FULL_OUT" "wiki-sync.sh"
 assert_contains "full install repairs convenience wiki-sync symlink" "$FULL_OUT" "ln -sfn"
 assert_contains "full install targets home bin wiki-sync" "$FULL_OUT" "$TEST_ROOT/home/bin/wiki-sync.sh"
+
+NODE_DIR="$TEST_ROOT/node24/bin"
+mkdir -p "$NODE_DIR"
+cat > "$NODE_DIR/node" <<'EOF'
+#!/bin/sh
+echo v24.15.0
+EOF
+chmod +x "$NODE_DIR/node"
+
+MAC_OUT="$TEST_ROOT/macos-full.out"
+TEST_UNAME_S=Darwin TEST_EXTRA_PATH="$NODE_DIR" run_install "$MAC_OUT" --role leaf --execute
+MAC_RC=$?
+PUSH_PLIST="$TEST_ROOT/home/Library/LaunchAgents/com.karlchow.wiki-push.plist"
+assert_exit "macOS full install exits 0" "$MAC_RC" 0
+assert_contains "macOS push plist includes discovered node dir" "$PUSH_PLIST" "$NODE_DIR"
+assert_contains "macOS push plist keeps Homebrew fallback" "$PUSH_PLIST" "/opt/homebrew/bin"
+assert_contains "macOS push plist keeps system fallback" "$PUSH_PLIST" "/usr/bin:/bin"
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

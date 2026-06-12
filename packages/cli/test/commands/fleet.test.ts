@@ -60,6 +60,24 @@ hosts:
           ssh_aliases: [sg02, cloudsg02, sg02-agent, sg02-agent-memory]
           users: [root, agent, agent-memory]
           transports: [public-ip]
+    maintenance:
+      skillwiki_satellite:
+        enabled: true
+        user: agent-memory
+        vault_path: /home/agent-memory/wiki
+        repo_path: /home/agent-memory/llm-wiki
+        ssh_alias: sg02-agent-memory
+        scheduler: systemd
+        timezone: Asia/Hong_Kong
+        jobs:
+          - self-update-check
+          - vault-sync-preflight
+          - agent-memory-trends-daily
+          - session-brief-refresh
+          - health-summary
+        cadence:
+          self_update_check: every-4-hours
+          daily_window: "00:10 Asia/Hong_Kong"
 `;
 }
 
@@ -153,7 +171,8 @@ describe("fleet context", () => {
     if (r.result.ok) {
       expect(r.result.data.host_id).toBe("macos-dev");
       expect(r.result.data.source).toBe("~/.skillwiki/.env:SKILLWIKI_HOST_ID");
-      expect(r.result.data.markdown).toContain("Declared outbound SSH from this source: `sg01`, `sg02`");
+      expect(r.result.data.markdown).toContain("`sg01` via `sg01`, `cloudsg01` (users: `root`)");
+      expect(r.result.data.markdown).toContain("`sg02` via `sg02`, `cloudsg02`, `sg02-agent`, `sg02-agent-memory` (users: `root`, `agent`, `agent-memory`)");
       expect(r.result.data.markdown).toContain("do not assume undeclared hosts have reciprocal SSH access");
     }
   });
@@ -176,6 +195,28 @@ describe("fleet context", () => {
       expect(r.result.data.markdown).toContain("Current machine: unknown");
       expect(r.result.data.markdown).toContain("host identity is unresolved");
       expect(r.result.data.markdown).toContain("do not assume local vs remote role");
+    }
+  });
+
+  it("renders sg02 skillwiki satellite metadata separately from fleet sync role", async () => {
+    const vault = writeVaultFleet();
+
+    const r = await runFleetContext({
+      vault,
+      hostId: "sg02",
+      osHostname: "sg02",
+      user: "agent-memory",
+      cwd: "/home/agent-memory/llm-wiki",
+      home: "/home/agent-memory",
+    });
+
+    expect(r.exitCode).toBe(ExitCode.OK);
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.markdown).toContain("Fleet role: `leaf`; protected: `false`; writes_to: `github`");
+      expect(r.result.data.markdown).toContain("Maintenance role: `skillwiki satellite`; user: `agent-memory`; ssh: `sg02-agent-memory`");
+      expect(r.result.data.markdown).toContain("maintenance vault: `/home/agent-memory/wiki`; repo: `/home/agent-memory/llm-wiki`; scheduler: `systemd`");
+      expect(r.result.data.markdown).toContain("jobs: `self-update-check`, `vault-sync-preflight`, `agent-memory-trends-daily`, `session-brief-refresh`, `health-summary`");
     }
   });
 });

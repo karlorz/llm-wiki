@@ -22,6 +22,20 @@ jobs:
           else
             echo "::warning::Push to main without plugin.json version bump — /plugin update won't detect changes"
           fi
+      - name: Warn when stable release tag is missing
+        if: github.ref == 'refs/heads/main'
+        run: |
+          VERSION=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' package.json | head -n 1)
+          if echo "$VERSION" | grep -q '-'; then
+            echo "Pre-release version $VERSION — stable tag guard skipped"
+            exit 0
+          fi
+          TAG="v$VERSION"
+          if git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Stable release tag $TAG exists on origin"
+          else
+            echo "::warning::Stable version $VERSION is on main but $TAG is not on origin. Run scripts/release.sh $VERSION or push the tag to trigger publish.yml."
+          fi
 
   build-and-test:
     needs: verify-manifests
