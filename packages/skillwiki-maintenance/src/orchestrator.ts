@@ -3,9 +3,10 @@ import { join } from "node:path";
 import { createCommandRunner } from "./command.js";
 import { parseMaintenanceConfig, type MaintenanceConfig } from "./config.js";
 import { runSelfUpdateCheck } from "./jobs/self-update-check.js";
+import { runSessionBriefRefresh } from "./jobs/session-brief-refresh.js";
 import { runVaultSyncPreflight } from "./jobs/vault-sync-preflight.js";
 import { acquireLock } from "./lock.js";
-import { err, ok, type JobCheck, type Result } from "./types.js";
+import { err, ok, type CommandRunner, type JobCheck, type Result } from "./types.js";
 
 export interface RunMaintenanceInput {
   fleetPath: string;
@@ -13,6 +14,7 @@ export interface RunMaintenanceInput {
   lockDir: string;
   now: Date;
   emit?: (event: MaintenanceEvent) => void;
+  runCommand?: CommandRunner;
 }
 
 export interface MaintenanceEvent {
@@ -39,9 +41,9 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
   if (!lock.ok) return lock;
 
   const checks: JobCheck[] = [];
-  const runCommand = createCommandRunner();
+  const runCommand = input.runCommand ?? createCommandRunner();
   const ts = () => new Date().toISOString();
-  emit({ ts: input.now.toISOString(), event: "start", host_id: input.hostId, details: { stage: 1 } });
+  emit({ ts: input.now.toISOString(), event: "start", host_id: input.hostId, details: { stage: 2 } });
 
   try {
     const selfUpdate = await runSelfUpdateCheck({ repoPath: parsed.data.repoPath, runCommand });
@@ -54,7 +56,18 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
 
     for (const job of parsed.data.jobs) {
       if (job === "self-update-check" || job === "vault-sync-preflight") continue;
-      emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred until Stage 2" });
+      if (job === "session-brief-refresh") {
+        const sessionBrief = await runSessionBriefRefresh({
+          vaultPath: parsed.data.vaultPath,
+          repoPath: parsed.data.repoPath,
+          project: "llm-wiki",
+          runCommand,
+        });
+        checks.push(sessionBrief);
+        emit({ ts: ts(), event: "job", host_id: input.hostId, job: sessionBrief.job, status: sessionBrief.status, reason: sessionBrief.reason, details: sessionBrief.details });
+        continue;
+      }
+      emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred until dedicated transaction wiring" });
     }
 
     const failed = checks.find((check) => check.status === "fail");

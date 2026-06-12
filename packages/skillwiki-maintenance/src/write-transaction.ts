@@ -204,7 +204,7 @@ function filesFromPorcelain(stdout: string): string[] {
     const path = line.slice(3).trim();
     const renameSeparator = " -> ";
     return path.includes(renameSeparator) ? path.slice(path.lastIndexOf(renameSeparator) + renameSeparator.length) : path;
-  });
+  }).sort((left, right) => left.localeCompare(right));
 }
 
 function isAllowed(path: string, allowlist: string[]): boolean {
