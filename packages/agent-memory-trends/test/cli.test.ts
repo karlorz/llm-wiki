@@ -211,6 +211,108 @@ describe("agent-memory-trends CLI", () => {
     return check;
   }
 
+  it("returns read-only help for global and pseudo-command help requests", async () => {
+    for (const argv of [["--help"], ["help"]] as string[][]) {
+      const result = await runAgentMemoryTrendsCli(argv, {
+        cwd: "/repo",
+        env: {},
+        now: new Date("2026-06-11T00:10:00Z"),
+        readFile: () => {
+          throw new Error("help should not read config");
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.result.ok).toBe(true);
+      if (!result.result.ok) throw new Error("expected help success");
+      expect(result.result.data.command).toBe("help");
+      expect(result.result.data.mutations).toEqual([]);
+      expect(result.result.data.humanHint).toContain("Usage: agent-memory-trends");
+    }
+  });
+
+  it.each([
+    ["--help"],
+    ["-h"],
+  ])("returns read-only help for daily %s without running daily hooks", async (helpFlag) => {
+    const calls: string[] = [];
+    const result = await runAgentMemoryTrendsCli(["daily", helpFlag, "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
+      cwd: "/repo",
+      env: {
+        AGENT_MEMORY_TRENDS_HEARTBEAT_URL: "https://kuma.example/push",
+      },
+      now: new Date("2026-06-11T00:10:00Z"),
+      readFile: () => {
+        calls.push("read-config");
+        return CONFIG;
+      },
+      collectGithubCandidates: async () => {
+        calls.push("collect");
+        return { ok: true, data: {
+          rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+          apiCallsUsed: 12,
+          rawCandidateCount: 1,
+          selectedCandidates: [selectedCandidate()],
+          runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        } };
+      },
+      collectDuplicateSignals: () => {
+        calls.push("dedupe");
+        return { ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } };
+      },
+      writeAgentInput: () => {
+        calls.push("write-input");
+        return { ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } };
+      },
+      runCodexSynthesis: async () => {
+        calls.push("codex");
+        return { ok: true, data: { manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json", stdout: "", stderr: "" } };
+      },
+      publishGeneratedChanges: async () => {
+        calls.push("publish");
+        return { ok: true, data: { baseCommit: "abc123", changedFiles: [], commitMessage: "noop" } };
+      },
+      maybeSendHeartbeat: async () => {
+        calls.push("heartbeat");
+        return { ok: true, data: { status: "sent", url: "https://kuma.example/push" } };
+      },
+      writeRunState: () => {
+        calls.push("write-state");
+        return {
+          ok: true,
+          data: {
+            runStatePath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
+            latestRunPath: "/vault/.skillwiki/agent-memory-trends/latest-run.json",
+          },
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected help success");
+    expect(result.result.data.command).toBe("help");
+    expect(result.result.data.mutations).toEqual([]);
+    expect(result.result.data.humanHint).toContain("Usage: agent-memory-trends");
+    expect(calls).toEqual([]);
+  });
+
+  it("keeps unknown commands as usage errors when help is not requested", async () => {
+    const result = await runAgentMemoryTrendsCli(["bogus"], {
+      cwd: "/repo",
+      env: {},
+      now: new Date("2026-06-11T00:10:00Z"),
+    });
+
+    expect(result.exitCode).toBe(46);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected usage error");
+    expect(result.result.error).toBe("USAGE");
+    expect(result.result.detail).toEqual({
+      message: "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--help]",
+    });
+  });
+
   it.each(["publish"] as const)("supports %s command", async (command) => {
     const result = await runAgentMemoryTrendsCli([command, "--dry-run"], {
       cwd: "/tmp",

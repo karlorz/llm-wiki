@@ -27,7 +27,7 @@ export function err(error: string, detail?: unknown): ErrResult {
   return detail === undefined ? { ok: false, error } : { ok: false, error, detail };
 }
 
-export type AgentMemoryTrendsCommand = "doctor" | "collect" | "daily" | "publish";
+export type AgentMemoryTrendsCommand = "doctor" | "collect" | "daily" | "publish" | "help";
 
 export interface RefreshSessionBriefInput {
   vault: string;

@@ -26,6 +26,7 @@ import {
 } from "./types.js";
 
 const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "publish"]);
+const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--help]";
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
 const SESSION_BRIEF_FILES = [
@@ -49,18 +50,22 @@ export async function runAgentMemoryTrendsCli(
   }
 ): Promise<CliRunResult<AgentMemoryTrendsCommandResult>> {
   const command = argv.find((arg) => !arg.startsWith("-")) as AgentMemoryTrendsCommand | undefined;
+  const generatedAt = formatInstant(context.now);
+  if (isHelpRequest(argv, command)) {
+    return okRun("help", false, generatedAt, [], USAGE_TEXT);
+  }
+
   if (!command || !COMMANDS.has(command)) {
     return {
       exitCode: 46,
       result: err("USAGE", {
-        message: "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run]",
+        message: USAGE_TEXT,
       }),
     };
   }
 
   const options = parseCliOptions(argv);
   const dryRun = options.flags.has("dry-run");
-  const generatedAt = formatInstant(context.now);
 
   try {
     if (command === "doctor") {
@@ -106,6 +111,10 @@ export async function runAgentMemoryTrendsCli(
   } catch (error) {
     return errorRun(err("COMMAND_FAILED", error instanceof Error ? error.message : String(error)));
   }
+}
+
+function isHelpRequest(argv: string[], command: AgentMemoryTrendsCommand | undefined): boolean {
+  return command === "help" || argv.includes("--help") || argv.includes("-h");
 }
 
 interface ParsedCliOptions {
