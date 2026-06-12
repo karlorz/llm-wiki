@@ -56,8 +56,13 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
     emit({ ts: ts(), event: "job", host_id: input.hostId, job: preflight.job, status: preflight.status, reason: preflight.reason, details: preflight.details });
 
     let writeCommitted = false;
+    let writeFailed = false;
     for (const job of parsed.data.jobs) {
       if (job === "self-update-check" || job === "vault-sync-preflight") continue;
+      if (writeFailed) {
+        emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred because a prior writing job failed in this run" });
+        continue;
+      }
       if (writeCommitted) {
         emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred because a prior writing job already committed in this run" });
         continue;
@@ -70,6 +75,7 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
           runCommand,
         });
         checks.push(trendsDaily);
+        writeFailed = trendsDaily.status === "fail";
         writeCommitted = trendsDaily.details.committed;
         emit({ ts: ts(), event: "job", host_id: input.hostId, job: trendsDaily.job, status: trendsDaily.status, reason: trendsDaily.reason, details: trendsDaily.details });
         continue;
@@ -82,6 +88,7 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
           runCommand,
         });
         checks.push(sessionBrief);
+        writeFailed = sessionBrief.status === "fail";
         writeCommitted = sessionBrief.details.committed;
         emit({ ts: ts(), event: "job", host_id: input.hostId, job: sessionBrief.job, status: sessionBrief.status, reason: sessionBrief.reason, details: sessionBrief.details });
         continue;

@@ -59,6 +59,45 @@ describe("runStage1Maintenance", () => {
     expect(events.find((event) => event.job === "health-summary" && event.event === "skip")?.reason).toContain("deferred");
     expect(git(vault, "log", "-1", "--pretty=%s")).toBe("research(agent-memory): daily digest");
   });
+
+  it("does not run later writing jobs after agent-memory-trends-daily fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-fail-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const events: MaintenanceEvent[] = [];
+
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      now: new Date("2026-06-13T00:00:00Z"),
+      emit: (event) => events.push(event),
+      runCommand: async (command, args, options) => {
+        if (command === "npm" && args.join(" ") === "view skillwiki version") return commandResult("0.8.10\n");
+        if (command === "skillwiki" && args.join(" ") === "--version") return commandResult("0.8.10\n");
+        if (command === "agent-memory-trends" && args[0] === "daily") return commandResult("");
+        if (command === "skillwiki" && args[0] === "session-brief") {
+          writeSessionBriefOutputs(vault);
+          return commandResult(JSON.stringify({ ok: true }) + "\n");
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(events.find((event) => event.job === "agent-memory-trends-daily" && event.event === "job")?.status).toBe("fail");
+    const sessionBriefSkip = events.find((event) => event.job === "session-brief-refresh" && event.event === "skip");
+    const healthSummarySkip = events.find((event) => event.job === "health-summary" && event.event === "skip");
+    expect(sessionBriefSkip).toBeTruthy();
+    expect(healthSummarySkip).toBeTruthy();
+    expect(sessionBriefSkip?.reason).toContain("prior writing job failed");
+    expect(healthSummarySkip?.reason).toContain("prior writing job failed");
+    expect(git(vault, "log", "-1", "--pretty=%s")).toBe("initial");
+  });
 });
 
 function fleetYaml(vault: string, repo: string): string {
