@@ -30,6 +30,7 @@ function manifest(overrides: Partial<RunManifest> = {}): RunManifest {
       evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
       digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
       taskCapturePaths: ["raw/transcripts/2026-06-11-task-local-agent-memory.md"],
+      taskCaptureRenderer: "typescript",
       sessionBriefPath: "meta/latest-session-brief.md",
       runStatePath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
       latestRunPath: ".skillwiki/agent-memory-trends/latest-run.json",
@@ -45,6 +46,8 @@ describe("agent-memory-trends generated-output allowlist", () => {
     expect(isAllowedGeneratedPath("raw/articles/2026-06-11-agent-memory-trends-evidence-2026-06-11T14-35-51+08-00.md", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath("queries/2026-06-11-agent-memory-trends-digest.md", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath("raw/transcripts/2026-06-11-task-memory.md", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath("raw/transcripts/2026-06-11-bug-memory.md", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath("raw/transcripts/2026-06-11-idea-memory.md", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath("meta/latest-session-brief.md", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/2026-06-11-input.json", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/2026-06-11-run.json", "2026-06-11")).toBe(true);
@@ -68,6 +71,7 @@ describe("agent-memory-trends generated-output allowlist", () => {
         evidencePath,
         digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
         taskCapturePaths: [],
+        taskCaptureRenderer: "typescript",
         runStatePath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
         latestRunPath: ".skillwiki/agent-memory-trends/latest-run.json",
       },
@@ -136,6 +140,7 @@ describe("agent-memory-trends generated-output allowlist", () => {
           "raw/transcripts/2026-06-11-task-3.md",
           "raw/transcripts/2026-06-11-task-4.md",
         ],
+        taskCaptureRenderer: "typescript",
       },
       webSources: Array.from({ length: 16 }, (_, index) => `https://example.com/source-${index}`),
     });
@@ -169,6 +174,7 @@ describe("agent-memory-trends generated-output allowlist", () => {
         evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
         digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
         taskCapturePaths: ["raw/transcripts/2026-06-11-task-secret.md"],
+        taskCaptureRenderer: "typescript",
       },
     });
     writeVaultFile(vault, "raw/articles/2026-06-11-agent-memory-trends-evidence.md", "evidence\n");
@@ -195,5 +201,33 @@ describe("agent-memory-trends generated-output allowlist", () => {
     expect(String(result.detail)).toContain("executable");
     expect(String(result.detail)).toContain("oversized");
     expect(String(result.detail)).toContain("secret");
+  });
+
+  it("rejects task captures that were not marked as TypeScript-rendered", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
+    const runManifest = manifest({
+      outputs: {
+        evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+        taskCapturePaths: ["raw/transcripts/2026-06-11-task-local-agent-memory.md"],
+        sessionBriefPath: "meta/latest-session-brief.md",
+        runStatePath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        latestRunPath: ".skillwiki/agent-memory-trends/latest-run.json",
+      },
+    });
+    for (const path of runManifest.changedFiles) writeVaultFile(vault, path, `generated file ${path}\n`);
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected non-TypeScript captures to be rejected");
+    expect(String(result.detail)).toContain("task captures must be rendered by TypeScript");
   });
 });

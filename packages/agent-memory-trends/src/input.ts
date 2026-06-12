@@ -149,6 +149,12 @@ function candidateToWire(candidate: SelectedGithubCandidate): Record<string, unk
     pushed_at: candidate.pushedAt,
     archived: candidate.archived,
     query_ids: candidate.queryIds,
+    readme_evidence: (candidate.readmeEvidence ?? []).map((evidence) => ({
+      source_url: evidence.sourceUrl,
+      excerpt: evidence.excerpt,
+      supports_claim: evidence.supportsClaim,
+      confidence: evidence.confidence,
+    })),
     score: {
       score: candidate.score.score,
       components: {

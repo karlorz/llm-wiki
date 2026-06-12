@@ -5,6 +5,8 @@ import type { AgentInput, WriteAgentInputOutput } from "./input.js";
 import type { MaybeSendHeartbeatInput, HeartbeatResult } from "./heartbeat.js";
 import type { PublishGeneratedChangesInput, PublishGeneratedChangesOutput } from "./publish.js";
 import type { AgentMemoryTrendRunState, WriteRunStateOutput } from "./run-state.js";
+import type { SynthesisRunner } from "./synthesis.js";
+import type { RenderProposalCapturesInput, RenderProposalCapturesOutput } from "./captures.js";
 
 export interface OkResult<T> {
   ok: true;
@@ -65,11 +67,8 @@ export interface AgentMemoryTrendsContext {
   ) => Promise<Result<GithubCollectionOutput>>;
   collectDuplicateSignals?: (vault: string, project: string) => Result<DuplicateSignals>;
   writeAgentInput?: (input: AgentInput) => Result<WriteAgentInputOutput>;
-  runCodexSynthesis?: (input: {
-    input: AgentInput;
-    tmpDir: string;
-    outputLastMessagePath: string;
-  }) => Promise<Result<{ manifestPath: string; stdout: string; stderr: string }>>;
+  runSynthesis?: SynthesisRunner;
+  renderProposalCaptures?: (input: RenderProposalCapturesInput) => Result<RenderProposalCapturesOutput>;
   refreshSessionBrief?: (input: RefreshSessionBriefInput) => Promise<Result<RefreshSessionBriefOutput>>;
   publishGeneratedChanges?: (input: PublishGeneratedChangesInput) => Promise<Result<PublishGeneratedChangesOutput>>;
   listTrackedRawPaths?: (vault: string) => Promise<Result<string[]>>;

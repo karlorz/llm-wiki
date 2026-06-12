@@ -2,12 +2,36 @@
 
 Private `llm-wiki` workspace package for the nightly agent-memory research workflow. It is intentionally not part of the public plugin install path in v1.
 
-The package stages high-signal agent-memory research into the vault. It collects bounded GitHub candidates through `gh api`, prepares a Codex synthesis input, runs a non-interactive Codex job, validates generated vault output through the publisher gate, pushes successful changes, and sends a heartbeat only after the push succeeds.
+The package stages high-signal agent-memory research into the vault. It collects bounded GitHub candidates through `gh api`, prepares an agent-neutral synthesis input, runs a non-interactive synthesis runner, validates generated vault output through the publisher gate, pushes successful changes, and sends a heartbeat only after the push succeeds.
+
+## Synthesis Contract
+
+`agent-memory-trends` keeps the shared synthesis boundary agent-client-neutral. The core pipeline depends on `SynthesisRunner`; Codex is the only live adapter today. This keeps the package compatible with a later Claude Code or other agent-client runner without changing the downstream publisher contract.
+
+GitHub READMEs are fetched for deterministic scoring, but full README bodies are not sent to the agent prompt. The collector extracts bounded `readme_evidence` items with:
+
+- `source_url`
+- `excerpt`
+- `supports_claim`
+- `confidence`
+
+The agent may write the aggregate evidence file, digest, run manifest, and conservative watchlist updates. It must not write `raw/transcripts` captures directly. Instead, it returns structured proposal JSON in the final message captured by `--output-last-message`.
+
+Proposal fields are `title`, `capture_kind`, `problem`, `requirements_or_questions`, `acceptance`, `evidence`, `affected_surfaces`, and `source_urls`. `capture_kind` is limited to `task`, `bug`, or `idea`; `affected_surfaces` is a small controlled vocabulary owned by `src/synthesis.ts`.
+
+TypeScript validates proposals all-or-zero before creating captures:
+
+- Any malformed proposal or missing evidence suppresses all task/bug/idea captures for the run.
+- Metadata-only candidates do not become executable `task` captures. They may become `idea` captures only when the acceptance is source inspection and decision.
+- Post-proposal duplicates are suppressed without failing the run.
+- Suppression details are recorded in the run manifest, while evidence and digest output can still publish when valid.
+- Rendered captures carry `outputs.task_capture_renderer: "typescript"` in the manifest; publisher validation rejects transcript captures without that marker.
 
 ## Codex Invocation
 
-The runner is tested against `codex-cli 0.139.0`, where live search and approval
-policy are top-level Codex flags. Keep them before the `exec` subcommand:
+The Codex adapter is tested against `codex-cli 0.139.0`, where live search and
+approval policy are top-level Codex flags. Keep them before the `exec`
+subcommand:
 
 ```bash
 codex --search --ask-for-approval never exec \
@@ -100,7 +124,7 @@ codex login
 codex doctor
 ```
 
-The nightly runner uses a self-contained `codex exec` invocation with the prompt and input JSON supplied through stdin. It does not require Codex plugins to be installed. Plugin setup is only for manual interactive Codex sessions.
+The nightly runner uses a self-contained `codex exec` invocation with the prompt and input JSON supplied through stdin. It does not require Codex plugins to be installed. Plugin setup is only for manual interactive Codex sessions. Do not enable a production timer or release-path update for this package until an `sg02` dry-run and one controlled live run pass with the current runner build.
 
 Configure the heartbeat only in the untracked service env file. Do not put secrets in tracked files.
 
@@ -138,7 +162,7 @@ sudo systemctl start agent-memory-trends.service
 journalctl -u agent-memory-trends.service --no-pager -n 200
 ```
 
-After the manual live run verifies the GitHub commit, `meta/latest-session-brief.md`, digest, evidence, task captures if any, run JSON, and Uptime Kuma heartbeat, enable the timer.
+After the manual live run verifies the GitHub commit, `meta/latest-session-brief.md`, digest, evidence, TypeScript-rendered task/bug/idea captures if any, run JSON, suppression fields if any, and Uptime Kuma heartbeat, enable the timer.
 
 ```bash
 sudo systemctl enable --now agent-memory-trends.timer
@@ -152,5 +176,6 @@ The workflow must preserve these constraints:
 - `gh auth login` and `codex login` store credentials in each tool's normal user state; do not copy tokens into tracked config.
 - `AGENT_MEMORY_TRENDS_HEARTBEAT_URL` belongs only in `/home/agent-memory/.config/agent-memory-trends/env`.
 - Publisher validation must reject out-of-allowlist changes, raw rewrites, symlinks, executable generated files, oversized files, secret-like content, manifest mismatches, too many task captures, and too many web sources.
+- Publisher validation must reject direct agent-written transcript captures that are not marked as TypeScript-rendered.
 - The heartbeat fires only after a successful push.
 - `sg01` is read-only for this workflow.

@@ -81,13 +81,18 @@ describe("agent-memory-trends GitHub collector", () => {
         };
       }
       if (args[0] === "api" && args[1]?.startsWith("/repos/") && args[1]?.endsWith("/readme")) {
+        const readme = [
+          "# Local Agent Memory",
+          "",
+          "Markdown knowledge base, local-first sync, Codex and Claude memory hooks.",
+          "",
+          "Irrelevant implementation notes. ".repeat(200),
+        ].join("\n");
         return {
           exitCode: 0,
           stdout: JSON.stringify({
             encoding: "base64",
-            content: Buffer.from("Markdown knowledge base, local-first sync, Codex and Claude memory hooks.").toString(
-              "base64"
-            ),
+            content: Buffer.from(readme).toString("base64"),
           }),
           stderr: "",
         };
@@ -111,6 +116,19 @@ describe("agent-memory-trends GitHub collector", () => {
     expect(result.data.apiCallsUsed).toBeLessThanOrEqual(100);
     expect(result.data.rawCandidateCount).toBe(50);
     expect(result.data.selectedCandidates).toHaveLength(10);
+    expect(result.data.selectedCandidates[0].readmeEvidence).toEqual([
+      {
+        sourceUrl: expect.stringMatching(/^https:\/\/github\.com\/acme\/memory-.*#readme$/),
+        excerpt: "Markdown knowledge base, local-first sync, Codex and Claude memory hooks.",
+        supportsClaim: "README evidence mentions agent-memory-relevant implementation signals.",
+        confidence: "medium",
+      },
+    ]);
+    const readmeEvidence = result.data.selectedCandidates[0].readmeEvidence ?? [];
+    expect(readmeEvidence[0]?.excerpt.length).toBeLessThanOrEqual(600);
+    expect(result.data.selectedCandidates[0].readmeText.length).toBeGreaterThan(
+      readmeEvidence[0]?.excerpt.length ?? 0
+    );
     expect(result.data.rateLimit.resources.search.remaining).toBe(29);
     expect(result.data.runSummary).toMatchObject({
       rawCandidateCount: 50,

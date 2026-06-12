@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { collectGithubCandidates } from "./github.js";
 import { readResearchConfig, parseResearchConfig, type ResearchConfig } from "./config.js";
 import { collectDuplicateSignals } from "./dedupe.js";
+import { renderProposalCaptures } from "./captures.js";
 import { createGitRunner, createSkillwikiRunner } from "./git.js";
 import { maybeSendHeartbeat } from "./heartbeat.js";
 import { buildAgentInput, writeAgentInput, type AgentInput, type AllowedOutputs } from "./input.js";
 import { publishGeneratedChanges } from "./publish.js";
-import { runCodexSynthesis } from "./runner.js";
+import { createCodexSynthesisRunner } from "./runner.js";
 import { writeRunState, type AgentMemoryTrendRunState, type HeartbeatState } from "./run-state.js";
 import {
   err,
@@ -856,20 +857,17 @@ async function runDaily(
 
   const tmpDir = join(tmpdir(), "agent-memory-trends");
   mkdirSync(tmpDir, { recursive: true });
-  const codexInput = {
+  const synthesisInput = {
     input: collected.data.input,
     tmpDir,
     outputLastMessagePath: join(tmpDir, `${collected.data.options.runDate}-codex-last-message.md`),
   };
-  const codex = context.runCodexSynthesis
-    ? await context.runCodexSynthesis(codexInput)
-    : await runCodexSynthesis({
-        ...codexInput,
-        runCodex: createCodexRunner(),
-      });
-  if (!codex.ok) {
+  const synthesis = context.runSynthesis
+    ? await context.runSynthesis(synthesisInput)
+    : await createCodexSynthesisRunner(createCodexRunner())(synthesisInput);
+  if (!synthesis.ok) {
     writeFailureState(collected.data.options, context, startedAt, "agent");
-    return err("AGENT_FAILED", codex.detail ?? codex.error);
+    return err("AGENT_FAILED", synthesis.detail ?? synthesis.error);
   }
 
   let changedFiles: string[] = [];
@@ -877,6 +875,24 @@ async function runDaily(
   const mutations = [collected.data.inputPath];
 
   if (!dryRun) {
+    const renderer = context.renderProposalCaptures ?? renderProposalCaptures;
+    const rendered = renderer({
+      vault: collected.data.options.vault,
+      project: collected.data.options.project,
+      runDate: collected.data.options.runDate,
+      manifestPath: collected.data.input.manifestPath,
+      output: synthesis.data.output,
+      duplicateSignals: {
+        existingTasks: collected.data.input.existingTasks,
+        activeWork: collected.data.input.activeWork,
+        recentDigests: collected.data.input.recentDigests,
+      },
+    });
+    if (!rendered.ok) {
+      writeFailureState(collected.data.options, context, startedAt, "validation");
+      return rendered;
+    }
+
     const refresher = context.refreshSessionBrief ?? ((input) => refreshSessionBrief(input, context));
     const refreshed = await refresher({
       vault: collected.data.options.vault,

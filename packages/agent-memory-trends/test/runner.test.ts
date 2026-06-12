@@ -5,11 +5,13 @@ import { describe, expect, it } from "vitest";
 import type { AgentInput } from "../src/input.js";
 import {
   buildCodexExecRequest,
+  createCodexSynthesisRunner,
   loadCodexSynthesisPrompt,
   runCodexSynthesis,
   type CodexRunResult,
   type CodexRunner,
 } from "../src/runner.js";
+import type { SynthesisRunner } from "../src/synthesis.js";
 
 function inputFixture(overrides: Partial<AgentInput> = {}): AgentInput {
   return {
@@ -38,7 +40,10 @@ describe("Codex synthesis runner", () => {
   it("loads a prompt that encodes the publisher contract and web-source cap", () => {
     const prompt = loadCodexSynthesisPrompt();
 
-    expect(prompt).toContain("0-3 task captures");
+    expect(prompt).toContain("Return structured JSON");
+    expect(prompt).toContain("capture_kind");
+    expect(prompt).toContain("Do not write raw/transcripts");
+    expect(prompt).toContain("metadata-only");
     expect(prompt).toContain("max 15");
     expect(prompt).toContain("run manifest");
     expect(prompt).toContain("publisher gate");
@@ -95,6 +100,14 @@ describe("Codex synthesis runner", () => {
             archived: false,
             queryIds: ["agent-memory"],
             readmeText: "README ".repeat(10_000),
+            readmeEvidence: [
+              {
+                sourceUrl: "https://github.com/example/huge-agent#readme",
+                excerpt: "Agent memory hooks for Codex and Claude using local Markdown.",
+                supportsClaim: "README evidence mentions cross-agent memory hooks.",
+                confidence: "medium",
+              },
+            ],
             score: {
               score: 31,
               components: {
@@ -121,6 +134,14 @@ describe("Codex synthesis runner", () => {
       full_name: "example/huge-agent",
       canonical_url: "https://github.com/example/huge-agent",
       stargazers_count: 42,
+      readme_evidence: [
+        {
+          source_url: "https://github.com/example/huge-agent#readme",
+          excerpt: "Agent memory hooks for Codex and Claude using local Markdown.",
+          supports_claim: "README evidence mentions cross-agent memory hooks.",
+          confidence: "medium",
+        },
+      ],
       score: {
         components: {
           authority_activity: 5,
@@ -167,5 +188,67 @@ describe("Codex synthesis runner", () => {
     expect(calls[0].args).toContain("exec");
     expect(calls[0].stdin).toContain('"allowed_outputs"');
     expect(result.data.manifestPath).toBe(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-11-run.json"));
+  });
+
+  it("adapts Codex exec behind the neutral SynthesisRunner boundary", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "agent-memory-trends-runner-"));
+    const vault = join(tmp, "vault");
+    const repo = join(tmp, "repo");
+    const outputLastMessagePath = join(tmp, "last-message.md");
+    mkdirSync(join(vault, ".skillwiki", "agent-memory-trends"), { recursive: true });
+    mkdirSync(repo, { recursive: true });
+    const input = inputFixture({
+      vault,
+      repo,
+      manifestPath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      allowedOutputs: {
+        evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+        taskCaptureGlob: "raw/transcripts/2026-06-11-task-*.md",
+        manifestPath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      },
+    });
+
+    const codexRunner: CodexRunner = async () => {
+      writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-11-run.json"), '{"ok":true}\n', "utf8");
+      writeFileSync(
+        outputLastMessagePath,
+        JSON.stringify({
+          proposals: [
+            {
+              title: "Evaluate local agent memory bridge",
+              capture_kind: "idea",
+              problem: "A source-backed memory bridge may be relevant, but needs inspection first.",
+              requirements_or_questions: ["Inspect the source and decide whether the pattern applies."],
+              acceptance: ["A human-reviewed decision exists before implementation work is queued."],
+              evidence: [
+                {
+                  source_url: "https://github.com/acme/local-agent-memory#readme",
+                  excerpt: "Local-first agent memory for Claude and Codex sessions.",
+                  supports_claim: "The README describes local-first cross-agent memory.",
+                  confidence: "medium",
+                },
+              ],
+              affected_surfaces: ["agent-memory-trends"],
+              source_urls: ["https://github.com/acme/local-agent-memory#readme"],
+            },
+          ],
+        }),
+        "utf8"
+      );
+      return { exitCode: 0, stdout: "done", stderr: "" };
+    };
+    const runner: SynthesisRunner = createCodexSynthesisRunner(codexRunner);
+
+    const result = await runner({ input, tmpDir: tmp, outputLastMessagePath });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected synthesis success");
+    expect(result.data.output.proposals).toHaveLength(1);
+    expect(result.data.output.proposals[0]).toMatchObject({
+      title: "Evaluate local agent memory bridge",
+      captureKind: "idea",
+      affectedSurfaces: ["agent-memory-trends"],
+    });
   });
 });

@@ -6,6 +6,7 @@ export interface RunManifestOutputs {
   evidencePath?: string;
   digestPath?: string;
   taskCapturePaths?: string[];
+  taskCaptureRenderer?: string;
   sessionBriefPath?: string;
   sessionBriefCachePaths?: string[];
   sessionBriefSupportPaths?: string[];
@@ -53,7 +54,10 @@ export function isAllowedGeneratedPath(path: string, runDate: string): boolean {
     path === `raw/articles/${runDate}-agent-memory-trends-evidence.md` ||
     new RegExp(`^raw/articles/${escapeRegExp(runDate)}-agent-memory-trends-evidence-[A-Za-z0-9.+-]+\\.md$`).test(path) ||
     path === `queries/${runDate}-agent-memory-trends-digest.md` ||
-    (/^raw\/transcripts\/\d{4}-\d{2}-\d{2}-task-[^/]+\.md$/.test(path) && path.startsWith(`raw/transcripts/${runDate}-task-`)) ||
+    (/^raw\/transcripts\/\d{4}-\d{2}-\d{2}-(task|bug|idea)-[^/]+\.md$/.test(path) &&
+      (path.startsWith(`raw/transcripts/${runDate}-task-`) ||
+        path.startsWith(`raw/transcripts/${runDate}-bug-`) ||
+        path.startsWith(`raw/transcripts/${runDate}-idea-`))) ||
     path === SESSION_BRIEF_PATH ||
     SESSION_BRIEF_CACHE_PATHS.includes(path) ||
     SESSION_BRIEF_SUPPORT_PATHS.includes(path) ||
@@ -86,6 +90,9 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
 
   const taskCaptures = input.manifest.outputs.taskCapturePaths ?? [];
   if (taskCaptures.length > 3) issues.push("expected 0-3 task captures");
+  if (taskCaptures.length > 0 && input.manifest.outputs.taskCaptureRenderer !== "typescript") {
+    issues.push("task captures must be rendered by TypeScript");
+  }
   if ((input.manifest.webSources ?? []).length > 15) issues.push("expected max 15 web sources");
 
   const digestPaths = changedFiles.filter((path) => path === `queries/${input.runDate}-agent-memory-trends-digest.md`);
@@ -139,6 +146,7 @@ export function parseRunManifest(text: string): Result<RunManifest> {
         evidencePath: stringField(outputs.evidence_path ?? outputs.evidencePath),
         digestPath: stringField(outputs.digest_path ?? outputs.digestPath),
         taskCapturePaths: stringArray(outputs.task_capture_paths ?? outputs.taskCapturePaths),
+        taskCaptureRenderer: stringField(outputs.task_capture_renderer ?? outputs.taskCaptureRenderer),
         sessionBriefPath: stringField(outputs.session_brief_path ?? outputs.sessionBriefPath),
         sessionBriefCachePaths: stringArray(outputs.session_brief_cache_paths ?? outputs.sessionBriefCachePaths),
         sessionBriefSupportPaths: stringArray(outputs.session_brief_support_paths ?? outputs.sessionBriefSupportPaths),

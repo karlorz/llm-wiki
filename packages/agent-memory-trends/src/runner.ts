@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agentInputToWire, type AgentInput } from "./input.js";
+import { parseSynthesisOutput, type SynthesisOutput, type SynthesisRunner } from "./synthesis.js";
 import { err, ok, type Result } from "./types.js";
 
 export interface CodexRunResult {
@@ -38,6 +39,11 @@ export interface RunCodexSynthesisOutput {
   outputLastMessagePath: string;
   stdout: string;
   stderr: string;
+  output: SynthesisOutput;
+}
+
+export function createCodexSynthesisRunner(runCodex: CodexRunner): SynthesisRunner {
+  return (request) => runCodexSynthesis({ ...request, runCodex });
 }
 
 export function loadCodexSynthesisPrompt(): string {
@@ -94,10 +100,23 @@ export async function runCodexSynthesis(input: RunCodexSynthesisInput): Promise<
     return err("CODEX_MANIFEST_MISSING", { manifestPath });
   }
 
+  const output = readSynthesisOutput(input.outputLastMessagePath);
+
   return ok({
     manifestPath,
     outputLastMessagePath: input.outputLastMessagePath,
     stdout: result.stdout,
     stderr: result.stderr,
+    output,
   });
+}
+
+function readSynthesisOutput(outputLastMessagePath: string): SynthesisOutput {
+  if (!existsSync(outputLastMessagePath)) return { proposals: [] };
+  const parsed = parseSynthesisOutput(readFileSync(outputLastMessagePath, "utf8"));
+  if (parsed.ok) return parsed.data;
+  return {
+    proposals: [],
+    proposalErrors: [typeof parsed.detail === "string" ? parsed.detail : parsed.error],
+  };
 }

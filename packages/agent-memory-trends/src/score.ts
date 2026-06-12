@@ -1,4 +1,5 @@
 import { normalizeCanonicalUrl } from "./config.js";
+import type { ProposalEvidence } from "./synthesis.js";
 
 export interface CandidateForScoring {
   name: string;
@@ -7,6 +8,7 @@ export interface CandidateForScoring {
   description: string;
   topics: string[];
   readmeText: string;
+  readmeEvidence?: ProposalEvidence[];
   stargazersCount: number;
   forksCount: number;
   pushedAt: string;

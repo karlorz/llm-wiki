@@ -264,9 +264,51 @@ describe("agent-memory-trends CLI", () => {
         calls.push("write-input");
         return { ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } };
       },
-      runCodexSynthesis: async () => {
-        calls.push("codex");
-        return { ok: true, data: { manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json", stdout: "", stderr: "" } };
+      runSynthesis: async (input) => {
+        calls.push("synthesis");
+        return {
+          ok: true,
+          data: {
+            manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
+            outputLastMessagePath: input.outputLastMessagePath,
+            stdout: "",
+            stderr: "",
+            output: {
+              proposals: [
+                {
+                  title: "Evaluate local agent memory bridge",
+                  captureKind: "idea",
+                  problem: "A source-backed bridge may be useful but needs inspection.",
+                  requirementsOrQuestions: ["Inspect the README-backed source before queuing implementation."],
+                  acceptance: ["A reviewed decision exists before a planned work item is created."],
+                  evidence: [
+                    {
+                      sourceUrl: "https://github.com/acme/local-agent-memory#readme",
+                      excerpt: "Local-first agent memory for Claude and Codex sessions.",
+                      supportsClaim: "The README describes local-first cross-agent memory.",
+                      confidence: "medium",
+                    },
+                  ],
+                  affectedSurfaces: ["agent-memory-trends"],
+                  sourceUrls: ["https://github.com/acme/local-agent-memory#readme"],
+                },
+              ],
+            },
+          },
+        };
+      },
+      renderProposalCaptures: (input) => {
+        calls.push("render");
+        expect(input.manifestPath).toBe(".skillwiki/agent-memory-trends/2026-06-11-run.json");
+        expect(input.output.proposals).toHaveLength(1);
+        return {
+          ok: true,
+          data: {
+            renderedPaths: ["raw/transcripts/2026-06-11-idea-evaluate-local-agent-memory-bridge.md"],
+            validationErrors: [],
+            duplicateSuppressions: [],
+          },
+        };
       },
       publishGeneratedChanges: async () => {
         calls.push("publish");
@@ -709,7 +751,7 @@ describe("agent-memory-trends CLI", () => {
     expect(ghCalls).toEqual([]);
   });
 
-  it("wires daily --dry-run through collect, Codex synthesis, run-state, and skips publish plus heartbeat", async () => {
+  it("wires daily --dry-run through collect, synthesis, run-state, and skips publish plus heartbeat", async () => {
     const calls: string[] = [];
     const result = await runAgentMemoryTrendsCli(["daily", "--dry-run", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
       cwd: "/repo",
@@ -727,9 +769,18 @@ describe("agent-memory-trends CLI", () => {
       } }),
       collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
-      runCodexSynthesis: async (input) => {
-        calls.push(`codex:${input.input.runId}`);
-        return { ok: true, data: { manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json", stdout: "", stderr: "" } };
+      runSynthesis: async (input) => {
+        calls.push(`synthesis:${input.input.runId}`);
+        return {
+          ok: true,
+          data: {
+            manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
+            outputLastMessagePath: input.outputLastMessagePath,
+            stdout: "",
+            stderr: "",
+            output: { proposals: [] },
+          },
+        };
       },
       publishGeneratedChanges: async () => {
         calls.push("publish");
@@ -756,7 +807,7 @@ describe("agent-memory-trends CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(result.result.ok).toBe(true);
     if (!result.result.ok) throw new Error("expected daily success");
-    expect(calls).toEqual(["codex:2026-06-11T00-10-00+08-00"]);
+    expect(calls).toEqual(["synthesis:2026-06-11T00-10-00+08-00"]);
     expect(result.result.data.mutations).toContain("/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json");
     expect(result.result.data.humanHint).toContain("daily: ok (dry-run)");
   });
@@ -794,9 +845,51 @@ describe("agent-memory-trends CLI", () => {
         expect(input.allowedOutputs.evidencePath).toBe(evidencePath);
         return { ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } };
       },
-      runCodexSynthesis: async () => {
-        calls.push("codex");
-        return { ok: true, data: { manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json", stdout: "", stderr: "" } };
+      runSynthesis: async (input) => {
+        calls.push("synthesis");
+        return {
+          ok: true,
+          data: {
+            manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
+            outputLastMessagePath: input.outputLastMessagePath,
+            stdout: "",
+            stderr: "",
+            output: {
+              proposals: [
+                {
+                  title: "Evaluate local agent memory bridge",
+                  captureKind: "idea",
+                  problem: "A source-backed bridge may be useful but needs inspection.",
+                  requirementsOrQuestions: ["Inspect the README-backed source before queuing implementation."],
+                  acceptance: ["A reviewed decision exists before a planned work item is created."],
+                  evidence: [
+                    {
+                      sourceUrl: "https://github.com/acme/local-agent-memory#readme",
+                      excerpt: "Local-first agent memory for Claude and Codex sessions.",
+                      supportsClaim: "The README describes local-first cross-agent memory.",
+                      confidence: "medium",
+                    },
+                  ],
+                  affectedSurfaces: ["agent-memory-trends"],
+                  sourceUrls: ["https://github.com/acme/local-agent-memory#readme"],
+                },
+              ],
+            },
+          },
+        };
+      },
+      renderProposalCaptures: (input) => {
+        calls.push("render");
+        expect(input.manifestPath).toBe(".skillwiki/agent-memory-trends/2026-06-11-run.json");
+        expect(input.output.proposals).toHaveLength(1);
+        return {
+          ok: true,
+          data: {
+            renderedPaths: ["raw/transcripts/2026-06-11-idea-evaluate-local-agent-memory-bridge.md"],
+            validationErrors: [],
+            duplicateSuppressions: [],
+          },
+        };
       },
       refreshSessionBrief: async (input) => {
         calls.push("refresh-brief");
@@ -842,7 +935,7 @@ describe("agent-memory-trends CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(result.result.ok).toBe(true);
     if (!result.result.ok) throw new Error("expected daily success");
-    expect(calls).toEqual(["codex", "refresh-brief", "publish", "heartbeat"]);
+    expect(calls).toEqual(["synthesis", "render", "refresh-brief", "publish", "heartbeat"]);
     expect(result.result.data.mutations).toEqual([
       "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json",
       ...publishedFiles,
@@ -871,7 +964,24 @@ describe("agent-memory-trends CLI", () => {
       } }),
       collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: join(vault, ".skillwiki/agent-memory-trends/2026-06-11-input.json") } }),
-      runCodexSynthesis: async () => ({ ok: true, data: { manifestPath: join(vault, ".skillwiki/agent-memory-trends/2026-06-11-run.json"), stdout: "", stderr: "" } }),
+      runSynthesis: async (input) => ({
+        ok: true,
+        data: {
+          manifestPath: join(vault, ".skillwiki/agent-memory-trends/2026-06-11-run.json"),
+          outputLastMessagePath: input.outputLastMessagePath,
+          stdout: "",
+          stderr: "",
+          output: { proposals: [] },
+        },
+      }),
+      renderProposalCaptures: () => ({
+        ok: true,
+        data: {
+          renderedPaths: [],
+          validationErrors: [],
+          duplicateSuppressions: [],
+        },
+      }),
       runCommand: async (command, args) => {
         calls.push(`${command} ${args.join(" ")}`);
         expect(command).toBe("skillwiki");

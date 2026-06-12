@@ -1,6 +1,7 @@
 import { normalizeCanonicalUrl, type ResearchConfig, type ResearchQuery } from "./config.js";
 import { err, ok, type Result } from "./types.js";
 import { scoreCandidate, type CandidateForScoring, type CandidateScore } from "./score.js";
+import type { ProposalEvidence } from "./synthesis.js";
 
 export interface GhRunResult {
   exitCode: number;
@@ -103,7 +104,10 @@ export async function collectGithubCandidates(
     if (apiCallsUsed >= config.github.apiCallBudget) break;
     const readme = await fetchReadme(options.runGh, candidate.fullName);
     apiCallsUsed += 1;
-    if (readme.ok) candidate.readmeText = readme.data;
+    if (readme.ok) {
+      candidate.readmeText = readme.data;
+      candidate.readmeEvidence = extractReadmeEvidence(candidate);
+    }
   }
 
   const selectedCandidates = rawCandidates
@@ -129,6 +133,39 @@ export async function collectGithubCandidates(
       apiCallsUsed,
     },
   });
+}
+
+function extractReadmeEvidence(candidate: CandidateForScoring): ProposalEvidence[] {
+  const excerpt = selectReadmeExcerpt(candidate.readmeText);
+  if (!excerpt) return [];
+  return [
+    {
+      sourceUrl: `${candidate.canonicalUrl}#readme`,
+      excerpt,
+      supportsClaim: "README evidence mentions agent-memory-relevant implementation signals.",
+      confidence: "medium",
+    },
+  ];
+}
+
+function selectReadmeExcerpt(readmeText: string): string {
+  const paragraphs = readmeText
+    .split(/\n\s*\n/g)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter((paragraph) => paragraph.length > 0 && !paragraph.startsWith("#"));
+
+  const matched = paragraphs.find((paragraph) =>
+    /\b(agent[- ]memory|session continuity|codex|claude|mcp|markdown|knowledge base|local[- ]first|sync|hook|hooks|sqlite|obsidian)\b/i.test(
+      paragraph
+    )
+  );
+  return matched ? clampExcerpt(matched) : "";
+}
+
+function clampExcerpt(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length <= 600) return normalized;
+  return `${normalized.slice(0, 597).trimEnd()}...`;
 }
 
 async function searchRepositories(runGh: GhRunner, query: ResearchQuery): Promise<Result<SearchRepositoryItem[]>> {

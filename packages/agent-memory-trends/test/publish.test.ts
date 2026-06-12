@@ -68,6 +68,7 @@ function seedGeneratedVault(): { vault: string; manifestPath: string; changedFil
           evidence_path: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
           digest_path: "queries/2026-06-11-agent-memory-trends-digest.md",
           task_capture_paths: ["raw/transcripts/2026-06-11-task-local-agent-memory.md"],
+          task_capture_renderer: "typescript",
           run_state_path: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
         },
         web_sources: ["https://example.com/source"],
