@@ -63,6 +63,7 @@ prd_disciplines:
       - ".claude-plugin/**"
       - ".agents/plugins/marketplace.json"
       - "plugin.json"
+      - "scripts/release.sh"
       - "scripts/materialize-plugin-assets.sh"
       - "scripts/verify-manifests.sh"
       - "packages/vault-sync/**"
@@ -120,8 +121,11 @@ critical_paths:
       - ".claude-plugin/**"
       - ".agents/plugins/marketplace.json"
       - "plugin.json"
+      - "scripts/release.sh"
       - "scripts/materialize-plugin-assets.sh"
       - "scripts/verify-manifests.sh"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/publish.yml"
     vault:
       - "plugin-distribution"
       - "distribution-channels"
@@ -282,8 +286,9 @@ e2e_scripts:
 
 ```yaml
 bump_script: ./scripts/bump-version.sh
+release_script: ./scripts/release.sh
 publish_via: ci-tag-trigger
-manifests_count: 12       # bump-version.sh updates 12 manifests across CLI, plugin, package, marketplace, vault-sync, and root agy channels
+manifests_count: 13       # bump-version.sh updates 13 manifests across CLI, plugin, package, marketplace, vault-sync, agent-memory-trends, and root agy channels
 deploy_script: ""         # sg01 is a plugin-test host, not a deploy target — DEPLOY step is a no-op
 remote_hosts: [sg01]      # kept for context (e2e-remote/e2e-plugin targets), not used by DEPLOY step
 
@@ -298,6 +303,9 @@ release_policy:
     - "packages/vault-sync/**"
     - ".claude-plugin/marketplace.json"
     - "scripts/bump-version.sh"
+    - "scripts/release.sh"
+    - ".github/workflows/ci.yml"
+    - ".github/workflows/publish.yml"
   # NOTE: scripts/e2e-*.sh is intentionally NOT in trigger_globs.
   # E2E assertion fixes (e.g., doctor warn count updates) are test
   # infrastructure, not shipped artifacts. Cycles that only edit e2e
@@ -317,6 +325,7 @@ release_policy:
     - "*.md"                               # standalone doc-only commits (CLAUDE.md, README, etc.)
   tag_format: "v{version}"                 # publish.yml matches v[0-9]+.[0-9]+.[0-9]+(-beta.*)
   verify_after_push: true                  # `git ls-remote origin refs/tags/<tag>` + `gh run watch --exit-status`
+  stable_release_guard: release_script      # stable bumps do NOT publish from main alone; scripts/release.sh must push main + tag
 ```
 
 ## CI Configuration
@@ -344,13 +353,16 @@ notes:
     1. Compute next version: read current root package.json version (e.g. 0.6.0),
        then list existing tags `git tag --list 'v<base>-beta.*'`, increment -beta.N
        (e.g. v0.6.1-beta.1, then -beta.2). Stable bumps require explicit user request.
-    2. Bump all 12 manifests in lock-step via bump_script.
+    2. Bump all 13 manifests in lock-step via bump_script.
     3. Commit (`chore: bump version to <X.Y.Z-beta.N>`) and push to main branch
        — this push IS the plugin release (Claude Code plugin uses HEAD of main).
-    4. Tag `v<version>` and push the tag → publish.yml fires via OIDC → npm publish --tag beta.
+    4. Tag `v<version>` and push the tag → publish.yml fires via OIDC → npm publish --tag beta/latest.
     5. Verify tag landed on remote: `git ls-remote origin refs/tags/v<version>`.
     6. Verify CI: `gh run watch --exit-status` on the publish.yml run.
-    7. Never run `npm dist-tag add` or `npm publish` locally — OIDC tag routing only.
+    7. Stable releases are explicit: after `npm run bump <X.Y.Z>`, commit and tag `v<X.Y.Z>`, then run
+       `scripts/release.sh <X.Y.Z> --watch`. A bump commit on main alone only runs CI and updates plugin
+       source; it does not publish npm.
+    8. Never run `npm dist-tag add` or `npm publish` locally — OIDC tag routing only.
   release_policy_notes: |
     PUSH (step 10) is intentionally separate from MERGE (step 6b). MERGE always
     commits + pushes/PRs the code change. PUSH bumps + tags + lets CI publish.
