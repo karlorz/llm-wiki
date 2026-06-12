@@ -120,6 +120,7 @@ const endpointName = z.string().min(1).regex(/^[A-Za-z0-9_.-]+$/, "must be a hos
 const ipAddress = z.string().min(1).regex(/^[0-9a-fA-F:.]+$/, "must be an IP address token");
 const sshAlias = z.string().min(1).regex(/^[A-Za-z0-9_.@-]+$/, "must be an SSH alias token");
 const sshUser = z.string().min(1).regex(/^[A-Za-z0-9_.-]+$/, "must be an SSH user token");
+const absolutePath = z.string().min(1).regex(/^\//, "must be an absolute path");
 
 export const FleetAccessProfileSchema = z.object({
   status: z.enum(["local", "configured", "planned", "absent", "unknown"]),
@@ -143,6 +144,29 @@ export const FleetHostIdentitySchema = z.object({
 
 export type FleetHostIdentity = z.infer<typeof FleetHostIdentitySchema>;
 
+export const FleetSkillwikiSatelliteSchema = z.object({
+  enabled: z.boolean(),
+  user: sshUser,
+  vault_path: absolutePath,
+  repo_path: absolutePath,
+  ssh_alias: sshAlias,
+  scheduler: z.enum(["systemd"]),
+  timezone: z.string().min(1).optional(),
+  jobs: z.array(z.enum([
+    "self-update-check",
+    "vault-sync-preflight",
+    "agent-memory-trends-daily",
+    "session-brief-refresh",
+    "health-summary"
+  ])).min(1),
+  cadence: z.object({
+    self_update_check: z.literal("every-4-hours").optional(),
+    daily_window: z.string().min(1).optional()
+  }).strict().optional()
+}).strict();
+
+export type FleetSkillwikiSatellite = z.infer<typeof FleetSkillwikiSatelliteSchema>;
+
 export const FleetHostSchema = z.object({
   class: z.enum(["dev-macos", "dev-linux", "prod-linux", "unknown"]),
   role: z.enum(["leaf", "snapshotter"]),
@@ -151,6 +175,9 @@ export const FleetHostSchema = z.object({
   identity: FleetHostIdentitySchema,
   access: z.object({
     from: z.record(hostId, FleetAccessProfileSchema).optional()
+  }).strict().optional(),
+  maintenance: z.object({
+    skillwiki_satellite: FleetSkillwikiSatelliteSchema.optional()
   }).strict().optional()
 }).strict();
 

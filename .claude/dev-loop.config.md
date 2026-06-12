@@ -134,7 +134,7 @@ critical_paths:
       - "claude-code-plugin-update-workflow"
     history_pins:
       - "2026-06-04: materialized plugin mirrors must be regenerated and verified"
-      - "Version bump syncs 12 manifests across CLI, plugin, package, marketplace, vault-sync, and root agy channels"
+      - "Version bump syncs 14 manifests across CLI, plugin, package, marketplace, vault-sync, agent-memory-trends, skillwiki-maintenance, and root agy channels"
   vault_sync_safety:
     code:
       - "packages/vault-sync/**"
@@ -288,7 +288,7 @@ e2e_scripts:
 bump_script: ./scripts/bump-version.sh
 release_script: ./scripts/release.sh
 publish_via: ci-tag-trigger
-manifests_count: 13       # bump-version.sh updates 13 manifests across CLI, plugin, package, marketplace, vault-sync, agent-memory-trends, and root agy channels
+manifests_count: 14       # bump-version.sh updates 14 manifests across CLI, plugin, package, marketplace, vault-sync, agent-memory-trends, skillwiki-maintenance, and root agy channels
 deploy_script: ""         # sg01 is a plugin-test host, not a deploy target — DEPLOY step is a no-op
 remote_hosts: [sg01]      # kept for context (e2e-remote/e2e-plugin targets), not used by DEPLOY step
 
@@ -353,7 +353,7 @@ notes:
     1. Compute next version: read current root package.json version (e.g. 0.6.0),
        then list existing tags `git tag --list 'v<base>-beta.*'`, increment -beta.N
        (e.g. v0.6.1-beta.1, then -beta.2). Stable bumps require explicit user request.
-    2. Bump all 13 manifests in lock-step via bump_script.
+    2. Bump all 14 manifests in lock-step via bump_script.
     3. Commit (`chore: bump version to <X.Y.Z-beta.N>`) and push to main branch
        — this push IS the plugin release (Claude Code plugin uses HEAD of main).
     4. Tag `v<version>` and push the tag → publish.yml fires via OIDC → npm publish --tag beta/latest.

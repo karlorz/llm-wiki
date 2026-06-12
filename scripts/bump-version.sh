@@ -18,6 +18,7 @@
 #   11. plugin.json                        (root agy local plugin)
 #   12. .claude-plugin/plugin.json         (root agy GitHub URL marker)
 #   13. packages/agent-memory-trends/package.json (private workspace package)
+#   14. packages/skillwiki-maintenance/package.json (private workspace package)
 #
 # After editing, verifies all manifest files have the new version.
 
@@ -61,6 +62,7 @@ bump_file "packages/vault-sync/.codex-plugin/plugin.json"  "${REPO_ROOT}/package
 bump_file "plugin.json (root agy local plugin)"    "${REPO_ROOT}/plugin.json"
 bump_file ".claude-plugin/plugin.json (root agy URL marker)" "${REPO_ROOT}/.claude-plugin/plugin.json"
 bump_file "packages/agent-memory-trends/package.json" "${REPO_ROOT}/packages/agent-memory-trends/package.json"
+bump_file "packages/skillwiki-maintenance/package.json" "${REPO_ROOT}/packages/skillwiki-maintenance/package.json"
 
 echo ""
 echo "Verifying all files..."
@@ -78,6 +80,7 @@ EXPECTED_FILES=(
   "${REPO_ROOT}/plugin.json"
   "${REPO_ROOT}/.claude-plugin/plugin.json"
   "${REPO_ROOT}/packages/agent-memory-trends/package.json"
+  "${REPO_ROOT}/packages/skillwiki-maintenance/package.json"
 )
 
 MISSING=0
@@ -94,9 +97,9 @@ if ! grep -q "\"version\": \"${VERSION}\"" "${REPO_ROOT}/.claude-plugin/marketpl
 fi
 
 if [ "$MISSING" -eq 0 ]; then
-  echo "  ✓ All 13 manifest version fields updated to ${VERSION}"
+  echo "  ✓ All 14 manifest version fields updated to ${VERSION}"
 else
-  echo "  ⚠ Expected 13 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
+  echo "  ⚠ Expected 14 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
   exit 1
 fi
 

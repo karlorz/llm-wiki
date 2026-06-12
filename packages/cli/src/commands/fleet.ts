@@ -48,6 +48,12 @@ type LoadedFleet =
   | { ok: true; manifest: FleetManifest }
   | { ok: false; error: "FILE_NOT_FOUND" | "INVALID_YAML" | "INVALID_FLEET_MANIFEST"; detail?: unknown };
 
+interface OutboundAccess {
+  hostId: string;
+  sshAliases: string[];
+  users: string[];
+}
+
 const FLEET_REL_PATH = join("projects", "llm-wiki", "architecture", "fleet.yaml");
 
 export async function runFleetValidate(input: FleetValidateInput): Promise<{ exitCode: number; result: Result<FleetValidateOutput> }> {
@@ -240,7 +246,8 @@ function formatKnownContext(input: {
   const protectedValue = host.protected === true ? "true" : "false";
   const writesTo = host.writes_to.join(", ");
   const selfAliases = collectSelfAliases(input.manifest, input.hostId);
-  const outbound = collectOutboundHosts(input.manifest, input.hostId);
+  const outbound = collectOutboundAccess(input.manifest, input.hostId);
+  const maintenanceLines = formatMaintenanceLines(host);
 
   const guidance = input.hostId === "macos-dev"
     ? "use declared SSH aliases for remote work when needed; do not assume undeclared hosts have reciprocal SSH access."
@@ -255,8 +262,9 @@ function formatKnownContext(input: {
     `- Workspace: ${formatMaybe(input.cwd)}`,
     `- Vault: ${formatMaybe(input.vault)}`,
     `- Fleet role: \`${host.role}\`; protected: \`${protectedValue}\`; writes_to: \`${writesTo}\``,
+    ...maintenanceLines,
     `- Self SSH aliases known in fleet: ${formatList(selfAliases)}`,
-    `- Declared outbound SSH from this source: ${outbound.length > 0 ? formatList(outbound) : "none"}`,
+    `- Declared outbound SSH from this source: ${formatOutboundAccess(outbound)}`,
     `- Guidance: ${guidance}`,
   ].join("\n");
 }
@@ -294,16 +302,39 @@ function collectSelfAliases(manifest: FleetManifest, hostId: string): string[] {
   return [...new Set(aliases)];
 }
 
-function collectOutboundHosts(manifest: FleetManifest, sourceHostId: string): string[] {
-  const hosts: string[] = [];
+function collectOutboundAccess(manifest: FleetManifest, sourceHostId: string): OutboundAccess[] {
+  const hosts: OutboundAccess[] = [];
   for (const [targetId, target] of Object.entries(manifest.hosts)) {
     if (targetId === sourceHostId) continue;
     const profile = target.access?.from?.[sourceHostId];
     if (profile && (profile.status === "configured" || profile.status === "local")) {
-      hosts.push(targetId);
+      hosts.push({
+        hostId: targetId,
+        sshAliases: [...new Set(profile.ssh_aliases ?? [])],
+        users: [...new Set(profile.users ?? [])],
+      });
     }
   }
-  return hosts.sort();
+  return hosts.sort((left, right) => left.hostId.localeCompare(right.hostId));
+}
+
+function formatMaintenanceLines(host: FleetManifest["hosts"][string]): string[] {
+  const satellite = host.maintenance?.skillwiki_satellite;
+  if (!satellite?.enabled) return [];
+
+  return [
+    `- Maintenance role: \`skillwiki satellite\`; user: \`${satellite.user}\`; ssh: \`${satellite.ssh_alias}\``,
+    `- Maintenance paths: maintenance vault: \`${satellite.vault_path}\`; repo: \`${satellite.repo_path}\`; scheduler: \`${satellite.scheduler}\`; jobs: ${formatList(satellite.jobs)}`,
+  ];
+}
+
+function formatOutboundAccess(values: OutboundAccess[]): string {
+  if (values.length === 0) return "none";
+  return values.map((value) => {
+    const aliasPart = value.sshAliases.length > 0 ? ` via ${formatList(value.sshAliases)}` : " (no SSH aliases)";
+    const usersPart = value.users.length > 0 ? ` (users: ${formatList(value.users)})` : "";
+    return `\`${value.hostId}\`${aliasPart}${usersPart}`;
+  }).join("; ");
 }
 
 function formatList(values: string[]): string {

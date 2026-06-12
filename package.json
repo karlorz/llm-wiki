@@ -6,7 +6,8 @@
     "packages/shared",
     "packages/cli",
     "packages/skills",
-    "packages/agent-memory-trends"
+    "packages/agent-memory-trends",
+    "packages/skillwiki-maintenance"
   ],
   "scripts": {
     "build": "npm run -ws --if-present build",

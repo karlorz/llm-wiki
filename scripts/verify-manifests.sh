@@ -4,7 +4,7 @@ set -euo pipefail
 # verify-manifests.sh — Validate manifest consistency across distribution channels.
 #
 # Checks:
-#   1. Version field is identical across all 13 manifest files
+#   1. Version field is identical across all 14 manifest files
 #   2. Every skill directory has a SKILL.md
 #   3. SKILL.md frontmatter uses Agent Skills schema fields across shipped layouts
 #   4. Skill count in plugin descriptions/marketplace matches actual count
@@ -56,12 +56,13 @@ else
   echo "✓ No case-only tracked path collisions"
 fi
 
-# ---- 1. Version consistency across all 13 manifests ----
+# ---- 1. Version consistency across all 14 manifests ----
 
 CLI_VER=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 SKILLS_PKG_VER=$(grep '"version"' "$REPO_ROOT/packages/skills/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 SHARED_VER=$(grep '"version"' "$REPO_ROOT/packages/shared/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 AGENT_MEMORY_TRENDS_VER=$(grep '"version"' "$REPO_ROOT/packages/agent-memory-trends/package.json" 2>/dev/null | head -1 | sed 's/.*: *"//;s/".*//' || true)
+SKILLWIKI_MAINTENANCE_VER=$(grep '"version"' "$REPO_ROOT/packages/skillwiki-maintenance/package.json" 2>/dev/null | head -1 | sed 's/.*: *"//;s/".*//' || true)
 ROOT_VER=$(grep '"version"' "$REPO_ROOT/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 PLUGIN_VER=$(grep '"version"' "$REPO_ROOT/packages/skills/.claude-plugin/plugin.json" | head -1 | sed 's/.*: *"//;s/".*//')
 CODEX_PLUGIN_VER=$(grep '"version"' "$REPO_ROOT/packages/skills/.codex-plugin/plugin.json" | head -1 | sed 's/.*: *"//;s/".*//')
@@ -84,6 +85,7 @@ check_version "packages/cli/package.json" "$CLI_VER"
 check_version "packages/skills/package.json" "$SKILLS_PKG_VER"
 check_version "packages/shared/package.json" "$SHARED_VER"
 check_version "packages/agent-memory-trends/package.json" "$AGENT_MEMORY_TRENDS_VER"
+check_version "packages/skillwiki-maintenance/package.json" "$SKILLWIKI_MAINTENANCE_VER"
 check_version "package.json (root)" "$ROOT_VER"
 check_version "packages/skills/.claude-plugin/plugin.json" "$PLUGIN_VER"
 check_version "packages/skills/.codex-plugin/plugin.json" "$CODEX_PLUGIN_VER"
@@ -95,7 +97,7 @@ check_version ".claude-plugin/plugin.json (root agy URL marker)" "$ROOT_AGY_REMO
 check_version ".claude-plugin/marketplace.json metadata.version" "$MARKET_VER"
 
 if [ "$ERRORS" -eq 0 ]; then
-  echo "✓ All 13 manifests at version $CLI_VER"
+  echo "✓ All 14 manifests at version $CLI_VER"
 fi
 
 # ---- 2. Skill directories have SKILL.md ----
