@@ -25,10 +25,15 @@ export interface CommandRunResult {
   stderr: string;
 }
 
+export interface CommandRunOptions {
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+}
+
 export type CommandRunner = (
   command: string,
   args: string[],
-  options: { cwd: string }
+  options: CommandRunOptions
 ) => Promise<CommandRunResult>;
 
 export type MaintenanceJobId =
