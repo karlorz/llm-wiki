@@ -223,7 +223,32 @@ function matchesPattern(path: string, pattern: string): boolean {
     const rest = normalizedPath.startsWith(`${prefix}/`) ? normalizedPath.slice(prefix.length + 1) : "";
     return rest.length > 0 && !rest.includes("/");
   }
+  if (normalizedPattern.includes("*")) {
+    return globPatternToRegExp(normalizedPattern).test(normalizedPath);
+  }
   return normalizedPath === normalizedPattern;
+}
+
+function globPatternToRegExp(pattern: string): RegExp {
+  let source = "^";
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index]!;
+    if (char === "*") {
+      if (pattern[index + 1] === "*") {
+        source += ".*";
+        index += 1;
+      } else {
+        source += "[^/]*";
+      }
+      continue;
+    }
+    source += escapeRegExp(char);
+  }
+  return new RegExp(`${source}$`);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
 }
 
 function normalizePath(path: string): string {
