@@ -49,6 +49,7 @@ import { runCanvasGenerate } from "./commands/canvas.js";
 import { runQuery } from "./commands/query.js";
 import { runIndexLinkFormat } from "./commands/index-link-format.js";
 import { runTopicMapCheck } from "./commands/topic-map-check.js";
+import { runFleetContext, runFleetValidate } from "./commands/fleet.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 import { postCommit } from "./utils/auto-commit.js";
 import { triggerAutoUpdate } from "./utils/auto-update.js";
@@ -814,6 +815,33 @@ program
       provenance: opts.provenance,
       dryRun: !!opts.dryRun,
     }), opts.vault);
+  });
+
+const fleetCmd = program.command("fleet").description("manage fleet topology metadata");
+
+fleetCmd
+  .command("validate <file>")
+  .description("validate a fleet manifest")
+  .action(async (file) => {
+    emit(await runFleetValidate({ file }));
+  });
+
+fleetCmd
+  .command("context [vault]")
+  .description("render compact Runtime Host Context for SessionStart")
+  .option("--file <path>", "fleet manifest path")
+  .option("--host-id <id>", "explicit current fleet host id")
+  .action(async (vault, opts) => {
+    emit(await runFleetContext({
+      vault,
+      file: opts.file,
+      hostId: opts.hostId,
+      env: process.env,
+      home: process.env.HOME ?? "",
+      cwd: process.cwd(),
+      osHostname: process.env.HOSTNAME,
+      user: process.env.USER,
+    }));
   });
 
 // Emit deprecation warnings for any installed skills marked deprecated

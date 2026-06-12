@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/karlorz/llm-wiki/refs/heads/main/schemas/fleet.schema.json",
+  "title": "SkillWiki Fleet Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "vault_remote", "hosts"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "vault_remote": {
+      "type": "string",
+      "minLength": 1
+    },
+    "s3_remote": {
+      "type": "string",
+      "minLength": 1
+    },
+    "hosts": {
+      "type": "object",
+      "description": "Fleet hosts keyed by stable host id. Runtime validation requires exactly one host with role: snapshotter.",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/host"
+      }
+    }
+  },
+  "$defs": {
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "role", "writes_to", "identity"],
+      "properties": {
+        "class": {
+          "enum": ["dev-macos", "dev-linux", "prod-linux", "unknown"]
+        },
+        "role": {
+          "enum": ["leaf", "snapshotter"]
+        },
+        "writes_to": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": ["s3", "github"]
+          }
+        },
+        "protected": {
+          "type": "boolean"
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "access": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "from": {
+              "type": "object",
+              "propertyNames": {
+                "pattern": "^[a-z0-9][a-z0-9_-]*$"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/accessProfile"
+              }
+            }
+          }
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hostnames"],
+      "properties": {
+        "hostnames": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/endpointName"
+          }
+        },
+        "public_addresses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ipAddress"
+          }
+        },
+        "private_addresses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ipAddress"
+          }
+        },
+        "tailscale": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "node_names": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/endpointName"
+              }
+            },
+            "magicdns_names": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/endpointName"
+              }
+            },
+            "addresses": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ipAddress"
+              }
+            }
+          }
+        }
+      }
+    },
+    "accessProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "transports"],
+      "properties": {
+        "status": {
+          "enum": ["local", "configured", "planned", "absent", "unknown"]
+        },
+        "ssh_aliases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sshAlias"
+          }
+        },
+        "users": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sshUser"
+          }
+        },
+        "transports": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": ["local", "public-ip", "tailscale", "private-lan"]
+          }
+        }
+      }
+    },
+    "endpointName": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "ipAddress": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[0-9a-fA-F:.]+$"
+    },
+    "sshAlias": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.@-]+$"
+    },
+    "sshUser": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    }
+  }
+}

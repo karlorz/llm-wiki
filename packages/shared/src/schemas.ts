@@ -115,6 +115,71 @@ export const MetaSchema = z.object({
 
 export type Meta = z.infer<typeof MetaSchema>;
 
+const hostId = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/, "must be a lowercase host id");
+const endpointName = z.string().min(1).regex(/^[A-Za-z0-9_.-]+$/, "must be a hostname-like token");
+const ipAddress = z.string().min(1).regex(/^[0-9a-fA-F:.]+$/, "must be an IP address token");
+const sshAlias = z.string().min(1).regex(/^[A-Za-z0-9_.@-]+$/, "must be an SSH alias token");
+const sshUser = z.string().min(1).regex(/^[A-Za-z0-9_.-]+$/, "must be an SSH user token");
+
+export const FleetAccessProfileSchema = z.object({
+  status: z.enum(["local", "configured", "planned", "absent", "unknown"]),
+  ssh_aliases: z.array(sshAlias).optional(),
+  users: z.array(sshUser).optional(),
+  transports: z.array(z.enum(["local", "public-ip", "tailscale", "private-lan"])).min(1)
+}).strict();
+
+export type FleetAccessProfile = z.infer<typeof FleetAccessProfileSchema>;
+
+export const FleetHostIdentitySchema = z.object({
+  hostnames: z.array(endpointName).min(1),
+  public_addresses: z.array(ipAddress).optional(),
+  private_addresses: z.array(ipAddress).optional(),
+  tailscale: z.object({
+    node_names: z.array(endpointName).optional(),
+    magicdns_names: z.array(endpointName).optional(),
+    addresses: z.array(ipAddress).optional()
+  }).strict().optional()
+}).strict();
+
+export type FleetHostIdentity = z.infer<typeof FleetHostIdentitySchema>;
+
+export const FleetHostSchema = z.object({
+  class: z.enum(["dev-macos", "dev-linux", "prod-linux", "unknown"]),
+  role: z.enum(["leaf", "snapshotter"]),
+  writes_to: z.array(z.enum(["s3", "github"])).min(1),
+  protected: z.boolean().optional(),
+  identity: FleetHostIdentitySchema,
+  access: z.object({
+    from: z.record(hostId, FleetAccessProfileSchema).optional()
+  }).strict().optional()
+}).strict();
+
+export type FleetHost = z.infer<typeof FleetHostSchema>;
+
+export const FleetManifestSchema = z.object({
+  "$schema": z.string().url().optional(),
+  schema_version: z.literal(1),
+  vault_remote: z.string().min(1),
+  s3_remote: z.string().min(1).optional(),
+  hosts: z.record(hostId, FleetHostSchema)
+}).strict().superRefine((v, ctx) => {
+  const entries = Object.entries(v.hosts);
+  if (entries.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["hosts"], message: "must contain at least one host" });
+  }
+
+  const snapshotters = entries.filter(([, host]) => host.role === "snapshotter").map(([id]) => id);
+  if (snapshotters.length !== 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["hosts"],
+      message: `must contain exactly one snapshotter host, found ${snapshotters.length}`
+    });
+  }
+});
+
+export type FleetManifest = z.infer<typeof FleetManifestSchema>;
+
 export type SchemaName = "typed-knowledge" | "raw" | "work-item" | "compound" | "meta";
 
 export function detectSchema(fm: Record<string, unknown>): { schema: SchemaName | null } {

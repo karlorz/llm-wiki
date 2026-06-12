@@ -274,6 +274,41 @@ Committed memory capsule.
     expect(context).toContain("Root hook memory capsule.");
   });
 
+  it("injects Runtime Host Context from the skillwiki fleet context helper", () => {
+    const project = tempProject();
+    const vault = tempVault();
+    const bin = fakeSkillwikiBin(`#!/usr/bin/env bash
+if [ "\${1:-}" = "--human" ] && [ "\${2:-}" = "fleet" ] && [ "\${3:-}" = "context" ]; then
+  cat <<'OUT'
+## Runtime Host Context
+
+- Current machine: \`sg01\` (source: \`SKILLWIKI_HOST_ID\`)
+- OS hostname: \`sg01\`
+- User: \`root\`
+- Workspace: \`/root/llm-wiki\`
+- Vault: \`/root/wiki\`
+- Fleet role: \`snapshotter\`; protected: \`true\`; writes_to: \`github\`
+- Self SSH aliases known in fleet: \`sg01\`, \`cloudsg01\`
+- Declared outbound SSH from this source: none
+- Guidance: this session is already on \`sg01\`; do not SSH to self aliases unless the user explicitly asks.
+OUT
+  exit 0
+fi
+exit 42
+`);
+
+    const context = runClaudeHook(project, {
+      WIKI_PATH: vault,
+      SKILLWIKI_HOST_ID: "sg01",
+      PATH: `${bin}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(context).toContain("## Runtime Host Context");
+    expect(context).toContain("Current machine: `sg01`");
+    expect(context).toContain("Self SSH aliases known in fleet: `sg01`, `cloudsg01`");
+    expect(context.indexOf("## Runtime Host Context")).toBeLessThan(context.indexOf("name: using-skillwiki"));
+  });
+
   it("falls back to read-only session-brief computation when no file exists", () => {
     const project = tempProject();
     const vault = tempVault();

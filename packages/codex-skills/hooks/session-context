@@ -183,6 +183,43 @@ build_dynamic_session_memory() {
     return 0
 }
 
+build_runtime_host_context() {
+    local vault
+    vault=$(resolve_vault_path_for_session)
+
+    if command -v skillwiki >/dev/null 2>&1; then
+        local context
+        if [[ -n "$vault" && -d "$vault" ]]; then
+            context=$(skillwiki --human fleet context "$vault" 2>/dev/null || true)
+        else
+            context=$(skillwiki --human fleet context 2>/dev/null || true)
+        fi
+        if [[ "$context" == *"## Runtime Host Context"* ]]; then
+            printf '%s' "$context"
+            return 0
+        fi
+    fi
+
+    local os_hostname
+    local current_user
+    os_hostname=$(hostname -s 2>/dev/null || hostname 2>/dev/null || printf '')
+    current_user=$(id -un 2>/dev/null || printf '%s' "${USER:-}")
+
+    cat <<EOF
+## Runtime Host Context
+
+- Current machine: unknown
+- OS hostname: \`${os_hostname:-unknown}\`
+- User: \`${current_user:-unknown}\`
+- Workspace: \`${PWD}\`
+- Vault: \`${vault:-unknown}\`
+- Fleet role: unknown
+- Self SSH aliases known in fleet: unknown
+- Declared outbound SSH from this source: unknown
+- Guidance: host identity is unresolved; do not assume local vs remote role. Inspect runtime or ask before SSH/deploy/sync work.
+EOF
+}
+
 escape_for_json() {
     local s="$1"
     s="${s//\\/\\\\}"
@@ -219,12 +256,18 @@ build_skillwiki_session_context() {
     local skill_content="$1"
     local project_prd_context
     local dynamic_session_memory
+    local runtime_host_context
     local session_context
 
     project_prd_context=$(build_project_prd_context)
     dynamic_session_memory=$(build_dynamic_session_memory)
+    runtime_host_context=$(build_runtime_host_context)
 
     session_context=$'### Skillwiki Activation\n\nSkillwiki is active for this workspace. Below are the capability guidelines for local reference:'
+    if [[ -n "$runtime_host_context" ]]; then
+        session_context+=$'\n\n'
+        session_context+="$runtime_host_context"
+    fi
     if [[ -n "$dynamic_session_memory" ]]; then
         session_context+=$'\n\n'
         session_context+="$dynamic_session_memory"
