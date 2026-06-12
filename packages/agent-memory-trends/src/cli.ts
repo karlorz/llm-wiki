@@ -9,7 +9,7 @@ import { renderProposalCaptures } from "./captures.js";
 import { createGitRunner, createSkillwikiRunner } from "./git.js";
 import { maybeSendHeartbeat } from "./heartbeat.js";
 import { buildAgentInput, writeAgentInput, type AgentInput, type AllowedOutputs } from "./input.js";
-import { publishGeneratedChanges } from "./publish.js";
+import { materializeOperationalRunManifest, publishGeneratedChanges } from "./publish.js";
 import { createCodexSynthesisRunner } from "./runner.js";
 import { writeRunState, type AgentMemoryTrendRunState, type HeartbeatState } from "./run-state.js";
 import {
@@ -27,7 +27,7 @@ import {
 } from "./types.js";
 
 const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "publish"]);
-const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--help]";
+const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--generate-only] [--help]";
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
 const SESSION_BRIEF_FILES = [
@@ -95,14 +95,15 @@ export async function runAgentMemoryTrendsCli(
     }
 
     if (command === "daily") {
-      const result = await runDaily(options, context, dryRun);
+      const generateOnly = options.flags.has("generate-only") && !dryRun;
+      const result = await runDaily(options, context, dryRun, generateOnly);
       if (!result.ok) return errorRun(result);
       return okRun(
         command,
         dryRun,
         generatedAt,
         result.data.mutations,
-        `daily: ok${dryRun ? " (dry-run)" : ""}; selected ${result.data.selectedCandidateCount} candidate(s)`
+        `daily: ok${dryRun ? " (dry-run)" : generateOnly ? " (generate-only)" : ""}; selected ${result.data.selectedCandidateCount} candidate(s)`
       );
     }
 
@@ -849,7 +850,8 @@ async function collectInput(options: ParsedCliOptions, context: AgentMemoryTrend
 async function runDaily(
   options: ParsedCliOptions,
   context: AgentMemoryTrendsContext,
-  dryRun: boolean
+  dryRun: boolean,
+  generateOnly: boolean
 ): Promise<Result<{ mutations: string[]; selectedCandidateCount: number }>> {
   const startedAt = formatInstant(context.now);
   const collected = await collectInput(options, context);
@@ -871,7 +873,7 @@ async function runDaily(
   }
 
   let changedFiles: string[] = [];
-  let heartbeat: HeartbeatState = { status: "skipped", reason: "dry-run" };
+  let heartbeat: HeartbeatState = { status: "skipped", reason: dryRun ? "dry-run" : "generate-only" };
   const mutations = [collected.data.inputPath];
 
   if (!dryRun) {
@@ -893,15 +895,42 @@ async function runDaily(
       return rendered;
     }
 
-    const refresher = context.refreshSessionBrief ?? ((input) => refreshSessionBrief(input, context));
-    const refreshed = await refresher({
-      vault: collected.data.options.vault,
-      repo: collected.data.options.repo,
-      project: collected.data.options.project,
-    });
-    if (!refreshed.ok) {
-      writeFailureState(collected.data.options, context, startedAt, "validation");
-      return refreshed;
+    let refreshed: RefreshSessionBriefOutput = { filesWritten: [] };
+    if (!generateOnly) {
+      const refresher = context.refreshSessionBrief ?? ((input) => refreshSessionBrief(input, context));
+      const refreshResult = await refresher({
+        vault: collected.data.options.vault,
+        repo: collected.data.options.repo,
+        project: collected.data.options.project,
+      });
+      if (!refreshResult.ok) {
+        writeFailureState(collected.data.options, context, startedAt, "validation");
+        return refreshResult;
+      }
+      refreshed = refreshResult.data;
+    }
+
+    if (generateOnly) {
+      const materialized = materializeOperationalRunManifest({
+        vault: collected.data.options.vault,
+        runDate: collected.data.options.runDate,
+        manifestPath: collected.data.input.manifestPath,
+        extraChangedFiles: [
+          vaultRelativePath(collected.data.options.vault, collected.data.inputPath),
+          ...rendered.data.renderedPaths,
+          ...refreshed.filesWritten,
+        ],
+      });
+      if (!materialized.ok) {
+        writeFailureState(collected.data.options, context, startedAt, "validation");
+        return materialized;
+      }
+      changedFiles = materialized.data.changedFiles;
+      mutations.push(...changedFiles);
+      return ok({
+        mutations,
+        selectedCandidateCount: collected.data.input.selectedCandidates.length,
+      });
     }
 
     const published = await runPublish(options, context, false);
@@ -936,6 +965,11 @@ async function runDaily(
     mutations,
     selectedCandidateCount: collected.data.input.selectedCandidates.length,
   });
+}
+
+function vaultRelativePath(vault: string, path: string): string {
+  const prefix = vault.endsWith("/") ? vault : `${vault}/`;
+  return path.startsWith(prefix) ? path.slice(prefix.length) : path;
 }
 
 async function refreshSessionBrief(
