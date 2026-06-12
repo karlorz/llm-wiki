@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { collectGithubCandidates } from "./github.js";
 import { readResearchConfig, parseResearchConfig, type ResearchConfig } from "./config.js";
 import { collectDuplicateSignals } from "./dedupe.js";
@@ -1249,6 +1250,16 @@ async function main(): Promise<void> {
   process.exit(run.exitCode);
 }
 
-if (process.argv[1] && import.meta.url === new URL(process.argv[1], "file:").href) {
+export function isDirectCliInvocation(metaUrl: string, argvPath = process.argv[1]): boolean {
+  if (!argvPath) return false;
+  const modulePath = fileURLToPath(metaUrl);
+  try {
+    return realpathSync(modulePath) === realpathSync(argvPath);
+  } catch {
+    return modulePath === argvPath;
+  }
+}
+
+if (isDirectCliInvocation(import.meta.url)) {
   void main();
 }

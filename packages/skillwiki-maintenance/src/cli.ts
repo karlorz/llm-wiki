@@ -1,5 +1,7 @@
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defaultFleetPath, runStage1Maintenance } from "./orchestrator.js";
 
 interface CliOptions {
@@ -52,7 +54,19 @@ function parseArgs(args: string[], env: NodeJS.ProcessEnv): CliOptions {
   return options;
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-  process.exitCode = 1;
-});
+export function isDirectCliInvocation(metaUrl: string, argvPath = process.argv[1]): boolean {
+  if (!argvPath) return false;
+  const modulePath = fileURLToPath(metaUrl);
+  try {
+    return realpathSync(modulePath) === realpathSync(argvPath);
+  } catch {
+    return modulePath === argvPath;
+  }
+}
+
+if (isDirectCliInvocation(import.meta.url)) {
+  void main().catch((error) => {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
