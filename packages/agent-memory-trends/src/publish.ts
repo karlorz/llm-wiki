@@ -34,12 +34,19 @@ export interface PublishGeneratedChangesOutput {
   commitMessage: string;
 }
 
+export interface MaterializeOperationalRunManifestInput {
+  vault: string;
+  runDate: string;
+  manifestPath: string;
+  extraChangedFiles?: string[];
+}
+
 interface ManifestFile {
   manifest: RunManifest;
   raw: Record<string, unknown>;
 }
 
-interface NormalizedOperationalFiles {
+export interface NormalizedOperationalFiles {
   manifest: RunManifest;
   changedFiles: string[];
 }
@@ -48,6 +55,20 @@ const MAX_GENERATED_FILE_BYTES = 256 * 1024;
 const SESSION_BRIEF_PATH = "meta/latest-session-brief.md";
 const SESSION_BRIEF_CACHE_PATHS = [".skillwiki/session-brief.md", ".skillwiki/session-brief.json"];
 const SESSION_BRIEF_SUPPORT_PATHS = ["index.md", "log.md"];
+
+export function materializeOperationalRunManifest(
+  input: MaterializeOperationalRunManifestInput
+): Result<NormalizedOperationalFiles> {
+  const manifest = readManifest(input.vault, input.manifestPath);
+  if (!manifest.ok) return manifest;
+  return normalizeManifestForOperationalFiles(
+    input.vault,
+    input.manifestPath,
+    manifest.data,
+    [...new Set([...manifest.data.manifest.changedFiles, ...(input.extraChangedFiles ?? [])])],
+    input.runDate
+  );
+}
 
 export async function publishGeneratedChanges(input: PublishGeneratedChangesInput): Promise<Result<PublishGeneratedChangesOutput>> {
   const lock = await input.acquireLock();

@@ -351,7 +351,7 @@ describe("agent-memory-trends CLI", () => {
     if (result.result.ok) throw new Error("expected usage error");
     expect(result.result.error).toBe("USAGE");
     expect(result.result.detail).toEqual({
-      message: "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--help]",
+      message: "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--generate-only] [--help]",
     });
   });
 
@@ -940,6 +940,123 @@ describe("agent-memory-trends CLI", () => {
       "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json",
       ...publishedFiles,
     ]);
+  });
+
+  it("wires daily --generate-only through generation without publish, heartbeat, or session brief refresh", async () => {
+    const calls: string[] = [];
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-generate-only-"));
+    mkdirSync(join(vault, ".skillwiki", "agent-memory-trends"), { recursive: true });
+    mkdirSync(join(vault, "queries"), { recursive: true });
+    mkdirSync(join(vault, "raw", "articles"), { recursive: true });
+
+    const runDate = "2026-06-11";
+    const runId = "2026-06-11T00-10-00+08-00";
+    const evidencePath = `raw/articles/${runDate}-agent-memory-trends-evidence-${runId}.md`;
+    const digestPath = `queries/${runDate}-agent-memory-trends-digest.md`;
+    const manifestPath = `.skillwiki/agent-memory-trends/${runDate}-run.json`;
+    const inputPath = join(vault, ".skillwiki", "agent-memory-trends", `${runDate}-input.json`);
+
+    const result = await runAgentMemoryTrendsCli(["daily", "--generate-only", "--vault", vault, "--repo", "/repo", "--config", "/config.yaml"], {
+      cwd: "/repo",
+      env: {
+        AGENT_MEMORY_TRENDS_HEARTBEAT_URL: "https://kuma.example/push",
+      },
+      now: new Date("2026-06-11T00:10:00+08:00"),
+      readFile: () => CONFIG,
+      collectGithubCandidates: async () => ({ ok: true, data: {
+        rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+        apiCallsUsed: 12,
+        rawCandidateCount: 1,
+        selectedCandidates: [selectedCandidate()],
+        runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+      } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+      writeAgentInput: () => ({ ok: true, data: { path: inputPath } }),
+      runSynthesis: async (input) => {
+        calls.push("synthesis");
+        writeFileSync(join(vault, evidencePath), "# Evidence\n", "utf8");
+        writeFileSync(join(vault, digestPath), "# Digest\n", "utf8");
+        writeFileSync(join(vault, manifestPath), JSON.stringify({
+          run_date: runDate,
+          status: "success",
+          changed_files: [evidencePath, digestPath, manifestPath],
+          outputs: {
+            evidence_path: evidencePath,
+            digest_path: digestPath,
+          },
+          web_sources: [],
+        }, null, 2) + "\n", "utf8");
+        return {
+          ok: true,
+          data: {
+            manifestPath: join(vault, manifestPath),
+            outputLastMessagePath: input.outputLastMessagePath,
+            stdout: "",
+            stderr: "",
+            output: { proposals: [] },
+          },
+        };
+      },
+      renderProposalCaptures: (input) => {
+        calls.push("render");
+        expect(input.manifestPath).toBe(manifestPath);
+        return {
+          ok: true,
+          data: {
+            renderedPaths: [],
+            validationErrors: [],
+            duplicateSuppressions: [],
+          },
+        };
+      },
+      refreshSessionBrief: async () => {
+        calls.push("refresh-brief");
+        return { ok: true, data: { filesWritten: ["meta/latest-session-brief.md"] } };
+      },
+      publishGeneratedChanges: async () => {
+        calls.push("publish");
+        return { ok: true, data: { baseCommit: "abc123", changedFiles: [], commitMessage: "noop" } };
+      },
+      maybeSendHeartbeat: async () => {
+        calls.push("heartbeat");
+        return { ok: true, data: { status: "sent", url: "https://kuma.example/push" } };
+      },
+      writeRunState: () => {
+        calls.push("write-state");
+        return {
+          ok: true,
+          data: {
+            runStatePath: join(vault, manifestPath),
+            latestRunPath: join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"),
+          },
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected daily success");
+    expect(calls).toEqual(["synthesis", "render"]);
+    expect(result.result.data.humanHint).toContain("daily: ok (generate-only)");
+    expect(result.result.data.mutations).toEqual([
+      inputPath,
+      ".skillwiki/agent-memory-trends/2026-06-11-input.json",
+      ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      ".skillwiki/agent-memory-trends/latest-run.json",
+      digestPath,
+      evidencePath,
+    ]);
+    const manifest = JSON.parse(readFileSync(join(vault, manifestPath), "utf8"));
+    const latest = JSON.parse(readFileSync(join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"), "utf8"));
+    expect(manifest.outputs.latest_run_path).toBe(".skillwiki/agent-memory-trends/latest-run.json");
+    expect(manifest.changed_files).toEqual([
+      ".skillwiki/agent-memory-trends/2026-06-11-input.json",
+      ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      ".skillwiki/agent-memory-trends/latest-run.json",
+      digestPath,
+      evidencePath,
+    ]);
+    expect(latest).toEqual(manifest);
   });
 
   it("restores last-op scratch state after the default session brief refresh", async () => {

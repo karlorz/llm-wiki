@@ -155,6 +155,14 @@ agent-memory-trends collect --dry-run
 agent-memory-trends daily --dry-run
 ```
 
+Run generation-only mode when another orchestrator owns the transaction
+boundary. This mode writes generated trend outputs and the operational run
+manifest, but does not refresh the session brief, publish, push, or heartbeat.
+
+```bash
+agent-memory-trends daily --generate-only
+```
+
 Run one manual live service start before enabling the timer.
 
 ```bash
