@@ -11,6 +11,7 @@ import { createGitRunner, createSkillwikiRunner } from "./git.js";
 import { maybeSendHeartbeat } from "./heartbeat.js";
 import { buildAgentInput, writeAgentInput, type AgentInput, type AllowedOutputs } from "./input.js";
 import { materializeOperationalRunManifest, publishGeneratedChanges } from "./publish.js";
+import { materializePreviewRun } from "./preview.js";
 import { createCodexSynthesisRunner } from "./runner.js";
 import { writeRunState, type AgentMemoryTrendRunState, type HeartbeatState } from "./run-state.js";
 import {
@@ -28,7 +29,7 @@ import {
 } from "./types.js";
 
 const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "publish"]);
-const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--generate-only] [--help]";
+const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--generate-only] [--preview-only] [--help]";
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
 const SESSION_BRIEF_FILES = [
@@ -97,14 +98,15 @@ export async function runAgentMemoryTrendsCli(
 
     if (command === "daily") {
       const generateOnly = options.flags.has("generate-only") && !dryRun;
-      const result = await runDaily(options, context, dryRun, generateOnly);
+      const previewOnly = generateOnly && options.flags.has("preview-only");
+      const result = await runDaily(options, context, dryRun, generateOnly, previewOnly);
       if (!result.ok) return errorRun(result);
       return okRun(
         command,
         dryRun,
         generatedAt,
         result.data.mutations,
-        `daily: ok${dryRun ? " (dry-run)" : generateOnly ? " (generate-only)" : ""}; selected ${result.data.selectedCandidateCount} candidate(s)`
+        `daily: ok${dailyModeLabel(dryRun, generateOnly, previewOnly)}; selected ${result.data.selectedCandidateCount} candidate(s)`
       );
     }
 
@@ -852,11 +854,26 @@ async function runDaily(
   options: ParsedCliOptions,
   context: AgentMemoryTrendsContext,
   dryRun: boolean,
-  generateOnly: boolean
+  generateOnly: boolean,
+  previewOnly: boolean
 ): Promise<Result<{ mutations: string[]; selectedCandidateCount: number }>> {
   const startedAt = formatInstant(context.now);
   const collected = await collectInput(options, context);
   if (!collected.ok) return collected;
+
+  if (previewOnly) {
+    const preview = materializePreviewRun({
+      vault: collected.data.options.vault,
+      runDate: collected.data.options.runDate,
+      inputPath: `.skillwiki/agent-memory-trends/${collected.data.options.runDate}-input.json`,
+      input: collected.data.input,
+    });
+    if (!preview.ok) return preview;
+    return ok({
+      mutations: [collected.data.inputPath, ...preview.data.changedFiles],
+      selectedCandidateCount: collected.data.input.selectedCandidates.length,
+    });
+  }
 
   const tmpDir = join(tmpdir(), "agent-memory-trends");
   mkdirSync(tmpDir, { recursive: true });
@@ -966,6 +983,13 @@ async function runDaily(
     mutations,
     selectedCandidateCount: collected.data.input.selectedCandidates.length,
   });
+}
+
+function dailyModeLabel(dryRun: boolean, generateOnly: boolean, previewOnly: boolean): string {
+  if (dryRun) return " (dry-run)";
+  if (previewOnly) return " (generate-only preview)";
+  if (generateOnly) return " (generate-only)";
+  return "";
 }
 
 function vaultRelativePath(vault: string, path: string): string {

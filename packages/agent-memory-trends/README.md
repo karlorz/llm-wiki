@@ -200,6 +200,15 @@ manifest, but does not refresh the session brief, publish, push, or heartbeat.
 agent-memory-trends daily --generate-only
 ```
 
+For bounded local preview, add `--preview-only`. This skips the synthesis
+agent and writes deterministic evidence, digest, and manifest files from the
+selected candidate input. Use a temporary vault for smoke checks that must not
+touch the real wiki.
+
+```bash
+agent-memory-trends daily --generate-only --preview-only --vault "$tmp_vault"
+```
+
 Run one manual live service start before enabling the timer.
 
 ```bash

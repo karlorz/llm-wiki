@@ -355,7 +355,7 @@ describe("agent-memory-trends CLI", () => {
     if (result.result.ok) throw new Error("expected usage error");
     expect(result.result.error).toBe("USAGE");
     expect(result.result.detail).toEqual({
-      message: "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--generate-only] [--help]",
+      message: "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--generate-only] [--preview-only] [--help]",
     });
   });
 
@@ -1061,6 +1061,77 @@ describe("agent-memory-trends CLI", () => {
       evidencePath,
     ]);
     expect(latest).toEqual(manifest);
+  });
+
+  it("writes a deterministic daily preview without invoking synthesis", async () => {
+    const calls: string[] = [];
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-preview-"));
+    mkdirSync(join(vault, ".skillwiki", "agent-memory-trends"), { recursive: true });
+    mkdirSync(join(vault, "queries"), { recursive: true });
+    mkdirSync(join(vault, "raw", "articles"), { recursive: true });
+
+    const result = await runAgentMemoryTrendsCli(
+      ["daily", "--generate-only", "--preview-only", "--vault", vault, "--repo", "/repo", "--config", "/config.yaml"],
+      {
+        cwd: "/repo",
+        env: {},
+        now: new Date("2026-06-11T00:10:00+08:00"),
+        readFile: () => CONFIG,
+        collectGithubCandidates: async () => ({ ok: true, data: {
+          rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+          apiCallsUsed: 12,
+          rawCandidateCount: 1,
+          selectedCandidates: [selectedCandidate()],
+          runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        } }),
+        collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+        runSynthesis: async () => {
+          calls.push("synthesis");
+          throw new Error("preview should not call synthesis");
+        },
+        renderProposalCaptures: () => {
+          calls.push("render");
+          throw new Error("preview should not render captures");
+        },
+        publishGeneratedChanges: async () => {
+          calls.push("publish");
+          throw new Error("preview should not publish");
+        },
+        maybeSendHeartbeat: async () => {
+          calls.push("heartbeat");
+          throw new Error("preview should not heartbeat");
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected preview success");
+    expect(calls).toEqual([]);
+    expect(result.result.data.humanHint).toContain("daily: ok (generate-only preview)");
+    expect(result.result.data.mutations).toEqual([
+      join(vault, ".skillwiki", "agent-memory-trends", "2026-06-11-input.json"),
+      ".skillwiki/agent-memory-trends/2026-06-11-input.json",
+      ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      ".skillwiki/agent-memory-trends/latest-run.json",
+      "queries/2026-06-11-agent-memory-trends-digest.md",
+      "raw/articles/2026-06-11-agent-memory-trends-evidence-2026-06-11T00-10-00+08-00.md",
+    ]);
+
+    const digest = readFileSync(join(vault, "queries", "2026-06-11-agent-memory-trends-digest.md"), "utf8");
+    const evidence = readFileSync(
+      join(vault, "raw", "articles", "2026-06-11-agent-memory-trends-evidence-2026-06-11T00-10-00+08-00.md"),
+      "utf8"
+    );
+    const manifest = JSON.parse(readFileSync(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-11-run.json"), "utf8"));
+
+    expect(digest).toContain("Agent Memory Trends Preview - 2026-06-11");
+    expect(digest).toContain("acme/local-agent-memory");
+    expect(evidence).toContain("Deterministic preview evidence");
+    expect(evidence).toContain("https://github.com/acme/local-agent-memory");
+    expect(manifest.mode).toBe("preview-only");
+    expect(manifest.outputs.digest_path).toBe("queries/2026-06-11-agent-memory-trends-digest.md");
+    expect(manifest.outputs.latest_run_path).toBe(".skillwiki/agent-memory-trends/latest-run.json");
   });
 
   it("restores last-op scratch state after the default session brief refresh", async () => {
