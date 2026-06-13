@@ -19,6 +19,7 @@ export function extractCitationMarkers(body: string): CitationMarker[] {
   const out: CitationMarker[] = [];
   let m: RegExpExecArray | null;
   while ((m = MARKER_RE.exec(stripped)) !== null) {
+    if (m[1] === "raw/...") continue;
     out.push({ marker: m[0], target: m[1] });
   }
   return out;

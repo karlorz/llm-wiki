@@ -17,6 +17,10 @@ describe("extractCitationMarkers", () => {
     const body = "Use `^[raw/x.md]` for citations. ^[raw/y.md]\n";
     expect(extractCitationMarkers(body).map(m => m.target)).toEqual(["raw/y.md"]);
   });
+  it("ignores raw ellipsis placeholder markers", () => {
+    const body = "Use ^[raw/...] in docs to describe citation syntax. ^[raw/articles/x.md]\n";
+    expect(extractCitationMarkers(body).map(m => m.target)).toEqual(["raw/articles/x.md"]);
+  });
   it("returns empty array when none", () => {
     expect(extractCitationMarkers("plain body")).toEqual([]);
   });

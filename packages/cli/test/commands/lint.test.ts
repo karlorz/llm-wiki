@@ -126,6 +126,7 @@ describe("runLint", () => {
   it("warns on legacy citation style pages", async () => {
     const v = vault();
     mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
     writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "Body cites X.\n^[raw/articles/x.md]\n");
     writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
     const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
@@ -139,6 +140,7 @@ describe("runLint", () => {
   it("warns on orphaned citations after Sources section", async () => {
     const v = vault();
     mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "raw", "articles", "x.md"), "Raw content");
     // Citation marker after blank line in Sources section = orphaned
     const body = "Body cites X. ^[raw/articles/x.md]\n\n## Sources\n- ^[raw/articles/x.md]\n\n\n^[raw/articles/x.md]\n";
     writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + body);
@@ -336,6 +338,80 @@ Content.
       const bucket = r.result.data.by_severity.error.find(b => b.kind === "broken_sources");
       expect(bucket!.items.length).toBe(1);
       expect(bucket!.items[0]).toContain("raw/articles/missing.md");
+    }
+  });
+
+  it("flags broken_sources when body citation marker points to non-existent raw file", async () => {
+    const v = vault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "concepts", "body-badsrc.md"), FM(["model"]) + `> **TL;DR:** Summary.
+
+## Overview
+
+Body source is missing. ^[raw/articles/missing-body.md]
+
+## Related
+
+- [[body-badsrc]]
+
+## Sources
+
+- ^[raw/articles/missing-body.md]
+`);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[body-badsrc]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    expect(r.exitCode).toBe(23);
+    if (r.result.ok) {
+      const errorKinds = r.result.data.by_severity.error.map(b => b.kind);
+      expect(errorKinds).toContain("broken_sources");
+      const bucket = r.result.data.by_severity.error.find(b => b.kind === "broken_sources");
+      expect(bucket!.items.some(i => String(i).includes("raw/articles/missing-body.md"))).toBe(true);
+    }
+  });
+
+  it("does not flag broken_sources when body citation marker resolves in _archive/raw", async () => {
+    const v = vault();
+    mkdirSync(join(v, "_archive", "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "_archive", "raw", "articles", "archived-body.md"), "Archived source\n");
+    writeFileSync(join(v, "concepts", "body-archivedsrc.md"), FM(["model"]) + `> **TL;DR:** Summary.
+
+## Overview
+
+Body source is archived. ^[raw/articles/archived-body.md]
+
+## Related
+
+- [[body-archivedsrc]]
+
+## Sources
+
+- ^[raw/articles/archived-body.md]
+`);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[body-archivedsrc]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const errorKinds = r.result.data.by_severity.error.map(b => b.kind);
+      expect(errorKinds).not.toContain("broken_sources");
+    }
+  });
+
+  it("ignores raw ellipsis placeholder citation markers", async () => {
+    const v = vault();
+    writeFileSync(join(v, "concepts", "placeholder.md"), FM(["model"]) + `> **TL;DR:** Summary.
+
+## Overview
+
+Use ^[raw/...] as the placeholder shape in examples.
+
+## Related
+
+- [[placeholder]]
+`);
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[placeholder]]\n");
+    const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+    if (r.result.ok) {
+      const errorKinds = r.result.data.by_severity.error.map(b => b.kind);
+      expect(errorKinds).not.toContain("broken_sources");
     }
   });
 

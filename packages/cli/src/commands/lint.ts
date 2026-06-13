@@ -20,11 +20,12 @@ import { validateCompoundReferences } from "./audit.js";
 import { fixPathTooLong, runPathTooLong } from "./path-too-long.js";
 import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
-import { isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations } from "../parsers/citations.js";
+import { extractCitationMarkers, isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations } from "../parsers/citations.js";
 import { buildSlugMap } from "../utils/slug.js";
 import { buildCliSurface, validateCliRefs } from "../utils/cli-surface.js";
 import { parseExpiryAnnotations } from "../parsers/expiry-annotations.js";
 import { assessSourceIdentity } from "../utils/source-identity.js";
+import { normalizeRawSourceTarget, rawSourceTargetExistsSync } from "../utils/raw-source.js";
 
 const STRUCT_MIN_BODY_LINES = 60;
 const STRUCT_MIN_SECTIONS = 3;
@@ -340,7 +341,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     const noOverview: string[] = [];
     const fmWikilinkFlags: string[] = [];
     const wikilinkCitationFlags: string[] = [];
-    const brokenSourceFlags: string[] = [];
+    const brokenSourceFlags = new Set<string>();
     const missingTldrFlags: string[] = [];
     const missingDiagramFlags: string[] = [];
     for (const page of scan.data.typedKnowledge) {
@@ -353,21 +354,18 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
       if (isLegacyCitationStyle(body)) legacyPages.push(page.relPath);
       if (hasOrphanedCitations(body)) orphanedPages.push(page.relPath);
       if (hasWikilinkCitations(body)) wikilinkCitationFlags.push(page.relPath);
-      // broken_sources: check sources: frontmatter entries resolve to files in raw/
+      // broken_sources: check sources: frontmatter entries and body markers resolve to raw files.
       const sourcesEntries = extractSourceEntries(rawFm);
       for (const entry of sourcesEntries) {
-        // Strip citation markers ^[...] and surrounding quotes
-        let rawPath = entry.replace(/^"/, "").replace(/"$/, "").replace(/^'/, "").replace(/'$/, "");
-        rawPath = rawPath.replace(/^\^\[/, "").replace(/\]$/, "");
-        if (!rawPath.startsWith("raw/") && !rawPath.startsWith("_archive/raw/")) continue;
-        if (
-          !existsSync(join(input.vault, rawPath)) &&
-          !existsSync(join(input.vault, rawPath + ".md")) &&
-          !rawPath.startsWith("_archive/") &&
-          !existsSync(join(input.vault, "_archive", rawPath)) &&
-          !existsSync(join(input.vault, "_archive", rawPath + ".md"))
-        ) {
-          brokenSourceFlags.push(`${page.relPath}: ${rawPath}`);
+        const rawPath = normalizeRawSourceTarget(entry);
+        if (!rawPath) continue;
+        if (!rawSourceTargetExistsSync(input.vault, rawPath)) {
+          brokenSourceFlags.add(`${page.relPath}: ${rawPath}`);
+        }
+      }
+      for (const marker of extractCitationMarkers(body)) {
+        if (!rawSourceTargetExistsSync(input.vault, marker.target)) {
+          brokenSourceFlags.add(`${page.relPath}: ${marker.target}`);
         }
       }
       // Frontmatter wikilink resolution check
@@ -410,7 +408,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     if (noOverview.length > 0) buckets.missing_overview = noOverview;
     if (fmWikilinkFlags.length > 0) buckets.frontmatter_wikilink = fmWikilinkFlags;
     if (wikilinkCitationFlags.length > 0) buckets.wikilink_citation = wikilinkCitationFlags;
-    if (brokenSourceFlags.length > 0) buckets.broken_sources = brokenSourceFlags;
+    if (brokenSourceFlags.size > 0) buckets.broken_sources = [...brokenSourceFlags];
     if (missingTldrFlags.length > 0) buckets.missing_tldr = missingTldrFlags;
     if (missingDiagramFlags.length > 0) buckets.missing_diagram = missingDiagramFlags;
 

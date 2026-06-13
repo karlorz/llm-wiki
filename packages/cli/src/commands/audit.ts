@@ -5,6 +5,7 @@ import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js"
 import { extractCitationMarkers } from "../parsers/citations.js";
 import { scanVault, readPage } from "../utils/vault.js";
 import type { VaultPage } from "../utils/vault.js";
+import { rawSourceTargetExists } from "../utils/raw-source.js";
 
 export interface AuditInput { file: string }
 export interface AuditOutput {
@@ -30,8 +31,7 @@ export async function runAudit(input: AuditInput): Promise<{ exitCode: number; r
 
   const markers = extractCitationMarkers(body);
   const resolved = await Promise.all(markers.map(async m => {
-    try { await stat(join(vault, m.target)); return { ...m, resolved: true }; }
-    catch { return { ...m, resolved: false }; }
+    return { ...m, resolved: await rawSourceTargetExists(vault, m.target) };
   }));
 
   const sources = ((fm.data.sources as string[] | undefined) ?? [])

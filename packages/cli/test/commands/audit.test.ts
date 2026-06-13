@@ -22,6 +22,40 @@ describe("audit", () => {
     expect(r.exitCode).toBe(11);
   });
 
+  it("resolves body citation markers against archived raw sources", async () => {
+    const v = mkdtempSync(join(tmpdir(), "audit-vault-"));
+    writeFileSync(join(v, "SCHEMA.md"), "# Vault Schema\n");
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    mkdirSync(join(v, "_archive", "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "_archive", "raw", "articles", "archived.md"), "Archived source\n");
+    writeFileSync(join(v, "concepts", "archived-marker.md"), `---
+title: Archived marker
+type: concept
+tags: [model]
+sources:
+  - "^[raw/articles/archived.md]"
+provenance: research
+created: 2026-06-14
+updated: 2026-06-14
+---
+
+## Overview
+
+Archived claim. ^[raw/articles/archived.md]
+
+## Sources
+
+- ^[raw/articles/archived.md]
+`);
+
+    const r = await runAudit({ file: join(v, "concepts", "archived-marker.md") });
+
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.markers.every(m => m.resolved)).toBe(true);
+    }
+  });
+
   it("returns SOURCES_INCONSISTENT (12) for unused sources", async () => {
     const r = await runAudit({ file: F("concepts/inconsistent.md") });
     expect(r.exitCode).toBe(12);
