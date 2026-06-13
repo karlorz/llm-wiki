@@ -280,7 +280,7 @@ function evaluateCandidateQualityGate(
 }
 
 function passesPrimaryGate(candidate: RawCandidate, gate: GithubQualityGate): boolean {
-  return passesAuthorityGate(candidate, gate) && candidate.evidenceFamilies.length >= gate.minEvidenceFamilies;
+  return hasTargetTopicEvidence(candidate) && passesAuthorityGate(candidate, gate) && candidate.evidenceFamilies.length >= gate.minEvidenceFamilies;
 }
 
 function passesAuthorityGate(candidate: RawCandidate, gate: GithubQualityGate): boolean {
@@ -292,6 +292,7 @@ function passesAuthorityGate(candidate: RawCandidate, gate: GithubQualityGate): 
 
 function passesMultiQueryException(candidate: RawCandidate, gate: GithubQualityGate): boolean {
   return (
+    hasTargetTopicEvidence(candidate) &&
     gate.allowMultiQueryException &&
     candidate.queryIds.length >= 2 &&
     candidate.evidenceFamilies.length >= Math.max(2, gate.minEvidenceFamilies)
@@ -299,22 +300,25 @@ function passesMultiQueryException(candidate: RawCandidate, gate: GithubQualityG
 }
 
 function passesStrongEvidenceException(candidate: RawCandidate, gate: GithubQualityGate): boolean {
-  return gate.allowStrongEvidenceException && candidate.evidenceFamilies.length >= Math.max(3, gate.minEvidenceFamilies);
+  return (
+    hasTargetTopicEvidence(candidate) &&
+    gate.allowStrongEvidenceException &&
+    candidate.evidenceFamilies.length >= Math.max(3, gate.minEvidenceFamilies)
+  );
+}
+
+function hasTargetTopicEvidence(candidate: RawCandidate): boolean {
+  return candidate.evidenceFamilies.includes("coding_agent");
 }
 
 function extractEvidenceFamilies(candidate: CandidateForScoring): string[] {
-  const text = [
-    candidate.name,
-    candidate.fullName,
-    candidate.description,
-    candidate.topics.join(" "),
-    candidate.readmeText,
-  ]
-    .join("\n")
-    .toLowerCase();
+  const text = buildCandidateEvidenceText(candidate).toLowerCase();
 
   const matchers: Array<[string, RegExp]> = [
-    ["coding_agent", /\b(coding agent|code agent|codex|claude|opencode|autonomous coding|agentic coding)\b/],
+    [
+      "coding_agent",
+      /\b(agent[- ]memory|coding agents?|code agents?|ai coding agents?|claude code|claude (agent|memory|workflow|skill|skills|hook|hooks)|codex (agent|memory|workflow|skill|skills|hook|hooks)|opencode|autonomous coding|agentic coding|agent workflows?|agent skills?|subagents?)\b/,
+    ],
     ["memory_state", /\b(memory|checkpoint|session continuity|session-continuity|context consolidation|cross-session|state)\b/],
     ["workflow_distillation", /\b(distill|distillation|dream|reflection|workflow|lesson|summarize|consolidation)\b/],
     ["skills_subagents", /\b(skill|skills|subagent|sub-agent|hook|hooks|command|commands)\b/],
@@ -324,6 +328,45 @@ function extractEvidenceFamilies(candidate: CandidateForScoring): string[] {
   ];
 
   return matchers.filter(([, pattern]) => pattern.test(text)).map(([family]) => family);
+}
+
+function buildCandidateEvidenceText(candidate: CandidateForScoring): string {
+  return [
+    candidate.name,
+    candidate.fullName,
+    candidate.description,
+    candidate.topics.join(" "),
+    selectReadmeIdentityText(candidate.readmeText),
+  ].join("\n");
+}
+
+function selectReadmeIdentityText(readmeText: string): string {
+  const kept: string[] = [];
+  let sectionCount = 0;
+
+  for (const rawLine of readmeText.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      if (kept.length > 0 && kept[kept.length - 1] !== "") kept.push("");
+      continue;
+    }
+    if (isMarkdownBadgeLine(line)) continue;
+    if (/^#{2,}\s+(contents|table of contents|toc)\b/i.test(line)) break;
+
+    if (/^#{2,}\s+/.test(line)) {
+      sectionCount += 1;
+      if (sectionCount > 2) break;
+    }
+
+    kept.push(line);
+    if (kept.join("\n").length >= 2500) break;
+  }
+
+  return kept.join("\n").slice(0, 2500);
+}
+
+function isMarkdownBadgeLine(line: string): boolean {
+  return /^(\[?!?\[[^\]]*\]\([^)]+\)\s*)+$/.test(line);
 }
 
 function parseRateLimit(text: string): RateLimitState {

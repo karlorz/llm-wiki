@@ -259,6 +259,20 @@ describe("agent-memory-trends GitHub collector", () => {
             pushed_at: "2026-06-11T14:29:00Z",
           }),
         ];
+        if (query.includes("checkpoint memory") || query.includes("workflow distillation")) {
+          items.push(
+            repo({
+              name: "awesome-go",
+              full_name: "avelino/awesome-go",
+              html_url: "https://github.com/avelino/awesome-go",
+              description: "A curated list of Go frameworks, libraries, workflow tools, databases, and search packages.",
+              topics: ["go", "awesome-list", "database", "search"],
+              stargazers_count: 150000,
+              forks_count: 12000,
+              pushed_at: "2026-06-12T10:00:00Z",
+            })
+          );
+        }
         if (query.includes("coding agent memory")) {
           items.push(
             repo({
@@ -288,6 +302,23 @@ describe("agent-memory-trends GitHub collector", () => {
                 "",
                 "An autonomous coding agent workflow with checkpoint memory, context consolidation, dream and distill loops, reusable skills, subagents, goal judge evaluation, and local search over agent trajectories.",
               ].join("\n")
+            : fullName.toLowerCase() === "avelino/awesome-go"
+              ? [
+                  "# Awesome Go",
+                  "",
+                  "A curated list of workflow tools, database libraries, search packages, benchmarks, and local storage projects.",
+                  "",
+                  "## Contents",
+                  "",
+                  "- Database",
+                  "- Workflow Frameworks",
+                  "",
+                  "## Artificial Intelligence",
+                  "",
+                  "- hotplex - AI Agent runtime engine with long-lived sessions for Claude Code, OpenCode and other CLI AI tools.",
+                  "- veil - Local HTTPS proxy that hides API credentials from AI coding agents with SQLite audit logs.",
+                  "- dakera-go - Agent memory server SDK with memory store and recall APIs.",
+                ].join("\n")
             : "Small wrapper with a recent push.";
         return {
           exitCode: 0,
@@ -316,6 +347,7 @@ describe("agent-memory-trends GitHub collector", () => {
     expect(searchCalls[3]).toEqual(expect.arrayContaining(["q=local search database agent trajectory memory in:name,description,readme created:>=2026-05-14"]));
 
     expect(result.data.selectedCandidates.some((candidate) => candidate.fullName === "noise/fresh-demo")).toBe(false);
+    expect(result.data.selectedCandidates.some((candidate) => candidate.fullName === "avelino/awesome-go")).toBe(false);
     const mimo = result.data.selectedCandidates.find((candidate) => candidate.fullName === "XiaomiMiMo/MiMo-Code");
     expect(mimo).toBeTruthy();
     expect(mimo?.laneIds).toEqual(["daily_fresh", "weekly_momentum", "monthly_authority", "emerging"]);
