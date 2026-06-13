@@ -1165,6 +1165,7 @@ describe("agent-memory-trends CLI", () => {
     writeFileSync(lastOpPath, previousLastOp, "utf8");
 
     const calls: string[] = [];
+    let sessionBriefOptions: { cwd: string; env?: Record<string, string | undefined> } | undefined;
     const result = await runAgentMemoryTrendsCli(["daily", "--vault", vault, "--repo", "/repo", "--config", "/config.yaml"], {
       cwd: "/repo",
       env: {},
@@ -1197,10 +1198,11 @@ describe("agent-memory-trends CLI", () => {
           duplicateSuppressions: [],
         },
       }),
-      runCommand: async (command, args) => {
+      runCommand: async (command, args, options) => {
         calls.push(`${command} ${args.join(" ")}`);
         expect(command).toBe("skillwiki");
         expect(args).toEqual(["session-brief", vault, "--project", "llm-wiki", "--write"]);
+        sessionBriefOptions = options;
         writeFileSync(lastOpPath, '[{"operation":"session-brief"}]\n', "utf8");
         return { exitCode: 0, stdout: "", stderr: "" };
       },
@@ -1219,6 +1221,7 @@ describe("agent-memory-trends CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(result.result.ok).toBe(true);
     expect(calls).toEqual([`skillwiki session-brief ${vault} --project llm-wiki --write`]);
+    expect(sessionBriefOptions).toEqual({ cwd: "/repo", env: { AUTO_COMMIT: "false" } });
     expect(readFileSync(lastOpPath, "utf8")).toBe(previousLastOp);
   });
 

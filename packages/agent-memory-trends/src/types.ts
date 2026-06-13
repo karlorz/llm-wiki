@@ -47,10 +47,15 @@ export interface CommandRunResult {
   stderr: string;
 }
 
+export interface CommandRunOptions {
+  cwd: string;
+  env?: Record<string, string | undefined>;
+}
+
 export type CommandRunner = (
   command: string,
   args: string[],
-  options: { cwd: string }
+  options: CommandRunOptions
 ) => Promise<CommandRunResult>;
 
 export interface AgentMemoryTrendsContext {

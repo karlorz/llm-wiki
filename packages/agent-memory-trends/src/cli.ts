@@ -1036,7 +1036,7 @@ async function refreshSessionBrief(
   const result = await runCommand(
     "skillwiki",
     ["session-brief", input.vault, "--project", input.project, "--write"],
-    { cwd: input.repo }
+    { cwd: input.repo, env: { AUTO_COMMIT: "false" } }
   ).finally(() => {
     try {
       restoreLastOp(lastOp);
@@ -1191,7 +1191,8 @@ function createCodexRunner() {
 function createCommandRunner(): CommandRunner {
   return (command, args, options) =>
     new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
-      execFile(command, args, { cwd: options.cwd, encoding: "utf8" }, (error, stdout, stderr) => {
+      const env = options.env ? { ...process.env, ...options.env } : undefined;
+      execFile(command, args, { cwd: options.cwd, encoding: "utf8", env }, (error, stdout, stderr) => {
         resolve({
           exitCode: typeof error?.code === "number" ? error.code : error ? 1 : 0,
           stdout,
