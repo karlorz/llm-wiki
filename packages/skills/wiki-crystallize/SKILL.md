@@ -17,6 +17,15 @@ Standard four reads. If cwd is inside `projects/{slug}/`, also read project READ
 3. Compose the page with citations pre-attached. Reuse existing `raw/` sources where possible. Every page MUST include:
 - `> **TL;DR:**` blockquote as the first content after the title heading — a one-sentence summary of the page's key takeaway (under 200 chars). See SCHEMA.md `## TL;DR Convention`.
 - For pages tagged `architecture` or explaining workflows/systems: include a Mermaid diagram (`graph TB` or `sequenceDiagram`) in the body. Follow Obsidian-compatible Mermaid rules (see SCHEMA.md `## Mermaid Diagrams`).
+For `comparison`, evaluation-style `query`, or research-summary pages, end the body with:
+```markdown
+## Decision Closeout
+
+Disposition: no-op | concept | ADR | work-item | evidence-needed
+Reason: ...
+Follow-up: ...
+```
+Use exactly one disposition. Keep this as a prompt/template convention; do not add validation or lint enforcement.
 4. `skillwiki validate <page>`. If non-zero, STOP.
 5. Apply writes: page → `index.md` → `log.md`.
 ## Stop conditions

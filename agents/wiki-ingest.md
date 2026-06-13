@@ -34,6 +34,15 @@ You are a vault ingestion specialist converting source material (URLs, files, te
    - `^[raw/...]` citations for every factual claim
    - Mermaid diagram if tagged `architecture` or explaining workflows
    - `confidence: low` if only one source cited
+   - For generated `comparisons/` pages or evaluation-style `queries/` pages, end with:
+     ```markdown
+     ## Decision Closeout
+
+     Disposition: no-op | concept | ADR | work-item | evidence-needed
+     Reason: ...
+     Follow-up: ...
+     ```
+     Use exactly one disposition. This is a prompt convention, not a validator rule.
 6. **Validate.** For each page: `skillwiki validate <page>`. If any non-zero, fix issues and re-validate. Do NOT proceed until all pages pass.
 7. **Apply writes in order:** raw file(s) → page(s) → update `index.md` → append `log.md`.
 

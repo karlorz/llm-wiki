@@ -36,7 +36,7 @@ You are a PRD format adapter specializing in mapping foreign design document for
 | Requirements list | `concepts/` or `entities/` |
 | Architecture decisions | `concepts/` with `tags: [architecture]` |
 | Motivation / context | `entities/` |
-| Trade-offs / comparisons | `comparisons/` |
+| Trade-offs / comparisons | `comparisons/` with a `Decision Closeout` block |
 | Action items / next steps | Skip (project management, not knowledge) |
 
 **Execution Process:**
@@ -51,6 +51,15 @@ You are a PRD format adapter specializing in mapping foreign design document for
    - `## TL;DR` as first section
    - Preserve requirement IDs as tags or inline references
    - Convert internal links to `[[wikilinks]]` where pages exist
+   - For generated comparison or evaluation pages, end with:
+     ```markdown
+     ## Decision Closeout
+
+     Disposition: no-op | concept | ADR | work-item | evidence-needed
+     Reason: ...
+     Follow-up: ...
+     ```
+     Use exactly one disposition. Keep skipped action items out of typed knowledge unless the closeout disposition is `work-item`.
 7. **Validate.** `skillwiki validate <page>` for each page. If any non-zero, STOP.
 8. **Apply writes:** raw → pages → `index.md` → `log.md`.
 

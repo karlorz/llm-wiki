@@ -48,7 +48,7 @@ Map source sections to typed-knowledge pages:
 | Requirements list | `concepts/` or `entities/` | Each major requirement becomes its own page or a section in a compound page |
 | Architecture decisions | `concepts/` | Map to concept pages with `tags: [architecture]` |
 | Motivation / context | `entities/` | Capture as entity pages describing the system or component |
-| Trade-offs / comparisons | `comparisons/` | Create comparison pages when the source weighs alternatives |
+| Trade-offs / comparisons | `comparisons/` | Create comparison pages when the source weighs alternatives; include a `Decision Closeout` block |
 | Action items / next steps | Skip | Not knowledge — track in project work items instead |
 
 ### Cross-reference handling
@@ -65,6 +65,15 @@ Map source sections to typed-knowledge pages:
 3. Write raw capture: frontmatter + full body → `raw/articles/<slug>.md`.
 4. Run `skillwiki hash <raw-file>`, embed sha256.
 5. Generate typed-knowledge pages following the mapping strategy.
+   For generated comparison or evaluation pages, end the body with:
+   ```markdown
+   ## Decision Closeout
+
+   Disposition: no-op | concept | ADR | work-item | evidence-needed
+   Reason: ...
+   Follow-up: ...
+   ```
+   Use exactly one disposition. Preserve action items as skipped project-management content unless the closeout explicitly says `work-item`.
 6. For each page: run `skillwiki validate <page>`. If any fails, STOP.
 7. Write pages, then update `index.md` and `log.md`.
 

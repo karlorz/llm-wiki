@@ -23,6 +23,15 @@ Run `skillwiki lang` at the start. Generate page-body prose, narrative sections,
 5. **Generate page(s).** Compose typed-knowledge page(s) with citations pre-attached (`^[raw/...]` markers). Every page MUST include:
 - `> **TL;DR:**` blockquote as the first content after the title heading — a one-sentence summary of the page's key takeaway (under 200 chars). See SCHEMA.md `## TL;DR Convention`.
 - For pages tagged `architecture` or explaining workflows/systems: include a Mermaid diagram (`graph TB` or `sequenceDiagram`) in the body. Follow Obsidian-compatible Mermaid rules (see SCHEMA.md `## Mermaid Diagrams`).
+For generated `comparisons/` pages or evaluation-style `queries/` pages, end the body with:
+```markdown
+## Decision Closeout
+
+Disposition: no-op | concept | ADR | work-item | evidence-needed
+Reason: ...
+Follow-up: ...
+```
+Use exactly one disposition. Keep this as a prompt convention, not a validator rule.
 6. **Validate.** For each generated page: run `skillwiki validate <page>`. If exit ≠ 0, STOP — do not write index/log.
 7. **Apply writes in order.** raw → page(s) → `index.md` → `log.md`.
 8. **Confidence flag.** If only one source is cited, set `confidence: low`.

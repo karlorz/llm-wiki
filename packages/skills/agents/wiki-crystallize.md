@@ -32,6 +32,15 @@ You are a knowledge crystallizer specializing in distilling raw session material
    - Citations using `^[raw/...]` markers for every factual claim
    - For pages tagged `architecture` or explaining workflows: a Mermaid diagram (`graph TB` or `sequenceDiagram`)
    - Tags must come from `{vault}/SCHEMA.md` taxonomy only. If no relevant tag exists, use `[dev-loop]`.
+   - For `comparison`, evaluation-style `query`, or research-summary pages, end with:
+     ```markdown
+     ## Decision Closeout
+
+     Disposition: no-op | concept | ADR | work-item | evidence-needed
+     Reason: ...
+     Follow-up: ...
+     ```
+     Use exactly one disposition. Keep this as a prompt/template convention, not validation or lint enforcement.
 6. **Validate.** Run `skillwiki validate <page>`. If non-zero, fix issues and re-validate. Do NOT proceed until validation passes.
 7. **Apply writes in order:** Page file → add entry to `{vault}/index.md` → append entry to `{vault}/log.md`.
 

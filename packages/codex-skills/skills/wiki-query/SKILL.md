@@ -22,7 +22,15 @@ Standard four reads (SCHEMA, index, log, project context if applicable).
 - Type affinity: 1.0×
 5. **Read top candidates** in full (frontmatter + body).
 6. **Synthesize answer** with explicit citations to the candidate pages.
-7. **Optional file.** If user accepts: write to `queries/<slug>.md` or `comparisons/<slug>.md` with full frontmatter, validate, then update `index.md` then `log.md`.
+7. **Optional file.** If user accepts: write to `queries/<slug>.md` or `comparisons/<slug>.md` with full frontmatter, validate, then update `index.md` then `log.md`. If the filed page is a research/evaluation answer, recommendation, or comparison, end it with:
+```markdown
+## Decision Closeout
+
+Disposition: no-op | concept | ADR | work-item | evidence-needed
+Reason: ...
+Follow-up: ...
+```
+Use exactly one disposition. This is a prompt convention only; do not add CLI enforcement here.
 ## Stop conditions
 - Zero matching pages.
 - User declines to file.
