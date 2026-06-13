@@ -235,6 +235,29 @@ describe("agent-memory-trends CLI", () => {
     }
   });
 
+  it("returns the runner package version for global and pseudo-command version requests", async () => {
+    for (const argv of [["--version"], ["-v"], ["version"]] as string[][]) {
+      const result = await runAgentMemoryTrendsCli(argv, {
+        cwd: "/repo",
+        env: {},
+        now: new Date("2026-06-11T00:10:00Z"),
+        readFile: (path: string) => {
+          if (path === "/repo/packages/agent-memory-trends/package.json") {
+            return JSON.stringify({ version: "0.9.1-beta.1" });
+          }
+          throw new Error(`version should not read ${path}`);
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.result.ok).toBe(true);
+      if (!result.result.ok) throw new Error("expected version success");
+      expect(result.result.data.command).toBe("version");
+      expect(result.result.data.mutations).toEqual([]);
+      expect(result.result.data.humanHint).toBe("0.9.1-beta.1");
+    }
+  });
+
   it.each([
     ["--help"],
     ["-h"],
@@ -355,7 +378,7 @@ describe("agent-memory-trends CLI", () => {
     if (result.result.ok) throw new Error("expected usage error");
     expect(result.result.error).toBe("USAGE");
     expect(result.result.detail).toEqual({
-      message: "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--generate-only] [--preview-only] [--help]",
+      message: "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--help] [--version]",
     });
   });
 

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectGithubCandidates } from "./github.js";
 import { readResearchConfig, parseResearchConfig, type ResearchConfig } from "./config.js";
@@ -28,8 +28,8 @@ import {
   type Result,
 } from "./types.js";
 
-const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "publish"]);
-const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish> [--dry-run] [--generate-only] [--preview-only] [--help]";
+const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "publish", "version"]);
+const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--help] [--version]";
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
 const SESSION_BRIEF_FILES = [
@@ -56,6 +56,12 @@ export async function runAgentMemoryTrendsCli(
   const generatedAt = formatInstant(context.now);
   if (isHelpRequest(argv, command)) {
     return okRun("help", false, generatedAt, [], USAGE_TEXT);
+  }
+
+  if (isVersionRequest(argv, command)) {
+    const version = readRunnerPackageVersion(context);
+    if (!version.ok) return errorRun(version);
+    return okRun("version", false, generatedAt, [], version.data);
   }
 
   if (!command || !COMMANDS.has(command)) {
@@ -120,6 +126,29 @@ export async function runAgentMemoryTrendsCli(
 
 function isHelpRequest(argv: string[], command: AgentMemoryTrendsCommand | undefined): boolean {
   return command === "help" || argv.includes("--help") || argv.includes("-h");
+}
+
+function isVersionRequest(argv: string[], command: AgentMemoryTrendsCommand | undefined): boolean {
+  return command === "version" || argv.includes("--version") || argv.includes("-v");
+}
+
+function readRunnerPackageVersion(context: AgentMemoryTrendsContext): Result<string> {
+  const candidates = [
+    join(context.cwd, "packages", "agent-memory-trends", "package.json"),
+    join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"),
+  ];
+
+  for (const path of candidates) {
+    try {
+      const body = context.readFile ? context.readFile(path) : readFileSync(path, "utf8");
+      const parsed = JSON.parse(body) as { version?: unknown };
+      if (typeof parsed.version === "string" && parsed.version.length > 0) return ok(parsed.version);
+    } catch {
+      // Try the next known package.json location.
+    }
+  }
+
+  return err("VERSION_UNAVAILABLE", "could not read packages/agent-memory-trends/package.json");
 }
 
 interface ParsedCliOptions {

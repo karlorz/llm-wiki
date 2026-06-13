@@ -51,6 +51,7 @@ describe("sg02 systemd rollout artifacts", () => {
     expect(installer).toContain("set +a");
     expect(installer).toContain("export PATH=\"$HOME/.local/npm/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"");
     expect(installer).toContain("export WIKI_PATH=\"${WIKI_PATH:-$VAULT}\"");
+    expect(installer).toContain("require('./packages/agent-memory-trends/package.json').version");
     expect(installer).toContain("npm run -w @skillwiki/agent-memory-trends --silent \"$COMMAND\" --");
     expect(installer).toContain("manual auth gates");
     expect(installer).toContain("gh auth login");

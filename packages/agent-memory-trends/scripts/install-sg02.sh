@@ -117,7 +117,7 @@ cat > "$BIN_DIR/agent-memory-trends" <<'EOF'
 set -Eeuo pipefail
 
 if [ "$#" -lt 1 ]; then
-  echo "Usage: agent-memory-trends <doctor|collect|daily|publish> [args...]" >&2
+  echo "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [args...]" >&2
   exit 46
 fi
 
@@ -138,6 +138,10 @@ cd "$REPO"
 export PATH="$HOME/.local/npm/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export SKILLWIKI_PROJECT="${SKILLWIKI_PROJECT:-llm-wiki}"
 export WIKI_PATH="${WIKI_PATH:-$VAULT}"
+
+if [ "$COMMAND" = "--version" ] || [ "$COMMAND" = "-v" ] || [ "$COMMAND" = "version" ]; then
+  exec node -p "require('./packages/agent-memory-trends/package.json').version"
+fi
 
 exec npm run -w @skillwiki/agent-memory-trends --silent "$COMMAND" -- "$@"
 EOF
