@@ -10,10 +10,34 @@ export interface ResearchQuery {
 
 export interface ScoringWeights {
   relevance: number;
-  actionability: number;
-  authorityActivity: number;
+  implementationEvidence: number;
+  authorityMomentum: number;
   freshness: number;
-  novelty: number;
+  noveltyOrTracking: number;
+}
+
+export type GithubLaneSort = "updated" | "stars";
+export type GithubLaneOrder = "asc" | "desc";
+export type GithubDateField = "pushed" | "created";
+
+export interface GithubQualityGate {
+  minStars: number;
+  minForks: number;
+  minEvidenceFamilies: number;
+  allowMultiQueryException: boolean;
+  allowStrongEvidenceException: boolean;
+}
+
+export interface GithubLane {
+  id: string;
+  label: string;
+  windowDays: number;
+  dateField: GithubDateField;
+  sort: GithubLaneSort;
+  order: GithubLaneOrder;
+  perPage: number;
+  qualityGate: GithubQualityGate;
+  queries: ResearchQuery[];
 }
 
 export interface WatchlistEntry {
@@ -35,6 +59,7 @@ export interface ResearchConfig {
     maxQueries: number;
     maxRawCandidates: number;
     maxSelectedCandidates: number;
+    lanes: GithubLane[];
     queries: ResearchQuery[];
   };
   watchlist: {
@@ -83,6 +108,8 @@ const REQUIRED_QUERY_IDS = [
   "local-first-memory-sync",
 ];
 
+const MAX_GITHUB_QUERIES = 24;
+
 export function readResearchConfig(path: string): Result<ResearchConfig> {
   return parseResearchConfig(readFileSync(path, "utf8"), path);
 }
@@ -103,14 +130,9 @@ export function parseResearchConfig(text: string, sourcePath: string): Result<Re
     const watchlist = asRecord(root.watchlist, "watchlist");
     const autoAppend = asRecord(watchlist.auto_append, "watchlist.auto_append");
 
-    const queries = asArray(github.queries, "github.queries").map((query, index) => {
-      const item = asRecord(query, `github.queries[${index}]`);
-      return {
-        id: asString(item.id, `github.queries[${index}].id`),
-        label: asString(item.label, `github.queries[${index}].label`),
-        query: asString(item.query, `github.queries[${index}].query`),
-      };
-    });
+    const laneParse = parseGithubLanes(github);
+    const lanes = laneParse.lanes;
+    const queries = lanes.flatMap((lane) => lane.queries);
 
     const config: ResearchConfig = {
       sourcePath,
@@ -119,19 +141,14 @@ export function parseResearchConfig(text: string, sourcePath: string): Result<Re
       timezone: asString(root.timezone, "timezone"),
       scoring: {
         threshold: asNumber(scoring.threshold, "scoring.threshold"),
-        weights: {
-          relevance: asNumber(weights.relevance, "scoring.weights.relevance"),
-          actionability: asNumber(weights.actionability, "scoring.weights.actionability"),
-          authorityActivity: asNumber(weights.authority_activity, "scoring.weights.authority_activity"),
-          freshness: asNumber(weights.freshness, "scoring.weights.freshness"),
-          novelty: asNumber(weights.novelty, "scoring.weights.novelty"),
-        },
+        weights: parseScoringWeights(weights),
       },
       github: {
         apiCallBudget: asNumber(github.api_call_budget, "github.api_call_budget"),
         maxQueries: asNumber(github.max_queries, "github.max_queries"),
         maxRawCandidates: asNumber(github.max_raw_candidates, "github.max_raw_candidates"),
         maxSelectedCandidates: asNumber(github.max_selected_candidates, "github.max_selected_candidates"),
+        lanes,
         queries,
       },
       watchlist: {
@@ -146,12 +163,108 @@ export function parseResearchConfig(text: string, sourcePath: string): Result<Re
       },
     };
 
-    const validation = validateResearchConfig(config);
+    const validation = validateResearchConfig(config, laneParse.legacy);
     if (validation) return err("CONFIG_INVALID", validation);
     return ok(config);
   } catch (error) {
     return err("CONFIG_INVALID", getErrorMessage(error));
   }
+}
+
+function parseScoringWeights(weights: Record<string, unknown>): ScoringWeights {
+  const hasNewKeys =
+    weights.implementation_evidence !== undefined ||
+    weights.authority_momentum !== undefined ||
+    weights.novelty_or_tracking !== undefined;
+  if (hasNewKeys) {
+    return {
+      relevance: asNumber(weights.relevance, "scoring.weights.relevance"),
+      implementationEvidence: asNumber(weights.implementation_evidence, "scoring.weights.implementation_evidence"),
+      authorityMomentum: asNumber(weights.authority_momentum, "scoring.weights.authority_momentum"),
+      freshness: asNumber(weights.freshness, "scoring.weights.freshness"),
+      noveltyOrTracking: asNumber(weights.novelty_or_tracking, "scoring.weights.novelty_or_tracking"),
+    };
+  }
+
+  return {
+    relevance: asNumber(weights.relevance, "scoring.weights.relevance"),
+    implementationEvidence: asNumber(weights.actionability, "scoring.weights.actionability"),
+    authorityMomentum: asNumber(weights.authority_activity, "scoring.weights.authority_activity"),
+    freshness: asNumber(weights.freshness, "scoring.weights.freshness"),
+    noveltyOrTracking: asNumber(weights.novelty, "scoring.weights.novelty"),
+  };
+}
+
+function parseGithubLanes(github: Record<string, unknown>): { lanes: GithubLane[]; legacy: boolean } {
+  if (github.lanes !== undefined) {
+    const lanes = asArray(github.lanes, "github.lanes").map(parseGithubLane);
+    return { lanes, legacy: false };
+  }
+
+  const queries = parseResearchQueries(github.queries, "github.queries");
+  return {
+    legacy: true,
+    lanes: [
+      {
+        id: "legacy_flat",
+        label: "Legacy flat query portfolio",
+        windowDays: 0,
+        dateField: "pushed",
+        sort: "updated",
+        order: "desc",
+        perPage: 10,
+        qualityGate: {
+          minStars: 0,
+          minForks: 0,
+          minEvidenceFamilies: 0,
+          allowMultiQueryException: false,
+          allowStrongEvidenceException: false,
+        },
+        queries,
+      },
+    ],
+  };
+}
+
+function parseGithubLane(lane: unknown, index: number): GithubLane {
+  const path = `github.lanes[${index}]`;
+  const item = asRecord(lane, path);
+  const queries = parseResearchQueries(item.queries, `${path}.queries`);
+  if (queries.length === 0) throw new Error(`${path}.queries must contain at least one query`);
+
+  return {
+    id: asString(item.id, `${path}.id`),
+    label: asString(item.label, `${path}.label`),
+    windowDays: asNonNegativeNumber(item.window_days, `${path}.window_days`),
+    dateField: asEnum(item.date_field, `${path}.date_field`, ["pushed", "created"]),
+    sort: asEnum(item.sort, `${path}.sort`, ["updated", "stars"]),
+    order: asEnum(item.order, `${path}.order`, ["asc", "desc"]),
+    perPage: asPositiveNumber(item.per_page, `${path}.per_page`),
+    qualityGate: parseQualityGate(item.quality_gate, `${path}.quality_gate`),
+    queries,
+  };
+}
+
+function parseResearchQueries(value: unknown, path: string): ResearchQuery[] {
+  return asArray(value, path).map((query, index) => {
+    const item = asRecord(query, `${path}[${index}]`);
+    return {
+      id: asString(item.id, `${path}[${index}].id`),
+      label: asString(item.label, `${path}[${index}].label`),
+      query: asString(item.query, `${path}[${index}].query`),
+    };
+  });
+}
+
+function parseQualityGate(value: unknown, path: string): GithubQualityGate {
+  const item = value === undefined || value === null ? {} : asRecord(value, path);
+  return {
+    minStars: asOptionalNonNegativeNumber(item.min_stars, `${path}.min_stars`, 0),
+    minForks: asOptionalNonNegativeNumber(item.min_forks, `${path}.min_forks`, 0),
+    minEvidenceFamilies: asOptionalNonNegativeNumber(item.min_evidence_families, `${path}.min_evidence_families`, 1),
+    allowMultiQueryException: asOptionalBoolean(item.allow_multi_query_exception, `${path}.allow_multi_query_exception`, false),
+    allowStrongEvidenceException: asOptionalBoolean(item.allow_strong_evidence_exception, `${path}.allow_strong_evidence_exception`, false),
+  };
 }
 
 export function shouldAutoAppendWatchlist(input: WatchlistDecisionInput): WatchlistDecision {
@@ -204,17 +317,24 @@ export function normalizeCanonicalUrl(url: string): string {
   return `https://github.com/${match[1]!.toLowerCase()}/${match[2]!.toLowerCase()}`;
 }
 
-function validateResearchConfig(config: ResearchConfig): string | undefined {
+function validateResearchConfig(config: ResearchConfig, legacyQueries: boolean): string | undefined {
   if (config.version !== 1) return "version must be 1";
-  if (config.github.maxQueries > 10) return "github.max_queries must be <= 10";
+  if (config.github.maxQueries > MAX_GITHUB_QUERIES) return `github.max_queries must be <= ${MAX_GITHUB_QUERIES}`;
   if (config.github.maxRawCandidates > 50) return "github.max_raw_candidates must be <= 50";
   if (config.github.maxSelectedCandidates > 10) return "github.max_selected_candidates must be <= 10";
   if (config.github.apiCallBudget > 100) return "github.api_call_budget must be <= 100";
-  if (config.github.queries.length !== 10) return "github.queries must contain the accepted 10-query portfolio";
-  if (config.github.queries.length > config.github.maxQueries) return "github.queries exceeds github.max_queries";
+  if (config.github.lanes.length === 0) return "github.lanes must contain at least one lane";
+  if (config.github.queries.length > config.github.maxQueries) return "github lane queries exceed github.max_queries";
+  if (config.github.lanes.some((lane) => lane.perPage > 100)) return "github.lanes per_page must be <= 100";
 
-  const ids = config.github.queries.map((query) => query.id);
-  if (ids.join(",") !== REQUIRED_QUERY_IDS.join(",")) {
+  const laneIds = config.github.lanes.map((lane) => lane.id);
+  if (new Set(laneIds).size !== laneIds.length) return "github.lanes ids must be unique";
+  const queryIds = config.github.queries.map((query) => query.id);
+  if (new Set(queryIds).size !== queryIds.length) return "github query ids must be unique across lanes";
+
+  if (legacyQueries && config.github.queries.length !== 10) return "github.queries must contain the accepted 10-query portfolio";
+
+  if (legacyQueries && queryIds.join(",") !== REQUIRED_QUERY_IDS.join(",")) {
     return `github.queries ids must match accepted portfolio: ${REQUIRED_QUERY_IDS.join(", ")}`;
   }
 
@@ -259,6 +379,36 @@ function asString(value: unknown, path: string): string {
 function asNumber(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${path} must be a finite number`);
   return value;
+}
+
+function asNonNegativeNumber(value: unknown, path: string): number {
+  const number = asNumber(value, path);
+  if (number < 0) throw new Error(`${path} must be >= 0`);
+  return number;
+}
+
+function asPositiveNumber(value: unknown, path: string): number {
+  const number = asNumber(value, path);
+  if (number <= 0) throw new Error(`${path} must be > 0`);
+  return number;
+}
+
+function asOptionalNonNegativeNumber(value: unknown, path: string, fallback: number): number {
+  if (value === undefined || value === null) return fallback;
+  return asNonNegativeNumber(value, path);
+}
+
+function asOptionalBoolean(value: unknown, path: string, fallback: boolean): boolean {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "boolean") throw new Error(`${path} must be a boolean`);
+  return value;
+}
+
+function asEnum<T extends string>(value: unknown, path: string, allowed: readonly T[]): T {
+  if (typeof value !== "string" || !allowed.includes(value as T)) {
+    throw new Error(`${path} must be one of: ${allowed.join(", ")}`);
+  }
+  return value as T;
 }
 
 function getErrorMessage(error: unknown): string {

@@ -8,7 +8,112 @@ import {
   shouldAutoAppendWatchlist,
 } from "../src/config.js";
 
-const VALID_CONFIG = `version: 1
+const LANE_CONFIG = `version: 1
+project: llm-wiki
+timezone: Asia/Hong_Kong
+scoring:
+  threshold: 65
+  weights:
+    relevance: 30
+    implementation_evidence: 25
+    authority_momentum: 25
+    freshness: 10
+    novelty_or_tracking: 10
+github:
+  api_call_budget: 100
+  max_queries: 24
+  max_raw_candidates: 50
+  max_selected_candidates: 10
+  lanes:
+    - id: daily_fresh
+      label: Daily fresh
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 10
+        min_forks: 0
+        min_evidence_families: 2
+        allow_multi_query_exception: true
+      queries:
+        - id: daily-memory
+          label: Daily coding-agent memory
+          query: coding agent memory in:name,description,readme
+        - id: daily-checkpoints
+          label: Daily coding-agent checkpoints
+          query: coding agent checkpoints in:name,description,readme
+    - id: weekly_momentum
+      label: Weekly momentum
+      window_days: 7
+      date_field: pushed
+      sort: stars
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 50
+        min_forks: 5
+        min_evidence_families: 2
+      queries:
+        - id: weekly-checkpoints
+          label: Weekly checkpoint memory
+          query: checkpoint memory coding agent in:name,description,readme
+        - id: weekly-skills
+          label: Weekly skills and subagents
+          query: agent skills subagents workflow in:name,description,readme
+    - id: monthly_authority
+      label: Monthly authority
+      window_days: 30
+      date_field: pushed
+      sort: stars
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 100
+        min_forks: 10
+        min_evidence_families: 2
+      queries:
+        - id: monthly-workflow
+          label: Monthly workflow distillation
+          query: workflow distillation agent memory in:name,description,readme
+        - id: monthly-context-engineering
+          label: Monthly context engineering
+          query: context engineering coding agent memory in:name,description,readme
+    - id: emerging
+      label: Emerging evidence
+      window_days: 30
+      date_field: created
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 3
+        allow_strong_evidence_exception: true
+      queries:
+        - id: emerging-goal-judge
+          label: Emerging goal judge loops
+          query: goal judge loop coding agent in:name,description,readme
+        - id: emerging-local-search
+          label: Emerging local search memory
+          query: local search database agent trajectory memory in:name,description,readme
+watchlist:
+  auto_append:
+    min_appearances: 3
+    window_days: 14
+    min_score: 65
+  accepted: []
+  rejected:
+    - canonical_url: https://github.com/nope/rejected
+      reason: not relevant to llm-wiki
+  archived:
+    - canonical_url: https://github.com/old/archived
+      reason: superseded
+`;
+
+const LEGACY_CONFIG = `version: 1
 project: llm-wiki
 timezone: Asia/Hong_Kong
 scoring:
@@ -61,22 +166,75 @@ watchlist:
     window_days: 14
     min_score: 65
   accepted: []
-  rejected:
-    - canonical_url: https://github.com/nope/rejected
-      reason: not relevant to llm-wiki
-  archived:
-    - canonical_url: https://github.com/old/archived
-      reason: superseded
+  rejected: []
+  archived: []
 `;
 
 describe("agent-memory-trends research config", () => {
-  it("loads the accepted ten-query portfolio and hard collection budgets", () => {
-    const parsed = parseResearchConfig(VALID_CONFIG, "test-config.yaml");
+  it("loads lane-based GitHub discovery config and updated scoring weights", () => {
+    const parsed = parseResearchConfig(LANE_CONFIG, "test-config.yaml");
 
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) throw new Error("expected config to parse");
     expect(parsed.data.project).toBe("llm-wiki");
-    expect(parsed.data.github.queries.map((query) => query.id)).toEqual([
+    expect(parsed.data.github.lanes.map((lane) => lane.id)).toEqual([
+      "daily_fresh",
+      "weekly_momentum",
+      "monthly_authority",
+      "emerging",
+    ]);
+    expect(parsed.data.github.lanes[0]).toMatchObject({
+      id: "daily_fresh",
+      windowDays: 1,
+      dateField: "pushed",
+      sort: "updated",
+      order: "desc",
+      perPage: 10,
+      qualityGate: {
+        minStars: 10,
+        minForks: 0,
+        minEvidenceFamilies: 2,
+        allowMultiQueryException: true,
+      },
+    });
+    expect(parsed.data.github.lanes[2].queries.map((query) => query.id)).toEqual([
+      "monthly-workflow",
+      "monthly-context-engineering",
+    ]);
+    expect(parsed.data.github.maxQueries).toBe(24);
+    expect(parsed.data.github.maxRawCandidates).toBe(50);
+    expect(parsed.data.github.maxSelectedCandidates).toBe(10);
+    expect(parsed.data.github.apiCallBudget).toBe(100);
+    expect(parsed.data.scoring.weights).toEqual({
+      relevance: 30,
+      implementationEvidence: 25,
+      authorityMomentum: 25,
+      freshness: 10,
+      noveltyOrTracking: 10,
+    });
+  });
+
+  it("bridges the legacy flat ten-query portfolio into one explicit compatibility lane", () => {
+    const parsed = parseResearchConfig(LEGACY_CONFIG, "legacy-config.yaml");
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("expected legacy config to parse");
+    expect(parsed.data.github.lanes).toHaveLength(1);
+    expect(parsed.data.github.lanes[0]).toMatchObject({
+      id: "legacy_flat",
+      label: "Legacy flat query portfolio",
+      windowDays: 0,
+      dateField: "pushed",
+      sort: "updated",
+      order: "desc",
+      perPage: 10,
+      qualityGate: {
+        minStars: 0,
+        minForks: 0,
+        minEvidenceFamilies: 0,
+      },
+    });
+    expect(parsed.data.github.lanes[0].queries.map((query) => query.id)).toEqual([
       "claude-agent-memory",
       "codex-agent-memory",
       "cross-agent-memory",
@@ -88,22 +246,11 @@ describe("agent-memory-trends research config", () => {
       "second-brain-agent-memory",
       "local-first-memory-sync",
     ]);
-    expect(parsed.data.github.maxQueries).toBe(10);
-    expect(parsed.data.github.maxRawCandidates).toBe(50);
-    expect(parsed.data.github.maxSelectedCandidates).toBe(10);
-    expect(parsed.data.github.apiCallBudget).toBe(100);
-    expect(parsed.data.scoring.weights).toEqual({
-      relevance: 35,
-      actionability: 25,
-      authorityActivity: 20,
-      freshness: 10,
-      novelty: 10,
-    });
   });
 
   it("rejects configs that exceed the agreed GitHub collection caps", () => {
     const parsed = parseResearchConfig(
-      VALID_CONFIG.replace("max_queries: 10", "max_queries: 11"),
+      LANE_CONFIG.replace("max_queries: 24", "max_queries: 25"),
       "too-many-queries.yaml"
     );
 
@@ -113,10 +260,22 @@ describe("agent-memory-trends research config", () => {
     expect(String(parsed.detail)).toContain("max_queries");
   });
 
+  it("rejects invalid lane fields with a clear migration error", () => {
+    const parsed = parseResearchConfig(
+      LANE_CONFIG.replace("sort: updated", "sort: recency"),
+      "bad-lane.yaml"
+    );
+
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) throw new Error("expected invalid config");
+    expect(parsed.error).toBe("CONFIG_INVALID");
+    expect(String(parsed.detail)).toContain("github.lanes[0].sort");
+  });
+
   it("reads YAML from disk with the same validation", () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-memory-trends-config-"));
     const configPath = join(dir, "agent-memory-research-sources.yaml");
-    writeFileSync(configPath, VALID_CONFIG, "utf8");
+    writeFileSync(configPath, LANE_CONFIG, "utf8");
 
     const parsed = readResearchConfig(configPath);
 
@@ -126,7 +285,7 @@ describe("agent-memory-trends research config", () => {
   });
 
   it("auto-appends only stable, repeated, above-threshold repository signals", () => {
-    const parsed = parseResearchConfig(VALID_CONFIG, "test-config.yaml");
+    const parsed = parseResearchConfig(LANE_CONFIG, "test-config.yaml");
     if (!parsed.ok) throw new Error("expected config to parse");
 
     const decision = shouldAutoAppendWatchlist({
@@ -149,7 +308,7 @@ describe("agent-memory-trends research config", () => {
   });
 
   it("does not auto-append rejected, archived, unstable, or below-threshold signals", () => {
-    const parsed = parseResearchConfig(VALID_CONFIG, "test-config.yaml");
+    const parsed = parseResearchConfig(LANE_CONFIG, "test-config.yaml");
     if (!parsed.ok) throw new Error("expected config to parse");
 
     const rejected = shouldAutoAppendWatchlist({

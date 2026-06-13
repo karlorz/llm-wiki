@@ -52,15 +52,19 @@ function selectedCandidate(): SelectedGithubCandidate {
     pushedAt: "2026-06-10T00:00:00Z",
     archived: false,
     queryIds: ["cross-agent-memory"],
+    laneIds: ["legacy_flat"],
+    qualityGate: "passed",
+    evidenceFamilies: ["coding_agent", "memory_state", "knowledge_store"],
     score: {
       score: 82,
       components: {
         relevance: 30,
-        actionability: 20,
-        authorityActivity: 16,
+        implementationEvidence: 20,
+        authorityMomentum: 16,
         freshness: 8,
-        novelty: 8,
+        noveltyOrTracking: 8,
       },
+      trackingStatus: "new",
       reasons: ["strong agent-memory match"],
     },
   };

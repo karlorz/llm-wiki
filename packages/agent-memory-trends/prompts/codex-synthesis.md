@@ -66,6 +66,11 @@ inspection and decision, not implementation.
 ## Evidence And Web Sources
 
 - Prefer bounded `readme_evidence` supplied with selected candidates.
+- Use `lane_ids`, `query_ids`, `quality_gate`, `evidence_families`, and
+  `score.tracking_status` when explaining why a repository was selected,
+  tracked, or duplicate-suppressed. Repositories that are already known may
+  still be high-signal tracked sources; explain them in the digest instead of
+  creating duplicate task captures.
 - Declare every relied-on web source in the run manifest and aggregate evidence
   file.
 - Use max 15 web sources.

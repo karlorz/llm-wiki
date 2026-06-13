@@ -100,6 +100,9 @@ describe("Codex synthesis runner", () => {
             archived: false,
             queryIds: ["agent-memory"],
             readmeText: "README ".repeat(10_000),
+            laneIds: ["weekly_momentum"],
+            qualityGate: "passed",
+            evidenceFamilies: ["coding_agent", "memory_state", "skills_subagents"],
             readmeEvidence: [
               {
                 sourceUrl: "https://github.com/example/huge-agent#readme",
@@ -112,12 +115,13 @@ describe("Codex synthesis runner", () => {
               score: 31,
               components: {
                 relevance: 12,
-                actionability: 7,
-                authorityActivity: 5,
+                implementationEvidence: 7,
+                authorityMomentum: 5,
                 freshness: 4,
-                novelty: 3,
+                noveltyOrTracking: 3,
               },
-              reasons: ["relevance: 12/35 for agent memory match"],
+              trackingStatus: "new",
+              reasons: ["relevance: 12/30 for agent memory match"],
             },
           },
         ],
@@ -133,6 +137,9 @@ describe("Codex synthesis runner", () => {
     expect(JSON.parse(wireJson ?? "{}").selected_candidates[0]).toMatchObject({
       full_name: "example/huge-agent",
       canonical_url: "https://github.com/example/huge-agent",
+      lane_ids: ["weekly_momentum"],
+      quality_gate: "passed",
+      evidence_families: ["coding_agent", "memory_state", "skills_subagents"],
       stargazers_count: 42,
       readme_evidence: [
         {
@@ -144,8 +151,11 @@ describe("Codex synthesis runner", () => {
       ],
       score: {
         components: {
-          authority_activity: 5,
+          authority_momentum: 5,
+          implementation_evidence: 7,
+          novelty_or_tracking: 3,
         },
+        tracking_status: "new",
       },
     });
   });

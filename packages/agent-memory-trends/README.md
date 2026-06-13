@@ -4,6 +4,43 @@ Private `llm-wiki` workspace package for the nightly agent-memory research workf
 
 The package stages high-signal agent-memory research into the vault. It collects bounded GitHub candidates through `gh api`, prepares an agent-neutral synthesis input, runs a non-interactive synthesis runner, validates generated vault output through the publisher gate, pushes successful changes, and sends a heartbeat only after the push succeeds.
 
+## GitHub Discovery Lanes
+
+GitHub recall is lane-based rather than a single updated-first query list. The
+owned config at
+`/Users/karlchow/wiki/projects/llm-wiki/architecture/agent-memory-research-sources.yaml`
+defines four lanes:
+
+- `daily_fresh`: short pushed window, `sort=updated`, filtered by a low but real
+  quality gate so minute-level 0-star noise does not flood the digest.
+- `weekly_momentum`: seven-day pushed window, `sort=stars`, with stars/forks and
+  evidence-family gates.
+- `monthly_authority`: thirty-day pushed window, `sort=stars`, so high-authority
+  active projects remain visible even when they are not the newest pushed repo.
+- `emerging`: thirty-day created window, `sort=updated`, for low-authority
+  projects with strong implementation evidence. These are usually inspection
+  ideas, not direct implementation tasks.
+
+Each selected candidate carries `lane_ids`, `query_ids`, `quality_gate`, and
+`evidence_families`. Duplicate repositories returned by multiple lanes merge by
+canonical GitHub URL before scoring, preserving all lane/query provenance.
+
+The scorer uses five explicit components:
+
+- `relevance` / 30
+- `implementation_evidence` / 25
+- `authority_momentum` / 25
+- `freshness` / 10
+- `novelty_or_tracking` / 10
+
+Known repositories are not hidden at scoring time. They receive
+`tracking_status: "tracked_existing"` and remain visible in selected or
+duplicate-suppression payloads, while TypeScript capture rendering still
+suppresses duplicate raw transcript creation.
+
+Legacy configs with a flat `github.queries` list still parse through an explicit
+`legacy_flat` compatibility lane. New owned config should use `github.lanes`.
+
 ## Synthesis Contract
 
 `agent-memory-trends` keeps the shared synthesis boundary agent-client-neutral. The core pipeline depends on `SynthesisRunner`; Codex is the only live adapter today. This keeps the package compatible with a later Claude Code or other agent-client runner without changing the downstream publisher contract.

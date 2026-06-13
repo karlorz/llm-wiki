@@ -149,6 +149,9 @@ function candidateToWire(candidate: SelectedGithubCandidate): Record<string, unk
     pushed_at: candidate.pushedAt,
     archived: candidate.archived,
     query_ids: candidate.queryIds,
+    lane_ids: candidate.laneIds,
+    quality_gate: candidate.qualityGate,
+    evidence_families: candidate.evidenceFamilies,
     readme_evidence: (candidate.readmeEvidence ?? []).map((evidence) => ({
       source_url: evidence.sourceUrl,
       excerpt: evidence.excerpt,
@@ -159,11 +162,12 @@ function candidateToWire(candidate: SelectedGithubCandidate): Record<string, unk
       score: candidate.score.score,
       components: {
         relevance: candidate.score.components.relevance,
-        actionability: candidate.score.components.actionability,
-        authority_activity: candidate.score.components.authorityActivity,
+        implementation_evidence: candidate.score.components.implementationEvidence,
+        authority_momentum: candidate.score.components.authorityMomentum,
         freshness: candidate.score.components.freshness,
-        novelty: candidate.score.components.novelty,
+        novelty_or_tracking: candidate.score.components.noveltyOrTracking,
       },
+      tracking_status: candidate.score.trackingStatus,
       reasons: candidate.score.reasons,
     },
   };

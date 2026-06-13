@@ -94,6 +94,9 @@ function candidate(overrides: Partial<SelectedGithubCandidate>): SelectedGithubC
     description: "Agent memory for llm-wiki.",
     topics: ["agent-memory"],
     readmeText: "Markdown memory.",
+    laneIds: ["weekly_momentum"],
+    qualityGate: "passed",
+    evidenceFamilies: ["coding_agent", "memory_state", "knowledge_store"],
     stargazersCount: 100,
     forksCount: 10,
     pushedAt: "2026-06-10T00:00:00Z",
@@ -103,11 +106,12 @@ function candidate(overrides: Partial<SelectedGithubCandidate>): SelectedGithubC
       score: 80,
       components: {
         relevance: 30,
-        actionability: 20,
-        authorityActivity: 15,
+        implementationEvidence: 20,
+        authorityMomentum: 15,
         freshness: 10,
-        novelty: 5,
+        noveltyOrTracking: 5,
       },
+      trackingStatus: "new",
       reasons: ["high signal"],
     },
     ...overrides,
@@ -203,6 +207,20 @@ describe("agent-memory-trends duplicate suppression and input generation", () =>
     const json = JSON.parse(readFileSync(written.data.path, "utf8"));
     expect(json.run_id).toBe("2026-06-11T00-10-00+08-00");
     expect(json.selected_candidates).toHaveLength(1);
+    expect(json.selected_candidates[0]).toMatchObject({
+      full_name: "acme/novel-memory",
+      lane_ids: ["weekly_momentum"],
+      quality_gate: "passed",
+      evidence_families: ["coding_agent", "memory_state", "knowledge_store"],
+      score: {
+        components: {
+          implementation_evidence: 20,
+          authority_momentum: 15,
+          novelty_or_tracking: 5,
+        },
+        tracking_status: "new",
+      },
+    });
     expect(json.duplicate_suppressions[0].candidate.full_name).toBe("acme/local-agent-memory");
     expect(json.allowed_outputs.manifest_path).toBe(".skillwiki/agent-memory-trends/2026-06-11-run.json");
   });
