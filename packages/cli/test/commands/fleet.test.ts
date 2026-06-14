@@ -143,7 +143,13 @@ describe("fleet context", () => {
     if (r.result.ok) {
       expect(r.result.data.host_id).toBe("sg01");
       expect(r.result.data.source).toBe("host-id");
+      expect(r.result.data.identity_status).toBe("known");
+      expect(r.result.data.generated_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(r.result.data.warnings).toEqual([]);
+      expect(r.result.data.resolver_trace[0]).toEqual({ source: "--host-id", status: "matched", value: "sg01" });
       expect(r.result.data.markdown).toContain("## Runtime Host Context");
+      expect(r.result.data.markdown).toContain("Identity status: `known`");
+      expect(r.result.data.markdown).toContain("Identity resolution: `--host-id` -> `sg01`");
       expect(r.result.data.markdown).toContain("Current machine: `sg01`");
       expect(r.result.data.markdown).toContain("Fleet role: `snapshotter`; protected: `true`; writes_to: `github`");
       expect(r.result.data.markdown).toContain("Self SSH aliases known in fleet: `sg01`, `cloudsg01`");
@@ -171,6 +177,9 @@ describe("fleet context", () => {
     if (r.result.ok) {
       expect(r.result.data.host_id).toBe("macos-dev");
       expect(r.result.data.source).toBe("~/.skillwiki/.env:SKILLWIKI_HOST_ID");
+      expect(r.result.data.identity_status).toBe("known");
+      expect(r.result.data.resolver_trace.map((step) => step.status)).toContain("matched");
+      expect(r.result.data.markdown).toContain("Resolver trace: `--host-id` unset; `SKILLWIKI_HOST_ID` unset; `AGENT_HOST_ID` unset; `~/.skillwiki/.env:SKILLWIKI_HOST_ID` matched `macos-dev`");
       expect(r.result.data.markdown).toContain("`sg01` via `sg01`, `cloudsg01` (users: `root`)");
       expect(r.result.data.markdown).toContain("`sg02` via `sg02`, `cloudsg02`, `sg02-agent`, `sg02-agent-memory` (users: `root`, `agent`, `agent-memory`)");
       expect(r.result.data.markdown).toContain("do not assume undeclared hosts have reciprocal SSH access");
@@ -192,9 +201,41 @@ describe("fleet context", () => {
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       expect(r.result.data.host_id).toBeUndefined();
+      expect(r.result.data.identity_status).toBe("unknown");
+      expect(r.result.data.warnings).toContain("host identity is unresolved");
+      expect(r.result.data.resolver_trace.at(-1)).toEqual({ source: "hostname", status: "unmatched", value: "localhost" });
       expect(r.result.data.markdown).toContain("Current machine: unknown");
+      expect(r.result.data.markdown).toContain("Identity status: `unknown`");
+      expect(r.result.data.markdown).toContain("Warnings: host identity is unresolved");
       expect(r.result.data.markdown).toContain("host identity is unresolved");
       expect(r.result.data.markdown).toContain("do not assume local vs remote role");
+    }
+  });
+
+  it("keeps invalid identity diagnostic non-fatal when a configured host id is absent from fleet", async () => {
+    const vault = writeVaultFleet();
+
+    const r = await runFleetContext({
+      vault,
+      env: { AGENT_HOST_ID: "ptcloud" },
+      osHostname: "cmux-task-123",
+      user: "root",
+      cwd: "/workspace/llm-wiki",
+      home: tempDir(),
+    });
+
+    expect(r.exitCode).toBe(ExitCode.OK);
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.host_id).toBe("ptcloud");
+      expect(r.result.data.source).toBe("AGENT_HOST_ID");
+      expect(r.result.data.identity_status).toBe("invalid");
+      expect(r.result.data.warnings).toContain("resolved host id `ptcloud` from AGENT_HOST_ID is not in fleet.yaml");
+      expect(r.result.data.resolver_trace).toContainEqual({ source: "AGENT_HOST_ID", status: "matched", value: "ptcloud" });
+      expect(r.result.data.markdown).toContain("Current machine: unknown");
+      expect(r.result.data.markdown).toContain("Identity status: `invalid`");
+      expect(r.result.data.markdown).toContain("resolved host id `ptcloud` from AGENT_HOST_ID is not in fleet.yaml");
+      expect(r.result.data.markdown).toContain("do not trust this identity");
     }
   });
 

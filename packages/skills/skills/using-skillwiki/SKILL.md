@@ -107,8 +107,29 @@ Use `prd_layer` + `prd_pipeline` from `.claude/dev-loop.config.md` as source of 
 
 ## CLI Backbone
 All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, health reporting, and linting. Skills invoke it via Bash for the mechanical parts and use Claude for the creative parts.
-Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `graph build`, `archive`, `drift`, `compound`, `tag-sync`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
+Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `archive`, `drift`, `compound`, `tag-sync`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
 Run `skillwiki health <vault> --out /tmp/skillwiki-health.json --no-fail` for a bounded whole-system report that includes doctor, lint, vault-sync, query-readiness, source-freshness, risk flags, and self-check coverage. Run `skillwiki lint <vault> --summary` for lint-only bucket counts with capped examples and details commands. Run `skillwiki doctor` to diagnose setup/runtime issues only. Run `skillwiki config list` to see current configuration.
+
+## Runtime Host Context and Fleet Freshness
+The live output of `skillwiki --human fleet context <vault>` is authoritative for host identity. It overrides stale injected SessionStart context, remembered workspace context, and prior conversation summaries. `fleet context` is local and network-free; it reports `identity_status`, resolver trace, warnings, and the fact that remote freshness was not checked.
+
+Use the local identity check for ordinary runtime context:
+```bash
+VAULT="$(skillwiki --human path | sed 's/ (via.*//')"
+skillwiki --human fleet validate "$VAULT/projects/llm-wiki/architecture/fleet.yaml"
+skillwiki --human fleet context "$VAULT"
+```
+
+Use the remote freshness flow before SSH, sync, deploy, install/uninstall, snapshot, protected-host work, editing `fleet.yaml`, or claiming "fleet is up to date":
+```bash
+VAULT="$(skillwiki --human path | sed 's/ (via.*//')"
+git -C "$VAULT" fetch origin main --prune
+skillwiki --human sync status "$VAULT"
+skillwiki --human fleet validate "$VAULT/projects/llm-wiki/architecture/fleet.yaml"
+skillwiki --human fleet context "$VAULT"
+```
+
+If `identity_status` is `unknown` or `invalid`, treat the runtime as ephemeral: do not infer SSH/self aliases, sync authority, deploy authority, or protected-host permissions. Rerun with `--host-id <id>` only after the user confirms the current machine is that named fleet host.
 
 ## Typical Workflow
 1. **Init** (`wiki-init`) — create vault, set domain and taxonomy

@@ -40,8 +40,18 @@ export interface FleetContextOutput {
   manifest_loaded: boolean;
   host_id?: string;
   source?: string;
+  generated_at: string;
+  identity_status: "known" | "unknown" | "invalid";
+  resolver_trace: FleetResolverTrace[];
+  warnings: string[];
   markdown: string;
   humanHint: string;
+}
+
+export interface FleetResolverTrace {
+  source: string;
+  status: "unset" | "matched" | "unmatched" | "skipped";
+  value?: string;
 }
 
 type LoadedFleet =
@@ -89,13 +99,32 @@ export async function runFleetContext(input: FleetContextInput): Promise<{ exitC
   const user = input.user ?? safeEnvValue(env.USER) ?? safeUserName();
   const vault = input.vault ?? safeEnvValue(env.WIKI_PATH);
   const file = input.file ?? (vault ? join(vault, FLEET_REL_PATH) : undefined);
+  const generatedAt = new Date().toISOString();
 
   const loaded = file ? await loadFleetManifest(file) : { ok: false as const, error: "FILE_NOT_FOUND" as const };
   if (!loaded.ok) {
-    const markdown = formatUnknownContext({ osHostname, user, cwd, vault, reason: "fleet manifest unavailable or invalid" });
+    const warnings = ["fleet manifest unavailable or invalid"];
+    const markdown = formatUnknownContext({
+      generatedAt,
+      osHostname,
+      user,
+      cwd,
+      vault,
+      reason: warnings[0]!,
+      trace: [],
+      warnings,
+    });
     return {
       exitCode: ExitCode.OK,
-      result: ok({ manifest_loaded: false, markdown, humanHint: markdown })
+      result: ok({
+        manifest_loaded: false,
+        generated_at: generatedAt,
+        identity_status: "unknown",
+        resolver_trace: [],
+        warnings,
+        markdown,
+        humanHint: markdown,
+      })
     };
   }
 
@@ -107,11 +136,59 @@ export async function runFleetContext(input: FleetContextInput): Promise<{ exitC
     osHostname,
   });
 
-  if (!resolved.hostId || !loaded.manifest.hosts[resolved.hostId]) {
-    const markdown = formatUnknownContext({ osHostname, user, cwd, vault, reason: "host identity is unresolved" });
+  if (resolved.hostId && !loaded.manifest.hosts[resolved.hostId]) {
+    const source = resolved.source ?? "unknown";
+    const warnings = [`resolved host id \`${resolved.hostId}\` from ${source} is not in fleet.yaml`];
+    const markdown = formatInvalidContext({
+      generatedAt,
+      hostId: resolved.hostId,
+      source,
+      osHostname,
+      user,
+      cwd,
+      vault,
+      trace: resolved.trace,
+      warnings,
+    });
     return {
       exitCode: ExitCode.OK,
-      result: ok({ manifest_loaded: true, markdown, humanHint: markdown })
+      result: ok({
+        manifest_loaded: true,
+        host_id: resolved.hostId,
+        source: resolved.source,
+        generated_at: generatedAt,
+        identity_status: "invalid",
+        resolver_trace: resolved.trace,
+        warnings,
+        markdown,
+        humanHint: markdown,
+      })
+    };
+  }
+
+  if (!resolved.hostId) {
+    const warnings = ["host identity is unresolved"];
+    const markdown = formatUnknownContext({
+      generatedAt,
+      osHostname,
+      user,
+      cwd,
+      vault,
+      reason: warnings[0]!,
+      trace: resolved.trace,
+      warnings,
+    });
+    return {
+      exitCode: ExitCode.OK,
+      result: ok({
+        manifest_loaded: true,
+        generated_at: generatedAt,
+        identity_status: "unknown",
+        resolver_trace: resolved.trace,
+        warnings,
+        markdown,
+        humanHint: markdown,
+      })
     };
   }
 
@@ -119,10 +196,12 @@ export async function runFleetContext(input: FleetContextInput): Promise<{ exitC
     manifest: loaded.manifest,
     hostId: resolved.hostId,
     source: resolved.source,
+    generatedAt,
     osHostname,
     user,
     cwd,
     vault,
+    trace: resolved.trace,
   });
 
   return {
@@ -131,6 +210,10 @@ export async function runFleetContext(input: FleetContextInput): Promise<{ exitC
       manifest_loaded: true,
       host_id: resolved.hostId,
       source: resolved.source,
+      generated_at: generatedAt,
+      identity_status: "known",
+      resolver_trace: resolved.trace,
+      warnings: [],
       markdown,
       humanHint: markdown
     })
@@ -209,38 +292,72 @@ async function resolveHostId(input: {
   env: Record<string, string | undefined>;
   home: string;
   osHostname: string;
-}): Promise<{ hostId?: string; source?: string }> {
-  if (input.hostId) return { hostId: input.hostId, source: "host-id" };
-  if (input.env.SKILLWIKI_HOST_ID) return { hostId: input.env.SKILLWIKI_HOST_ID, source: "SKILLWIKI_HOST_ID" };
-  if (input.env.AGENT_HOST_ID) return { hostId: input.env.AGENT_HOST_ID, source: "AGENT_HOST_ID" };
+}): Promise<{ hostId?: string; source?: string; trace: FleetResolverTrace[] }> {
+  const trace: FleetResolverTrace[] = [];
+  if (input.hostId) {
+    trace.push({ source: "--host-id", status: "matched", value: input.hostId });
+    return { hostId: input.hostId, source: "host-id", trace };
+  }
+  trace.push({ source: "--host-id", status: "unset" });
+
+  if (input.env.SKILLWIKI_HOST_ID) {
+    trace.push({ source: "SKILLWIKI_HOST_ID", status: "matched", value: input.env.SKILLWIKI_HOST_ID });
+    return { hostId: input.env.SKILLWIKI_HOST_ID, source: "SKILLWIKI_HOST_ID", trace };
+  }
+  trace.push({ source: "SKILLWIKI_HOST_ID", status: "unset" });
+
+  if (input.env.AGENT_HOST_ID) {
+    trace.push({ source: "AGENT_HOST_ID", status: "matched", value: input.env.AGENT_HOST_ID });
+    return { hostId: input.env.AGENT_HOST_ID, source: "AGENT_HOST_ID", trace };
+  }
+  trace.push({ source: "AGENT_HOST_ID", status: "unset" });
 
   if (input.home) {
     const dotenv = await parseDotenvFile(join(input.home, ".skillwiki", ".env"));
     if (dotenv.SKILLWIKI_HOST_ID) {
-      return { hostId: dotenv.SKILLWIKI_HOST_ID, source: "~/.skillwiki/.env:SKILLWIKI_HOST_ID" };
+      trace.push({ source: "~/.skillwiki/.env:SKILLWIKI_HOST_ID", status: "matched", value: dotenv.SKILLWIKI_HOST_ID });
+      return { hostId: dotenv.SKILLWIKI_HOST_ID, source: "~/.skillwiki/.env:SKILLWIKI_HOST_ID", trace };
     }
+    trace.push({ source: "~/.skillwiki/.env:SKILLWIKI_HOST_ID", status: "unset" });
+  } else {
+    trace.push({ source: "~/.skillwiki/.env:SKILLWIKI_HOST_ID", status: "skipped" });
   }
 
-  if (input.env.VS_HOSTNAME) return { hostId: input.env.VS_HOSTNAME, source: "VS_HOSTNAME" };
+  if (input.env.VS_HOSTNAME) {
+    trace.push({ source: "VS_HOSTNAME", status: "matched", value: input.env.VS_HOSTNAME });
+    return { hostId: input.env.VS_HOSTNAME, source: "VS_HOSTNAME", trace };
+  }
+  trace.push({ source: "VS_HOSTNAME", status: "unset" });
 
   const hostname = input.osHostname.trim();
   if (hostname) {
-    if (input.manifest.hosts[hostname]) return { hostId: hostname, source: "hostname" };
+    if (input.manifest.hosts[hostname]) {
+      trace.push({ source: "hostname", status: "matched", value: hostname });
+      return { hostId: hostname, source: "hostname", trace };
+    }
     const byHostname = Object.entries(input.manifest.hosts).find(([, host]) => host.identity.hostnames.includes(hostname));
-    if (byHostname) return { hostId: byHostname[0], source: "hostname" };
+    if (byHostname) {
+      trace.push({ source: "hostname", status: "matched", value: hostname });
+      return { hostId: byHostname[0], source: "hostname", trace };
+    }
+    trace.push({ source: "hostname", status: "unmatched", value: hostname });
+  } else {
+    trace.push({ source: "hostname", status: "unset" });
   }
 
-  return {};
+  return { trace };
 }
 
 function formatKnownContext(input: {
   manifest: FleetManifest;
   hostId: string;
   source?: string;
+  generatedAt: string;
   osHostname: string;
   user: string;
   cwd: string;
   vault?: string;
+  trace: FleetResolverTrace[];
 }): string {
   const host = input.manifest.hosts[input.hostId]!;
   const protectedValue = host.protected === true ? "true" : "false";
@@ -256,11 +373,16 @@ function formatKnownContext(input: {
   return [
     "## Runtime Host Context",
     "",
+    `- Context generated: \`${input.generatedAt}\``,
     `- Current machine: \`${input.hostId}\`${input.source ? ` (source: \`${input.source}\`)` : ""}`,
+    "- Identity status: `known`",
+    `- Identity resolution: ${formatResolution(input.source, input.hostId)}`,
+    `- Resolver trace: ${formatTrace(input.trace)}`,
     `- OS hostname: ${formatMaybe(input.osHostname)}`,
     `- User: ${formatMaybe(input.user)}`,
     `- Workspace: ${formatMaybe(input.cwd)}`,
     `- Vault: ${formatMaybe(input.vault)}`,
+    "- Remote freshness: not checked by `fleet context`; run `sync status` or presync before host-sensitive work.",
     `- Fleet role: \`${host.role}\`; protected: \`${protectedValue}\`; writes_to: \`${writesTo}\``,
     ...maintenanceLines,
     `- Self SSH aliases known in fleet: ${formatList(selfAliases)}`,
@@ -270,24 +392,64 @@ function formatKnownContext(input: {
 }
 
 function formatUnknownContext(input: {
+  generatedAt: string;
   osHostname: string;
   user: string;
   cwd: string;
   vault?: string;
   reason: string;
+  trace: FleetResolverTrace[];
+  warnings: string[];
 }): string {
   return [
     "## Runtime Host Context",
     "",
+    `- Context generated: \`${input.generatedAt}\``,
     "- Current machine: unknown",
+    "- Identity status: `unknown`",
+    `- Resolver trace: ${formatTrace(input.trace)}`,
+    `- Warnings: ${formatWarnings(input.warnings)}`,
     `- OS hostname: ${formatMaybe(input.osHostname)}`,
     `- User: ${formatMaybe(input.user)}`,
     `- Workspace: ${formatMaybe(input.cwd)}`,
     `- Vault: ${formatMaybe(input.vault)}`,
+    "- Remote freshness: not checked by `fleet context`; run `sync status` or presync before host-sensitive work.",
     "- Fleet role: unknown",
     "- Self SSH aliases known in fleet: unknown",
     "- Declared outbound SSH from this source: unknown",
     `- Guidance: ${input.reason}; do not assume local vs remote role. Inspect runtime or ask before SSH/deploy/sync work.`,
+  ].join("\n");
+}
+
+function formatInvalidContext(input: {
+  generatedAt: string;
+  hostId: string;
+  source: string;
+  osHostname: string;
+  user: string;
+  cwd: string;
+  vault?: string;
+  trace: FleetResolverTrace[];
+  warnings: string[];
+}): string {
+  return [
+    "## Runtime Host Context",
+    "",
+    `- Context generated: \`${input.generatedAt}\``,
+    "- Current machine: unknown",
+    "- Identity status: `invalid`",
+    `- Identity resolution: ${formatResolution(input.source, input.hostId)}`,
+    `- Resolver trace: ${formatTrace(input.trace)}`,
+    `- Warnings: ${formatWarnings(input.warnings)}`,
+    `- OS hostname: ${formatMaybe(input.osHostname)}`,
+    `- User: ${formatMaybe(input.user)}`,
+    `- Workspace: ${formatMaybe(input.cwd)}`,
+    `- Vault: ${formatMaybe(input.vault)}`,
+    "- Remote freshness: not checked by `fleet context`; run `sync status` or presync before host-sensitive work.",
+    "- Fleet role: unknown",
+    "- Self SSH aliases known in fleet: unknown",
+    "- Declared outbound SSH from this source: unknown",
+    `- Guidance: do not trust this identity; rerun with \`--host-id\` only if the user confirms \`${input.hostId}\` is the current fleet host id.`,
   ].join("\n");
 }
 
@@ -335,6 +497,24 @@ function formatOutboundAccess(values: OutboundAccess[]): string {
     const usersPart = value.users.length > 0 ? ` (users: ${formatList(value.users)})` : "";
     return `\`${value.hostId}\`${aliasPart}${usersPart}`;
   }).join("; ");
+}
+
+function formatResolution(source: string | undefined, hostId: string): string {
+  return source ? `\`${source === "host-id" ? "--host-id" : source}\` -> \`${hostId}\`` : `unknown -> \`${hostId}\``;
+}
+
+function formatTrace(values: FleetResolverTrace[]): string {
+  if (values.length === 0) return "not available";
+  return values.map((value) => {
+    const source = `\`${value.source}\``;
+    if (value.status === "matched") return `${source} matched \`${value.value ?? ""}\``;
+    if (value.status === "unmatched") return `${source} unmatched \`${value.value ?? ""}\``;
+    return `${source} ${value.status}`;
+  }).join("; ");
+}
+
+function formatWarnings(values: string[]): string {
+  return values.length > 0 ? values.join("; ") : "none";
 }
 
 function formatList(values: string[]): string {

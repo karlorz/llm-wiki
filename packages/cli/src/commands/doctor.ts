@@ -11,6 +11,7 @@ import { semverGt } from "../utils/semver.js";
 import { findPlugin, findPluginInstallations, type PluginChannelInstall } from "../utils/plugin-registry.js";
 import { scanVault } from "../utils/vault.js";
 import { buildWikilinkAdjacency, toUndirectedWeighted, louvain, communityCohesion } from "../utils/community.js";
+import { runFleetContext } from "./fleet.js";
 import {
   findRcloneMountPid,
   parseRcloneFlags,
@@ -549,6 +550,43 @@ function checkVaultGitComparison(
   } catch {
     return check("warn", id, label, "Could not compare HEAD with origin/main");
   }
+}
+
+async function checkFleetIdentity(input: {
+  vaultPath?: string;
+  home: string;
+  cwd?: string;
+  envValue?: string;
+}): Promise<CheckResult> {
+  if (!input.vaultPath) {
+    return check("pass", "fleet_identity", "Fleet identity", "No vault path — check skipped");
+  }
+
+  const r = await runFleetContext({
+    vault: input.vaultPath,
+    env: { ...process.env, WIKI_PATH: input.envValue ?? input.vaultPath },
+    home: input.home,
+    cwd: input.cwd ?? process.cwd(),
+    osHostname: process.env.HOSTNAME,
+    user: process.env.USER,
+  });
+
+  if (!r.result.ok) {
+    return check("warn", "fleet_identity", "Fleet identity", "Could not evaluate fleet identity");
+  }
+
+  const data = r.result.data;
+  if (!data.manifest_loaded) {
+    return check("pass", "fleet_identity", "Fleet identity", "Fleet manifest unavailable — check skipped");
+  }
+  if (data.identity_status === "known") {
+    return check("pass", "fleet_identity", "Fleet identity", `Resolved ${data.host_id ?? "unknown"} via ${data.source ?? "unknown"}`);
+  }
+
+  const detail = data.warnings.length > 0
+    ? data.warnings.join("; ")
+    : "Fleet identity is unresolved";
+  return check("warn", "fleet_identity", "Fleet identity", detail);
 }
 
 function pullLogPaths(home: string): string[] {
@@ -1269,6 +1307,12 @@ export async function runDoctor(
   checks.push(checkVaultStructure(resolvedPath));
   checks.push(checkObsidianTemplates(resolvedPath));
   checks.push(checkVaultGitRemote(resolvedPath));
+  checks.push(await checkFleetIdentity({
+    vaultPath: resolvedPath,
+    home: input.home,
+    cwd: input.cwd,
+    envValue: input.envValue,
+  }));
   checks.push(checkSyncLastPush(resolvedPath));
   checks.push(checkVaultGitDirty(resolvedPath));
   checks.push(checkVaultGitAhead(resolvedPath));

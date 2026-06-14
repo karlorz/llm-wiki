@@ -69,6 +69,39 @@ function homeWithCodexPlugin(version: string, sourceType: "local" | "git" = "loc
 }
 
 const SCHEMA = `# Vault Schema\n\n## Tag Taxonomy\n\n\`\`\`yaml\ntaxonomy:\n  - model\n\`\`\`\n`;
+const FLEET = `schema_version: 1
+vault_remote: git@github.com:karlorz/wiki.git
+s3_remote: seaweed-wiki:cloud/wiki
+hosts:
+  macos-dev:
+    class: dev-macos
+    role: leaf
+    writes_to: [s3, github]
+    protected: false
+    identity:
+      hostnames: [macos-dev]
+    access:
+      from:
+        macos-dev:
+          status: local
+          ssh_aliases: []
+          users: [karlchow]
+          transports: [local]
+  sg01:
+    class: prod-linux
+    role: snapshotter
+    writes_to: [github]
+    protected: true
+    identity:
+      hostnames: [sg01]
+    access:
+      from:
+        macos-dev:
+          status: configured
+          ssh_aliases: [sg01]
+          users: [root]
+          transports: [public-ip]
+`;
 
 function fullVault(): string {
   const v = mkdtempSync(join(tmpdir(), "vault-"));
@@ -78,6 +111,12 @@ function fullVault(): string {
   execSync("git init", { cwd: v, stdio: "pipe" });
   execSync("git remote add origin https://example.com/vault.git", { cwd: v, stdio: "pipe" });
   return v;
+}
+
+function addFleet(vault: string): void {
+  const dir = join(vault, "projects", "llm-wiki", "architecture");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "fleet.yaml"), FLEET);
 }
 
 function gitCommit(cwd: string, message: string): void {
@@ -211,12 +250,45 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 37 checks", async () => {
+  it("warns when configured fleet identity is not in fleet.yaml", async () => {
+    const h = home();
+    const v = fullVault();
+    addFleet(v);
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\nSKILLWIKI_HOST_ID=ptcloud\n`);
+
+    const prior = {
+      SKILLWIKI_HOST_ID: process.env.SKILLWIKI_HOST_ID,
+      AGENT_HOST_ID: process.env.AGENT_HOST_ID,
+      VS_HOSTNAME: process.env.VS_HOSTNAME,
+    };
+    delete process.env.SKILLWIKI_HOST_ID;
+    delete process.env.AGENT_HOST_ID;
+    delete process.env.VS_HOSTNAME;
+    let r!: Awaited<ReturnType<typeof runDoctor>>;
+    try {
+      r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    } finally {
+      for (const [key, value] of Object.entries(prior)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const fleet = r.result.data.checks.find(c => c.id === "fleet_identity");
+      expect(fleet?.status).toBe("warn");
+      expect(fleet?.detail).toContain("resolved host id `ptcloud`");
+      expect(fleet?.detail).toContain("not in fleet.yaml");
+    }
+  });
+
+  it("always returns exactly 38 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(37);
+      expect(r.result.data.checks).toHaveLength(38);
       const freshness = r.result.data.checks.find(c => c.id === "s3_mount_freshness");
       expect(freshness).toBeDefined();
       expect(freshness?.status).toBe("pass");
