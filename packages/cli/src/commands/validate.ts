@@ -6,6 +6,7 @@ import {
   detectSchema, type SchemaName, type Result
 } from "@skillwiki/shared";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
+import { scanSensitiveContent, type SensitiveFinding } from "../utils/sensitive-content.js";
 
 export interface ValidateInput {
   file: string;
@@ -19,6 +20,7 @@ export interface ValidateOutput {
   index_updated: boolean;
   log_updated: boolean;
   humanHint: string;
+  sensitive_findings?: SensitiveFinding[];
 }
 
 const TYPE_TO_SECTION: Record<string, string> = {
@@ -53,6 +55,25 @@ export async function runValidate(input: ValidateInput): Promise<{ exitCode: num
     return { exitCode: ExitCode.INVALID_FRONTMATTER, result: fm };
   }
   const det = detectSchema(fm.data);
+  const sensitiveFindings = scanSensitiveContent(text, { file: input.file });
+  if (sensitiveFindings.length > 0) {
+    const errors = sensitiveFindings.map(f => ({
+      path: "sensitive_content",
+      message: `${f.kind} at line ${f.line}: ${f.preview}`,
+    }));
+    return {
+      exitCode: ExitCode.SENSITIVE_CONTENT_DETECTED,
+      result: ok({
+        schema: det.schema,
+        valid: false,
+        errors,
+        index_updated: false,
+        log_updated: false,
+        humanHint: `SENSITIVE CONTENT (${sensitiveFindings.length})\n${errors.map(e => `  ${e.message}`).join("\n")}`,
+        sensitive_findings: sensitiveFindings,
+      }),
+    };
+  }
   if (!det.schema) {
     return { exitCode: ExitCode.SCHEMA_NOT_DETECTED, result: ok({ schema: null, valid: false, errors: [], index_updated: false, log_updated: false, humanHint: "schema not detected" }) };
   }

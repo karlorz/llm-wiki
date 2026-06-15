@@ -19,8 +19,9 @@ Run `skillwiki lang` at the start. Generate page-body prose, narrative sections,
 1. **Guard.** For each URL: run `skillwiki fetch-guard <url>`. If exit ≠ 0, STOP and surface the error. Do not retry.
 2. **Fetch.** Use `web_fetch` (or read local file) under Layer 2 controls (the CLI Layer 2 fetcher applies in tests; in skill runtime use `web_fetch` directly and treat any error as STOP).
 3. **Identity guard.** Before writing raw files, ensure the target raw filename/title, `source_url`, fetched H1/title, and early body subject agree. If `skillwiki ingest` reports `INGEST_VALIDATION_FAILED` with `source identity conflict`, STOP. Do not fix by renaming after the fact; choose the correct title/source pair or ask the user.
-4. **Hash.** Write the raw file (frontmatter + body). Run `skillwiki hash <raw-file>` and embed the result in raw frontmatter `sha256:`.
-5. **Generate page(s).** Compose typed-knowledge page(s) with citations pre-attached (`^[raw/...]` markers). Every page MUST include:
+4. **Sensitive content guard.** Before writing or filing any vault page, scan the source and generated body for live credentials, access keys, tokens, passwords, cookies, bearer headers, or private keys. Redact generated prose before writing. If the source itself must remain raw and contains a live secret, STOP instead of preserving it.
+5. **Hash.** Write the raw file (frontmatter + body). Run `skillwiki hash <raw-file>` and embed the result in raw frontmatter `sha256:`.
+6. **Generate page(s).** Compose typed-knowledge page(s) with citations pre-attached (`^[raw/...]` markers). Every page MUST include:
 - `> **TL;DR:**` blockquote as the first content after the title heading — a one-sentence summary of the page's key takeaway (under 200 chars). See SCHEMA.md `## TL;DR Convention`.
 - For pages tagged `architecture` or explaining workflows/systems: include a Mermaid diagram (`graph TB` or `sequenceDiagram`) in the body. Follow Obsidian-compatible Mermaid rules (see SCHEMA.md `## Mermaid Diagrams`).
 For generated `comparisons/` pages or evaluation-style `queries/` pages, end the body with:
@@ -32,9 +33,9 @@ Reason: ...
 Follow-up: ...
 ```
 Use exactly one disposition. Keep this as a prompt convention, not a validator rule.
-6. **Validate.** For each generated page: run `skillwiki validate <page>`. If exit ≠ 0, STOP — do not write index/log.
-7. **Apply writes in order.** raw → page(s) → `index.md` → `log.md`.
-8. **Confidence flag.** If only one source is cited, set `confidence: low`.
+7. **Validate.** For each generated page: run `skillwiki validate <page>`. If exit ≠ 0, STOP — do not write index/log.
+8. **Apply writes in order.** raw → page(s) → `index.md` → `log.md`.
+9. **Confidence flag.** If only one source is cited, set `confidence: low`.
 ## Provenance defaults
 - Default `provenance: research`.
 - If cwd is inside `projects/{slug}/`, set `provenance: project` and add `provenance_projects: ["[[slug]]"]`.
@@ -47,6 +48,7 @@ Raw ephemeral data (market feeds, logs, transient JSON) must be written to the *
 - `fetch-guard` non-zero.
 - Fetch timeout / size limit exceeded.
 - `INGEST_VALIDATION_FAILED` with `source identity conflict`.
+- Source or generated content contains unredacted live credentials or other authenticating secrets.
 - `validate` non-zero on any page.
 - sha256 already exists in vault for the same source.
 ## Forbidden
@@ -57,7 +59,7 @@ Raw ephemeral data (market feeds, logs, transient JSON) must be written to the *
 - Writing `[[wikilinks]]` to pages that don't exist in the vault. Before linking, verify the target exists: check `index.md` or `ls` the target directory. If the target doesn't exist yet, use plain text instead of a wikilink.
 ## Batch Mode
 When the user provides multiple sources (a directory of files, a list of URLs, or a multi-document input):
-1. **Loop per source.** Execute steps 1–6 for each source individually (guard → fetch → identity guard → hash → generate → validate).
+1. **Loop per source.** Execute steps 1–7 for each source individually (guard → fetch → identity guard → sensitive content guard → hash → generate → validate).
 2. **Accumulate, don't write yet.** Collect all raw files and pages in memory. Do not write `index.md` or `log.md` until every source has validated.
 3. **Fail fast.** If any page fails validation, STOP. Report all failures. Do not write index/log for any source.
 4. **Deduplication.** Before writing each raw file, check `sha256` against existing vault raw sources. Skip sources whose content is already present.

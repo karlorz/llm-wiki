@@ -1,6 +1,7 @@
 import { ok, ExitCode, type ExitCodeValue, type Result } from "@skillwiki/shared";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { runLinks } from "./links.js";
 import { runTagAudit } from "./tag-audit.js";
@@ -26,6 +27,7 @@ import { buildCliSurface, validateCliRefs } from "../utils/cli-surface.js";
 import { parseExpiryAnnotations } from "../parsers/expiry-annotations.js";
 import { assessSourceIdentity } from "../utils/source-identity.js";
 import { normalizeRawSourceTarget, rawSourceTargetExistsSync } from "../utils/raw-source.js";
+import { redactSensitiveContent, scanSensitiveContent } from "../utils/sensitive-content.js";
 
 const STRUCT_MIN_BODY_LINES = 60;
 const STRUCT_MIN_SECTIONS = 3;
@@ -120,7 +122,7 @@ export interface LintSummaryOutput {
   humanHint: string;
 }
 
-const ERROR_ORDER = ["broken_wikilinks", "invalid_frontmatter", "raw_source_identity_conflict", "raw_dedup", "broken_sources", "tag_not_in_taxonomy", "path_too_long"] as const;
+const ERROR_ORDER = ["sensitive_content", "broken_wikilinks", "invalid_frontmatter", "raw_source_identity_conflict", "raw_dedup", "broken_sources", "tag_not_in_taxonomy", "path_too_long"] as const;
 const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file_source_url", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram"] as const;
 const INFO_ORDER = ["bridges", "sparse_community", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
 const KNOWN_BUCKETS = [...ERROR_ORDER, ...WARNING_ORDER, ...INFO_ORDER] as const;
@@ -151,6 +153,25 @@ function summarizeBucket(bucket: Bucket, severity: LintSeverity, vaultPath: stri
     sample_truncated: bucket.items.length > examples.length,
     details_command: `skillwiki lint ${shellQuote(vaultPath)} --only ${bucket.kind}`,
   };
+}
+
+function recomputeRawSha256IfPresent(content: string): string {
+  const split = splitFrontmatter(content);
+  if (!split.ok) return content;
+  if (!/^sha256:\s*[0-9a-f]{64}$/m.test(split.data.rawFrontmatter)) return content;
+  const sha256 = createHash("sha256").update(Buffer.from(split.data.body, "utf8")).digest("hex");
+  const rawFrontmatter = split.data.rawFrontmatter.replace(/^sha256:\s*[0-9a-f]{64}$/m, `sha256: ${sha256}`);
+  return `---\n${rawFrontmatter}\n---\n${split.data.body}`;
+}
+
+function appendLintFixLastOp(vault: string, fixed: string[]): void {
+  if (fixed.length === 0) return;
+  appendLastOp(vault, {
+    operation: "lint-fix",
+    summary: `fixed ${fixed.length} page(s)`,
+    files: fixed,
+    timestamp: new Date().toISOString(),
+  });
 }
 
 export function summarizeLintOutput(output: LintOutput, examplesLimit = 3): LintSummaryOutput {
@@ -275,6 +296,18 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   const allPages = scan.ok ? [...scan.data.typedKnowledge, ...scan.data.raw, ...scan.data.workItems, ...scan.data.compound] : [];
   const slugs = scan.ok ? buildSlugMap(allPages) : new Map<string, string>();
   if (scan.ok) {
+    const sensitiveFlags: unknown[] = [];
+    for (const page of scan.data.allMarkdown) {
+      try {
+        const text = await readPage(page);
+        const findings = scanSensitiveContent(text, { file: page.relPath });
+        sensitiveFlags.push(...findings);
+      } catch {
+        // Skip unreadable pages; other filesystem checks surface path issues.
+      }
+    }
+    if (sensitiveFlags.length > 0) buckets.sensitive_content = sensitiveFlags;
+
     // Raw subdirectory duplicate detection
     // Raw files should be at depth 2: raw/{type}/{file}.md
     // Anything deeper (e.g., raw/articles/subdir/file.md) with a same-stem flat duplicate is flagged
@@ -516,6 +549,36 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
       } catch { /* skip unreadable pages */ }
     }
     if (staleSectionFlags.length > 0) buckets.stale_sections = staleSectionFlags;
+
+    // --fix: redact sensitive content as a security exception to raw immutability.
+    if (shouldFix("sensitive_content") && buckets.sensitive_content) {
+      const sensitiveFixed: string[] = [];
+      for (const page of scan.data.allMarkdown) {
+        try {
+          const raw = await readPage(page);
+          const redacted = redactSensitiveContent(raw, { file: page.relPath });
+          if (!redacted.changed) continue;
+          const next = recomputeRawSha256IfPresent(redacted.text);
+          const w = await safeWritePage(page.absPath, next, { minBodyRatio: null });
+          if (!w.ok) { unresolved.push(page.relPath); continue; }
+          sensitiveFixed.push(page.relPath);
+        } catch {
+          unresolved.push(page.relPath);
+        }
+      }
+      fixed.push(...sensitiveFixed);
+      const remainingSensitiveFlags: unknown[] = [];
+      for (const page of scan.data.allMarkdown) {
+        try {
+          const text = await readPage(page);
+          remainingSensitiveFlags.push(...scanSensitiveContent(text, { file: page.relPath }));
+        } catch {
+          // Leave unreadable paths in unresolved; they cannot be rescanned.
+        }
+      }
+      if (remainingSensitiveFlags.length > 0) buckets.sensitive_content = remainingSensitiveFlags;
+      else delete buckets.sensitive_content;
+    }
 
     // --fix: auto-fix legacy_citation_style by moving inline ^[raw/...] to ## Sources
     if (shouldFix("legacy_citation_style") && legacyPages.length > 0) {
@@ -883,6 +946,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
       unresolved,
       humanHint: `--only ${input.only}\n${match.length === 0 ? "0 violations" : match.map(b => `  ${b.kind}: ${b.items.length}`).join("\n")}`
     };
+    if (input.fix) appendLintFixLastOp(input.vault, fixed);
     return {
       exitCode: fExit,
       result: ok(input.summary ? summarizeLintOutput(output, input.examplesLimit) : output)
@@ -909,14 +973,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   }
   if (hintLines.length === 0) hintLines.push("0 errors, 0 warnings, 0 info");
 
-  if (input.fix && fixed.length > 0) {
-    appendLastOp(input.vault, {
-      operation: "lint-fix",
-      summary: `fixed ${fixed.length} page(s)`,
-      files: fixed,
-      timestamp: new Date().toISOString(),
-    });
-  }
+  if (input.fix) appendLintFixLastOp(input.vault, fixed);
 
   const output: LintOutput = {
     vault: { path: input.vault, source: input.source ?? "resolved" },

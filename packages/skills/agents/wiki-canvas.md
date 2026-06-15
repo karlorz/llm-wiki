@@ -42,3 +42,4 @@ Return:
 **Forbidden:**
 - Modifying `vault-graph.canvas` by hand
 - Generating canvas without current graph.json after vault changes
+- Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to graph, canvas, or log output

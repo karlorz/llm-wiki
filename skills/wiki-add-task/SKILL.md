@@ -32,8 +32,9 @@ Run `skillwiki lang` at the start. Entry prose and `--human` summaries use the r
 - `text` — the idea/bug/task/note content (required)
 - `type` — one of: `idea`, `bug`, `task`, `note` (default: `idea`)
 - `project` — optional project slug to cross-reference (e.g., `llm-wiki`)
-2. **Build filename.** Derive a slug from the first ~6 words of the text (lowercased, hyphens for spaces, non-alphanumeric stripped). The capture file is `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md`. Each capture gets its own file — never append to an existing file.
-3. **Write frontmatter.** Create the file with ad-hoc capture frontmatter:
+2. **Sensitive content guard.** Before writing a capture, scan the text for live credentials, access keys, tokens, passwords, cookies, bearer headers, or private keys. Redact before writing. If the source text itself contains a live secret that must be preserved verbatim, STOP instead of filing it.
+3. **Build filename.** Derive a slug from the first ~6 words of the text (lowercased, hyphens for spaces, non-alphanumeric stripped). The capture file is `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md`. Each capture gets its own file — never append to an existing file.
+4. **Write frontmatter.** Create the file with ad-hoc capture frontmatter:
 ```yaml
 ---
 source_url:
@@ -47,19 +48,19 @@ project: "[[{slug}]]"
 - If no project, omit the `project` field entirely.
 - `source_url` is null (these are locally originated captures).
 - No `sha256` — ad-hoc captures are mutable working notes, not immutable sources.
-4. **Write body.** Below the frontmatter, write:
+5. **Write body.** Below the frontmatter, write:
 ```markdown
 # {type}: {text}
 {text}
 ```
 Use the resolved output language for any prose. The type label and frontmatter stay English.
-5. **Cross-reference (optional).** If a `project` slug was provided:
+6. **Cross-reference (optional).** If a `project` slug was provided:
 - Check that `projects/{slug}/` exists in the vault.
 - Append a one-line reference to the project's compound notes:
 `- [YYYY-MM-DD] capture: [text (first 60 chars)] → raw/transcripts/YYYY-MM-DD-{type}-{slug}.md`
 - Do NOT create a full work item (that's `proj-work`'s job).
-6. **Update log.md.** Append: `## [YYYY-MM-DD] capture | [type]: [text (first 60 chars)]`
-7. **Confirm to user.** Report what was captured and where. Suggest next steps:
+7. **Update log.md.** Append: `## [YYYY-MM-DD] capture | [type]: [text (first 60 chars)]`
+8. **Confirm to user.** Report what was captured and where. Suggest next steps:
 - If `type: idea` → "Consider ingesting related sources to develop this idea."
 - If `type: bug` → "Use proj-work to create a bug-fix work item."
 - If `type: task` → "Use proj-work to track this task through the dev loop."
@@ -83,11 +84,13 @@ Ad-hoc captures omit `sha256` — they are mutable working notes, not immutable 
 - `skillwiki path` returns NO_VAULT_CONFIGURED.
 - No `text` provided (prompt user once, then stop).
 - Target file already exists (use a different slug or add a suffix).
+- Capture text contains unredacted live credentials or other authenticating secrets.
 ## Forbidden
 - Creating an `inbox/` directory. All captures go to `raw/transcripts/`.
 - Appending to existing capture files — each capture gets its own file.
 - Creating a work item — this is capture-only. Use `proj-work` for full work items.
 - Writing to any Layer 2 or Layer 3 location. Captures are Layer 1 (raw).
+- Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault.
 ## Filesystem drop (offline capture)
 When you're not in a Claude session, drop files directly into `raw/transcripts/`:
 1. Create a `.md` file in `raw/transcripts/` — name it descriptively (e.g., `2026-05-08-idea-fix-template.md`)

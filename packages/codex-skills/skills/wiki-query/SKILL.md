@@ -22,7 +22,8 @@ Standard four reads (SCHEMA, index, log, project context if applicable).
 - Type affinity: 1.0×
 5. **Read top candidates** in full (frontmatter + body).
 6. **Synthesize answer** with explicit citations to the candidate pages.
-7. **Optional file.** If user accepts: write to `queries/<slug>.md` or `comparisons/<slug>.md` with full frontmatter, validate, then update `index.md` then `log.md`. If the filed page is a research/evaluation answer, recommendation, or comparison, end it with:
+7. **Sensitive content guard.** Before filing any query or comparison page, scan the generated body for live credentials, access keys, tokens, passwords, cookies, bearer headers, or private keys. Redact before writing. If the answer depends on preserving a live secret, STOP and ask for a redacted source or explicit rotation/remediation direction.
+8. **Optional file.** If user accepts: write to `queries/<slug>.md` or `comparisons/<slug>.md` with full frontmatter, validate, then update `index.md` then `log.md`. If the filed page is a research/evaluation answer, recommendation, or comparison, end it with:
 ```markdown
 ## Decision Closeout
 
@@ -34,6 +35,7 @@ Use exactly one disposition. This is a prompt convention only; do not add CLI en
 ## Stop conditions
 - Zero matching pages.
 - User declines to file.
+- Generated filed content contains unredacted live credentials or other authenticating secrets.
 ## Pitfalls
 ### Claimed-status vs actual-state gap
 When a wiki page (especially a work item `tasks.md`) claims that fixes were applied, features were completed, or files were removed — **verify on disk before accepting the claim**. In one incident, a `tasks.md` marked 6 items DONE but 5 were not actually applied: a script claimed "removed" was still 2020 bytes on disk, a crontab claimed "updated to 30min" was still `*/10`, and a build target claimed "verified has consumers" had no web server serving it.
@@ -41,3 +43,4 @@ When a wiki page (especially a work item `tasks.md`) claims that fixes were appl
 ## Forbidden
 - Filing without `validate` passing.
 - Skipping the orientation reads even for "quick" queries.
+- Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault.

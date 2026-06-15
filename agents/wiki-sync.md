@@ -68,3 +68,4 @@ Return:
 - Auto-resolving body conflicts
 - Force-pushing (`git push --force`)
 - Modifying files in `raw/` to resolve conflicts (N9)
+- Printing, committing, or preserving live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets during conflict handling

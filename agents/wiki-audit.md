@@ -44,3 +44,4 @@ Return a structured summary:
 **Forbidden:**
 - Auto-applying suggested fixes (audit is observation-only — do not edit pages)
 - Modifying `sources:` frontmatter or body citations
+- Printing or writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets in audit summaries

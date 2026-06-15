@@ -298,4 +298,55 @@ Body.
     expect(readFileSync(join(dir, "index.md"), "utf8")).toBe("## Concepts\n");
     expect(readFileSync(join(dir, "log.md"), "utf8")).toBe("# Log\n");
   });
+
+  it("rejects sensitive content without exposing the value", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "validate-"));
+    const file = join(dir, "secret.md");
+    const secret = "hana_" + "dev_" + "A".repeat(43);
+    writeFileSync(file, `---
+title: Secret
+created: 2026-06-15
+updated: 2026-06-15
+type: query
+tags: [security]
+sources: [raw/articles/x.md]
+---
+
+# Secret
+
+Access key: ${secret}
+`);
+
+    const r = await runValidate({ file });
+
+    expect(r.exitCode).toBe(51);
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.valid).toBe(false);
+      expect(r.result.data.errors.some(e => e.path === "sensitive_content")).toBe(true);
+      expect(JSON.stringify(r.result.data)).not.toContain(secret);
+    }
+  });
+
+  it("accepts redacted sensitive placeholders", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "validate-"));
+    const file = join(dir, "redacted.md");
+    writeFileSync(file, `---
+title: Redacted
+created: 2026-06-15
+updated: 2026-06-15
+type: query
+tags: [security]
+sources: [raw/articles/x.md]
+---
+
+# Redacted
+
+Access key: [REDACTED:access_key:abc123]
+`);
+
+    const r = await runValidate({ file });
+
+    expect(r.exitCode).toBe(0);
+  });
 });

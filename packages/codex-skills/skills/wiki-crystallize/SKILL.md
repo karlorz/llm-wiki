@@ -26,12 +26,15 @@ Reason: ...
 Follow-up: ...
 ```
 Use exactly one disposition. Keep this as a prompt/template convention; do not add validation or lint enforcement.
-4. `skillwiki validate <page>`. If non-zero, STOP.
-5. Apply writes: page → `index.md` → `log.md`.
+4. **Sensitive content guard.** Before writing, scan the source and generated body for live credentials, access keys, tokens, passwords, cookies, bearer headers, or private keys. Redact generated prose before writing. If the source itself contains a live secret and would need to remain raw, STOP instead of preserving it.
+5. `skillwiki validate <page>`. If non-zero, STOP.
+6. Apply writes: page → `index.md` → `log.md`.
 ## Stop conditions
 - `validate` non-zero.
 - Missing `provenance:` for project-context runs.
+- Source or generated content contains unredacted live credentials or other authenticating secrets.
 ## Forbidden
 - Filing without explicit `provenance:`.
 - Updating `index.md` before `validate` passes.
 - Writing `[[wikilinks]]` to pages that don't exist in the vault. Before linking, verify the target exists: check `index.md` or `ls` the target directory. If the target doesn't exist yet, use plain text instead of a wikilink.
+- Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault.

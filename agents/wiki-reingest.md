@@ -30,9 +30,10 @@ You are a drift detection specialist running `skillwiki drift` and processing re
    - **unchanged:** No action needed.
 4. **Process each drifted source:**
    a. Archive old raw: `skillwiki archive <raw-path>`
-   b. Re-fetch content and write as new raw file with updated sha256
-   c. Update all concept/entity pages citing the old source: change `^[raw/...]` markers and `sources:` to reference the new path
-   d. Verify with `skillwiki audit` that no broken markers remain
+   b. Re-fetch content. If it contains live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets, STOP and ask for a redacted source or explicit rotation/remediation direction.
+   c. Write as new raw file with updated sha256
+   d. Update all concept/entity pages citing the old source: change `^[raw/...]` markers and `sources:` to reference the new path
+   e. Verify with `skillwiki audit` that no broken markers remain
 5. **Log.** Append to `{vault}/log.md`: scanned count, drifted count, re-ingested count, skipped count.
 
 **N9 Compliance:**
@@ -53,8 +54,10 @@ Return:
 - `skillwiki drift` returns non-zero (other than DRIFT_DETECTED)
 - No raw sources have `source_url` (nothing to check)
 - All sources unchanged
+- Replacement source content contains unredacted live credentials or other authenticating secrets
 
 **Forbidden:**
 - Modifying files in `raw/` directly (N9)
 - Re-ingesting without archiving old raw first
 - Updating citations without running `skillwiki audit` to verify
+- Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault

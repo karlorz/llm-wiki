@@ -15,12 +15,14 @@ Standard four reads.
 2. For lint-only maintenance, run `skillwiki lint <vault> --summary`. This returns bounded bucket counts, capped examples, and `details_command` hints without full item arrays.
 3. Drill into important buckets with `skillwiki lint <vault> --only <bucket>` when examples are insufficient for remediation.
 4. Reason over findings; present grouped by severity with concrete suggested actions per kind. If the CLI was recently updated with new lint checks, re-running lint on the full vault may flag pre-existing pages that predate the new rule — treat these as legitimate findings, not false positives.
-5. If `log_rotate_needed` is present and the user consents, run `skillwiki log-rotate <vault> --apply`. Otherwise leave alone.
-6. **Post-migration verification**: If the user recently migrated content (e.g., moved entity/concept pages to another vault), re-run `skillwiki lint <vault> --summary` and verify that broken_wikilinks count decreased. Remaining broken links for migrated content indicate pages still referencing the moved files — these should be cleaned up (remove citations or migrate the referencing pages too).
-7. Append a `log.md` entry summarizing lint counts only when the user asked to record the maintenance result. Do not log routine `health` reports by default.
+5. Treat `sensitive_content` as a security error. Drill down with `skillwiki lint <vault> --only sensitive_content --human`. Redaction is allowed as a security exception to raw immutability only through `skillwiki lint <vault> --fix --only sensitive_content`; never print the secret value in the report.
+6. If `log_rotate_needed` is present and the user consents, run `skillwiki log-rotate <vault> --apply`. Otherwise leave alone.
+7. **Post-migration verification**: If the user recently migrated content (e.g., moved entity/concept pages to another vault), re-run `skillwiki lint <vault> --summary` and verify that broken_wikilinks count decreased. Remaining broken links for migrated content indicate pages still referencing the moved files — these should be cleaned up (remove citations or migrate the referencing pages too).
+8. Append a `log.md` entry summarizing lint counts only when the user asked to record the maintenance result. Do not log routine `health` reports by default.
 ## Stop conditions
 None — lint reports all findings even on per-page errors.
 ## Forbidden
 - Auto-rotating logs.
 - Auto-updating sha256 fields.
 - Modifying any page beyond a user-approved lint summary entry in `log.md`.
+- Printing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets in findings or summaries.

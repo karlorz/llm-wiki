@@ -6,6 +6,7 @@ import { runFetchGuardSync } from "./fetch-guard.js";
 import { controlledFetch } from "../utils/fetch.js";
 import { appendLastOp } from "../utils/last-op.js";
 import { assessSourceIdentity } from "../utils/source-identity.js";
+import { scanSensitiveContent } from "../utils/sensitive-content.js";
 import {
   TypedKnowledgeSchema,
   RawSourceSchema,
@@ -232,6 +233,17 @@ export async function runIngest(
         result: err("FILE_NOT_FOUND", { path: input.source }),
       };
     }
+  }
+
+  const sensitiveFindings = scanSensitiveContent(sourceContent, { file: input.source });
+  if (sensitiveFindings.length > 0) {
+    return {
+      exitCode: ExitCode.SENSITIVE_CONTENT_DETECTED,
+      result: err("SENSITIVE_CONTENT_DETECTED", {
+        message: "source content contains sensitive authentication material; provide a redacted source before ingesting",
+        findings: sensitiveFindings,
+      }),
+    };
   }
 
   // Compute sha256 of the source content

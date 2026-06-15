@@ -62,3 +62,4 @@ Return:
 - Marking `status: completed` without a `completed:` date
 - Accepting tasks.md DONE labels without independent disk verification
 - Re-marking tasks as DONE without actually applying the fix
+- Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault

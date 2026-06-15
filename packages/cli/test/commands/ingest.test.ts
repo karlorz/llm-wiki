@@ -367,4 +367,44 @@ describe("ingest", () => {
     expect(typedContent).toContain("tags:");
     expect(typedContent).toContain("[]");
   });
+
+  it("rejects local source content containing sensitive values before writing", async () => {
+    const v = vault();
+    const source = join(v, "source.md");
+    const secret = "hana_" + "dev_" + "A".repeat(43);
+    writeFileSync(source, `# Source\n\nAccess key: ${secret}\n`);
+
+    const r = await runIngest({
+      source,
+      vault: v,
+      type: "query",
+      title: "Secret Source",
+      tags: ["security"],
+    });
+
+    expect(r.exitCode).toBe(51);
+    expect(r.result.ok).toBe(false);
+    expect(JSON.stringify(r.result)).not.toContain(secret);
+    expect(existsSync(join(v, "raw", "articles", "secret-source.md"))).toBe(false);
+    expect(existsSync(join(v, "queries", "secret-source.md"))).toBe(false);
+  });
+
+  it("rejects sensitive content even in dry-run mode", async () => {
+    const v = vault();
+    const source = join(v, "source.md");
+    const secret = "Bearer " + "B".repeat(48);
+    writeFileSync(source, `Authorization: ${secret}\n`);
+
+    const r = await runIngest({
+      source,
+      vault: v,
+      type: "query",
+      title: "Secret Dry Run",
+      tags: ["security"],
+      dryRun: true,
+    });
+
+    expect(r.exitCode).toBe(51);
+    expect(JSON.stringify(r.result)).not.toContain(secret);
+  });
 });

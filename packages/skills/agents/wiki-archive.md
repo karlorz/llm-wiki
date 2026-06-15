@@ -46,3 +46,4 @@ Return:
 - Archiving `raw/` files outside N9 Reingest Protocol
 - Archiving without updating citation markers for raw files
 - Deleting files (archive moves, never deletes)
+- Preserving live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets by archive-only handling

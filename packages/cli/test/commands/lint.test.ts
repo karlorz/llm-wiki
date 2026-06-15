@@ -1649,4 +1649,99 @@ SeaweedFS is a fast distributed storage system.
       }
     });
   });
+
+  describe("sensitive_content bucket", () => {
+    it("flags sensitive content as an error without exposing the value", async () => {
+      const v = vault();
+      mkdirSync(join(v, "queries"), { recursive: true });
+      const secret = "hana_" + "dev_" + "A".repeat(43);
+      writeFileSync(join(v, "queries", "secret.md"), `---
+title: Secret
+created: 2026-06-15
+updated: 2026-06-15
+type: query
+tags: [model]
+sources: [raw/articles/x.md]
+---
+
+Access key: ${secret}
+`);
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "sensitive_content" });
+
+      expect(r.exitCode).toBe(23);
+      if (r.result.ok) {
+        const bucket = r.result.data.by_severity.error.find(b => b.kind === "sensitive_content");
+        expect(bucket?.items).toHaveLength(1);
+        expect(JSON.stringify(bucket)).not.toContain(secret);
+      }
+    });
+
+    it("scans archived markdown too", async () => {
+      const v = vault();
+      mkdirSync(join(v, "_archive", "queries"), { recursive: true });
+      const secret = "Bearer " + "B".repeat(48);
+      writeFileSync(join(v, "_archive", "queries", "old.md"), `Authorization: ${secret}\n`);
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "sensitive_content" });
+
+      expect(r.exitCode).toBe(23);
+      if (r.result.ok) {
+        expect(JSON.stringify(r.result.data)).not.toContain(secret);
+        expect(JSON.stringify(r.result.data)).toContain("_archive/queries/old.md");
+      }
+    });
+
+    it("does not flag redacted placeholders", async () => {
+      const v = vault();
+      mkdirSync(join(v, "queries"), { recursive: true });
+      writeFileSync(join(v, "queries", "redacted.md"), "Access key: [REDACTED:access_key:abc123]\n");
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "sensitive_content" });
+
+      expect(r.exitCode).toBe(0);
+    });
+
+    it("redacts sensitive content with --fix --only sensitive_content", async () => {
+      const v = vault();
+      mkdirSync(join(v, "queries"), { recursive: true });
+      const secret = "hana_" + "dev_" + "A".repeat(43);
+      const file = join(v, "queries", "secret.md");
+      writeFileSync(file, `Access key: ${secret}\n`);
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true, only: "sensitive_content" });
+
+      expect(r.exitCode).toBe(0);
+      if (r.result.ok) {
+        expect(r.result.data.fixed).toContain("queries/secret.md");
+        expect(JSON.stringify(r.result.data)).not.toContain(secret);
+      }
+      const after = readFileSync(file, "utf8");
+      expect(after).toContain("Access key: [REDACTED:access_key:");
+      expect(after).not.toContain(secret);
+    });
+
+    it("recomputes raw sha256 after redaction", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "transcripts"), { recursive: true });
+      const secret = "hana_" + "dev_" + "A".repeat(43);
+      const file = join(v, "raw", "transcripts", "secret.md");
+      writeFileSync(file, `---
+source_url:
+ingested: 2026-06-15
+sha256: ${"0".repeat(64)}
+---
+
+Access key: ${secret}
+`);
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true, only: "sensitive_content" });
+
+      expect(r.exitCode).toBe(0);
+      const after = readFileSync(file, "utf8");
+      expect(after).not.toContain(secret);
+      expect(after).not.toContain(`sha256: ${"0".repeat(64)}`);
+      expect(after).toMatch(/^sha256: [0-9a-f]{64}$/m);
+    });
+  });
 });

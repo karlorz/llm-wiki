@@ -52,3 +52,4 @@ Return:
 - Filing a concept page without explicit `provenance:`
 - Skipping the generalization check
 - Updating index/logs before `validate` passes
+- Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault

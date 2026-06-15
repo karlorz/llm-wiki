@@ -55,6 +55,10 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 **Layer 2 — Typed Knowledge:** `entities/`, `concepts/`, `comparisons/`, `queries/`, `meta/`. Agent-owned pages with `^[raw/...]` citation markers at paragraph-end. Global scope — project association via `provenance_projects:` frontmatter, not directory nesting.
 **Layer 3 — Project Workspaces (`projects/{slug}/`):** Per-project lifecycle directories with `work/` (spec + plan + retro), `compound/` (distilled lessons/patterns), `architecture/` (ADRs), and `history/` (archived specs/plans).
 **No `inbox/` directory.** Ad-hoc captures go to `raw/transcripts/` or directly into a project work item via `proj-work`. Do not invent new top-level directories — extend Layer 2 via SCHEMA.md tag taxonomy if needed.
+
+## Sensitive Content Policy
+Vault content must not contain live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets. This includes development-only and local-only credentials. Redact values before filing using `[REDACTED:<kind>]` or `[REDACTED:<kind>:<fingerprint>]`. If a source contains live secrets, stop and ask for a redacted source or explicit rotation/remediation direction; do not preserve the secret in `raw/`.
+
 ### Ad-hoc capture: three entry points
 | Entry | When | What happens |
 |-------|------|-------------|

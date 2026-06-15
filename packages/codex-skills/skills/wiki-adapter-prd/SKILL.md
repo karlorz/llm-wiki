@@ -62,9 +62,10 @@ Map source sections to typed-knowledge pages:
 0. Resolve vault and language: `skillwiki path` and `skillwiki lang`.
 1. Classify the input format using the structural cues above.
 2. If URL source: run `skillwiki fetch-guard <url>`, then fetch.
-3. Write raw capture: frontmatter + full body → `raw/articles/<slug>.md`.
-4. Run `skillwiki hash <raw-file>`, embed sha256.
-5. Generate typed-knowledge pages following the mapping strategy.
+3. **Sensitive content guard.** Before writing the raw capture or generated pages, scan the source and generated body for live credentials, access keys, tokens, passwords, cookies, bearer headers, or private keys. Redact generated prose before writing. If the source itself contains a live secret and would need to remain raw, STOP instead of preserving it.
+4. Write raw capture: frontmatter + full body → `raw/articles/<slug>.md`.
+5. Run `skillwiki hash <raw-file>`, embed sha256.
+6. Generate typed-knowledge pages following the mapping strategy.
    For generated comparison or evaluation pages, end the body with:
    ```markdown
    ## Decision Closeout
@@ -74,8 +75,8 @@ Map source sections to typed-knowledge pages:
    Follow-up: ...
    ```
    Use exactly one disposition. Preserve action items as skipped project-management content unless the closeout explicitly says `work-item`.
-6. For each page: run `skillwiki validate <page>`. If any fails, STOP.
-7. Write pages, then update `index.md` and `log.md`.
+7. For each page: run `skillwiki validate <page>`. If any fails, STOP.
+8. Write pages, then update `index.md` and `log.md`.
 
 ## Provenance defaults
 
@@ -87,6 +88,7 @@ Map source sections to typed-knowledge pages:
 - `fetch-guard` non-zero.
 - `validate` non-zero on any page.
 - sha256 already exists for the same source (skip — already ingested).
+- Source or generated content contains unredacted live credentials or other authenticating secrets.
 
 ## Forbidden
 
@@ -94,3 +96,4 @@ Map source sections to typed-knowledge pages:
 - Writing index/log before all pages validate.
 - Modifying existing raw files (N9).
 - Auto-generating pages for action items, timelines, or process steps — those are project management, not knowledge.
+- Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault.

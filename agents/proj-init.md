@@ -56,3 +56,4 @@ Return:
 **Forbidden:**
 - Modifying any other project's files
 - Creating the workspace without updating index.md
+- Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault

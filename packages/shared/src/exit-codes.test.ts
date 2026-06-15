@@ -46,6 +46,7 @@ describe("exit-codes", () => {
     expect(ExitCode.SKILL_VERSION_MISMATCH).toBe(40);
     expect(ExitCode.INGEST_VALIDATION_FAILED).toBe(41);
     expect(ExitCode.FLEET_MANIFEST_INVALID).toBe(50);
+    expect(ExitCode.SENSITIVE_CONTENT_DETECTED).toBe(51);
     expect(ExitCode.SYNC_LOCK_HELD).toBe(48);
     expect(ExitCode.LOG_APPEND_LOCK_HELD).toBe(49);
   });
@@ -55,5 +56,6 @@ describe("exit-codes", () => {
     const names = codes.map(c => exitCodeName(c));
     expect(new Set(names).size).toBe(names.length);
     for (const n of names) expect(n.length).toBeGreaterThan(0);
+    expect(exitCodeName(51)).toBe("SENSITIVE_CONTENT_DETECTED");
   });
 });

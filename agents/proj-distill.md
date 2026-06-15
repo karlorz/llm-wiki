@@ -58,3 +58,4 @@ Return:
 - Skipping Step 1 (analysis before generation)
 - Inventing new tags not in SCHEMA.md taxonomy
 - Updating index/logs before `validate` passes
+- Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault

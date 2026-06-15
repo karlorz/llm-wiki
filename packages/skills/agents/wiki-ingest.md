@@ -26,9 +26,10 @@ You are a vault ingestion specialist converting source material (URLs, files, te
 
 1. **Resolve vault and language.** Run `skillwiki path` and `skillwiki lang`.
 2. **Guard (URL sources).** For each URL: `skillwiki fetch-guard <url>`. If non-zero, STOP.
-3. **Fetch.** Fetch content. Write raw file at `raw/articles/<slug>.md` with proper frontmatter (`source_url`, `ingested`, `sha256` placeholder).
-4. **Hash.** Run `skillwiki hash <raw-file>`. Embed the result in `sha256:`.
-5. **Generate page(s).** Compose typed-knowledge pages with:
+3. **Fetch.** Fetch content.
+4. **Sensitive content guard.** Before writing or filing any vault page, scan the source and generated body for live credentials, access keys, tokens, passwords, cookies, bearer headers, or private keys. Redact generated prose before writing. If the source itself must remain raw and contains a live secret, STOP instead of preserving it.
+5. **Write raw and hash.** Write raw file at `raw/articles/<slug>.md` with proper frontmatter (`source_url`, `ingested`, `sha256` placeholder). Run `skillwiki hash <raw-file>` and embed the result in `sha256:`.
+6. **Generate page(s).** Compose typed-knowledge pages with:
    - Proper frontmatter (`title`, `type`, `tags` from SCHEMA.md taxonomy, `provenance`, `sources`)
    - `## TL;DR` as first section — 1–3 bullet summary
    - `^[raw/...]` citations for every factual claim
@@ -43,8 +44,8 @@ You are a vault ingestion specialist converting source material (URLs, files, te
      Follow-up: ...
      ```
      Use exactly one disposition. This is a prompt convention, not a validator rule.
-6. **Validate.** For each page: `skillwiki validate <page>`. If any non-zero, fix issues and re-validate. Do NOT proceed until all pages pass.
-7. **Apply writes in order:** raw file(s) → page(s) → update `index.md` → append `log.md`.
+7. **Validate.** For each page: `skillwiki validate <page>`. If any non-zero, fix issues and re-validate. Do NOT proceed until all pages pass.
+8. **Apply writes in order:** raw file(s) → page(s) → update `index.md` → append `log.md`.
 
 ### Batch mode
 When multiple sources are provided:
@@ -68,6 +69,7 @@ Return:
 - Fetch timeout or size limit exceeded
 - `validate` non-zero on any page (after retry)
 - sha256 already exists in vault (skip, don't duplicate)
+- Source or generated content contains unredacted live credentials or other authenticating secrets
 
 **Forbidden:**
 - Skipping `fetch-guard` for URL sources
@@ -75,3 +77,4 @@ Return:
 - Modifying existing raw files (N9)
 - Writing `[[wikilinks]]` to nonexistent pages — verify first
 - Writing raw ephemeral data to cloud-mounted wiki paths
+- Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault
