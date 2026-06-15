@@ -41,6 +41,7 @@ interface Match {
 interface Matcher {
   kind: SensitiveKind;
   re: RegExp;
+  valueGroup?: number;
 }
 
 const REDACTED_RE = /\[REDACTED:[^\]]+\]/i;
@@ -53,43 +54,53 @@ const MATCHERS: Matcher[] = [
   },
   {
     kind: "authorization_header",
-    re: /\bAuthorization\s*:\s*(Bearer\s+[A-Za-z0-9._~+/-]{20,})/gi,
+    re: /\bAuthorization["']?\s*:\s*["']?(Bearer\s+[A-Za-z0-9._~+/-]{20,})["']?/gi,
+    valueGroup: 1,
   },
   {
     kind: "cookie",
     re: /\b(?:Cookie|Set-Cookie)\s*:\s*([^\n]{20,})/gi,
+    valueGroup: 1,
   },
   {
     kind: "jwt",
     re: /\b([A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,})\b/g,
+    valueGroup: 1,
   },
   {
     kind: "provider_key",
-    re: /\b((?:sk|xox[baprs]|gh[pousr])_[A-Za-z0-9_=-]{20,})\b/g,
+    re: /\b(sk-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|gh[pousr]_[A-Za-z0-9_=-]{20,})\b/g,
+    valueGroup: 1,
   },
   {
     kind: "access_key",
     re: /\b((?:AKIA|ASIA)[A-Z0-9]{16})\b/g,
+    valueGroup: 1,
   },
   {
     kind: "access_key",
-    re: /\b(access[-_ ]?key|credential)\s*[:=]\s*([A-Za-z0-9._~+/-]{20,})/gi,
+    re: /\b(?:access[-_ ]?key|credential)["']?\s*[:=]\s*["']?([A-Za-z0-9._~+/-]{20,})["']?/gi,
+    valueGroup: 1,
   },
   {
     kind: "api_key",
-    re: /\b(api[-_ ]?key)\s*[:=]\s*([A-Za-z0-9._~+/-]{20,})/gi,
+    re: /\b(?:api[-_ ]?key)["']?\s*[:=]\s*["']?([A-Za-z0-9._~+/-]{20,})["']?/gi,
+    valueGroup: 1,
   },
   {
     kind: "password",
-    re: /\b(pass(?:word|wd)?)\s*[:=]\s*([^\s`"']{8,})/gi,
+    re: /\b(?:pass(?:word|wd)?)["']?\s*[:=]\s*["']?([^\s`"']{8,})["']?/gi,
+    valueGroup: 1,
   },
   {
     kind: "secret",
-    re: /\b(secret|client[-_ ]?secret)\s*[:=]\s*([A-Za-z0-9._~+/-]{16,})/gi,
+    re: /\b(?:secret|client[-_ ]?secret)["']?\s*[:=]\s*["']?([A-Za-z0-9._~+/-]{16,})["']?/gi,
+    valueGroup: 1,
   },
   {
     kind: "token",
-    re: /\b(token|session)\s*[:=]\s*([A-Za-z0-9._~+/-]{16,})/gi,
+    re: /\b(?:token|session)["']?\s*[:=]\s*["']?([A-Za-z0-9._~+/-]{16,})["']?/gi,
+    valueGroup: 1,
   },
 ];
 
@@ -118,7 +129,7 @@ function collectMatches(text: string): Match[] {
       const start = m.index ?? 0;
       if (REDACTED_RE.test(whole)) continue;
 
-      const value = m[2] ?? m[1] ?? whole;
+      const value = matcher.valueGroup ? m[matcher.valueGroup] : whole;
       if (isSyntheticPlaceholder(value)) continue;
 
       const valueOffset = whole.lastIndexOf(value);

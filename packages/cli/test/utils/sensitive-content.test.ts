@@ -34,6 +34,32 @@ describe("sensitive-content", () => {
     expect(JSON.stringify(findings)).not.toContain(secret);
   });
 
+  it("detects quoted config values", () => {
+    const password = "dev-only-" + "P".repeat(24);
+    const apiKey = "key_" + "K".repeat(28);
+    const text = [
+      `"password": "${password}",`,
+      `api_key: '${apiKey}'`,
+    ].join("\n");
+
+    const findings = scanSensitiveContent(text);
+
+    expect(findings.map(f => f.kind)).toEqual(["password", "api_key"]);
+    expect(JSON.stringify(findings)).not.toContain(password);
+    expect(JSON.stringify(findings)).not.toContain(apiKey);
+  });
+
+  it("detects common provider key prefixes", () => {
+    const openAiLike = "sk-" + "A".repeat(48);
+    const slackLike = "xoxb-" + "B".repeat(48);
+
+    const findings = scanSensitiveContent(`${openAiLike}\n${slackLike}\n`);
+
+    expect(findings.map(f => f.kind)).toEqual(["provider_key", "provider_key"]);
+    expect(JSON.stringify(findings)).not.toContain(openAiLike);
+    expect(JSON.stringify(findings)).not.toContain(slackLike);
+  });
+
   it("detects private key blocks", () => {
     const text = [
       "-----BEGIN OPENSSH PRIVATE KEY-----",
