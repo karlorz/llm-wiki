@@ -119,6 +119,39 @@ describe("agent-memory-trends generated-output allowlist", () => {
     expect(result.data.digestPathForAudit).toBe("queries/2026-06-11-agent-memory-trends-digest.md");
   });
 
+  it("does not apply the generated-file byte cap to existing session-brief support files", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
+    const runManifest = manifest({
+      changedFiles: [
+        "queries/2026-06-11-agent-memory-trends-digest.md",
+        ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        ".skillwiki/agent-memory-trends/latest-run.json",
+        "log.md",
+      ],
+      outputs: {
+        digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+        runStatePath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        latestRunPath: ".skillwiki/agent-memory-trends/latest-run.json",
+        sessionBriefSupportPaths: ["log.md"],
+      },
+    });
+    writeVaultFile(vault, "queries/2026-06-11-agent-memory-trends-digest.md", "d\n");
+    writeVaultFile(vault, ".skillwiki/agent-memory-trends/2026-06-11-run.json", "{}\n");
+    writeVaultFile(vault, ".skillwiki/agent-memory-trends/latest-run.json", "{}\n");
+    writeVaultFile(vault, "log.md", `${"vault log entry\n".repeat(20)}`);
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 4,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects undeclared paths, too many tasks, too many web sources, and existing raw rewrites", () => {
     const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
     const runManifest = manifest({

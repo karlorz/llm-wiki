@@ -184,7 +184,9 @@ function inspectChangedFile(vault: string, path: string, maxFileBytes: number, i
   if ((lstat.mode & 0o111) !== 0) issues.push(`${path} is executable`);
 
   const stat = statSync(fullPath);
-  if (stat.size > maxFileBytes) issues.push(`${path} is oversized (${stat.size} bytes > ${maxFileBytes})`);
+  if (!isSessionBriefSupportPath(path) && stat.size > maxFileBytes) {
+    issues.push(`${path} is oversized (${stat.size} bytes > ${maxFileBytes})`);
+  }
 
   const body = readFileSync(fullPath, "utf8");
   if (SECRET_PATTERNS.some((pattern) => pattern.test(body))) issues.push(`${path} contains secret-like content`);
@@ -196,6 +198,10 @@ function isRawPath(path: string): boolean {
 
 function isTypedPagePath(path: string): boolean {
   return path.startsWith("queries/") || path === SESSION_BRIEF_PATH;
+}
+
+function isSessionBriefSupportPath(path: string): boolean {
+  return SESSION_BRIEF_SUPPORT_PATHS.includes(path);
 }
 
 function compareTypedPageValidationOrder(left: string, right: string): number {
