@@ -33,6 +33,7 @@ function makeDotenv(autoCommit: string): string {
 
 describe("postCommit", () => {
   const origHome = process.env.HOME;
+  const origAutoCommit = process.env.AUTO_COMMIT;
 
   beforeEach(() => {
     mkdirSync(TMP, { recursive: true });
@@ -40,6 +41,11 @@ describe("postCommit", () => {
 
   afterEach(() => {
     process.env.HOME = origHome;
+    if (origAutoCommit === undefined) {
+      delete process.env.AUTO_COMMIT;
+    } else {
+      process.env.AUTO_COMMIT = origAutoCommit;
+    }
     rmSync(TMP, { recursive: true, force: true });
   });
 
@@ -68,6 +74,27 @@ describe("postCommit", () => {
 
     const lastOpPath = join(vault, ".skillwiki", "last-op.json");
     expect(existsSync(lastOpPath)).toBe(true);
+  });
+
+  it("lets process env AUTO_COMMIT=false override dotenv config", async () => {
+    const vault = initTestRepo();
+    makeDotenv("true");
+    process.env.HOME = join(TMP, "home");
+    process.env.AUTO_COMMIT = "false";
+    writeFileSync(join(vault, "raw", "articles", "test.md"), "content");
+    appendLastOp(vault, {
+      operation: "session-brief",
+      summary: "refreshed latest session brief",
+      files: ["meta/latest-session-brief.md"],
+      timestamp: new Date().toISOString(),
+    });
+
+    await postCommit(vault, 0);
+
+    const lastOpPath = join(vault, ".skillwiki", "last-op.json");
+    expect(existsSync(lastOpPath)).toBe(true);
+    const log = execFileSync("git", ["-C", vault, "log", "--oneline"], { encoding: "utf8" }).trim();
+    expect(log.split("\n").length).toBe(1);
   });
 
   it("commits when AUTO_COMMIT is unset (default enabled)", async () => {

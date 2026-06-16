@@ -17,7 +17,8 @@ export async function postCommit(vault: string, exitCode: number): Promise<void>
   // Guard: check config (default: enabled)
   const home = process.env.HOME ?? "";
   const dotenv = await parseDotenvFile(configPath(home));
-  if (dotenv["AUTO_COMMIT"] === "false") return;
+  const autoCommit = process.env.AUTO_COMMIT ?? dotenv["AUTO_COMMIT"];
+  if (autoCommit === "false") return;
 
   // Guard: vault must be a git repo
   if (!existsSync(join(vault, ".git"))) return;
