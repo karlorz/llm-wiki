@@ -887,6 +887,15 @@ async function runDaily(
   previewOnly: boolean
 ): Promise<Result<{ mutations: string[]; selectedCandidateCount: number }>> {
   const startedAt = formatInstant(context.now);
+  if (!dryRun && !generateOnly && !previewOnly) {
+    const resolved = resolveRunOptions(options, context);
+    const synced = await syncVaultBeforeLiveDaily(resolved, context);
+    if (!synced.ok) {
+      writeFailureState(resolved, context, startedAt, classifyFailure(synced.error));
+      return synced;
+    }
+  }
+
   const collected = await collectInput(options, context);
   if (!collected.ok) return collected;
 
@@ -1024,6 +1033,22 @@ function dailyModeLabel(dryRun: boolean, generateOnly: boolean, previewOnly: boo
 function vaultRelativePath(vault: string, path: string): string {
   const prefix = vault.endsWith("/") ? vault : `${vault}/`;
   return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
+async function syncVaultBeforeLiveDaily(
+  options: ResolvedRunOptions,
+  context: AgentMemoryTrendsContext
+): Promise<Result<{ synced: true }>> {
+  const runCommand = context.runCommand ?? createCommandRunner();
+  const result = await runCommand("git", ["-C", options.vault, "pull", "--rebase", "origin", "main"], { cwd: options.repo });
+  if (result.exitCode !== 0) {
+    return err("GIT_FAILED", {
+      args: ["-C", options.vault, "pull", "--rebase", "origin", "main"],
+      stderr: result.stderr,
+      stdout: result.stdout,
+    });
+  }
+  return ok({ synced: true });
 }
 
 async function refreshSessionBrief(

@@ -860,13 +860,20 @@ describe("agent-memory-trends CLI", () => {
       env: {},
       now: new Date("2026-06-11T00:10:00+08:00"),
       readFile: () => CONFIG,
-      collectGithubCandidates: async () => ({ ok: true, data: {
-        rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
-        apiCallsUsed: 12,
-        rawCandidateCount: 1,
-        selectedCandidates: [selectedCandidate()],
-        runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
-      } }),
+      runCommand: async (command, args) => {
+        calls.push(`${command}:${args.join(" ")}`);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      collectGithubCandidates: async () => {
+        expect(calls[0]).toBe("git:-C /vault pull --rebase origin main");
+        return { ok: true, data: {
+          rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+          apiCallsUsed: 12,
+          rawCandidateCount: 1,
+          selectedCandidates: [selectedCandidate()],
+          runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        } };
+      },
       collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
       writeAgentInput: (input) => {
         expect(input.allowedOutputs.evidencePath).toBe(evidencePath);
@@ -962,7 +969,7 @@ describe("agent-memory-trends CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(result.result.ok).toBe(true);
     if (!result.result.ok) throw new Error("expected daily success");
-    expect(calls).toEqual(["synthesis", "render", "refresh-brief", "publish", "heartbeat"]);
+    expect(calls).toEqual(["git:-C /vault pull --rebase origin main", "synthesis", "render", "refresh-brief", "publish", "heartbeat"]);
     expect(result.result.data.mutations).toEqual([
       "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json",
       ...publishedFiles,
@@ -1200,11 +1207,17 @@ describe("agent-memory-trends CLI", () => {
       }),
       runCommand: async (command, args, options) => {
         calls.push(`${command} ${args.join(" ")}`);
-        expect(command).toBe("skillwiki");
-        expect(args).toEqual(["session-brief", vault, "--project", "llm-wiki", "--write"]);
-        sessionBriefOptions = options;
-        writeFileSync(lastOpPath, '[{"operation":"session-brief"}]\n', "utf8");
-        return { exitCode: 0, stdout: "", stderr: "" };
+        if (command === "git") {
+          expect(args).toEqual(["-C", vault, "pull", "--rebase", "origin", "main"]);
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        if (command === "skillwiki") {
+          expect(args).toEqual(["session-brief", vault, "--project", "llm-wiki", "--write"]);
+          sessionBriefOptions = options;
+          writeFileSync(lastOpPath, '[{"operation":"session-brief"}]\n', "utf8");
+          return { exitCode: 0, stdout: "", stderr: "" };
+        }
+        throw new Error(`unexpected command: ${command}`);
       },
       listTrackedRawPaths: async () => ({ ok: true, data: [] }),
       publishGeneratedChanges: async () => ({
@@ -1220,7 +1233,10 @@ describe("agent-memory-trends CLI", () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.result.ok).toBe(true);
-    expect(calls).toEqual([`skillwiki session-brief ${vault} --project llm-wiki --write`]);
+    expect(calls).toEqual([
+      `git -C ${vault} pull --rebase origin main`,
+      `skillwiki session-brief ${vault} --project llm-wiki --write`,
+    ]);
     expect(sessionBriefOptions).toEqual({ cwd: "/repo", env: { AUTO_COMMIT: "false" } });
     expect(readFileSync(lastOpPath, "utf8")).toBe(previousLastOp);
   });
