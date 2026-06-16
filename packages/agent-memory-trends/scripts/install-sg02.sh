@@ -152,6 +152,11 @@ cat > "$BIN_DIR/agent-memory-trends-daily" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+if [ "$#" -ne 0 ]; then
+  echo "agent-memory-trends-daily does not accept arguments; use agent-memory-trends <doctor|collect|daily|publish|version> [args...]" >&2
+  exit 64
+fi
+
 if [ -f "$HOME/.config/agent-memory-trends/env" ]; then
   # shellcheck source=/dev/null
   set -a

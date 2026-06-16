@@ -61,6 +61,16 @@ describe("sg02 systemd rollout artifacts", () => {
     expect(installer).toContain("npm run -w @skillwiki/agent-memory-trends --silent daily --");
     expect(installer).toContain("systemctl daemon-reload");
     expect(installer).toContain("systemctl enable --now agent-memory-trends.timer");
+
+    const dailyWrapperStart = installer.indexOf('cat > "$BIN_DIR/agent-memory-trends-daily"');
+    expect(dailyWrapperStart).toBeGreaterThan(-1);
+    const dailyWrapper = installer.slice(dailyWrapperStart);
+    const argumentGuard = dailyWrapper.indexOf('if [ "$#" -ne 0 ]; then');
+    const dailyCommand = dailyWrapper.indexOf("npm run -w @skillwiki/agent-memory-trends --silent daily --");
+
+    expect(argumentGuard).toBeGreaterThan(-1);
+    expect(argumentGuard).toBeLessThan(dailyCommand);
+    expect(dailyWrapper).toContain("agent-memory-trends-daily does not accept arguments");
   });
 
   it("documents the manual rollout gates without tracked secrets", () => {
