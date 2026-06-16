@@ -100,6 +100,9 @@ export async function publishGeneratedChanges(input: PublishGeneratedChangesInpu
     });
     if (!validation.ok) return err("VALIDATION_FAILED", validation.detail);
 
+    const normalizedPages = normalizeGeneratedTypedPageFrontmatter(input.vault, validation.data.typedPagesToValidate);
+    if (!normalizedPages.ok) return normalizedPages;
+
     const skillwikiValidation = await validateWithSkillwiki(input, validation.data);
     if (!skillwikiValidation.ok) return skillwikiValidation;
 
@@ -259,6 +262,62 @@ function cloneRecord(value: Record<string, unknown>): Record<string, unknown> {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function normalizeGeneratedTypedPageFrontmatter(vault: string, paths: string[]): Result<{ normalized: string[] }> {
+  const normalized: string[] = [];
+  for (const path of paths) {
+    const fullPath = join(vault, path);
+    try {
+      const text = readFileSync(fullPath, "utf8");
+      const next = quoteUnsafeFrontmatterScalars(text);
+      if (next !== text) {
+        writeFileSync(fullPath, next, "utf8");
+        normalized.push(path);
+      }
+    } catch (error) {
+      return err("VALIDATION_FAILED", {
+        path,
+        detail: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return ok({ normalized });
+}
+
+function quoteUnsafeFrontmatterScalars(text: string): string {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+  if (!match) return text;
+
+  const frontmatter = match[1];
+  const normalized = frontmatter
+    .split(/\r?\n/)
+    .map(quoteUnsafeFrontmatterScalarLine)
+    .join("\n");
+  if (normalized === frontmatter) return text;
+  return text.slice(0, match.index) + `---\n${normalized}\n---\n` + text.slice(match[0].length);
+}
+
+function quoteUnsafeFrontmatterScalarLine(line: string): string {
+  const match = /^([A-Za-z_][A-Za-z0-9_-]*):\s+(.+)$/.exec(line);
+  if (!match) return line;
+
+  const [, key, rawValue] = match;
+  const value = rawValue.trimEnd();
+  if (!frontmatterScalarNeedsQuoting(value)) return line;
+  return `${key}: ${JSON.stringify(value)}`;
+}
+
+function frontmatterScalarNeedsQuoting(value: string): boolean {
+  if (!value.includes(": ")) return false;
+  return !(
+    value.startsWith('"') ||
+    value.startsWith("'") ||
+    value.startsWith("[") ||
+    value.startsWith("{") ||
+    value.startsWith("|") ||
+    value.startsWith(">")
+  );
 }
 
 function lines(text: string): string[] {

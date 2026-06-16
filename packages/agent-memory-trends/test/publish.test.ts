@@ -314,4 +314,67 @@ describe("agent-memory-trends publisher gate", () => {
     expect(result.ok).toBe(true);
     expect(released).toBe(true);
   });
+
+  it("repairs unsafe generated digest frontmatter scalars before validating", async () => {
+    const { vault, manifestPath, changedFiles } = seedGeneratedVault();
+    const digestPath = "queries/2026-06-11-agent-memory-trends-digest.md";
+    writeVaultFile(
+      vault,
+      digestPath,
+      [
+        "---",
+        'title: "Agent Memory Trends Digest - 2026-06-11"',
+        "created: 2026-06-11",
+        "updated: 2026-06-11",
+        "type: query",
+        "name: agent-memory-trends-digest-2026-06-11",
+        "tags: [agent-memory, llm-wiki, trends]",
+        "provenance: research",
+        "confidence: low",
+        "overview: Quiet run: no selected candidates, ten duplicate repositories suppressed.",
+        "sources:",
+        '  - "raw/articles/2026-06-11-agent-memory-trends-evidence.md"',
+        "---",
+        "",
+        "# Agent Memory Trends Digest - 2026-06-11",
+        "",
+        "Digest cites raw/articles/2026-06-11-agent-memory-trends-evidence.md.",
+        "",
+      ].join("\n")
+    );
+    let validatedDigest = false;
+
+    const result = await publishGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      manifestPath,
+      acquireLock: async () => ({ ok: true, data: { release: async () => undefined } }),
+      git: async (args) => {
+        if (args[0] === "rev-parse") return { exitCode: 0, stdout: "abc123\n", stderr: "" };
+        if (args[0] === "status") {
+          return {
+            exitCode: 0,
+            stdout: changedFiles.map((path) => `?? ${path}`).join("\n") + "\n",
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      skillwiki: async (args) => {
+        if (args[0] === "lint") return { exitCode: 0, stdout: '{"summary":{"error":0}}\n', stderr: "" };
+        if (args[0] === "validate" && args[1] === join(vault, digestPath)) {
+          validatedDigest = true;
+          const digest = readFileSync(join(vault, digestPath), "utf8");
+          if (!digest.includes('overview: "Quiet run: no selected candidates, ten duplicate repositories suppressed."')) {
+            return { exitCode: 1, stdout: "invalid frontmatter\n", stderr: "" };
+          }
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      existingRawPaths: [],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(validatedDigest).toBe(true);
+  });
 });
