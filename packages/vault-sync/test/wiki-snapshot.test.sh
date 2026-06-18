@@ -105,7 +105,7 @@ STUB
   chmod +x "$bin_dir/skillwiki"
 
   CLOUD_FIXTURE="$cloud_dir" \
-    GIT_DIR="$git_dir" \
+    WIKI_GIT_WORKTREE="$git_dir" \
     WIKI_DIR="$root/wiki" \
     CLOUD_REMOTE="stub:cloud/wiki" \
     WIKI_SNAPSHOT_LOG="$log_file" \
