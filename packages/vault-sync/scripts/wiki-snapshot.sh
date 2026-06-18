@@ -1,9 +1,9 @@
 #!/bin/bash
 # wiki-snapshot.sh — Linux-only S3 → git snapshot/promotion job.
 #
-# Source-of-truth: this is the canonical copy. The deployed copy on sg01
-# (/root/.hermes/scripts/wiki-snapshot-v3.sh) is the operational one;
-# hand-migration replaces it with this body. See work item:
+# Source-of-truth: this is the canonical vault-sync copy. The deployed copy on
+# sg01 lives under /root/.local/share/vault-sync/bin; Hermes is not part of the
+# production snapshot path. See work item:
 #   projects/llm-wiki/work/2026-05-25-vault-sync-plugin-scaffold/
 #
 # Origin: migrated 2026-05-25 from sg01 wiki-snapshot-v3.sh (sha256:
@@ -21,6 +21,11 @@
 set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+if [ -n "${GIT_DIR:-}" ]; then
+    echo "[wiki-snapshot] WARNING: ignoring exported GIT_DIR; use WIKI_GIT_WORKTREE for the snapshot worktree" >&2
+    unset GIT_DIR
+fi
 
 # Source platform.sh — handles both dev (scripts/lib/) and deployed (lib/) layouts
 if [ -f "$SCRIPT_DIR/lib/platform.sh" ]; then
@@ -45,11 +50,12 @@ platform_require linux
 
 # ── Path configuration (env-overridable for plugin portability) ─
 WIKI_DIR="${WIKI_DIR:-/root/wiki}"
-GIT_DIR="${GIT_DIR:-/root/wiki-git}"
+SNAPSHOT_WORKTREE="${WIKI_GIT_WORKTREE:-${SNAPSHOT_WORKTREE:-/root/wiki-git}}"
 LOCK_FILE="${WIKI_SNAPSHOT_LOCK:-/var/lock/wiki-snapshot.lock}"
-LOG_FILE="${WIKI_SNAPSHOT_LOG:-/root/.hermes/logs/wiki-snapshot.log}"
+DEFAULT_LOG_DIR="$(platform_log_dir)"
+LOG_FILE="${WIKI_SNAPSHOT_LOG:-$DEFAULT_LOG_DIR/wiki-snapshot.log}"
 CLOUD_REMOTE="${CLOUD_REMOTE:-cloud:cloud/wiki}"
-REPAIR_SCRIPT="${WIKI_GIT_REPAIR_SCRIPT:-/root/.hermes/scripts/wiki-git-repair-v3.sh}"
+REPAIR_SCRIPT="${WIKI_GIT_REPAIR_SCRIPT:-$SCRIPT_DIR/wiki-git-repair-v3.sh}"
 DATE=$(date +%Y%m%d_%H%M%S)
 RCLONE_LOG="/tmp/rclone-${DATE}.log"
 
@@ -86,17 +92,19 @@ DRY_RUN=false
 
 if [ "$DRY_RUN" = true ]; then
     echo "[wiki-snapshot] DRY RUN"
-    echo "  WIKI_DIR     = $WIKI_DIR"
-    echo "  GIT_DIR      = $GIT_DIR"
-    echo "  LOCK_FILE    = $LOCK_FILE"
-    echo "  LOG_FILE     = $LOG_FILE"
-    echo "  CLOUD_REMOTE = $CLOUD_REMOTE"
-    echo "  REPAIR_SCRIPT= $REPAIR_SCRIPT"
+    echo "  WIKI_DIR          = $WIKI_DIR"
+    echo "  SNAPSHOT_WORKTREE = $SNAPSHOT_WORKTREE"
+    echo "  LOCK_FILE         = $LOCK_FILE"
+    echo "  LOG_FILE          = $LOG_FILE"
+    echo "  CLOUD_REMOTE      = $CLOUD_REMOTE"
+    echo "  REPAIR_SCRIPT     = $REPAIR_SCRIPT"
     echo "[wiki-snapshot] DRY RUN: --max-delete guard verified (present in $0)"
     echo "[wiki-snapshot] DRY RUN: would acquire $LOCK_FILE, rclone sync, git commit, push."
     echo "[wiki-snapshot] DRY RUN: Complete. No changes made."
     exit 0
 fi
+
+mkdir -p "$(dirname "$LOG_FILE")"
 
 # ── Lock file to prevent concurrent execution ──────────────
 exec 200>"$LOCK_FILE"
@@ -110,18 +118,43 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
 }
 
+raw_dedup_guard() {
+    if [ "${WIKI_SNAPSHOT_RAW_DEDUP_GUARD:-1}" = "0" ]; then
+        log "raw_dedup guard skipped by WIKI_SNAPSHOT_RAW_DEDUP_GUARD=0"
+        return 0
+    fi
+
+    SKILLWIKI_BIN="${WIKI_SNAPSHOT_SKILLWIKI_BIN:-skillwiki}"
+    if ! command -v "$SKILLWIKI_BIN" >/dev/null 2>&1; then
+        log "ERROR: skillwiki CLI unavailable; refusing to commit snapshot without raw_dedup guard"
+        return 1
+    fi
+
+    GUARD_LOG="${RCLONE_LOG}.raw-dedup-guard"
+    if ! "$SKILLWIKI_BIN" lint "$SNAPSHOT_WORKTREE" --only raw_dedup --summary >"$GUARD_LOG" 2>&1; then
+        log "ERROR: raw_dedup guard failed after cloud sync; refusing to commit snapshot"
+        cat "$GUARD_LOG" >>"$LOG_FILE" 2>/dev/null || true
+        rm -f "$GUARD_LOG"
+        return 1
+    fi
+
+    rm -f "$GUARD_LOG"
+    log "raw_dedup guard passed"
+    return 0
+}
+
 log "=== Wiki Snapshot: $DATE ==="
 
 # Check disk space (need at least 100MB free)
-AVAILABLE_KB=$(df -k "$GIT_DIR" | awk 'NR==2 {print $4}')
+AVAILABLE_KB=$(df -k "$SNAPSHOT_WORKTREE" | awk 'NR==2 {print $4}')
 if [ "$AVAILABLE_KB" -lt 102400 ]; then
     log "ERROR: Insufficient disk space. Only ${AVAILABLE_KB}KB available, need 100MB."
     exit 1
 fi
 
 # Check if git directory exists
-if [ ! -d "$GIT_DIR/.git" ]; then
-    log "ERROR: Git directory not found or not a git repo: $GIT_DIR"
+if [ ! -d "$SNAPSHOT_WORKTREE/.git" ]; then
+    log "ERROR: Git worktree not found or not a git repo: $SNAPSHOT_WORKTREE"
     exit 1
 fi
 
@@ -147,7 +180,7 @@ RCLONE_OPTS=(
 # Sync from cloud directly to git dir using rclone
 echo "Syncing from cloud to git repo (via rclone)..."
 
-if ! rclone sync "$CLOUD_REMOTE" "$GIT_DIR" "${RCLONE_OPTS[@]}" --stats 10s 2>&1 | tee "$RCLONE_LOG"; then
+if ! rclone sync "$CLOUD_REMOTE" "$SNAPSHOT_WORKTREE" "${RCLONE_OPTS[@]}" --stats 10s 2>&1 | tee "$RCLONE_LOG"; then
     RCLONE_EXIT=$?
     log "ERROR: Rclone sync failed with exit code $RCLONE_EXIT"
     log "Last 50 lines of output:"
@@ -159,17 +192,17 @@ fi
 rm -f "$RCLONE_LOG"
 
 # Verify sync actually happened
-if [ ! -f "$GIT_DIR/index.md" ]; then
+if [ ! -f "$SNAPSHOT_WORKTREE/index.md" ]; then
     log "ERROR: Sync verification failed - index.md not found in git dir"
     exit 1
 fi
 
 # Change to git dir for operations
-cd "$GIT_DIR" || { log "ERROR: Failed to cd to $GIT_DIR"; exit 1; }
+cd "$SNAPSHOT_WORKTREE" || { log "ERROR: Failed to cd to $SNAPSHOT_WORKTREE"; exit 1; }
 
 # Configure git if not already set
-git config user.email "cron@hermes.local" 2>/dev/null || true
-git config user.name "Hermes Snapshot" 2>/dev/null || true
+git config user.email "snapshot@vault-sync.local" 2>/dev/null || true
+git config user.name "Vault Sync Snapshot" 2>/dev/null || true
 
 if command -v git_case_assert_clean >/dev/null 2>&1; then
     if ! CASE_CONFLICTS=$(git_case_conflicts); then
@@ -220,16 +253,20 @@ if [ "$needs_repair" = true ]; then
         log "ERROR: Git repair failed"
         exit 1
     fi
-    cd "$GIT_DIR" || { log "ERROR: Failed to cd to $GIT_DIR after repair"; exit 1; }
+    cd "$SNAPSHOT_WORKTREE" || { log "ERROR: Failed to cd to $SNAPSHOT_WORKTREE after repair"; exit 1; }
 
     # Re-run rclone sync after repair to ensure we have latest
-    if ! rclone sync "$CLOUD_REMOTE" "$GIT_DIR" "${RCLONE_OPTS[@]}" --stats 10s 2>&1 | tee "$RCLONE_LOG"; then
+    if ! rclone sync "$CLOUD_REMOTE" "$SNAPSHOT_WORKTREE" "${RCLONE_OPTS[@]}" --stats 10s 2>&1 | tee "$RCLONE_LOG"; then
         log "ERROR: Post-repair rclone sync failed"
         tail -50 "$RCLONE_LOG" >> "$LOG_FILE" 2>/dev/null || true
         rm -f "$RCLONE_LOG"
         exit 1
     fi
     rm -f "$RCLONE_LOG"
+fi
+
+if ! raw_dedup_guard; then
+    exit 1
 fi
 
 # Check for changes
@@ -279,10 +316,10 @@ if [ "$PULL_SUCCESS" = false ]; then
     if bash "$REPAIR_SCRIPT" 2>&1 | tee -a "$LOG_FILE"; then
         # After repair, commit timestamp will be slightly different
         DATE=$(date +%Y%m%d_%H%M%S)
-        cd "$GIT_DIR" || { log "ERROR: Failed to cd after repair"; exit 1; }
+        cd "$SNAPSHOT_WORKTREE" || { log "ERROR: Failed to cd after repair"; exit 1; }
 
         # Re-sync after repair
-        rclone sync "$CLOUD_REMOTE" "$GIT_DIR" "${RCLONE_OPTS[@]}" 2>&1 | tee -a "$LOG_FILE" || true
+        rclone sync "$CLOUD_REMOTE" "$SNAPSHOT_WORKTREE" "${RCLONE_OPTS[@]}" 2>&1 | tee -a "$LOG_FILE" || true
         git add -A || true
         git commit -m "Snapshot $DATE (post-repair)" || true
     else
