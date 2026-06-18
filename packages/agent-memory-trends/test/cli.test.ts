@@ -865,7 +865,10 @@ describe("agent-memory-trends CLI", () => {
         return { exitCode: 0, stdout: "", stderr: "" };
       },
       collectGithubCandidates: async () => {
-        expect(calls[0]).toBe("git:-C /vault pull --rebase origin main");
+        expect(calls.slice(0, 2)).toEqual([
+          "git:-C /vault status --porcelain --untracked-files=all",
+          "git:-C /vault pull --rebase origin main",
+        ]);
         return { ok: true, data: {
           rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
           apiCallsUsed: 12,
@@ -969,10 +972,131 @@ describe("agent-memory-trends CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(result.result.ok).toBe(true);
     if (!result.result.ok) throw new Error("expected daily success");
-    expect(calls).toEqual(["git:-C /vault pull --rebase origin main", "synthesis", "render", "refresh-brief", "publish", "heartbeat"]);
+    expect(calls).toEqual([
+      "git:-C /vault status --porcelain --untracked-files=all",
+      "git:-C /vault pull --rebase origin main",
+      "synthesis",
+      "render",
+      "refresh-brief",
+      "publish",
+      "heartbeat",
+    ]);
     expect(result.result.data.mutations).toEqual([
       "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json",
       ...publishedFiles,
+    ]);
+  });
+
+  it("cleans generated preflight leftovers before live daily sync", async () => {
+    const calls: string[] = [];
+    const result = await runAgentMemoryTrendsCli(["daily", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
+      cwd: "/repo",
+      env: {},
+      now: new Date("2026-06-11T00:10:00+08:00"),
+      readFile: () => CONFIG,
+      runCommand: async (command, args) => {
+        calls.push(`${command}:${args.join(" ")}`);
+        if (command === "git" && args.join(" ") === "-C /vault status --porcelain --untracked-files=all") {
+          return {
+            exitCode: 0,
+            stdout: [
+              "M  .skillwiki/agent-memory-trends/2026-06-10-input.json",
+              " M .skillwiki/agent-memory-trends/2026-06-10-run.json",
+              " M .skillwiki/agent-memory-trends/latest-run.json",
+              "?? .skillwiki/agent-memory-trends/2026-06-11-run.json",
+            ].join("\n") + "\n",
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      collectGithubCandidates: async () => ({ ok: true, data: {
+        rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+        apiCallsUsed: 12,
+        rawCandidateCount: 1,
+        selectedCandidates: [selectedCandidate()],
+        runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+      } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+      writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
+      runSynthesis: async () => ({
+        ok: true,
+        data: {
+          manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
+          outputLastMessagePath: "/tmp/last-message.md",
+          stdout: "",
+          stderr: "",
+          output: { proposals: [] },
+        },
+      }),
+      renderProposalCaptures: () => ({ ok: true, data: { renderedPaths: [], validationErrors: [], duplicateSuppressions: [] } }),
+      refreshSessionBrief: async () => ({ ok: true, data: { filesWritten: [] } }),
+      listTrackedRawPaths: async () => ({ ok: true, data: [] }),
+      publishGeneratedChanges: async () => ({
+        ok: true,
+        data: {
+          baseCommit: "abc123",
+          changedFiles: [".skillwiki/agent-memory-trends/latest-run.json"],
+          commitMessage: "research(agent-memory): daily digest 2026-06-11",
+        },
+      }),
+      maybeSendHeartbeat: async () => ({ ok: true, data: { status: "skipped", reason: "heartbeat URL missing" } }),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    expect(calls.slice(0, 4)).toEqual([
+      "git:-C /vault status --porcelain --untracked-files=all",
+      "git:-C /vault restore --source=HEAD --staged --worktree -- .skillwiki/agent-memory-trends/2026-06-10-input.json .skillwiki/agent-memory-trends/2026-06-10-run.json .skillwiki/agent-memory-trends/latest-run.json",
+      "git:-C /vault clean -f -- .skillwiki/agent-memory-trends/2026-06-11-run.json",
+      "git:-C /vault pull --rebase origin main",
+    ]);
+  });
+
+  it("blocks unrelated dirty files before live daily collection", async () => {
+    const calls: string[] = [];
+    const result = await runAgentMemoryTrendsCli(["daily", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
+      cwd: "/repo",
+      env: {},
+      now: new Date("2026-06-11T00:10:00+08:00"),
+      readFile: () => CONFIG,
+      runCommand: async (command, args) => {
+        calls.push(`${command}:${args.join(" ")}`);
+        if (command === "git" && args.join(" ") === "-C /vault status --porcelain --untracked-files=all") {
+          return { exitCode: 0, stdout: " M concepts/unrelated.md\n", stderr: "" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      collectGithubCandidates: async () => {
+        calls.push("collect");
+        return { ok: true, data: {
+          rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+          apiCallsUsed: 12,
+          rawCandidateCount: 1,
+          selectedCandidates: [selectedCandidate()],
+          runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        } };
+      },
+      writeRunState: () => {
+        calls.push("write-state");
+        return {
+          ok: true,
+          data: {
+            runStatePath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
+            latestRunPath: "/vault/.skillwiki/agent-memory-trends/latest-run.json",
+          },
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected daily failure");
+    expect(result.result.error).toBe("DIRTY_PREFLIGHT");
+    expect(result.result.detail).toMatchObject({ dirtyFiles: ["concepts/unrelated.md"] });
+    expect(calls).toEqual([
+      "git:-C /vault status --porcelain --untracked-files=all",
+      "write-state",
     ]);
   });
 
@@ -1208,6 +1332,9 @@ describe("agent-memory-trends CLI", () => {
       runCommand: async (command, args, options) => {
         calls.push(`${command} ${args.join(" ")}`);
         if (command === "git") {
+          if (args.join(" ") === `-C ${vault} status --porcelain --untracked-files=all`) {
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
           expect(args).toEqual(["-C", vault, "pull", "--rebase", "origin", "main"]);
           return { exitCode: 0, stdout: "", stderr: "" };
         }
@@ -1234,6 +1361,7 @@ describe("agent-memory-trends CLI", () => {
     expect(result.exitCode).toBe(0);
     expect(result.result.ok).toBe(true);
     expect(calls).toEqual([
+      `git -C ${vault} status --porcelain --untracked-files=all`,
       `git -C ${vault} pull --rebase origin main`,
       `skillwiki session-brief ${vault} --project llm-wiki --write`,
     ]);

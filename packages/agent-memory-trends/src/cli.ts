@@ -889,6 +889,11 @@ async function runDaily(
   const startedAt = formatInstant(context.now);
   if (!dryRun && !generateOnly && !previewOnly) {
     const resolved = resolveRunOptions(options, context);
+    const recovered = await cleanGeneratedPreflightLeftovers(resolved, context);
+    if (!recovered.ok) {
+      writeFailureState(resolved, context, startedAt, classifyFailure(recovered.error));
+      return recovered;
+    }
     const synced = await syncVaultBeforeLiveDaily(resolved, context);
     if (!synced.ok) {
       writeFailureState(resolved, context, startedAt, classifyFailure(synced.error));
@@ -1033,6 +1038,87 @@ function dailyModeLabel(dryRun: boolean, generateOnly: boolean, previewOnly: boo
 function vaultRelativePath(vault: string, path: string): string {
   const prefix = vault.endsWith("/") ? vault : `${vault}/`;
   return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
+const AGENT_MEMORY_RUN_STATE_RE = /^\.skillwiki\/agent-memory-trends\/(?:latest-run|\d{4}-\d{2}-\d{2}-(?:input|run))\.json$/;
+
+interface DirtyVaultPaths {
+  tracked: string[];
+  untracked: string[];
+}
+
+async function cleanGeneratedPreflightLeftovers(
+  options: ResolvedRunOptions,
+  context: AgentMemoryTrendsContext
+): Promise<Result<{ cleaned: true }>> {
+  const runCommand = context.runCommand ?? createCommandRunner();
+  const status = await runCommand("git", ["-C", options.vault, "status", "--porcelain", "--untracked-files=all"], { cwd: options.repo });
+  if (status.exitCode !== 0) {
+    return err("GIT_FAILED", {
+      args: ["-C", options.vault, "status", "--porcelain", "--untracked-files=all"],
+      stderr: status.stderr,
+      stdout: status.stdout,
+    });
+  }
+
+  const dirty = parseDirtyVaultPaths(status.stdout);
+  const dirtyPaths = [...dirty.tracked, ...dirty.untracked];
+  if (dirtyPaths.length === 0) return ok({ cleaned: true });
+
+  const unrelated = dirtyPaths.filter((path) => !AGENT_MEMORY_RUN_STATE_RE.test(path));
+  if (unrelated.length > 0) {
+    return err("DIRTY_PREFLIGHT", {
+      message: "vault has dirty files outside generated agent-memory-trends run state",
+      dirtyFiles: unrelated,
+    });
+  }
+
+  if (dirty.tracked.length > 0) {
+    const restoreArgs = ["-C", options.vault, "restore", "--source=HEAD", "--staged", "--worktree", "--", ...dirty.tracked];
+    const restored = await runCommand("git", restoreArgs, { cwd: options.repo });
+    if (restored.exitCode !== 0) {
+      return err("GIT_FAILED", {
+        args: restoreArgs,
+        stderr: restored.stderr,
+        stdout: restored.stdout,
+      });
+    }
+  }
+
+  if (dirty.untracked.length > 0) {
+    const cleaned = await runCommand("git", ["-C", options.vault, "clean", "-f", "--", ...dirty.untracked], { cwd: options.repo });
+    if (cleaned.exitCode !== 0) {
+      return err("GIT_FAILED", {
+        args: ["-C", options.vault, "clean", "-f", "--", ...dirty.untracked],
+        stderr: cleaned.stderr,
+        stdout: cleaned.stdout,
+      });
+    }
+  }
+
+  return ok({ cleaned: true });
+}
+
+function parseDirtyVaultPaths(stdout: string): DirtyVaultPaths {
+  const dirty: DirtyVaultPaths = { tracked: [], untracked: [] };
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const path = pathFromPorcelainLine(line);
+    if (!path) continue;
+    if (line.startsWith("?? ")) {
+      dirty.untracked.push(path);
+    } else {
+      dirty.tracked.push(path);
+    }
+  }
+  return dirty;
+}
+
+function pathFromPorcelainLine(line: string): string | undefined {
+  if (line.length < 4) return undefined;
+  const path = line.slice(3).trim();
+  const renameSeparator = " -> ";
+  return path.includes(renameSeparator) ? path.slice(path.lastIndexOf(renameSeparator) + renameSeparator.length) : path;
 }
 
 async function syncVaultBeforeLiveDaily(
