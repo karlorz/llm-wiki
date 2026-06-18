@@ -58,7 +58,8 @@ describe("sg02 systemd rollout artifacts", () => {
     expect(installer).toContain("codex login");
     expect(installer).toContain("codex doctor");
     expect(installer).toContain("agent-memory-trends daily --dry-run");
-    expect(installer).toContain("npm run -w @skillwiki/agent-memory-trends --silent daily --");
+    expect(installer).toContain("npm run -w @skillwiki/maintenance --silent build");
+    expect(installer).toContain("node \"$REPO/packages/skillwiki-maintenance/dist/cli.js\" run");
     expect(installer).toContain("systemctl daemon-reload");
     expect(installer).toContain("systemctl enable --now agent-memory-trends.timer");
 
@@ -66,11 +67,15 @@ describe("sg02 systemd rollout artifacts", () => {
     expect(dailyWrapperStart).toBeGreaterThan(-1);
     const dailyWrapper = installer.slice(dailyWrapperStart);
     const argumentGuard = dailyWrapper.indexOf('if [ "$#" -ne 0 ]; then');
-    const dailyCommand = dailyWrapper.indexOf("npm run -w @skillwiki/agent-memory-trends --silent daily --");
+    const dailyCommand = dailyWrapper.indexOf("node \"$REPO/packages/skillwiki-maintenance/dist/cli.js\" run");
 
     expect(argumentGuard).toBeGreaterThan(-1);
     expect(argumentGuard).toBeLessThan(dailyCommand);
     expect(dailyWrapper).toContain("agent-memory-trends-daily does not accept arguments");
+    expect(dailyWrapper).toContain("SKILLWIKI_MAINTENANCE_FLEET");
+    expect(dailyWrapper).toContain("SKILLWIKI_MAINTENANCE_MODE=\"${SKILLWIKI_MAINTENANCE_MODE:-daily}\"");
+    expect(dailyWrapper).toContain("--host \"$SKILLWIKI_MAINTENANCE_HOST_ID\"");
+    expect(dailyWrapper).toContain("--mode \"$SKILLWIKI_MAINTENANCE_MODE\"");
   });
 
   it("documents the manual rollout gates without tracked secrets", () => {

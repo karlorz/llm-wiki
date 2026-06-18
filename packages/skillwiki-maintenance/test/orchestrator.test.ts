@@ -7,6 +7,55 @@ import { runStage1Maintenance, type MaintenanceEvent } from "../src/orchestrator
 import type { CommandRunResult } from "../src/types.js";
 
 describe("runStage1Maintenance", () => {
+  it("daily mode runs vault preflight and the trends writer without repo self-update or later writers", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-daily-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const events: MaintenanceEvent[] = [];
+
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "daily",
+      now: new Date("2026-06-13T00:00:00Z"),
+      emit: (event) => events.push(event),
+      runCommand: async (command, args, options) => {
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          writeGeneratedTrendOutputs(vault);
+          return commandResult(JSON.stringify({
+            ok: true,
+            data: {
+              mutations: [
+                ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+                ".skillwiki/agent-memory-trends/latest-run.json",
+                "queries/2026-06-13-agent-memory-trends-digest.md",
+              ],
+            },
+          }) + "\n");
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    if (!result.ok) throw new Error(JSON.stringify(result, null, 2));
+    expect(result.data.checks.map((check) => [check.job, check.status])).toEqual([
+      ["vault-sync-preflight", "pass"],
+      ["agent-memory-trends-daily", "pass"],
+    ]);
+    expect(events.find((event) => event.event === "start")?.details).toEqual({ stage: 2, mode: "daily" });
+    expect(events.find((event) => event.job === "self-update-check")).toBeUndefined();
+    expect(events.find((event) => event.job === "session-brief-refresh")).toBeUndefined();
+    expect(events.find((event) => event.job === "health-summary")).toBeUndefined();
+    expect(events.find((event) => event.job === "vault-push")?.status).toBe("pass");
+    git(vault, "fetch", "origin", "main");
+    expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
+  });
+
   it("runs agent-memory-trends-daily through the write transaction and defers later writers after a commit", async () => {
     const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-"));
     const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
