@@ -34,6 +34,40 @@ function makeHome(): string {
   return h;
 }
 
+function writeVaultSyncFixture(home: string): void {
+  const isMac = process.platform === "darwin";
+  const shareDir = isMac
+    ? join(home, "Library", "Application Support", "vault-sync", "bin")
+    : join(home, ".local", "share", "vault-sync", "bin");
+  const logDir = isMac
+    ? join(home, "Library", "Logs")
+    : join(home, ".local", "state", "vault-sync", "log");
+  const schedulerDir = isMac
+    ? join(home, "Library", "LaunchAgents")
+    : join(home, ".config", "systemd", "user");
+  mkdirSync(shareDir, { recursive: true });
+  mkdirSync(logDir, { recursive: true });
+  mkdirSync(schedulerDir, { recursive: true });
+  mkdirSync(join(home, ".config", "rclone"), { recursive: true });
+  writeFileSync(join(shareDir, "wiki-push.sh"), "#!/bin/sh\n");
+  if (isMac) {
+    writeFileSync(join(schedulerDir, "com.karlchow.wiki-push.plist"), "");
+    writeFileSync(join(schedulerDir, "com.karlchow.wiki-fetch.plist"), "");
+  } else {
+    writeFileSync(join(schedulerDir, "wiki-push.timer"), "");
+    writeFileSync(join(schedulerDir, "wiki-fetch.timer"), "");
+    writeFileSync(join(schedulerDir, "wiki-fuse-refresh.timer"), "");
+    writeFileSync(join(schedulerDir, "wiki-fuse-refresh.service"), "");
+  }
+  writeFileSync(join(home, ".config", "rclone", "wiki-push-filters.txt"),
+    "- remotely-save/data.json\n- .skillwiki/sync.lock\n- .claude/settings.local.json\n");
+  writeFileSync(join(logDir, "wiki-push.log"), [
+    "2026-06-18T16:01:12Z OK push (no changes) duration=13s",
+    "{\"ok\":true,\"data\":{\"summary\":{\"errors\":0,\"warnings\":0,\"info\":0}}}",
+  ].join("\n") + "\n");
+  writeFileSync(join(logDir, "wiki-fetch.log"), "2026-06-18T16:01:12Z OK behind=0 delta=0 (no notify)\n");
+}
+
 function makeVault(): string {
   const v = mkdtempSync(join(tmpdir(), "health-vault-"));
   writeFileSync(join(v, "SCHEMA.md"), SCHEMA);
@@ -91,6 +125,31 @@ describe("runHealth", () => {
       expect(errorTotal).toBe(data.components.lint.summary.errors);
       expect(data.risk_flags.map(f => f.id)).toContain("content_integrity_risk");
       expect(data.risk_flags.map(f => f.id)).toContain("retrieval_quality_risk");
+    }
+  });
+
+  it("uses the latest vault-sync status line when guard JSON trails the push log", async () => {
+    const home = makeHome();
+    const vault = makeVault();
+    writeVaultSyncFixture(home);
+
+    const r = await runHealth({
+      vault,
+      home,
+      envValue: undefined,
+      argv: ["node", "skillwiki", "health"],
+      currentVersion: "0.8.5-test",
+      sync: "optional",
+      noFail: true,
+    });
+
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const pushAge = r.result.data.components.vault_sync.checks.find(c => c.id === "vault_sync_last_push_age");
+      expect(pushAge).toBeDefined();
+      expect(pushAge!.status).toBe("pass");
+      expect(pushAge!.detail).toContain("OK push");
+      expect(pushAge!.detail).not.toContain("\"errors\"");
     }
   });
 

@@ -78,14 +78,35 @@ classify_log_tail() {
     return 0
   fi
 
-  local last
-  last=$(tail -n 20 "$file" | tail -n 1)
+  local -a lines=()
+  local line
+  while IFS= read -r line; do
+    lines+=("$line")
+  done < <(tail -n 20 "$file")
+
+  local last=""
+  local matched=0
+  local i
+  for ((i=${#lines[@]} - 1; i >= 0; i--)); do
+    line="${lines[$i]}"
+    if printf '%s' "$line" | grep -Eq 'FAIL|ERROR' || printf '%s' "$line" | grep -Eq "$ok_regex"; then
+      last="$line"
+      matched=1
+      break
+    fi
+  done
+  if [ -z "$last" ] && [ "${#lines[@]}" -gt 0 ]; then
+    last="${lines[$(( ${#lines[@]} - 1 ))]}"
+  fi
+
   if [ -z "$last" ]; then
     add_check "$check_id" "$label" "warn" "log file empty: $file"
     return 0
   fi
 
-  if printf '%s' "$last" | grep -Eq 'FAIL|ERROR'; then
+  if [ "$matched" -eq 0 ]; then
+    add_check "$check_id" "$label" "warn" "$last"
+  elif printf '%s' "$last" | grep -Eq 'FAIL|ERROR'; then
     add_check "$check_id" "$label" "error" "$last"
   elif printf '%s' "$last" | grep -Eq "$ok_regex"; then
     add_check "$check_id" "$label" "pass" "$last"

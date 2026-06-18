@@ -1060,8 +1060,12 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
       c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
         "Log file is empty");
     } else {
-      const lastLine = lines[lines.length - 1];
-      if (/FAIL/.test(lastLine)) {
+      const statusLine = [...lines].reverse().find(line => /\b(?:FAIL|ERROR)\b:?/.test(line) || /OK push/.test(line));
+      const lastLine = statusLine ?? lines[lines.length - 1]!;
+      if (!statusLine) {
+        c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+          `Last log entry: ${lastLine.slice(0, 80)}`);
+      } else if (/\b(?:FAIL|ERROR)\b:?/.test(lastLine)) {
         c3 = check("error", "vault_sync_last_push_age", "Vault sync last push recency",
           `Last push failed: ${lastLine}`);
       } else if (/OK push/.test(lastLine)) {

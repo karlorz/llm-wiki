@@ -871,6 +871,25 @@ describe("runDoctor", () => {
       expect(age!.detail).toContain("s ago");
     });
 
+    it("vault_sync_last_push_age ignores trailing guard JSON after latest OK push", async () => {
+      const h = home();
+      vaultSyncConfig(h, true);
+      createVaultSyncShareDir(h); // for installed check
+      const now = new Date();
+      const ts = now.toISOString().replace(/\.\d{3}Z$/, "Z");
+      createVaultSyncLog(h, [
+        `${ts} OK push (no changes) duration=0s`,
+        "{\"ok\":true,\"data\":{\"summary\":{\"errors\":0,\"warnings\":0,\"info\":0}}}",
+      ]);
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const age = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
+      expect(age).toBeDefined();
+      expect(age!.status).toBe("pass");
+      expect(age!.detail).toContain("s ago");
+    });
+
     it("vault_sync_last_push_age errors when log ends with FAIL", async () => {
       const h = home();
       vaultSyncConfig(h, true);

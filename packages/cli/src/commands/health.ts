@@ -219,12 +219,27 @@ function summarizeChecks(checks: CheckResult[]): { pass: number; info: number; w
   };
 }
 
+function logLineFailure(line: string): boolean {
+  return /\b(?:FAIL|ERROR)\b:?/.test(line);
+}
+
+function selectLogStatusLine(lines: string[], okPattern: RegExp): { line: string; matched: boolean } {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]!;
+    if (logLineFailure(line) || okPattern.test(line)) {
+      return { line, matched: true };
+    }
+  }
+  return { line: lines[lines.length - 1] ?? "", matched: false };
+}
+
 function classifyLog(path: string, id: string, label: string, okPattern: RegExp): CheckResult {
   if (!existsSync(path)) return { id, label, status: "warn", detail: `log file missing: ${path}` };
   const lines = readFileSync(path, "utf8").split(/\r?\n/).filter(Boolean);
-  const last = lines[lines.length - 1] ?? "";
+  const { line: last, matched } = selectLogStatusLine(lines, okPattern);
   if (!last) return { id, label, status: "warn", detail: `log file empty: ${path}` };
-  if (/fail|error/i.test(last)) return { id, label, status: "error", detail: last.slice(0, 120) };
+  if (!matched) return { id, label, status: "warn", detail: last.slice(0, 120) };
+  if (logLineFailure(last)) return { id, label, status: "error", detail: last.slice(0, 120) };
   if (okPattern.test(last)) return { id, label, status: "pass", detail: last.slice(0, 120) };
   return { id, label, status: "warn", detail: last.slice(0, 120) };
 }

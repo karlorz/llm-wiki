@@ -82,3 +82,21 @@ fi
 
 rm -f "$helper_out"
 echo "PASS: --read-only reports broken wiki-sync helper symlink"
+
+printf '%s\n' \
+  '2026-06-10T00:00:00Z OK push (no changes)' \
+  '{"ok":true,"data":{"summary":{"errors":0,"warnings":0,"info":0}}}' \
+  > "$log_dir/wiki-push.log"
+
+helper_out="$(mktemp)"
+HOME="$home_dir" VS_READ_ONLY=1 VS_JSON=1 bash "$STATUS_SH" >"$helper_out"
+
+if ! grep -q '"id":"vault_sync_last_push_age","label":"Vault sync last push recency","status":"pass","detail":"2026-06-10T00:00:00Z OK push' "$helper_out"; then
+  cat "$helper_out" >&2
+  rm -f "$helper_out"
+  echo "FAIL: expected trailing lint JSON to be ignored for push recency" >&2
+  exit 1
+fi
+
+rm -f "$helper_out"
+echo "PASS: --read-only uses latest status line before trailing lint JSON"
