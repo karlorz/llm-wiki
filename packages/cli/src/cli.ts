@@ -493,11 +493,26 @@ program
   .command("dedup [vault]")
   .description("detect duplicate raw sources by sha256")
   .option("--apply", "rewire citations and remove duplicate raw files", false)
+  .option("--canonical-policy <policy>", "canonical policy: stable-path or scan-order", "stable-path")
+  .option("--manifest-out <path>", "write raw dedup delete manifest before applying")
+  .option("--manifest-in <path>", "read existing raw dedup delete manifest for remote pruning")
+  .option("--remote <remote>", "rclone remote root, for example seaweed-wiki:cloud/wiki")
+  .option("--remote-delete", "delete manifest duplicate paths from the remote", false)
+  .option("--max-remote-deletes <n>", "maximum remote object deletes allowed", "50")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runDedup({ vault: v.vault, apply: opts.apply }), v.vault);
+    else emit(await runDedup({
+      vault: v.vault,
+      apply: opts.apply,
+      canonicalPolicy: opts.canonicalPolicy,
+      manifestOut: opts.manifestOut,
+      manifestIn: opts.manifestIn,
+      remote: opts.remote,
+      remoteDelete: !!opts.remoteDelete,
+      maxRemoteDeletes: Number.parseInt(opts.maxRemoteDeletes, 10),
+    }), v.vault);
   });
 
 // migrate-citations

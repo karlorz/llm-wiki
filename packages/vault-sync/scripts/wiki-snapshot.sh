@@ -110,6 +110,31 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
 }
 
+raw_dedup_guard() {
+    if [ "${WIKI_SNAPSHOT_RAW_DEDUP_GUARD:-1}" = "0" ]; then
+        log "raw_dedup guard skipped by WIKI_SNAPSHOT_RAW_DEDUP_GUARD=0"
+        return 0
+    fi
+
+    SKILLWIKI_BIN="${WIKI_SNAPSHOT_SKILLWIKI_BIN:-skillwiki}"
+    if ! command -v "$SKILLWIKI_BIN" >/dev/null 2>&1; then
+        log "ERROR: skillwiki CLI unavailable; refusing to commit snapshot without raw_dedup guard"
+        return 1
+    fi
+
+    GUARD_LOG="${RCLONE_LOG}.raw-dedup-guard"
+    if ! "$SKILLWIKI_BIN" lint "$GIT_DIR" --only raw_dedup --summary >"$GUARD_LOG" 2>&1; then
+        log "ERROR: raw_dedup guard failed after cloud sync; refusing to commit snapshot"
+        cat "$GUARD_LOG" >>"$LOG_FILE" 2>/dev/null || true
+        rm -f "$GUARD_LOG"
+        return 1
+    fi
+
+    rm -f "$GUARD_LOG"
+    log "raw_dedup guard passed"
+    return 0
+}
+
 log "=== Wiki Snapshot: $DATE ==="
 
 # Check disk space (need at least 100MB free)
@@ -230,6 +255,10 @@ if [ "$needs_repair" = true ]; then
         exit 1
     fi
     rm -f "$RCLONE_LOG"
+fi
+
+if ! raw_dedup_guard; then
+    exit 1
 fi
 
 # Check for changes

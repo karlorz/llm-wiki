@@ -50,7 +50,15 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("status").option("--wiki <name>");
   program.command("archive").option("--wiki <name>").option("--cascade").option("--apply");
   program.command("drift").option("--apply").option("--new <date>").option("--wiki <name>");
-  program.command("dedup").option("--apply").option("--wiki <name>");
+  program.command("dedup")
+    .option("--apply")
+    .option("--canonical-policy <policy>")
+    .option("--manifest-out <path>")
+    .option("--manifest-in <path>")
+    .option("--remote <remote>")
+    .option("--remote-delete")
+    .option("--max-remote-deletes <n>")
+    .option("--wiki <name>");
   program.command("migrate-citations").option("--dry-run").option("--wiki <name>");
   program.command("frontmatter-fix").option("--dry-run").option("--wiki <name>");
   program.command("update").option("--tag <tag>");
