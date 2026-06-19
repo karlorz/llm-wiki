@@ -154,7 +154,7 @@ describe("agent-memory-trends publisher gate", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected allowlist failure");
     expect(result.error).toBe("VALIDATION_FAILED");
-    expect(String(result.detail)).toContain("concepts/unrelated.md is not in generated-output allowlist");
+    expect(String(result.detail)).toContain("concepts/unrelated.md [typed-knowledge] is not in generated-output allowlist");
   });
 
   it("rejects generated failure manifests before committing", async () => {

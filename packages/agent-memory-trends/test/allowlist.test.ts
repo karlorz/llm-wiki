@@ -263,4 +263,41 @@ describe("agent-memory-trends generated-output allowlist", () => {
     if (result.ok) throw new Error("expected non-TypeScript captures to be rejected");
     expect(String(result.detail)).toContain("task captures must be rendered by TypeScript");
   });
+
+  it("includes path categories in generated-output rejection diagnostics", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
+    const runManifest = manifest({
+      changedFiles: [
+        ".skillwiki/session-brief.json",
+        "concepts/unrelated.md",
+        "queries/2026-06-11-agent-memory-trends-digest.md",
+        "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        ".skillwiki/agent-memory-trends/latest-run.json",
+      ],
+      outputs: {
+        evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+        runStatePath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        latestRunPath: ".skillwiki/agent-memory-trends/latest-run.json",
+      },
+    });
+    for (const path of runManifest.changedFiles) writeVaultFile(vault, path, `generated file ${path}\n`);
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: ["raw/articles/2026-06-11-agent-memory-trends-evidence.md"],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected categorized diagnostics");
+    const detail = String(result.detail);
+    expect(detail).toContain(".skillwiki/session-brief.json [session-brief-cache] is changed but not declared in manifest outputs");
+    expect(detail).toContain("concepts/unrelated.md [typed-knowledge] is not in generated-output allowlist");
+    expect(detail).toContain("raw/articles/2026-06-11-agent-memory-trends-evidence.md [evidence] rewrites an existing raw file");
+  });
 });

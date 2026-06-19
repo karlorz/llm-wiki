@@ -48,11 +48,12 @@ const SECRET_PATTERNS = [
 const SESSION_BRIEF_PATH = "meta/latest-session-brief.md";
 const SESSION_BRIEF_CACHE_PATHS = [".skillwiki/session-brief.md", ".skillwiki/session-brief.json"];
 const SESSION_BRIEF_SUPPORT_PATHS = ["index.md", "log.md"];
+const WATCHLIST_PATH = "projects/llm-wiki/architecture/agent-memory-research-sources.yaml";
+const TYPED_KNOWLEDGE_PREFIXES = ["concepts/", "entities/", "comparisons/", "queries/", "meta/"];
 
 export function isAllowedGeneratedPath(path: string, runDate: string): boolean {
   return (
-    path === `raw/articles/${runDate}-agent-memory-trends-evidence.md` ||
-    new RegExp(`^raw/articles/${escapeRegExp(runDate)}-agent-memory-trends-evidence-[A-Za-z0-9.+-]+\\.md$`).test(path) ||
+    isRunEvidencePath(path, runDate) ||
     path === `queries/${runDate}-agent-memory-trends-digest.md` ||
     (/^raw\/transcripts\/\d{4}-\d{2}-\d{2}-(task|bug|idea)-[^/]+\.md$/.test(path) &&
       (path.startsWith(`raw/transcripts/${runDate}-task-`) ||
@@ -61,11 +62,27 @@ export function isAllowedGeneratedPath(path: string, runDate: string): boolean {
     path === SESSION_BRIEF_PATH ||
     SESSION_BRIEF_CACHE_PATHS.includes(path) ||
     SESSION_BRIEF_SUPPORT_PATHS.includes(path) ||
-    path === `.skillwiki/agent-memory-trends/${runDate}-input.json` ||
-    path === `.skillwiki/agent-memory-trends/${runDate}-run.json` ||
-    path === ".skillwiki/agent-memory-trends/latest-run.json" ||
-    path === "projects/llm-wiki/architecture/agent-memory-research-sources.yaml"
+    isAgentMemoryRunStatePath(path, runDate) ||
+    path === WATCHLIST_PATH
   );
+}
+
+export function generatedPathCategory(path: string, runDate: string): string {
+  if (isRunEvidencePath(path, runDate)) return "evidence";
+  if (path === `queries/${runDate}-agent-memory-trends-digest.md`) return "digest";
+  const captureMatch = path.match(/^raw\/transcripts\/\d{4}-\d{2}-\d{2}-(task|bug|idea)-[^/]+\.md$/);
+  if (captureMatch) return `${captureMatch[1]}-capture`;
+  if (path === SESSION_BRIEF_PATH) return "session-brief";
+  if (SESSION_BRIEF_CACHE_PATHS.includes(path)) return "session-brief-cache";
+  if (SESSION_BRIEF_SUPPORT_PATHS.includes(path)) return "session-brief-support";
+  if (isAgentMemoryRunStatePath(path, runDate)) return "run-state";
+  if (path === WATCHLIST_PATH) return "watchlist";
+  if (TYPED_KNOWLEDGE_PREFIXES.some((prefix) => path.startsWith(prefix))) return "typed-knowledge";
+  if (path.startsWith("raw/articles/")) return "raw-article";
+  if (path.startsWith("raw/transcripts/")) return "raw-transcript";
+  if (path.startsWith(".skillwiki/")) return "skillwiki-state";
+  if (path.startsWith("projects/")) return "project-work";
+  return "unclassified";
 }
 
 export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): Result<ValidateGeneratedChangesOutput> {
@@ -85,7 +102,9 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
   }
 
   for (const path of changedFiles) {
-    if (!isAllowedGeneratedPath(path, input.runDate)) issues.push(`${path} is not in generated-output allowlist`);
+    if (!isAllowedGeneratedPath(path, input.runDate)) {
+      issues.push(`${pathDiagnostic(path, input.runDate)} is not in generated-output allowlist`);
+    }
   }
 
   const taskCaptures = input.manifest.outputs.taskCapturePaths ?? [];
@@ -112,14 +131,14 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
 
   for (const path of changedFiles) {
     if (!outputPaths.has(path) && !path.startsWith(".skillwiki/agent-memory-trends/")) {
-      issues.push(`${path} is changed but not declared in manifest outputs`);
+      issues.push(`${pathDiagnostic(path, input.runDate)} is changed but not declared in manifest outputs`);
     }
   }
 
   for (const path of changedFiles) {
-    inspectChangedFile(input.vault, path, input.maxFileBytes, issues);
+    inspectChangedFile(input.vault, path, input.runDate, input.maxFileBytes, issues);
     if (isRawPath(path) && input.existingRawPaths.includes(path)) {
-      issues.push(`${path} rewrites an existing raw file`);
+      issues.push(`${pathDiagnostic(path, input.runDate)} rewrites an existing raw file`);
     }
   }
 
@@ -165,31 +184,51 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function inspectChangedFile(vault: string, path: string, maxFileBytes: number, issues: string[]): void {
+function isRunEvidencePath(path: string, runDate: string): boolean {
+  return (
+    path === `raw/articles/${runDate}-agent-memory-trends-evidence.md` ||
+    new RegExp(`^raw/articles/${escapeRegExp(runDate)}-agent-memory-trends-evidence-[A-Za-z0-9.+-]+\\.md$`).test(path)
+  );
+}
+
+function isAgentMemoryRunStatePath(path: string, runDate: string): boolean {
+  return (
+    path === `.skillwiki/agent-memory-trends/${runDate}-input.json` ||
+    path === `.skillwiki/agent-memory-trends/${runDate}-run.json` ||
+    path === ".skillwiki/agent-memory-trends/latest-run.json"
+  );
+}
+
+function inspectChangedFile(vault: string, path: string, runDate: string, maxFileBytes: number, issues: string[]): void {
   const fullPath = join(vault, path);
+  const diagnosticPath = pathDiagnostic(path, runDate);
   if (!existsSync(fullPath)) {
-    issues.push(`${path} does not exist`);
+    issues.push(`${diagnosticPath} does not exist`);
     return;
   }
 
   const lstat = lstatSync(fullPath);
   if (lstat.isSymbolicLink()) {
-    issues.push(`${path} is a symlink`);
+    issues.push(`${diagnosticPath} is a symlink`);
     return;
   }
   if (!lstat.isFile()) {
-    issues.push(`${path} is not a regular file`);
+    issues.push(`${diagnosticPath} is not a regular file`);
     return;
   }
-  if ((lstat.mode & 0o111) !== 0) issues.push(`${path} is executable`);
+  if ((lstat.mode & 0o111) !== 0) issues.push(`${diagnosticPath} is executable`);
 
   const stat = statSync(fullPath);
   if (!isSessionBriefSupportPath(path) && stat.size > maxFileBytes) {
-    issues.push(`${path} is oversized (${stat.size} bytes > ${maxFileBytes})`);
+    issues.push(`${diagnosticPath} is oversized (${stat.size} bytes > ${maxFileBytes})`);
   }
 
   const body = readFileSync(fullPath, "utf8");
-  if (SECRET_PATTERNS.some((pattern) => pattern.test(body))) issues.push(`${path} contains secret-like content`);
+  if (SECRET_PATTERNS.some((pattern) => pattern.test(body))) issues.push(`${diagnosticPath} contains secret-like content`);
+}
+
+function pathDiagnostic(path: string, runDate: string): string {
+  return `${path} [${generatedPathCategory(path, runDate)}]`;
 }
 
 function isRawPath(path: string): boolean {
