@@ -294,7 +294,7 @@ if [ ! -f "$FILTER_PATH" ]; then
   add_check "vault_sync_filter_present" "Vault sync filter file present" "error" "Filter missing: $FILTER_PATH"
 else
   required_missing=()
-  for needle in "remotely-save/data.json" ".skillwiki/sync.lock" ".claude/settings.local.json"; do
+  for needle in "remotely-save/data.json" ".skillwiki/sync.lock" ".skillwiki/memory/" ".skillwiki/memory-topics.json" ".claude/settings.local.json"; do
     if ! grep -q "$needle" "$FILTER_PATH"; then
       required_missing+=("$needle")
     fi

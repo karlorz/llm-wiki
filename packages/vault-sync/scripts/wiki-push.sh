@@ -28,6 +28,11 @@ LOCK_FILE="$(platform_cache_dir)/wiki-push.lock"
 LOG_FILE="$(platform_log_dir)/wiki-push.log"
 LOG_MAX_SIZE=1048576  # 1 MB
 LOG_KEEP=5
+GIT_EXCLUDES=(
+    ':!.skillwiki/sync.lock'
+    ':!.skillwiki/memory'
+    ':!.skillwiki/memory-topics.json'
+)
 
 mkdir -p "$(dirname "$LOCK_FILE")" "$(dirname "$LOG_FILE")"
 
@@ -137,10 +142,10 @@ fi
 if [ "$GIT_OK" = true ] && [ -d "$WIKI_DIR/.git" ]; then
     # Commit local edits before any rebase. `git pull --rebase` refuses to
     # start with dirty tracked changes, so pulling first wedges the pipeline.
-    if [ -z "$(git status --porcelain -- . ':!.skillwiki/sync.lock' 2>/dev/null)" ]; then
+    if [ -z "$(git status --porcelain -- . "${GIT_EXCLUDES[@]}" 2>/dev/null)" ]; then
         log "GIT no changes to commit"
     else
-        git add -A -- . ':!.skillwiki/sync.lock' 2>>"$LOG_FILE"
+        git add -A -- . "${GIT_EXCLUDES[@]}" 2>>"$LOG_FILE"
         git commit -m "auto: wiki sync $(date -u +%Y-%m-%dT%H:%MZ)" 2>>"$LOG_FILE"
         GIT_COMMIT_RC=$?
         if [ "$GIT_COMMIT_RC" -eq 0 ]; then

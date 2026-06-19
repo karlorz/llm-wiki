@@ -171,6 +171,37 @@ test_sync_lock_is_not_committed() {
   rm -rf "$root"
 }
 
+test_memory_cache_is_not_committed() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone" "$vault/.skillwiki/memory/llm-wiki"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  printf 'old-cache\n' > "$vault/.skillwiki/memory/llm-wiki/topics.json"
+  git_commit "$vault" "track old memory cache"
+  git -C "$vault" push origin main >/dev/null
+
+  printf 'local\n' > "$vault/local.md"
+  printf 'new-cache\n' > "$vault/.skillwiki/memory/llm-wiki/topics.json"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_eq "real local edit is pushed with memory cache dirty" "$(git --git-dir="$root/origin.git" show main:local.md 2>/dev/null || true)" "local"
+  assert_eq "memory cache remains unchanged on remote" "$(git --git-dir="$root/origin.git" show main:.skillwiki/memory/llm-wiki/topics.json 2>/dev/null || true)" "old-cache"
+  rm -rf "$root"
+}
+
 test_case_only_collision_blocks_publish() {
   local root
   root="$(mktemp -d)"
@@ -295,6 +326,7 @@ STUB
 test_pull_helper_sees_clean_tree
 test_clean_ahead_commit_is_pushed
 test_sync_lock_is_not_committed
+test_memory_cache_is_not_committed
 test_case_only_collision_blocks_publish
 test_long_path_fix_runs_before_rclone
 test_long_path_fix_failure_blocks_publish

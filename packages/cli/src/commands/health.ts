@@ -282,7 +282,13 @@ function runVaultSyncHealth(home: string, syncMode: SyncMode): VaultSyncComponen
     checks.push({ id: "vault_sync_filter_present", label: "Vault sync filter file present", status: "error", detail: `Filter missing: ${filterPath}` });
   } else {
     const content = readFileSync(filterPath, "utf8");
-    const missing = ["remotely-save/data.json", ".skillwiki/sync.lock", ".claude/settings.local.json"].filter(item => !content.includes(item));
+    const missing = [
+      "remotely-save/data.json",
+      ".skillwiki/sync.lock",
+      ".skillwiki/memory/",
+      ".skillwiki/memory-topics.json",
+      ".claude/settings.local.json",
+    ].filter(item => !content.includes(item));
     checks.push(missing.length > 0
       ? { id: "vault_sync_filter_present", label: "Vault sync filter file present", status: "warn", detail: `Missing excludes: ${missing.join(", ")}` }
       : { id: "vault_sync_filter_present", label: "Vault sync filter file present", status: "pass", detail: "Required excludes present" });

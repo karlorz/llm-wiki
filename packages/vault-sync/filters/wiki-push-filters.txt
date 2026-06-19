@@ -8,6 +8,8 @@
 # Coordination exclusions:
 #   .skillwiki/sync.lock                        → wiki-sync v0.6.0 advisory lock
 #   .skillwiki/graph.json                       → local-only graph cache
+#   .skillwiki/memory/                          → local-only derived memory cache
+#   .skillwiki/memory-topics.json               → legacy local-only memory cache
 #
 # Noise exclusions (regenerable / per-machine state):
 #   .obsidian/workspace.json                    → Obsidian window state
@@ -35,6 +37,8 @@
 - .claude/settings.local.json
 - .skillwiki/sync.lock
 - .skillwiki/graph.json
+- .skillwiki/memory/
+- .skillwiki/memory-topics.json
 - .obsidian/workspace.json
 - .obsidian/plugins/*/main.js
 - .pytest_cache/

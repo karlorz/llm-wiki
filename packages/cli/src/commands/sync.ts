@@ -6,6 +6,7 @@ import { fixPathTooLong } from "./path-too-long.js";
 import { appendLastOp, readLastOp, clearLastOp } from "../utils/last-op.js";
 import { git, gitStrict } from "../utils/git.js";
 import { acquireLock, releaseLock, readLock, getSessionId, getCwdHash, type LockFile } from "../utils/sync-lock.js";
+import { VAULT_COMMIT_PATHSPEC, VAULT_GENERATED_COMMIT_PATHS } from "../utils/vault-git-pathspec.js";
 
 export interface SyncStatusInput {
   vault: string;
@@ -201,9 +202,10 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
 
   // 5. Stage all
   try {
-    gitStrict(vault, ["add", "-A"]);
-    // Unstage last-op.json if it was staged (it should not be committed)
-    try { gitStrict(vault, ["reset", "HEAD", "--", ".skillwiki/last-op.json"]); } catch (_e: unknown) { /* file may not be staged */ }
+    gitStrict(vault, ["add", "-A", "--", ...VAULT_COMMIT_PATHSPEC]);
+    for (const generatedPath of VAULT_GENERATED_COMMIT_PATHS) {
+      try { gitStrict(vault, ["reset", "HEAD", "--", generatedPath]); } catch (_e: unknown) { /* file may not be staged */ }
+    }
   } catch (e: unknown) {
     return {
       exitCode: ExitCode.SYNC_PUSH_FAILED,

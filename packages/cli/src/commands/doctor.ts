@@ -1133,6 +1133,8 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
       const requiredExcludes = [
         "remotely-save/data.json",
         ".skillwiki/sync.lock",
+        ".skillwiki/memory/",
+        ".skillwiki/memory-topics.json",
         ".claude/settings.local.json",
       ];
       const missing = requiredExcludes.filter(ex => !content.includes(ex));

@@ -60,7 +60,12 @@ touch "$share_bin/wiki-push.sh"
 chmod +x "$share_bin/wiki-push.sh"
 printf '2026-06-10T00:00:00Z OK push (no changes)\n' > "$log_dir/wiki-push.log"
 printf '2026-06-10T00:00:00Z OK behind=0 delta=0 (no notify)\n' > "$log_dir/wiki-fetch.log"
-printf '%s\n' '- remotely-save/data.json' '- .skillwiki/sync.lock' '- .claude/settings.local.json' > "$home_dir/.config/rclone/wiki-push-filters.txt"
+printf '%s\n' \
+  '- remotely-save/data.json' \
+  '- .skillwiki/sync.lock' \
+  '- .skillwiki/memory/' \
+  '- .skillwiki/memory-topics.json' \
+  '- .claude/settings.local.json' > "$home_dir/.config/rclone/wiki-push-filters.txt"
 ln -s "$home_dir/missing/wiki-sync.sh" "$home_dir/bin/wiki-sync.sh"
 
 helper_out="$(mktemp)"

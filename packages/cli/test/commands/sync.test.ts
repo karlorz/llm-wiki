@@ -207,6 +207,30 @@ describe("runSyncPush", () => {
     expect(existsSync(join(dir, ".skillwiki", "last-op.json"))).toBe(false);
   });
 
+  it("does not include dirty derived memory caches in sync commits", async () => {
+    const dir = makeTempDir();
+    git(dir, "init -b main");
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    writeFileSync(join(dir, "initial.txt"), "init");
+    mkdirSync(join(dir, ".skillwiki", "memory", "llm-wiki"), { recursive: true });
+    writeFileSync(join(dir, ".skillwiki", "memory", "llm-wiki", "topics.json"), "old-cache\n");
+    git(dir, "add .");
+    git(dir, "commit -m init");
+
+    writeFileSync(join(dir, ".skillwiki", "memory", "llm-wiki", "topics.json"), "new-cache\n");
+    mkdirSync(join(dir, "raw/articles"), { recursive: true });
+    writeFileSync(join(dir, "raw/articles/test.md"), "content");
+
+    const { exitCode } = await runSyncPush({ vault: dir });
+
+    expect(exitCode).toBe(ExitCode.SYNC_PUSH_FAILED); // no remote, but commit succeeds
+    const committedCache = execSync("git show HEAD:.skillwiki/memory/llm-wiki/topics.json", { cwd: dir, encoding: "utf8" });
+    expect(committedCache).toBe("old-cache\n");
+    const committedArticle = execSync("git show HEAD:raw/articles/test.md", { cwd: dir, encoding: "utf8" });
+    expect(committedArticle).toBe("content");
+  });
+
   it("falls back to timestamp commit when no last-op", async () => {
     const dir = makeTempDir();
     git(dir, "init -b main");

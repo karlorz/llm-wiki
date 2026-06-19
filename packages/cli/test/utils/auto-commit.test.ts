@@ -135,6 +135,27 @@ describe("postCommit", () => {
     expect(log).toContain("ingest: added test");
   });
 
+  it("does not include dirty derived memory caches in auto-commits", async () => {
+    const vault = initTestRepo();
+    makeDotenv("true");
+    process.env.HOME = join(TMP, "home");
+    mkdirSync(join(vault, ".skillwiki", "memory", "llm-wiki"), { recursive: true });
+    writeFileSync(join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json"), "old-cache\n");
+    execFileSync("git", ["-C", vault, "add", ".skillwiki/memory/llm-wiki/topics.json"], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "commit", "-m", "track old memory cache"], { encoding: "utf8" });
+
+    writeFileSync(join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json"), "new-cache\n");
+    writeFileSync(join(vault, "raw", "articles", "test.md"), "content");
+    appendLastOp(vault, { operation: "ingest", summary: "added test", files: ["raw/articles/test.md"], timestamp: new Date().toISOString() });
+
+    await postCommit(vault, 0);
+
+    const committedCache = execFileSync("git", ["-C", vault, "show", "HEAD:.skillwiki/memory/llm-wiki/topics.json"], { encoding: "utf8" });
+    expect(committedCache).toBe("old-cache\n");
+    const committedArticle = execFileSync("git", ["-C", vault, "show", "HEAD:raw/articles/test.md"], { encoding: "utf8" });
+    expect(committedArticle).toBe("content");
+  });
+
   it("does nothing when last-op is empty", async () => {
     const vault = initTestRepo();
     makeDotenv("true");
