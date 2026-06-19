@@ -153,7 +153,7 @@ cat > "$BIN_DIR/agent-memory-trends-daily" <<'EOF'
 set -Eeuo pipefail
 
 if [ "$#" -ne 0 ]; then
-  echo "agent-memory-trends-daily does not accept arguments; use agent-memory-trends <doctor|collect|daily|publish|version> [args...]" >&2
+  echo "agent-memory-trends-daily does not accept arguments; use agent-memory-trends <doctor|collect|daily|publish|version> [args...] for manual package commands" >&2
   exit 64
 fi
 
@@ -167,6 +167,9 @@ fi
 REPO="${AGENT_MEMORY_TRENDS_REPO:-$HOME/llm-wiki}"
 VAULT="${AGENT_MEMORY_TRENDS_VAULT:-$HOME/wiki}"
 LOG_DIR="${AGENT_MEMORY_TRENDS_LOG_DIR:-$HOME/.local/state/agent-memory-trends/logs}"
+SKILLWIKI_MAINTENANCE_HOST_ID="${SKILLWIKI_MAINTENANCE_HOST_ID:-sg02}"
+SKILLWIKI_MAINTENANCE_FLEET="${SKILLWIKI_MAINTENANCE_FLEET:-$VAULT/projects/llm-wiki/architecture/fleet.yaml}"
+SKILLWIKI_MAINTENANCE_MODE="${SKILLWIKI_MAINTENANCE_MODE:-daily}"
 
 mkdir -p "$LOG_DIR"
 cd "$REPO"
@@ -174,11 +177,19 @@ cd "$REPO"
 export PATH="$HOME/.local/npm/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export SKILLWIKI_PROJECT="${SKILLWIKI_PROJECT:-llm-wiki}"
 export WIKI_PATH="${WIKI_PATH:-$VAULT}"
+export AGENT_MEMORY_TRENDS_REPO="$REPO"
+export AGENT_MEMORY_TRENDS_VAULT="$VAULT"
+export SKILLWIKI_MAINTENANCE_HOST_ID
+export SKILLWIKI_MAINTENANCE_FLEET
+export SKILLWIKI_MAINTENANCE_MODE
 
-npm run -w @skillwiki/agent-memory-trends --silent daily -- \
-  --vault "$VAULT" \
-  --repo "$REPO" \
-  2>&1 | tee -a "$LOG_DIR/daily.log"
+{
+  npm run -w @skillwiki/maintenance --silent build
+  node "$REPO/packages/skillwiki-maintenance/dist/cli.js" run \
+    --fleet "$SKILLWIKI_MAINTENANCE_FLEET" \
+    --host "$SKILLWIKI_MAINTENANCE_HOST_ID" \
+    --mode "$SKILLWIKI_MAINTENANCE_MODE"
+} 2>&1 | tee -a "$LOG_DIR/daily.log"
 EOF
 chown "$SERVICE_USER:$SERVICE_USER" "$BIN_DIR/agent-memory-trends-daily"
 chmod 0750 "$BIN_DIR/agent-memory-trends-daily"

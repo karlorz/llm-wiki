@@ -14,6 +14,7 @@ export interface RunMaintenanceInput {
   hostId: string;
   lockDir: string;
   now: Date;
+  mode?: MaintenanceMode;
   emit?: (event: MaintenanceEvent) => void;
   runCommand?: CommandRunner;
 }
@@ -33,9 +34,13 @@ export interface RunMaintenanceOutput {
   checks: JobCheck[];
 }
 
+export type MaintenanceMode = "full" | "daily" | "self-update";
+
 export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<Result<RunMaintenanceOutput>> {
   const parsed = parseMaintenanceConfig(readFileSync(input.fleetPath, "utf8"), input.hostId, input.fleetPath);
   if (!parsed.ok) return parsed;
+  const mode = input.mode ?? "full";
+  if (!["full", "daily", "self-update"].includes(mode)) return err("CONFIG_INVALID", `unsupported maintenance mode: ${mode}`);
 
   const emit = input.emit ?? (() => undefined);
   const lock = acquireLock(input.lockDir, { owner: `skillwiki-maintenance:${input.hostId}`, now: input.now });
@@ -44,20 +49,36 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
   const checks: JobCheck[] = [];
   const runCommand = input.runCommand ?? createCommandRunner();
   const ts = () => new Date().toISOString();
-  emit({ ts: input.now.toISOString(), event: "start", host_id: input.hostId, details: { stage: 2 } });
+  emit({ ts: input.now.toISOString(), event: "start", host_id: input.hostId, details: { stage: 2, mode } });
 
   try {
-    const selfUpdate = await runSelfUpdateCheck({ repoPath: parsed.data.repoPath, runCommand });
-    checks.push(selfUpdate);
-    emit({ ts: ts(), event: "job", host_id: input.hostId, job: selfUpdate.job, status: selfUpdate.status, reason: selfUpdate.reason, details: selfUpdate.details });
+    if (mode !== "daily") {
+      const selfUpdate = await runSelfUpdateCheck({ repoPath: parsed.data.repoPath, runCommand });
+      checks.push(selfUpdate);
+      emit({ ts: ts(), event: "job", host_id: input.hostId, job: selfUpdate.job, status: selfUpdate.status, reason: selfUpdate.reason, details: selfUpdate.details });
+    }
 
-    const preflight = await runVaultSyncPreflight({ vaultPath: parsed.data.vaultPath, runCommand });
-    checks.push(preflight);
-    emit({ ts: ts(), event: "job", host_id: input.hostId, job: preflight.job, status: preflight.status, reason: preflight.reason, details: preflight.details });
+    if (mode !== "self-update") {
+      const preflight = await runVaultSyncPreflight({ vaultPath: parsed.data.vaultPath, runCommand });
+      checks.push(preflight);
+      emit({ ts: ts(), event: "job", host_id: input.hostId, job: preflight.job, status: preflight.status, reason: preflight.reason, details: preflight.details });
+      if (mode === "daily" && preflight.status === "fail") {
+        emit({ ts: ts(), event: "finish", host_id: input.hostId, status: "fail" });
+        return err("MAINTENANCE_FAILED", preflight);
+      }
+    }
+
+    if (mode === "self-update") {
+      const failed = checks.find((check) => check.status === "fail");
+      emit({ ts: ts(), event: "finish", host_id: input.hostId, status: failed ? "fail" : "pass" });
+      if (failed) return err("MAINTENANCE_FAILED", failed);
+      return ok({ config: parsed.data, checks });
+    }
 
     let writeCommitted = false;
     let writeFailed = false;
-    for (const job of parsed.data.jobs) {
+    const jobs = mode === "daily" ? (["agent-memory-trends-daily"] as const) : parsed.data.jobs;
+    for (const job of jobs) {
       if (job === "self-update-check" || job === "vault-sync-preflight") continue;
       if (writeFailed) {
         emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred because a prior writing job failed in this run" });
@@ -78,6 +99,11 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
         writeFailed = trendsDaily.status === "fail";
         writeCommitted = trendsDaily.details.committed;
         emit({ ts: ts(), event: "job", host_id: input.hostId, job: trendsDaily.job, status: trendsDaily.status, reason: trendsDaily.reason, details: trendsDaily.details });
+        if (mode === "daily" && trendsDaily.status === "pass" && trendsDaily.details.committed) {
+          const pushed = await pushVaultChanges(parsed.data.vaultPath, runCommand);
+          emit({ ts: ts(), event: "job", host_id: input.hostId, job: "vault-push", status: pushed.ok ? "pass" : "fail", reason: pushed.ok ? "pushed maintenance commit to origin/main" : pushed.detail, details: pushed.ok ? {} : pushed });
+          if (!pushed.ok) return err("MAINTENANCE_PUSH_FAILED", pushed);
+        }
         continue;
       }
       if (job === "session-brief-refresh") {
@@ -105,6 +131,16 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
   }
 }
 
+async function pushVaultChanges(vaultPath: string, runCommand: CommandRunner): Promise<{ ok: true } | { ok: false; detail: string }> {
+  const push = await runCommand("git", ["-C", vaultPath, "push", "origin", "main"], { cwd: vaultPath });
+  if (push.exitCode === 0) return { ok: true };
+  return { ok: false, detail: firstLine(push.stderr || push.stdout || "git push failed") };
+}
+
 export function defaultFleetPath(vaultPath: string): string {
   return join(vaultPath, "projects", "llm-wiki", "architecture", "fleet.yaml");
+}
+
+function firstLine(text: string): string {
+  return text.trim().split(/\r?\n/, 1)[0] || "no output";
 }

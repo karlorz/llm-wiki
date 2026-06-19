@@ -31,10 +31,7 @@ export async function runWriteTransaction<TJobData = unknown>(
 
   const jobResult = await input.run();
   if (!jobResult.ok) {
-    return fail(input, "writing job failed before commit", {
-      changedFiles: [],
-      allowlistViolations: [],
-    });
+    return cleanupAfterFailedJob(input);
   }
 
   const after = await statusFiles(input);
@@ -155,6 +152,14 @@ async function syncedWithOriginMain<TJobData>(
 async function statusFiles<TJobData>(
   input: WriteTransactionInput<TJobData>
 ): Promise<{ ok: true; files: string[] } | { ok: false; check: JobCheck<WriteTransactionDetails<TJobData>> }> {
+  const status = await statusEntries(input);
+  if (!status.ok) return status;
+  return { ok: true, files: status.entries.map((entry) => entry.path).sort((left, right) => left.localeCompare(right)) };
+}
+
+async function statusEntries<TJobData>(
+  input: WriteTransactionInput<TJobData>
+): Promise<{ ok: true; entries: StatusEntry[] } | { ok: false; check: JobCheck<WriteTransactionDetails<TJobData>> }> {
   const status = await input.runCommand("git", ["-C", input.repoPath, "status", "--porcelain", "--untracked-files=all"], {
     cwd: input.repoPath,
   });
@@ -167,7 +172,58 @@ async function statusFiles<TJobData>(
       }),
     };
   }
-  return { ok: true, files: filesFromPorcelain(status.stdout) };
+  return { ok: true, entries: statusEntriesFromPorcelain(status.stdout) };
+}
+
+async function cleanupAfterFailedJob<TJobData>(input: WriteTransactionInput<TJobData>): Promise<JobCheck<WriteTransactionDetails<TJobData>>> {
+  const after = await statusEntries(input);
+  if (!after.ok) return after.check;
+  const files = after.entries.map((entry) => entry.path).sort((left, right) => left.localeCompare(right));
+  const violations = files.filter((file) => !isAllowed(file, input.allowlist));
+  if (violations.length > 0) {
+    return fail(input, `writing job failed before commit and changed files outside allowlist: ${violations.join(", ")}`, {
+      changedFiles: files,
+      allowlistViolations: violations,
+    });
+  }
+
+  const tracked = after.entries.filter((entry) => !entry.untracked).map((entry) => entry.path);
+  const untracked = after.entries.filter((entry) => entry.untracked).map((entry) => entry.path);
+  if (tracked.length > 0) {
+    const restore = await input.runCommand("git", ["-C", input.repoPath, "restore", "--staged", "--worktree", "--", ...tracked], {
+      cwd: input.repoPath,
+    });
+    if (restore.exitCode !== 0) {
+      return fail(input, `writing job failed before commit; cleanup restore failed: ${firstLine(restore.stderr || restore.stdout)}`, {
+        changedFiles: files,
+        allowlistViolations: [],
+      });
+    }
+  }
+  if (untracked.length > 0) {
+    const clean = await input.runCommand("git", ["-C", input.repoPath, "clean", "-f", "--", ...untracked], { cwd: input.repoPath });
+    if (clean.exitCode !== 0) {
+      return fail(input, `writing job failed before commit; cleanup clean failed: ${firstLine(clean.stderr || clean.stdout)}`, {
+        changedFiles: files,
+        allowlistViolations: [],
+      });
+    }
+  }
+
+  const cleaned = await statusEntries(input);
+  if (!cleaned.ok) return cleaned.check;
+  if (cleaned.entries.length > 0) {
+    const remaining = cleaned.entries.map((entry) => entry.path).sort((left, right) => left.localeCompare(right));
+    return fail(input, `writing job failed before commit; cleanup left dirty files: ${remaining.join(", ")}`, {
+      changedFiles: remaining,
+      allowlistViolations: remaining.filter((file) => !isAllowed(file, input.allowlist)),
+    });
+  }
+
+  return fail(input, files.length > 0 ? "writing job failed before commit; cleaned allowed changes" : "writing job failed before commit", {
+    changedFiles: files,
+    allowlistViolations: [],
+  });
 }
 
 function fail<TJobData>(
@@ -199,12 +255,21 @@ function details<TJobData>(
   };
 }
 
-function filesFromPorcelain(stdout: string): string[] {
+interface StatusEntry {
+  path: string;
+  untracked: boolean;
+}
+
+function statusEntriesFromPorcelain(stdout: string): StatusEntry[] {
   return stdout.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean).map((line) => {
+    const status = line.slice(0, 2);
     const path = line.slice(3).trim();
     const renameSeparator = " -> ";
-    return path.includes(renameSeparator) ? path.slice(path.lastIndexOf(renameSeparator) + renameSeparator.length) : path;
-  }).sort((left, right) => left.localeCompare(right));
+    return {
+      path: path.includes(renameSeparator) ? path.slice(path.lastIndexOf(renameSeparator) + renameSeparator.length) : path,
+      untracked: status === "??",
+    };
+  }).sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function isAllowed(path: string, allowlist: string[]): boolean {

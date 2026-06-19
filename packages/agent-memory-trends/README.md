@@ -93,7 +93,7 @@ Tracked rollout files:
 - `service-units/systemd/agent-memory-trends.timer`
 - `scripts/install-sg02.sh`
 
-The systemd service is a system-level unit under `/etc/systemd/system`, runs with `User=agent-memory`, reads `/home/agent-memory/.config/agent-memory-trends/env`, and executes `/home/agent-memory/.local/bin/agent-memory-trends-daily`.
+The systemd service is a system-level unit under `/etc/systemd/system`, runs with `User=agent-memory`, reads `/home/agent-memory/.config/agent-memory-trends/env`, and executes `/home/agent-memory/.local/bin/agent-memory-trends-daily`. The daily wrapper calls the guarded `@skillwiki/maintenance` runner in `--mode daily`, which performs vault preflight, runs `agent-memory-trends daily --generate-only` inside the maintenance write transaction, and pushes the maintenance-owned commit to `origin/main` instead of using the legacy direct publisher path.
 
 The timer runs daily at `00:10` Asia/Hong_Kong with `RandomizedDelaySec=300`, `Persistent=true`, and `AccuracySec=60s`.
 
@@ -181,6 +181,9 @@ Run local package checks before enabling the service path.
 npm run -w @skillwiki/agent-memory-trends test
 npm run -w @skillwiki/agent-memory-trends typecheck
 npm run -w @skillwiki/agent-memory-trends build
+npm run -w @skillwiki/maintenance test
+npm run -w @skillwiki/maintenance typecheck
+npm run -w @skillwiki/maintenance build
 rm -rf packages/agent-memory-trends/dist
 ```
 
@@ -216,7 +219,7 @@ sudo systemctl start agent-memory-trends.service
 journalctl -u agent-memory-trends.service --no-pager -n 200
 ```
 
-After the manual live run verifies the GitHub commit, `meta/latest-session-brief.md`, digest, evidence, TypeScript-rendered task/bug/idea captures if any, run JSON, suppression fields if any, and Uptime Kuma heartbeat, enable the timer.
+After the manual live run verifies the guarded maintenance result, digest, evidence, TypeScript-rendered task/bug/idea captures if any, run JSON, suppression fields if any, and a clean or intentionally ahead vault state, enable the timer.
 
 ```bash
 sudo systemctl enable --now agent-memory-trends.timer
@@ -231,5 +234,6 @@ The workflow must preserve these constraints:
 - `AGENT_MEMORY_TRENDS_HEARTBEAT_URL` belongs only in `/home/agent-memory/.config/agent-memory-trends/env`.
 - Publisher validation must reject out-of-allowlist changes, raw rewrites, symlinks, executable generated files, oversized files, secret-like content, manifest mismatches, too many task captures, and too many web sources.
 - Publisher validation must reject direct agent-written transcript captures that are not marked as TypeScript-rendered.
-- The heartbeat fires only after a successful push.
+- The systemd timer must invoke the guarded maintenance runner; use the direct package `daily` command only for manual debugging.
+- The heartbeat fires only after a successful push when the legacy direct publisher path is intentionally run manually.
 - `sg01` is read-only for this workflow.

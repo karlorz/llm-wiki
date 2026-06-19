@@ -2,13 +2,14 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultFleetPath, runStage1Maintenance } from "./orchestrator.js";
+import { defaultFleetPath, runStage1Maintenance, type MaintenanceMode } from "./orchestrator.js";
 
 interface CliOptions {
   command: string;
   fleetPath: string;
   hostId: string;
   lockDir: string;
+  mode: MaintenanceMode;
 }
 
 async function main(): Promise<void> {
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
     fleetPath: options.fleetPath,
     hostId: options.hostId,
     lockDir: options.lockDir,
+    mode: options.mode,
     now: new Date(),
     emit: (event) => console.log(JSON.stringify(event)),
   });
@@ -42,6 +44,7 @@ function parseArgs(args: string[], env: NodeJS.ProcessEnv): CliOptions {
     fleetPath: env.SKILLWIKI_MAINTENANCE_FLEET ?? defaultFleetPath(vault),
     hostId: env.SKILLWIKI_MAINTENANCE_HOST_ID ?? env.SKILLWIKI_HOST_ID ?? "sg02",
     lockDir: env.SKILLWIKI_MAINTENANCE_LOCK_DIR ?? join(homedir(), ".local", "state", "skillwiki-maintenance", "lock"),
+    mode: parseMode(env.SKILLWIKI_MAINTENANCE_MODE),
   };
 
   for (let i = 1; i < args.length; i += 1) {
@@ -49,9 +52,15 @@ function parseArgs(args: string[], env: NodeJS.ProcessEnv): CliOptions {
     if (arg === "--fleet") options.fleetPath = args[++i] ?? options.fleetPath;
     else if (arg === "--host") options.hostId = args[++i] ?? options.hostId;
     else if (arg === "--lock-dir") options.lockDir = args[++i] ?? options.lockDir;
+    else if (arg === "--mode") options.mode = parseMode(args[++i]);
   }
 
   return options;
+}
+
+function parseMode(value: string | undefined): MaintenanceMode {
+  if (value === "daily" || value === "self-update") return value;
+  return "full";
 }
 
 export function isDirectCliInvocation(metaUrl: string, argvPath = process.argv[1]): boolean {

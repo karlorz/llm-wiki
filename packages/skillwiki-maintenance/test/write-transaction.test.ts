@@ -111,10 +111,56 @@ describe("runWriteTransaction", () => {
     expect(called).toBe(false);
   });
 
+  it("cleans allowed generated changes when a writing job fails before commit", async () => {
+    const repo = createSyncedRepo();
+    mkdirSync(join(repo, ".skillwiki", "agent-memory-trends"), { recursive: true });
+    writeFileSync(join(repo, ".skillwiki", "agent-memory-trends", "latest-run.json"), "{\"status\":\"previous\"}\n", "utf8");
+    git(repo, "add", ".skillwiki/agent-memory-trends/latest-run.json");
+    git(repo, "commit", "-m", "seed tracked trend metadata");
+    git(repo, "push", "origin", "main");
+    const before = git(repo, "rev-parse", "HEAD");
+
+    const check = await runWriteTransaction({
+      job: "agent-memory-trends-daily",
+      repoPath: repo,
+      allowlist: [
+        ".skillwiki/agent-memory-trends/**",
+        "queries/*-agent-memory-trends-digest.md",
+        "raw/articles/*-agent-memory-trends-evidence*.md",
+      ],
+      commitMessage: "research(agent-memory): daily digest",
+      runCommand: createCommandRunner(),
+      run: async () => {
+        mkdirSync(join(repo, "queries"), { recursive: true });
+        mkdirSync(join(repo, "raw", "articles"), { recursive: true });
+        writeFileSync(join(repo, ".skillwiki", "agent-memory-trends", "latest-run.json"), "{\"status\":\"failed\"}\n", "utf8");
+        writeFileSync(join(repo, "queries", "2026-06-19-agent-memory-trends-digest.md"), "# Digest\n", "utf8");
+        writeFileSync(
+          join(repo, "raw", "articles", "2026-06-19-agent-memory-trends-evidence-2026-06-19T03-40-39+08-00.md"),
+          "# Evidence\n",
+          "utf8"
+        );
+        return { ok: false, error: "TREND_GENERATION_FAILED" };
+      },
+    });
+
+    expect(check.status).toBe("fail");
+    expect(check.reason).toContain("cleaned allowed changes");
+    expect(check.details.committed).toBe(false);
+    expect(check.details.changedFiles).toEqual([
+      ".skillwiki/agent-memory-trends/latest-run.json",
+      "queries/2026-06-19-agent-memory-trends-digest.md",
+      "raw/articles/2026-06-19-agent-memory-trends-evidence-2026-06-19T03-40-39+08-00.md",
+    ]);
+    expect(git(repo, "status", "--porcelain", "--untracked-files=all")).toBe("");
+    expect(git(repo, "rev-parse", "HEAD")).toBe(before);
+  });
+
   it("refuses to run a writing job when origin/main is ahead", async () => {
     const repo = createSyncedRepo();
     const sibling = join(repo, "..", "sibling");
     git(repo, "clone", join(repo, "..", "origin.git"), sibling);
+    git(sibling, "checkout", "-B", "main", "origin/main");
     git(sibling, "config", "user.email", "skillwiki-maintenance@example.invalid");
     git(sibling, "config", "user.name", "SkillWiki Maintenance Test");
     writeFileSync(join(sibling, "remote.md"), "remote change\n", "utf8");
