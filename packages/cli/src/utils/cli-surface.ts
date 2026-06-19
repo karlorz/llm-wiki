@@ -72,6 +72,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("seed").option("--wiki <name>");
   program.command("observe").requiredOption("--text <text>").option("--kind <kind>").option("--project <slug>").option("--wiki <name>");
   program.command("session-brief").option("--project <slug>").option("--write").option("--wiki <name>");
+  program.command("memory"); // has subcommands
   program.command("ingest").requiredOption("--vault <path>").requiredOption("--type <type>").requiredOption("--title <title>").option("--tags <csv>").option("--provenance <provenance>").option("--dry-run");
   program.command("fleet"); // has subcommands
 
@@ -104,6 +105,12 @@ export function buildCliSurface(): Map<string, Set<string>> {
   const backupCmd = program.commands.find(c => c.name() === "backup")!;
   backupCmd.command("sync").option("--dry-run").option("--bucket <name>").option("--endpoint <url>").option("--region <region>").option("--prune").option("--wiki <name>");
   backupCmd.command("restore").option("--bucket <name>").option("--endpoint <url>").option("--region <region>").option("--target <dir>").option("--wiki <name>");
+
+  const memoryCmd = program.commands.find(c => c.name() === "memory")!;
+  memoryCmd.command("topics").option("--project <slug>").option("--limit <n>").option("--wiki <name>");
+  memoryCmd.command("index").requiredOption("--project <slug>").option("--wiki <name>");
+  memoryCmd.command("recall").requiredOption("--project <slug>").requiredOption("--topic <slug>").option("--limit <n>").option("--wiki <name>");
+  memoryCmd.command("import").requiredOption("--from <path>").requiredOption("--project <slug>").option("--dry-run").option("--apply").option("--max-bytes <n>").option("--wiki <name>");
 
   const fleetCmd = program.commands.find(c => c.name() === "fleet")!;
   fleetCmd.command("validate");

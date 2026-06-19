@@ -28,7 +28,16 @@ export interface SessionBriefOutput {
   index_updated: boolean;
   log_updated: boolean;
   generated_at: string;
+  memory_topics: SessionBriefMemoryTopic[];
   humanHint: string;
+}
+
+export interface SessionBriefMemoryTopic {
+  name: string;
+  summary: string;
+  project?: string;
+  updated: string;
+  paths: string[];
 }
 
 interface PageInfo {
@@ -62,6 +71,7 @@ export async function runSessionBrief(
     const workItems = await loadWorkItems(scan.data.workItems);
     const digests = await loadTrendDigests(scan.data.typedKnowledge);
     const healthWarnings = await loadHealthWarnings(input.vault);
+    const memoryTopics = project ? await loadMemoryTopics(input.vault, project) : [];
 
     const latestLogs = newest(transcripts.filter((t) => t.kind === "session-log"), 3);
     const unclaimedCaptures = newest(transcripts.filter((t) => {
@@ -85,6 +95,7 @@ export async function runSessionBrief(
       activeWork,
       latestDigest,
       projectLogs,
+      memoryTopics,
       healthWarnings,
     }), MAX_WORDS);
 
@@ -99,6 +110,7 @@ export async function runSessionBrief(
         generatedAt,
         today,
         wordCount: countWords(brief),
+        memoryTopics,
       });
       filesWritten = writeResult.filesWritten;
       indexUpdated = writeResult.indexUpdated;
@@ -116,6 +128,7 @@ export async function runSessionBrief(
         index_updated: indexUpdated,
         log_updated: logUpdated,
         generated_at: generatedAt,
+        memory_topics: memoryTopics,
         humanHint,
       }),
     };
@@ -237,6 +250,7 @@ function renderBrief(input: {
   activeWork: PageInfo[];
   latestDigest: PageInfo[];
   projectLogs: PageInfo[];
+  memoryTopics: SessionBriefMemoryTopic[];
   healthWarnings: string[];
 }): string {
   const lines = [
@@ -251,6 +265,7 @@ function renderBrief(input: {
   appendSection(lines, "Unclaimed Captures", input.unclaimedCaptures, "No unclaimed task or bug captures found.");
   appendSection(lines, "Recent Session Logs", input.project ? input.projectLogs : input.latestLogs, "No recent session logs found.");
   appendSection(lines, "Latest Agent Memory Trends", input.latestDigest, "No agent memory trends digest found.");
+  appendMemoryTopicsSection(lines, input.project, input.memoryTopics);
   appendTextSection(lines, "Health Warnings", input.healthWarnings, "No high-level health warnings found.");
 
   lines.push(
@@ -263,6 +278,16 @@ function renderBrief(input: {
   );
 
   return lines.join("\n").trimEnd() + "\n";
+}
+
+function appendMemoryTopicsSection(lines: string[], project: string | undefined, topics: SessionBriefMemoryTopic[]): void {
+  if (!project || topics.length === 0) return;
+  lines.push("## Memory Topics", "");
+  for (const topic of topics.slice(0, 5)) {
+    const sourceCount = topic.paths.length === 1 ? "1 source" : `${topic.paths.length} sources`;
+    lines.push(`- ${topic.updated} ${topic.name} (${sourceCount}) — ${topic.summary}; recall: \`skillwiki memory recall --project ${project} --topic ${topic.name}\``);
+  }
+  lines.push("");
 }
 
 function appendSection(lines: string[], title: string, items: PageInfo[], empty: string): void {
@@ -317,12 +342,38 @@ async function loadHealthWarnings(vault: string): Promise<string[]> {
   }
 }
 
+async function loadMemoryTopics(vault: string, project: string): Promise<SessionBriefMemoryTopic[]> {
+  const text = await readIfExists(join(vault, ".skillwiki", "memory", project, "topics.json"));
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text) as { topics?: unknown };
+    if (!Array.isArray(parsed.topics)) return [];
+    return parsed.topics
+      .filter((topic): topic is Record<string, unknown> => typeof topic === "object" && topic !== null && !Array.isArray(topic))
+      .map((topic) => ({
+        name: stringField(topic.name),
+        summary: stringField(topic.summary),
+        project: stringField(topic.project) || undefined,
+        updated: stringField(topic.updated),
+        paths: Array.isArray(topic.paths)
+          ? topic.paths.filter((path): path is string => typeof path === "string")
+          : [],
+      }))
+      .filter((topic) => topic.name && topic.summary && topic.updated && topic.paths.length > 0)
+      .sort((a, b) => b.updated.localeCompare(a.updated) || a.name.localeCompare(b.name))
+      .slice(0, 5);
+  } catch {
+    return [];
+  }
+}
+
 async function writeBriefArtifacts(vault: string, input: {
   project?: string;
   brief: string;
   generatedAt: string;
   today: string;
   wordCount: number;
+  memoryTopics: SessionBriefMemoryTopic[];
 }): Promise<{ filesWritten: string[]; indexUpdated: boolean; logUpdated: boolean }> {
   const metaPath = join(vault, "meta", "latest-session-brief.md");
   const cacheMdPath = join(vault, ".skillwiki", "session-brief.md");
@@ -343,6 +394,7 @@ async function writeBriefArtifacts(vault: string, input: {
     brief: input.brief,
     word_count: input.wordCount,
     generated_at: input.generatedAt,
+    memory_topics: input.memoryTopics,
   }, null, 2)}\n`, "utf8");
 
   const indexUpdated = await ensureIndexEntry(vault);
@@ -385,7 +437,7 @@ function renderCommittedBrief(input: {
     `created: ${input.today}`,
     `updated: ${input.today}`,
     "type: meta",
-    "tags: [generated, session-brief]",
+    "tags: [meta, session-brief]",
     "confidence: high",
     "generated_by: skillwiki session-brief",
     `generated_at: ${input.generatedAt}`,

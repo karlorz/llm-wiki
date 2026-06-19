@@ -21,7 +21,7 @@ describe("MetaSchema", () => {
       created: "2026-06-11",
       updated: "2026-06-11",
       type: "meta" as const,
-      tags: ["generated", "session-brief"],
+      tags: ["meta", "session-brief"],
       generated_by: "skillwiki session-brief",
       generated_at: "2026-06-11T00:10:00Z",
       generated_kind: "session-brief" as const

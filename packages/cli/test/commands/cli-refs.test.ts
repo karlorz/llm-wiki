@@ -49,6 +49,21 @@ describe("buildCliSurface", () => {
     expect(surface.get("session-brief")!.has("--write")).toBe(true);
     expect(surface.get("session-brief")!.has("--project")).toBe(true);
     expect(surface.get("session-brief")!.has("--wiki")).toBe(true);
+    expect(surface.get("memory.topics")!.has("--project")).toBe(true);
+    expect(surface.get("memory.topics")!.has("--limit")).toBe(true);
+    expect(surface.get("memory.topics")!.has("--wiki")).toBe(true);
+    expect(surface.get("memory.index")!.has("--project")).toBe(true);
+    expect(surface.get("memory.index")!.has("--wiki")).toBe(true);
+    expect(surface.get("memory.recall")!.has("--project")).toBe(true);
+    expect(surface.get("memory.recall")!.has("--topic")).toBe(true);
+    expect(surface.get("memory.recall")!.has("--limit")).toBe(true);
+    expect(surface.get("memory.recall")!.has("--wiki")).toBe(true);
+    expect(surface.get("memory.import")!.has("--from")).toBe(true);
+    expect(surface.get("memory.import")!.has("--project")).toBe(true);
+    expect(surface.get("memory.import")!.has("--dry-run")).toBe(true);
+    expect(surface.get("memory.import")!.has("--apply")).toBe(true);
+    expect(surface.get("memory.import")!.has("--max-bytes")).toBe(true);
+    expect(surface.get("memory.import")!.has("--wiki")).toBe(true);
   });
 
   it("includes --human flag inherited from root on all commands", () => {
@@ -164,6 +179,21 @@ describe("validateCliRefs", () => {
 
   it("accepts session-brief command refs", () => {
     const text = "Run `skillwiki session-brief --project auto --write` to refresh startup memory.";
+    expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
+  });
+
+  it("accepts memory topics command refs", () => {
+    const text = "Run `skillwiki memory topics --project llm-wiki --limit 3` to list topic memory.";
+    expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
+  });
+
+  it("accepts memory index and recall command refs", () => {
+    const text = "Run `skillwiki memory index --project llm-wiki` then `skillwiki memory recall --project llm-wiki --topic session-brief --limit 5`.";
+    expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
+  });
+
+  it("accepts memory import command refs", () => {
+    const text = "Run `skillwiki memory import --from /tmp/memories --project llm-wiki --dry-run --max-bytes 10000`.";
     expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
   });
 });

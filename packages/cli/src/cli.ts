@@ -39,6 +39,7 @@ import { runProjectIndex } from "./commands/project-index.js";
 import { runCompound, runCompoundList, runCompoundDelete } from "./commands/compound.js";
 import { runObserve } from "./commands/observe.js";
 import { runSessionBrief } from "./commands/session-brief.js";
+import { runMemoryImport, runMemoryIndex, runMemoryRecall, runMemoryTopics } from "./commands/memory.js";
 import { runIngest } from "./commands/ingest.js";
 import { runTagSync } from "./commands/tag-sync.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "./commands/sync.js";
@@ -805,6 +806,77 @@ program
       cwd: process.cwd(),
       env: { SKILLWIKI_PROJECT: process.env.SKILLWIKI_PROJECT }
     }), v.vault, { postCommit: !!opts.write });
+  });
+
+const memoryCmd = program.command("memory").description("inspect derived agent memory caches");
+
+memoryCmd
+  .command("topics [vault]")
+  .description("list topic-oriented memory from the optional derived cache")
+  .option("--project <slug>", "filter topics by project slug")
+  .option("--limit <n>", "maximum topics to return", (s) => parseInt(s, 10), 10)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runMemoryTopics({
+      vault: v.vault,
+      project: opts.project,
+      limit: opts.limit,
+    }), v.vault, { postCommit: false });
+  });
+
+memoryCmd
+  .command("index [vault]")
+  .description("build the derived project memory topic cache")
+  .requiredOption("--project <slug>", "project slug")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runMemoryIndex({
+      vault: v.vault,
+      project: opts.project,
+    }), v.vault);
+  });
+
+memoryCmd
+  .command("recall [vault]")
+  .description("recall bounded source summaries for a memory topic")
+  .requiredOption("--project <slug>", "project slug")
+  .requiredOption("--topic <slug>", "memory topic slug")
+  .option("--limit <n>", "maximum sources to return", (s) => parseInt(s, 10), 10)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runMemoryRecall({
+      vault: v.vault,
+      project: opts.project,
+      topic: opts.topic,
+      limit: opts.limit,
+    }), v.vault, { postCommit: false });
+  });
+
+memoryCmd
+  .command("import [vault]")
+  .description("preview or apply local memory imports into raw captures")
+  .requiredOption("--from <path>", "source file or directory to scan")
+  .requiredOption("--project <slug>", "project slug")
+  .option("--dry-run", "preview only; do not write captures", false)
+  .option("--apply", "write validated raw captures for ready entries", false)
+  .option("--max-bytes <n>", "reject source files above this size", (s) => parseInt(s, 10), 200000)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runMemoryImport({
+      vault: v.vault,
+      from: opts.from,
+      project: opts.project,
+      apply: !!opts.apply && !opts.dryRun,
+      maxBytes: opts.maxBytes,
+    }), v.vault, { postCommit: !!opts.apply && !opts.dryRun });
   });
 
 // ingest

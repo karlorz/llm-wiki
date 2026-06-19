@@ -100,6 +100,8 @@ describe("runSessionBrief", () => {
     const committed = readFileSync(join(vault, "meta", "latest-session-brief.md"), "utf8");
     expect(committed).toContain("generated_kind: session-brief");
     expect(committed).toContain("generated_by: skillwiki session-brief");
+    expect(committed).toContain("tags: [meta, session-brief]");
+    expect(committed).not.toContain("tags: [generated, session-brief]");
     expect(committed).toContain("# Session Brief");
 
     const cache = JSON.parse(readFileSync(join(vault, ".skillwiki", "session-brief.json"), "utf8"));
@@ -111,6 +113,52 @@ describe("runSessionBrief", () => {
 
     const log = readFileSync(join(vault, "log.md"), "utf8");
     expect(log.match(/session-brief \| refreshed: meta\/latest-session-brief\.md/g)).toHaveLength(1);
+  });
+
+  it("renders memory topic pointers from the derived project cache", async () => {
+    const vault = await makeVault();
+    mkdirSync(join(vault, ".skillwiki", "memory", "llm-wiki"), { recursive: true });
+    writeFileSync(join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json"), `${JSON.stringify({
+      generated_at: "2026-06-19T00:00:00Z",
+      project: "llm-wiki",
+      topics: [
+        {
+          name: "session-brief",
+          summary: "Startup memory and topic retrieval boundary.",
+          project: "llm-wiki",
+          updated: "2026-06-19",
+          paths: [
+            "concepts/agent-memory-control-loop.md",
+            "projects/llm-wiki/compound/session-brief-nightly-refresh-boundary.md",
+          ],
+        },
+      ],
+      sources: [],
+    }, null, 2)}\n`, "utf8");
+
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.brief).toContain("## Memory Topics");
+    expect(result.result.data.brief).toContain("session-brief");
+    expect(result.result.data.brief).toContain("skillwiki memory recall --project llm-wiki --topic session-brief");
+    expect(result.result.data.memory_topics).toHaveLength(1);
+
+    const cache = JSON.parse(readFileSync(join(vault, ".skillwiki", "session-brief.json"), "utf8"));
+    expect(cache.memory_topics).toEqual([
+      {
+        name: "session-brief",
+        summary: "Startup memory and topic retrieval boundary.",
+        project: "llm-wiki",
+        updated: "2026-06-19",
+        paths: [
+          "concepts/agent-memory-control-loop.md",
+          "projects/llm-wiki/compound/session-brief-nightly-refresh-boundary.md",
+        ],
+      },
+    ]);
   });
 
   it("appends log entries for later material changes, not timestamp-only refreshes", async () => {
