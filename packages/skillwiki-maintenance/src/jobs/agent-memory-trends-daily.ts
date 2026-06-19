@@ -75,7 +75,7 @@ export async function runAgentMemoryTrendsDaily(
 
 function parseAgentMemoryTrendsOutput(stdout: string): Result<AgentMemoryTrendsDailyData> {
   try {
-    const parsed = JSON.parse(stdout) as unknown;
+    const parsed = JSON.parse(extractJsonEnvelope(stdout)) as unknown;
     if (!isRecord(parsed)) return err("AGENT_MEMORY_TRENDS_OUTPUT_INVALID", "output must be a JSON object");
     if (parsed.ok !== true) return err("AGENT_MEMORY_TRENDS_DAILY_FAILED", parsed);
     const data = isRecord(parsed.data) ? parsed.data : {};
@@ -86,6 +86,14 @@ function parseAgentMemoryTrendsOutput(stdout: string): Result<AgentMemoryTrendsD
   } catch (error) {
     return err("AGENT_MEMORY_TRENDS_OUTPUT_INVALID", error instanceof Error ? error.message : String(error));
   }
+}
+
+function extractJsonEnvelope(stdout: string): string {
+  const direct = stdout.trim();
+  if (direct.startsWith("{")) return direct;
+
+  const jsonLine = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).reverse().find((line) => line.startsWith("{"));
+  return jsonLine ?? direct;
 }
 
 function stringArray(value: unknown): string[] {

@@ -68,6 +68,43 @@ describe("runAgentMemoryTrendsDaily", () => {
     expect(calls[0]?.env?.AGENT_MEMORY_TRENDS_REPO).toBe(repo);
   });
 
+  it("parses the final JSON envelope when the package build writes logs first", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-trends-logs-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+
+    const check = await runAgentMemoryTrendsDaily({
+      vaultPath: vault,
+      repoPath: repo,
+      project: "llm-wiki",
+      runCommand: async (command, args, options) => {
+        if (command === "git") return runGit(args, options.cwd);
+        if (command !== "agent-memory-trends") return result("", 127, `unexpected command: ${command}`);
+        writeGeneratedTrendOutputs(vault);
+        return result([
+          'CLI Building entry: {"cli":"src/cli.ts"}',
+          "ESM Build start",
+          "ESM dist/cli.js 120.76 KB",
+          JSON.stringify({
+            ok: true,
+            data: {
+              mutations: [
+                ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+                ".skillwiki/agent-memory-trends/latest-run.json",
+                "queries/2026-06-13-agent-memory-trends-digest.md",
+              ],
+              humanHint: "daily: ok (generate-only); selected 1 candidate(s)",
+            },
+          }),
+        ].join("\n") + "\n");
+      },
+    });
+
+    expect(check.status).toBe("pass");
+    expect(check.details.committed).toBe(true);
+    expect(check.details.jobData?.humanHint).toBe("daily: ok (generate-only); selected 1 candidate(s)");
+  });
+
   it("rejects generated changes outside the trends allowlist", async () => {
     const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-trends-bad-"));
     const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
