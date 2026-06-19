@@ -9,6 +9,9 @@ export interface VaultSyncPreflightDetails {
   changedFiles: string[];
   ahead?: number;
   behind?: number;
+  originalAhead?: number;
+  originalBehind?: number;
+  fastForwarded?: boolean;
 }
 
 export async function runVaultSyncPreflight(input: VaultSyncPreflightInput): Promise<JobCheck<VaultSyncPreflightDetails>> {
@@ -36,21 +39,65 @@ export async function runVaultSyncPreflight(input: VaultSyncPreflightInput): Pro
     return fail(`git ahead/behind check failed: ${firstLine(counts.stderr || counts.stdout)}`, { changedFiles });
   }
 
-  const [ahead, behind] = parseAheadBehind(counts.stdout);
-  if (ahead > 0 || behind > 0) {
-    return fail(`vault is not synchronized with origin/main (ahead ${ahead}, behind ${behind})`, { changedFiles, ahead, behind });
+  const [originalAhead, originalBehind] = parseAheadBehind(counts.stdout);
+  let ahead = originalAhead;
+  let behind = originalBehind;
+  let fastForwarded = false;
+  const details = (files = changedFiles): VaultSyncPreflightDetails => ({
+    changedFiles: files,
+    ahead,
+    behind,
+    originalAhead,
+    originalBehind,
+    fastForwarded,
+  });
+
+  if (ahead > 0) {
+    return fail(`vault is not synchronized with origin/main (ahead ${ahead}, behind ${behind})`, details());
+  }
+
+  if (behind > 0) {
+    const merge = await input.runCommand("git", ["-C", input.vaultPath, "merge", "--ff-only", "origin/main"], { cwd: input.vaultPath });
+    if (merge.exitCode !== 0) {
+      return fail(`git fast-forward failed: ${firstLine(merge.stderr || merge.stdout)}`, details());
+    }
+    fastForwarded = true;
+
+    const statusAfterMerge = await input.runCommand("git", ["-C", input.vaultPath, "status", "--porcelain", "--untracked-files=all"], {
+      cwd: input.vaultPath,
+    });
+    if (statusAfterMerge.exitCode !== 0) {
+      return fail("git status after fast-forward failed", details());
+    }
+
+    const changedAfterMerge = filesFromPorcelain(statusAfterMerge.stdout);
+    if (changedAfterMerge.length > 0) {
+      return fail(`vault is dirty after fast-forward: ${changedAfterMerge[0]}`, details(changedAfterMerge));
+    }
+
+    const countsAfterMerge = await input.runCommand("git", ["-C", input.vaultPath, "rev-list", "--left-right", "--count", "HEAD...origin/main"], {
+      cwd: input.vaultPath,
+    });
+    if (countsAfterMerge.exitCode !== 0) {
+      return fail(`git ahead/behind check after fast-forward failed: ${firstLine(countsAfterMerge.stderr || countsAfterMerge.stdout)}`, details());
+    }
+
+    [ahead, behind] = parseAheadBehind(countsAfterMerge.stdout);
+    if (ahead > 0 || behind > 0) {
+      return fail(`vault is not synchronized with origin/main after fast-forward (ahead ${ahead}, behind ${behind})`, details());
+    }
   }
 
   const push = await input.runCommand("git", ["-C", input.vaultPath, "push", "--dry-run", "origin", "main"], { cwd: input.vaultPath });
   if (push.exitCode !== 0) {
-    return fail(`push dry-run failed: ${firstLine(push.stderr || push.stdout)}`, { changedFiles, ahead, behind });
+    return fail(`push dry-run failed: ${firstLine(push.stderr || push.stdout)}`, details());
   }
 
   return {
     job: "vault-sync-preflight",
     status: "pass",
-    reason: "vault is clean, synchronized, and pushable",
-    details: { changedFiles, ahead, behind },
+    reason: fastForwarded ? "vault fast-forwarded, synchronized, and pushable" : "vault is clean, synchronized, and pushable",
+    details: details(),
   };
 }
 

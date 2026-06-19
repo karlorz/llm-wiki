@@ -30,20 +30,51 @@ describe("runVaultSyncPreflight", () => {
     expect(check.details.changedFiles).toEqual(["meta/latest-session-brief.md"]);
   });
 
-  it("detects behind and ahead vault states", async () => {
-    const behind = await runVaultSyncPreflight({
+  it("fast-forwards a clean behind-only vault before push checks", async () => {
+    const check = await runVaultSyncPreflight({
+      vaultPath: "/vault",
+      runCommand: mockRunner({
+        "git -C /vault status --porcelain --untracked-files=all": [result(""), result("")],
+        "git -C /vault fetch origin main": result(""),
+        "git -C /vault rev-list --left-right --count HEAD...origin/main": [result("0\t40\n"), result("0\t0\n")],
+        "git -C /vault merge --ff-only origin/main": result("Updating abc123..def456\n"),
+        "git -C /vault push --dry-run origin main": result("To github.com:karlorz/wiki.git\n"),
+      }),
+    });
+
+    expect(check.status).toBe("pass");
+    expect(check.details).toMatchObject({
+      ahead: 0,
+      behind: 0,
+      originalAhead: 0,
+      originalBehind: 40,
+      fastForwarded: true,
+    });
+  });
+
+  it("fails when a clean behind-only vault cannot fast-forward", async () => {
+    const check = await runVaultSyncPreflight({
       vaultPath: "/vault",
       runCommand: mockRunner({
         "git -C /vault status --porcelain --untracked-files=all": result(""),
         "git -C /vault fetch origin main": result(""),
         "git -C /vault rev-list --left-right --count HEAD...origin/main": result("0\t2\n"),
+        "git -C /vault merge --ff-only origin/main": result("", 1, "fatal: Not possible to fast-forward, aborting.\n"),
       }),
     });
 
-    expect(behind.status).toBe("fail");
-    expect(behind.details.ahead).toBe(0);
-    expect(behind.details.behind).toBe(2);
+    expect(check.status).toBe("fail");
+    expect(check.reason).toContain("fast-forward failed");
+    expect(check.details).toMatchObject({
+      ahead: 0,
+      behind: 2,
+      originalAhead: 0,
+      originalBehind: 2,
+      fastForwarded: false,
+    });
+  });
 
+  it("fails when the vault is ahead or diverged", async () => {
     const ahead = await runVaultSyncPreflight({
       vaultPath: "/vault",
       runCommand: mockRunner({
@@ -56,6 +87,19 @@ describe("runVaultSyncPreflight", () => {
     expect(ahead.status).toBe("fail");
     expect(ahead.details.ahead).toBe(1);
     expect(ahead.details.behind).toBe(0);
+
+    const diverged = await runVaultSyncPreflight({
+      vaultPath: "/vault",
+      runCommand: mockRunner({
+        "git -C /vault status --porcelain --untracked-files=all": result(""),
+        "git -C /vault fetch origin main": result(""),
+        "git -C /vault rev-list --left-right --count HEAD...origin/main": result("1\t2\n"),
+      }),
+    });
+
+    expect(diverged.status).toBe("fail");
+    expect(diverged.details.ahead).toBe(1);
+    expect(diverged.details.behind).toBe(2);
   });
 
   it("passes only when the vault is clean, synchronized, and pushable", async () => {
