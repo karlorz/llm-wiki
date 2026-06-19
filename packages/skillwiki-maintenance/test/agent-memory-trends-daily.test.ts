@@ -90,6 +90,39 @@ describe("runAgentMemoryTrendsDaily", () => {
     expect(check.details.allowlistViolations).toEqual(["concepts/unexpected.md"]);
     expect(git(vault, "rev-parse", "HEAD")).toBe(before);
   });
+
+  it("preserves failed agent-memory-trends stdout and stderr after cleanup", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-trends-fail-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+
+    const check = await runAgentMemoryTrendsDaily({
+      vaultPath: vault,
+      repoPath: repo,
+      project: "llm-wiki",
+      runCommand: async (command, args, options) => {
+        if (command === "git") return runGit(args, options.cwd);
+        if (command !== "agent-memory-trends") return result("", 127, `unexpected command: ${command}`);
+        return result(
+          JSON.stringify({ ok: false, error: "AGENT_FAILED", detail: "provider unavailable" }) + "\n",
+          1,
+          "codex exec failed\n"
+        );
+      },
+    });
+
+    expect(check.status).toBe("fail");
+    expect(check.reason).toBe("writing job failed before commit");
+    expect(check.details.jobError).toEqual({
+      ok: false,
+      error: "AGENT_MEMORY_TRENDS_DAILY_FAILED",
+      detail: {
+        stdout: JSON.stringify({ ok: false, error: "AGENT_FAILED", detail: "provider unavailable" }) + "\n",
+        stderr: "codex exec failed\n",
+      },
+    });
+    expect(git(vault, "status", "--porcelain", "--untracked-files=all")).toBe("");
+  });
 });
 
 function createSyncedRepo(origin: string, repo: string): string {

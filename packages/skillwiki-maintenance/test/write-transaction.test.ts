@@ -152,6 +152,7 @@ describe("runWriteTransaction", () => {
       "queries/2026-06-19-agent-memory-trends-digest.md",
       "raw/articles/2026-06-19-agent-memory-trends-evidence-2026-06-19T03-40-39+08-00.md",
     ]);
+    expect(check.details.jobError).toEqual({ ok: false, error: "TREND_GENERATION_FAILED" });
     expect(git(repo, "status", "--porcelain", "--untracked-files=all")).toBe("");
     expect(git(repo, "rev-parse", "HEAD")).toBe(before);
   });

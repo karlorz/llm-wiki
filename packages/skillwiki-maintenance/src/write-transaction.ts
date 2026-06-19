@@ -1,4 +1,4 @@
-import type { CommandRunner, JobCheck, MaintenanceJobId, Result } from "./types.js";
+import type { CommandRunner, ErrResult, JobCheck, MaintenanceJobId, Result } from "./types.js";
 
 export interface WriteTransactionInput<TJobData = unknown> {
   job: MaintenanceJobId;
@@ -16,6 +16,7 @@ export interface WriteTransactionDetails<TJobData = unknown> {
   committed: boolean;
   commitSha?: string;
   jobData?: TJobData;
+  jobError?: ErrResult;
   ahead?: number;
   behind?: number;
 }
@@ -31,7 +32,7 @@ export async function runWriteTransaction<TJobData = unknown>(
 
   const jobResult = await input.run();
   if (!jobResult.ok) {
-    return cleanupAfterFailedJob(input);
+    return cleanupAfterFailedJob(input, jobResult);
   }
 
   const after = await statusFiles(input);
@@ -175,7 +176,10 @@ async function statusEntries<TJobData>(
   return { ok: true, entries: statusEntriesFromPorcelain(status.stdout) };
 }
 
-async function cleanupAfterFailedJob<TJobData>(input: WriteTransactionInput<TJobData>): Promise<JobCheck<WriteTransactionDetails<TJobData>>> {
+async function cleanupAfterFailedJob<TJobData>(
+  input: WriteTransactionInput<TJobData>,
+  jobError: ErrResult
+): Promise<JobCheck<WriteTransactionDetails<TJobData>>> {
   const after = await statusEntries(input);
   if (!after.ok) return after.check;
   const files = after.entries.map((entry) => entry.path).sort((left, right) => left.localeCompare(right));
@@ -184,6 +188,7 @@ async function cleanupAfterFailedJob<TJobData>(input: WriteTransactionInput<TJob
     return fail(input, `writing job failed before commit and changed files outside allowlist: ${violations.join(", ")}`, {
       changedFiles: files,
       allowlistViolations: violations,
+      jobError,
     });
   }
 
@@ -197,6 +202,7 @@ async function cleanupAfterFailedJob<TJobData>(input: WriteTransactionInput<TJob
       return fail(input, `writing job failed before commit; cleanup restore failed: ${firstLine(restore.stderr || restore.stdout)}`, {
         changedFiles: files,
         allowlistViolations: [],
+        jobError,
       });
     }
   }
@@ -206,6 +212,7 @@ async function cleanupAfterFailedJob<TJobData>(input: WriteTransactionInput<TJob
       return fail(input, `writing job failed before commit; cleanup clean failed: ${firstLine(clean.stderr || clean.stdout)}`, {
         changedFiles: files,
         allowlistViolations: [],
+        jobError,
       });
     }
   }
@@ -217,12 +224,14 @@ async function cleanupAfterFailedJob<TJobData>(input: WriteTransactionInput<TJob
     return fail(input, `writing job failed before commit; cleanup left dirty files: ${remaining.join(", ")}`, {
       changedFiles: remaining,
       allowlistViolations: remaining.filter((file) => !isAllowed(file, input.allowlist)),
+      jobError,
     });
   }
 
   return fail(input, files.length > 0 ? "writing job failed before commit; cleaned allowed changes" : "writing job failed before commit", {
     changedFiles: files,
     allowlistViolations: [],
+    jobError,
   });
 }
 
@@ -250,6 +259,7 @@ function details<TJobData>(
     committed: partial.committed ?? false,
     commitSha: partial.commitSha,
     jobData: partial.jobData,
+    jobError: partial.jobError,
     ahead: partial.ahead,
     behind: partial.behind,
   };
