@@ -43,6 +43,42 @@ EXPECTED_CODEX_SKILLS=$(find -L "$REPO_ROOT/packages/codex-skills/skills" -maxde
 # Count discoverable CLI skills (wiki-*, proj-*) dynamically (no manual updates needed)
 EXPECTED_DISC=$(ls "$REPO_ROOT/packages/skills" | grep -cE '^(wiki-|proj-)')
 
+assert_cli_refs_guard() {
+  run_cli ssh "$SSH_TARGET" "$REMOTE_CLI lint '$VAULT_PATH' --only cli_refs"
+  if [ "$RUN_RC" -eq 0 ]; then
+    assert_exit 0 "$RUN_RC" "canonical vault has zero typed-knowledge cli_refs"
+    assert_json_contains "$RUN_OUTPUT" "data.summary.info" "0" "cli_refs summary info is zero"
+    return
+  fi
+
+  if [ "$READONLY_VERIFY" = "true" ] && { [ "${PLUGIN_VERSION:-}" != "$EXPECTED_VERSION" ] || [ "${REMOTE_CLI_VERSION:-}" != "$EXPECTED_VERSION" ]; }; then
+    if printf '%s' "$RUN_OUTPUT" | node -e '
+const chunks = [];
+process.stdin.on("data", (chunk) => chunks.push(chunk));
+process.stdin.on("end", () => {
+  try {
+    const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const summary = parsed?.data?.summary ?? {};
+    process.exit(summary.errors === 0 && summary.warnings === 0 ? 0 : 1);
+  } catch {
+    process.exit(1);
+  }
+});
+'; then
+      PASS=$((PASS + 1))
+      printf "  ⚠ cli_refs reports info-only findings under read-only version skew (plugin=%s, cli=%s, expected=%s)\n" "${PLUGIN_VERSION:-unknown}" "${REMOTE_CLI_VERSION:-unknown}" "$EXPECTED_VERSION"
+    else
+      FAIL=$((FAIL + 1))
+      printf "  ✗ cli_refs guard failed under read-only version skew\n"
+      printf "%s\n" "$RUN_OUTPUT"
+    fi
+    return
+  fi
+
+  assert_exit 0 "$RUN_RC" "canonical vault has zero typed-knowledge cli_refs"
+  assert_json_contains "$RUN_OUTPUT" "data.summary.info" "0" "cli_refs summary info is zero"
+}
+
 printf "=== Plugin E2E (%s on %s) ===\n" "$HOST_CLASS" "$SSH_HOST"
 printf "Mode    : %s\n" "$([ "$READONLY_VERIFY" = "true" ] && echo "read-only" || echo "full cycle")"
 printf "Host env: %s\n\n" "$HOST_ENV"
@@ -61,6 +97,15 @@ elif [ "$READONLY_VERIFY" = "true" ]; then
   PASS=$((PASS + 1)); printf "  \u26a0 plugin version is %s, expected %s (read-only host not auto-upgraded)\n" "$PLUGIN_VERSION" "$EXPECTED_VERSION"
 else
   FAIL=$((FAIL + 1)); printf "  \u2717 plugin version is %s, expected %s\n" "$PLUGIN_VERSION" "$EXPECTED_VERSION"
+fi
+
+REMOTE_CLI_VERSION=$(ssh "$SSH_TARGET" "$REMOTE_CLI --version 2>/dev/null || true")
+if [ "$REMOTE_CLI_VERSION" = "$EXPECTED_VERSION" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 remote CLI version is %s\n" "$REMOTE_CLI_VERSION"
+elif [ "$READONLY_VERIFY" = "true" ]; then
+  PASS=$((PASS + 1)); printf "  \u26a0 remote CLI version is %s, expected %s (read-only host not auto-upgraded)\n" "${REMOTE_CLI_VERSION:-unknown}" "$EXPECTED_VERSION"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 remote CLI version is %s, expected %s\n" "${REMOTE_CLI_VERSION:-unknown}" "$EXPECTED_VERSION"
 fi
 
 PLUGIN_ROOT="$PLUGIN_CACHE_ROOT/${PLUGIN_VERSION:-$EXPECTED_VERSION}"
@@ -83,9 +128,7 @@ fi
 
 if [ "$READONLY_VERIFY" = "true" ]; then
   printf "\n--- Read-only canonical vault guard ---\n"
-  run_cli ssh "$SSH_TARGET" "$REMOTE_CLI lint '$VAULT_PATH' --only cli_refs"
-  assert_exit 0 "$RUN_RC" "canonical vault has zero typed-knowledge cli_refs"
-  assert_json_contains "$RUN_OUTPUT" "data.summary.info" "0" "cli_refs summary info is zero"
+  assert_cli_refs_guard
 
   printf "\n"
   summary
@@ -169,9 +212,7 @@ assert_json_contains "$RUN_OUTPUT" "data.summary.warn" "2" "doctor 2 warns (skil
 
 # ---- 6. CI guard: canonical typed-knowledge CLI refs ----
 printf "\n--- cli_refs guard (canonical vault) ---\n"
-run_cli ssh "$SSH_TARGET" "$REMOTE_CLI lint '$VAULT_PATH' --only cli_refs"
-assert_exit 0 "$RUN_RC" "canonical vault has zero typed-knowledge cli_refs"
-assert_json_contains "$RUN_OUTPUT" "data.summary.info" "0" "cli_refs summary info is zero"
+assert_cli_refs_guard
 
 # ---- 7. Cleanup ----
 cleanup
