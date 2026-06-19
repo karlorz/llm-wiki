@@ -38,6 +38,7 @@ export type CommandRunner = (
 
 export type MaintenanceJobId =
   | "self-update-check"
+  | "self-update-apply"
   | "vault-sync-preflight"
   | "agent-memory-trends-daily"
   | "session-brief-refresh"

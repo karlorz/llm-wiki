@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createCommandRunner } from "./command.js";
 import { parseMaintenanceConfig, type MaintenanceConfig } from "./config.js";
 import { runAgentMemoryTrendsDaily } from "./jobs/agent-memory-trends-daily.js";
-import { runSelfUpdateCheck } from "./jobs/self-update-check.js";
+import { runSelfUpdateApply, runSelfUpdateCheck } from "./jobs/self-update-check.js";
 import { runSessionBriefRefresh } from "./jobs/session-brief-refresh.js";
 import { runVaultSyncPreflight } from "./jobs/vault-sync-preflight.js";
 import { acquireLock } from "./lock.js";
@@ -34,13 +34,13 @@ export interface RunMaintenanceOutput {
   checks: JobCheck[];
 }
 
-export type MaintenanceMode = "full" | "daily" | "self-update";
+export type MaintenanceMode = "full" | "daily" | "self-update" | "self-update-apply";
 
 export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<Result<RunMaintenanceOutput>> {
   const parsed = parseMaintenanceConfig(readFileSync(input.fleetPath, "utf8"), input.hostId, input.fleetPath);
   if (!parsed.ok) return parsed;
   const mode = input.mode ?? "full";
-  if (!["full", "daily", "self-update"].includes(mode)) return err("CONFIG_INVALID", `unsupported maintenance mode: ${mode}`);
+  if (!["full", "daily", "self-update", "self-update-apply"].includes(mode)) return err("CONFIG_INVALID", `unsupported maintenance mode: ${mode}`);
 
   const emit = input.emit ?? (() => undefined);
   const lock = acquireLock(input.lockDir, { owner: `skillwiki-maintenance:${input.hostId}`, now: input.now });
@@ -52,6 +52,24 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
   emit({ ts: input.now.toISOString(), event: "start", host_id: input.hostId, details: { stage: 2, mode } });
 
   try {
+    if (mode === "self-update-apply") {
+      const preflight = await runVaultSyncPreflight({ vaultPath: parsed.data.vaultPath, runCommand });
+      checks.push(preflight);
+      emit({ ts: ts(), event: "job", host_id: input.hostId, job: preflight.job, status: preflight.status, reason: preflight.reason, details: preflight.details });
+      if (preflight.status === "fail") {
+        emit({ ts: ts(), event: "finish", host_id: input.hostId, status: "fail" });
+        return err("MAINTENANCE_FAILED", preflight);
+      }
+
+      const selfUpdateApply = await runSelfUpdateApply({ repoPath: parsed.data.repoPath, runCommand });
+      checks.push(selfUpdateApply);
+      emit({ ts: ts(), event: "job", host_id: input.hostId, job: selfUpdateApply.job, status: selfUpdateApply.status, reason: selfUpdateApply.reason, details: selfUpdateApply.details });
+      const failed = checks.find((check) => check.status === "fail");
+      emit({ ts: ts(), event: "finish", host_id: input.hostId, status: failed ? "fail" : selfUpdateApply.status });
+      if (failed) return err("MAINTENANCE_FAILED", failed);
+      return ok({ config: parsed.data, checks });
+    }
+
     if (mode !== "daily") {
       const selfUpdate = await runSelfUpdateCheck({ repoPath: parsed.data.repoPath, runCommand });
       checks.push(selfUpdate);

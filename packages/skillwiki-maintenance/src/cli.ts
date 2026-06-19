@@ -15,7 +15,7 @@ interface CliOptions {
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2), process.env);
   if (options.command !== "run") {
-    console.error("Usage: skillwiki-maintenance run [--fleet <path>] [--host <id>] [--lock-dir <path>]");
+    console.error("Usage: skillwiki-maintenance run [--fleet <path>] [--host <id>] [--lock-dir <path>] [--mode <full|daily|self-update|self-update-apply>]");
     process.exitCode = 46;
     return;
   }
@@ -59,7 +59,7 @@ function parseArgs(args: string[], env: NodeJS.ProcessEnv): CliOptions {
 }
 
 function parseMode(value: string | undefined): MaintenanceMode {
-  if (value === "daily" || value === "self-update") return value;
+  if (value === "daily" || value === "self-update" || value === "self-update-apply") return value;
   return "full";
 }
 

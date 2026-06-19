@@ -109,6 +109,39 @@ describe("runStage1Maintenance", () => {
     expect(git(vault, "log", "-1", "--pretty=%s")).toBe("research(agent-memory): daily digest");
   });
 
+  it("self-update-apply mode runs preflight and apply without writer jobs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-apply-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const events: MaintenanceEvent[] = [];
+
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "self-update-apply",
+      now: new Date("2026-06-13T00:00:00Z"),
+      emit: (event) => events.push(event),
+      runCommand: async (command, args, options) => {
+        if (command === "npm" && args.join(" ") === "view skillwiki version") return commandResult("0.8.10\n");
+        if (command === "skillwiki" && args.join(" ") === "--version") return commandResult("0.8.10\n");
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    if (!result.ok) throw new Error(JSON.stringify(result, null, 2));
+    expect(result.data.checks.map((check) => [check.job, check.status])).toEqual([
+      ["vault-sync-preflight", "pass"],
+      ["self-update-apply", "pass"],
+    ]);
+    expect(events.find((event) => event.job === "agent-memory-trends-daily")).toBeUndefined();
+    expect(events.find((event) => event.job === "session-brief-refresh")).toBeUndefined();
+  });
+
   it("does not run later writing jobs after agent-memory-trends-daily fails", async () => {
     const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-fail-"));
     const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
