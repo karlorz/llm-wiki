@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { resolveSessionKind } from "@skillwiki/shared";
 import { createCommandRunner } from "./command.js";
 import { parseMaintenanceConfig, type MaintenanceConfig } from "./config.js";
 import { runAgentMemoryTrendsDaily } from "./jobs/agent-memory-trends-daily.js";
@@ -48,8 +49,17 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
 
   const checks: JobCheck[] = [];
   const runCommand = input.runCommand ?? createCommandRunner();
+  const sessionKind = resolveSessionKind({
+    satelliteHostId: input.hostId,
+    maintenanceMode: mode,
+  });
   const ts = () => new Date().toISOString();
-  emit({ ts: input.now.toISOString(), event: "start", host_id: input.hostId, details: { stage: 2, mode } });
+  emit({
+    ts: input.now.toISOString(),
+    event: "start",
+    host_id: input.hostId,
+    details: { stage: 2, mode, sessionKind: sessionKind.data },
+  });
 
   try {
     if (mode === "self-update-apply") {

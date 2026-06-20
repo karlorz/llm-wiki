@@ -47,13 +47,50 @@ describe("runStage1Maintenance", () => {
       ["vault-sync-preflight", "pass"],
       ["agent-memory-trends-daily", "pass"],
     ]);
-    expect(events.find((event) => event.event === "start")?.details).toEqual({ stage: 2, mode: "daily" });
+    expect(events.find((event) => event.event === "start")?.details).toMatchObject({ stage: 2, mode: "daily" });
     expect(events.find((event) => event.job === "self-update-check")).toBeUndefined();
     expect(events.find((event) => event.job === "session-brief-refresh")).toBeUndefined();
     expect(events.find((event) => event.job === "health-summary")).toBeUndefined();
     expect(events.find((event) => event.job === "vault-push")?.status).toBe("pass");
     git(vault, "fetch", "origin", "main");
     expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
+  });
+
+  it("emits the resolved satellite session policy on start", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-session-kind-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const events: MaintenanceEvent[] = [];
+
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "daily",
+      now: new Date("2026-06-13T00:00:00Z"),
+      emit: (event) => events.push(event),
+      runCommand: async (command, args, options) => {
+        if (command === "agent-memory-trends" && args[0] === "daily") return commandResult("");
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    const start = events.find((event) => event.event === "start");
+    expect(start?.details).toMatchObject({
+      stage: 2,
+      mode: "daily",
+      sessionKind: {
+        kind: "satellite",
+        mayPrompt: false,
+        defaultPolicy: "profile-allowed-or-fail",
+        defaultSourceRequired: true,
+      },
+    });
   });
 
   it("rebases and retries when the vault remote advances after the daily commit", async () => {
