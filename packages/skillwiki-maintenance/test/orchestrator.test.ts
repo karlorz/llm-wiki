@@ -329,6 +329,7 @@ function createSyncedRepo(origin: string, repo: string): string {
   git(repo, "branch", "-M", "main");
   git(repo, "remote", "add", "origin", origin);
   git(repo, "push", "-u", "origin", "main");
+  git(origin, "symbolic-ref", "HEAD", "refs/heads/main");
   return repo;
 }
 
@@ -347,6 +348,7 @@ function createSyncedVault(origin: string, vault: string): string {
   git(vault, "branch", "-M", "main");
   git(vault, "remote", "add", "origin", origin);
   git(vault, "push", "-u", "origin", "main");
+  git(origin, "symbolic-ref", "HEAD", "refs/heads/main");
   return vault;
 }
 
