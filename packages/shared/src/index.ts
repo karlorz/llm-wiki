@@ -3,3 +3,4 @@ export * from "./json-output.js";
 export * from "./schemas.js";
 export * from "./blocked-hosts.js";
 export * from "./error-message.js";
+export * from "./session-kind.js";

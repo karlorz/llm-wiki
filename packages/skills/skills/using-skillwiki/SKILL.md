@@ -135,6 +135,15 @@ skillwiki --human fleet context "$VAULT"
 
 If `identity_status` is `unknown` or `invalid`, treat the runtime as ephemeral: do not infer SSH/self aliases, sync authority, deploy authority, or protected-host permissions. Rerun with `--host-id <id>` only after the user confirms the current machine is that named fleet host.
 
+## Session Kind Policy
+
+Before asking questions or running scheduled maintenance, resolve the session kind through the shared `session-kind` policy when the CLI/runtime exposes it.
+
+- `interactive`: prompts are allowed.
+- `headless`: prompts are forbidden; use recorded defaults or fail closed.
+- `goal`: prompts are forbidden; run only automation-ready work or explicitly approved defaults.
+- `satellite`: prompts are forbidden; run only host/profile-allowed jobs and fail closed on unsafe authority.
+
 ## Typical Workflow
 1. **Init** (`wiki-init`) — create vault, set domain and taxonomy
 2. **Ingest** (`wiki-ingest`) — add sources, build pages
