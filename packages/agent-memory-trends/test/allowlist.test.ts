@@ -119,6 +119,38 @@ describe("agent-memory-trends generated-output allowlist", () => {
     expect(result.data.digestPathForAudit).toBe("queries/2026-06-11-agent-memory-trends-digest.md");
   });
 
+  it("accepts quiet successful runs that publish only agent-memory-trends run state", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
+    const runManifest = manifest({
+      changedFiles: [
+        ".skillwiki/agent-memory-trends/2026-06-11-input.json",
+        ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        ".skillwiki/agent-memory-trends/latest-run.json",
+      ],
+      outputs: {
+        runStatePath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        latestRunPath: ".skillwiki/agent-memory-trends/latest-run.json",
+      },
+      webSources: [],
+    });
+    for (const path of runManifest.changedFiles) writeVaultFile(vault, path, `generated file ${path}\n`);
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected quiet run-state-only changes to validate");
+    expect(result.data.typedPagesToValidate).toEqual([]);
+    expect(result.data.rawPagesToValidate).toEqual([]);
+    expect(result.data.digestPathForAudit).toBeUndefined();
+  });
+
   it("does not apply the generated-file byte cap to existing session-brief support files", () => {
     const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
     const runManifest = manifest({

@@ -115,7 +115,9 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
   if ((input.manifest.webSources ?? []).length > 15) issues.push("expected max 15 web sources");
 
   const digestPaths = changedFiles.filter((path) => path === `queries/${input.runDate}-agent-memory-trends-digest.md`);
-  if (digestPaths.length !== 1) issues.push("expected exactly one digest on successful runs");
+  if (digestPaths.length !== 1 && !isQuietRunStateOnlyChangeSet(changedFiles, input.runDate)) {
+    issues.push("expected exactly one digest on successful runs");
+  }
 
   const outputPaths = new Set([
     input.manifest.outputs.evidencePath,
@@ -196,6 +198,15 @@ function isAgentMemoryRunStatePath(path: string, runDate: string): boolean {
     path === `.skillwiki/agent-memory-trends/${runDate}-input.json` ||
     path === `.skillwiki/agent-memory-trends/${runDate}-run.json` ||
     path === ".skillwiki/agent-memory-trends/latest-run.json"
+  );
+}
+
+function isQuietRunStateOnlyChangeSet(paths: string[], runDate: string): boolean {
+  return (
+    paths.length > 0 &&
+    paths.every((path) => isAgentMemoryRunStatePath(path, runDate)) &&
+    paths.includes(`.skillwiki/agent-memory-trends/${runDate}-run.json`) &&
+    paths.includes(".skillwiki/agent-memory-trends/latest-run.json")
   );
 }
 

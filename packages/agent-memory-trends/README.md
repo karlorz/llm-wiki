@@ -2,7 +2,7 @@
 
 Private `llm-wiki` workspace package for the nightly agent-memory research workflow. It is intentionally not part of the public plugin install path in v1.
 
-The package stages high-signal agent-memory research into the vault. It collects bounded GitHub candidates through `gh api`, prepares an agent-neutral synthesis input, runs a non-interactive synthesis runner, validates generated vault output through the publisher gate, pushes successful changes, and sends a heartbeat only after the push succeeds.
+The package stages high-signal agent-memory research into the vault. It collects bounded GitHub candidates through `gh api`, prepares an agent-neutral synthesis input, runs a non-interactive synthesis runner when there is a selected research signal, validates generated vault output through the publisher gate, pushes successful changes, and sends a heartbeat only after the push succeeds.
 
 ## GitHub Discovery Lanes
 
@@ -52,7 +52,7 @@ GitHub READMEs are fetched for deterministic scoring, but full README bodies are
 - `supports_claim`
 - `confidence`
 
-The agent may write the aggregate evidence file, digest, run manifest, and conservative watchlist updates. It must not write `raw/transcripts` captures directly. Instead, it returns structured proposal JSON in the final message captured by `--output-last-message`.
+When there is a selected research signal, the agent may write the aggregate evidence file, digest, run manifest, and conservative watchlist updates. Quiet duplicate-only runs skip synthesis and publish only agent-memory-trends run state plus heartbeat. The agent must not write `raw/transcripts` captures directly. Instead, it returns structured proposal JSON in the final message captured by `--output-last-message`.
 
 Proposal fields are `title`, `capture_kind`, `problem`, `requirements_or_questions`, `acceptance`, `evidence`, `affected_surfaces`, and `source_urls`. `capture_kind` is limited to `task`, `bug`, or `idea`; `affected_surfaces` is a small controlled vocabulary owned by `src/synthesis.ts`.
 
@@ -197,7 +197,9 @@ agent-memory-trends daily --dry-run
 
 Run generation-only mode when another orchestrator owns the transaction
 boundary. This mode writes generated trend outputs and the operational run
-manifest, but does not refresh the session brief, publish, push, or heartbeat.
+manifest when there is a selected research signal. Quiet duplicate-only runs
+write only agent-memory-trends run state. It does not refresh the session
+brief, publish, push, or heartbeat.
 
 ```bash
 agent-memory-trends daily --generate-only

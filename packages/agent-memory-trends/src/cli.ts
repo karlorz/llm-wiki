@@ -918,6 +918,10 @@ async function runDaily(
     });
   }
 
+  if (isQuietRunInput(collected.data.input)) {
+    return runQuietDaily(options, context, dryRun, generateOnly, collected.data, startedAt);
+  }
+
   const tmpDir = join(tmpdir(), "agent-memory-trends");
   mkdirSync(tmpDir, { recursive: true });
   const synthesisInput = {
@@ -1026,6 +1030,67 @@ async function runDaily(
     mutations,
     selectedCandidateCount: collected.data.input.selectedCandidates.length,
   });
+}
+
+async function runQuietDaily(
+  options: ParsedCliOptions,
+  context: AgentMemoryTrendsContext,
+  dryRun: boolean,
+  generateOnly: boolean,
+  collected: CollectedInput,
+  startedAt: string
+): Promise<Result<{ mutations: string[]; selectedCandidateCount: number }>> {
+  const changedFiles = quietRunChangedFiles(collected.options, collected.inputPath);
+  const heartbeat: HeartbeatState = dryRun
+    ? { status: "skipped", reason: "dry-run" }
+    : generateOnly
+      ? { status: "skipped", reason: "generate-only" }
+      : { status: "skipped", reason: "publish heartbeat pending" };
+  const state = context.writeRunState ?? writeRunState;
+  const stateResult = state(collected.options.vault, {
+    runDate: collected.options.runDate,
+    runId: collected.options.runId,
+    status: "success",
+    startedAt,
+    finishedAt: formatInstant(context.now),
+    selectedCandidateCount: 0,
+    taskCaptureCount: 0,
+    changedFiles,
+    failureClass: null,
+    heartbeat,
+  });
+  if (!stateResult.ok) return stateResult;
+
+  const mutations = [collected.inputPath];
+  if (dryRun || generateOnly) {
+    return ok({
+      mutations: [...mutations, ...changedFiles],
+      selectedCandidateCount: 0,
+    });
+  }
+
+  const published = await runPublish(options, context, false);
+  if (!published.ok) {
+    writeFailureState(collected.options, context, startedAt, classifyFailure(published.error));
+    return published;
+  }
+
+  return ok({
+    mutations: [...mutations, ...published.data.mutations],
+    selectedCandidateCount: 0,
+  });
+}
+
+function isQuietRunInput(input: AgentInput): boolean {
+  return input.selectedCandidates.length === 0;
+}
+
+function quietRunChangedFiles(options: ResolvedRunOptions, inputPath: string): string[] {
+  return [
+    vaultRelativePath(options.vault, inputPath),
+    options.manifestPath,
+    ".skillwiki/agent-memory-trends/latest-run.json",
+  ].sort((left, right) => left.localeCompare(right));
 }
 
 function dailyModeLabel(dryRun: boolean, generateOnly: boolean, previewOnly: boolean): string {

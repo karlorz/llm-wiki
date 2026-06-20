@@ -987,6 +987,122 @@ describe("agent-memory-trends CLI", () => {
     ]);
   });
 
+  it("suppresses wiki-visible output for quiet duplicate-only live daily while publishing run state and heartbeat", async () => {
+    const calls: string[] = [];
+    const runStateFiles = [
+      ".skillwiki/agent-memory-trends/2026-06-11-input.json",
+      ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      ".skillwiki/agent-memory-trends/latest-run.json",
+    ];
+
+    const result = await runAgentMemoryTrendsCli(["daily", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
+      cwd: "/repo",
+      env: {
+        AGENT_MEMORY_TRENDS_HEARTBEAT_URL: "https://kuma.example/push",
+      },
+      now: new Date("2026-06-11T00:10:00+08:00"),
+      readFile: () => CONFIG,
+      runCommand: async (command, args) => {
+        calls.push(`${command}:${args.join(" ")}`);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      collectGithubCandidates: async () => ({ ok: true, data: {
+        rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+        apiCallsUsed: 12,
+        rawCandidateCount: 1,
+        selectedCandidates: [selectedCandidate()],
+        runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+      } }),
+      collectDuplicateSignals: () => ({
+        ok: true,
+        data: {
+          existingTasks: [],
+          activeWork: [],
+          recentDigests: [
+            {
+              path: "queries/2026-06-10-agent-memory-trends-digest.md",
+              title: "Agent Memory Trends Digest - 2026-06-10",
+              sourceUrls: ["https://github.com/acme/local-agent-memory"],
+              repoNames: ["acme/local-agent-memory"],
+            },
+          ],
+        },
+      }),
+      writeAgentInput: (input) => {
+        calls.push("write-input");
+        expect(input.selectedCandidates).toHaveLength(0);
+        expect(input.duplicateSuppressions).toHaveLength(1);
+        return { ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } };
+      },
+      runSynthesis: async () => {
+        calls.push("synthesis");
+        throw new Error("quiet duplicate-only runs should not invoke synthesis");
+      },
+      renderProposalCaptures: () => {
+        calls.push("render");
+        throw new Error("quiet duplicate-only runs should not render captures");
+      },
+      refreshSessionBrief: async () => {
+        calls.push("refresh-brief");
+        throw new Error("quiet duplicate-only runs should not refresh the session brief");
+      },
+      listTrackedRawPaths: async (vault) => {
+        calls.push(`list-raw:${vault}`);
+        return { ok: true, data: [] };
+      },
+      publishGeneratedChanges: async (input) => {
+        calls.push(`publish:${input.manifestPath}`);
+        return {
+          ok: true,
+          data: {
+            baseCommit: "abc123",
+            changedFiles: runStateFiles,
+            commitMessage: "research(agent-memory): daily digest 2026-06-11",
+          },
+        };
+      },
+      maybeSendHeartbeat: async (input) => {
+        calls.push(`heartbeat:${input.pushSucceeded ? "pushed" : "not-pushed"}`);
+        return { ok: true, data: { status: "sent", url: input.url ?? "" } };
+      },
+      writeRunState: (vault, state) => {
+        calls.push("write-state");
+        expect(vault).toBe("/vault");
+        expect(state).toMatchObject({
+          status: "success",
+          selectedCandidateCount: 0,
+          taskCaptureCount: 0,
+          changedFiles: runStateFiles,
+          failureClass: null,
+        });
+        return {
+          ok: true,
+          data: {
+            runStatePath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
+            latestRunPath: "/vault/.skillwiki/agent-memory-trends/latest-run.json",
+          },
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected daily success");
+    expect(calls).toEqual([
+      "git:-C /vault status --porcelain --untracked-files=all",
+      "git:-C /vault pull --rebase origin main",
+      "write-input",
+      "write-state",
+      "list-raw:/vault",
+      "publish:.skillwiki/agent-memory-trends/2026-06-11-run.json",
+      "heartbeat:pushed",
+    ]);
+    expect(result.result.data.mutations).toEqual([
+      "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json",
+      ...runStateFiles,
+    ]);
+  });
+
   it("cleans generated preflight leftovers before live daily sync", async () => {
     const calls: string[] = [];
     const result = await runAgentMemoryTrendsCli(["daily", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
