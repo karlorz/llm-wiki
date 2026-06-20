@@ -145,6 +145,12 @@ function checkCliChannels(argv: string[], home: string): CheckResult {
   const prodChannels = channels.filter(c => !c.isDevLink);
 
   if (devChannels.length > 0 && prodChannels.length > 0) {
+    const hasInstall = prodChannels.some(c => c.name === "install");
+    if (!hasInstall) {
+      const devNames = devChannels.map(c => `${c.name}(dev)`);
+      const prodNames = prodChannels.map(c => c.name);
+      return check("pass", "cli_channels", "CLI channels", `${channels.length} channels: ${[...devNames, ...prodNames].join(", ")} — dev source with installed production channels`);
+    }
     // Dev + prod channels coexist — this is the overlap case
     const devNames = devChannels.map(c => `${c.name}(dev)`);
     const prodNames = prodChannels.map(c => c.name);
@@ -169,6 +175,10 @@ function checkCliChannels(argv: string[], home: string): CheckResult {
   }
   // npm + plugin (or other non-install combos) are legitimate — versions checked separately
   return check("pass", "cli_channels", "CLI channels", `${channels.length} channels: ${names.join(", ")}`);
+}
+
+function isDevSourceRun(argv: string[]): boolean {
+  return argv.length >= 2 && argv[1].endsWith("cli.js");
 }
 
 async function checkConfigFile(home: string): Promise<CheckResult> {
@@ -296,7 +306,7 @@ function checkNpmUpdate(home: string, currentVersion: string): CheckResult {
   return check("pass", "npm_update", "npm CLI version", `v${currentVersion} (${distTag}: v${latest})`);
 }
 
-function checkPluginVersionDrift(home: string, currentVersion: string): CheckResult {
+function checkPluginVersionDrift(home: string, currentVersion: string, devSourceRun: boolean): CheckResult {
   const plugins = findPluginInstallations(home);
   if (plugins.length === 0) {
     return check("pass", "plugin_version_drift", "Plugin/CLI version", "Plugin not installed — CLI only");
@@ -312,6 +322,11 @@ function checkPluginVersionDrift(home: string, currentVersion: string): CheckRes
     }
     const labels = plugins.map(plugin => `${plugin.label} plugin`).join(", ");
     return check("pass", "plugin_version_drift", "Plugin/CLI version", `${labels}, and CLI all at v${currentVersion}`);
+  }
+
+  if (devSourceRun && drifted.every(plugin => semverGt(currentVersion, plugin.version))) {
+    const details = drifted.map(plugin => `${plugin.label} plugin v${plugin.version}`).join(", ");
+    return check("info", "plugin_version_drift", "Plugin/CLI version", `Dev source v${currentVersion} is ahead of installed ${details}`);
   }
 
   const details = drifted.map(plugin => {
@@ -1060,7 +1075,7 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
       c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
         "Log file is empty");
     } else {
-      const lastLine = lines[lines.length - 1];
+      const lastLine = [...lines].reverse().find(line => /FAIL|OK push/.test(line)) ?? lines[lines.length - 1];
       if (/FAIL/.test(lastLine)) {
         c3 = check("error", "vault_sync_last_push_age", "Vault sync last push recency",
           `Last push failed: ${lastLine}`);
@@ -1287,6 +1302,7 @@ export async function runDoctor(
   input: DoctorInput
 ): Promise<{ exitCode: number; result: Result<DoctorOutput> }> {
   const checks: CheckResult[] = [];
+  const devSourceRun = isDevSourceRun(input.argv);
 
   // Read vault-sync config once at the top for all checks that need it
   const vsConfig = readVaultSyncConfig(input.home);
@@ -1330,7 +1346,7 @@ export async function runDoctor(
   checks.push(checkSkillsInstalled(input.home, input.cwd));
   checks.push(checkDuplicateSkills(input.home));
   checks.push(checkNpmUpdate(input.home, input.currentVersion));
-  checks.push(checkPluginVersionDrift(input.home, input.currentVersion));
+  checks.push(checkPluginVersionDrift(input.home, input.currentVersion, devSourceRun));
 
   // Vault-sync checks (6 checks, no exit code impact)
   checks.push(...vaultSyncChecks({

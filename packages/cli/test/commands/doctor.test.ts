@@ -398,6 +398,18 @@ describe("runDoctor", () => {
     }
   });
 
+  it("plugin_version_drift reports info when dev source is ahead of installed plugin", async () => {
+    const h = homeWithPlugin("0.2.0");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "/path/to/packages/cli/dist/cli.js", "doctor"], currentVersion: "0.2.1" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
+      expect(drift?.status).toBe("info");
+      expect(drift?.detail).toContain("Dev source v0.2.1 is ahead");
+      expect(drift?.detail).toContain("Claude plugin v0.2.0");
+    }
+  });
+
   it("plugin_version_drift warns with Codex remediation when Codex plugin cache is stale", async () => {
     const h = homeWithCodexPlugin("0.2.0-beta.14", "local");
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
@@ -754,6 +766,22 @@ describe("runDoctor", () => {
     }
   });
 
+  it("cli_channels passes for dev source with installed plugin channel", async () => {
+    const h = homeWithPlugin("0.2.0-beta.15");
+    const v = fullVault();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const pluginDir = join(h, ".claude", "plugins", "cache", "llm-wiki", "skillwiki", "0.2.0-beta.15");
+    mkdirSync(join(pluginDir, "bin"), { recursive: true });
+    writeFileSync(join(pluginDir, "bin", "skillwiki"), "#!/usr/bin/env bash\nexec npx skillwiki \"$@\"\n");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "/path/to/packages/cli/dist/cli.js", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const cli = r.result.data.checks.find(c => c.id === "cli_channels");
+      expect(cli?.status).toBe("pass");
+      expect(cli?.detail).toContain("dev source with installed production channels");
+    }
+  });
+
   it("cli_channels warns when plugin bin and CLI install bin both exist", async () => {
     const h = homeWithPlugin("0.2.0-beta.15");
     // Add CLI install bin
@@ -862,6 +890,26 @@ describe("runDoctor", () => {
       const now = new Date();
       const ts = now.toISOString().replace(/\.\d{3}Z$/, "Z");
       createVaultSyncLog(h, [`${ts} OK push (no changes) duration=0s`]);
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const age = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
+      expect(age).toBeDefined();
+      expect(age!.status).toBe("pass");
+      expect(age!.detail).toContain("s ago");
+    });
+
+    it("vault_sync_last_push_age uses latest OK push when git housekeeping follows", async () => {
+      const h = home();
+      vaultSyncConfig(h, true);
+      createVaultSyncShareDir(h); // for installed check
+      const now = new Date();
+      const ts = now.toISOString().replace(/\.\d{3}Z$/, "Z");
+      createVaultSyncLog(h, [
+        `${ts} OK push (no changes) duration=0s`,
+        `${ts} GIT no changes to commit`,
+        `${ts} GIT no commits to push`,
+      ]);
       const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
       expect(r.result.ok).toBe(true);
       if (!r.result.ok) return;
