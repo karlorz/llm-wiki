@@ -87,3 +87,58 @@ fi
 
 rm -f "$helper_out"
 echo "PASS: --read-only reports broken wiki-sync helper symlink"
+
+snapshot_home="$(mktemp -d)"
+case "$(uname -s)" in
+  Darwin)
+    snapshot_share="$snapshot_home/Library/Application Support/vault-sync/bin"
+    ;;
+  Linux)
+    snapshot_share="$snapshot_home/.local/share/vault-sync/bin"
+    mkdir -p "$snapshot_home/.config/systemd/user"
+    touch "$snapshot_home/.config/systemd/user/wiki-snapshot.timer"
+    ;;
+  *)
+    echo "SKIP: unsupported OS for snapshotter status test"
+    exit 0
+    ;;
+esac
+
+mkdir -p "$snapshot_share" "$snapshot_home/.skillwiki"
+snapshot_script="$snapshot_share/wiki-snapshot.sh"
+printf '%s\n' '#!/usr/bin/env bash' '# --max-delete 10' > "$snapshot_script"
+chmod +x "$snapshot_script"
+cat > "$snapshot_home/.skillwiki/.env" <<EOF
+vault_sync.installed=true
+vault_sync.role=snapshotter
+vault_sync.service_scope=user
+vault_sync.snapshot_script=$snapshot_script
+EOF
+
+snapshot_out="$(mktemp)"
+HOME="$snapshot_home" VS_READ_ONLY=1 VS_JSON=1 bash "$STATUS_SH" >"$snapshot_out"
+
+if grep -Eq 'Script missing: .*wiki-push|Filter missing: .*wiki-push-filters' "$snapshot_out"; then
+  cat "$snapshot_out" >&2
+  rm -f "$snapshot_out"
+  echo "FAIL: snapshotter status should not require leaf wiki-push assets" >&2
+  exit 1
+fi
+
+if ! grep -q '"id":"vault_sync_installed".*"status":"pass".*wiki-snapshot.sh' "$snapshot_out"; then
+  cat "$snapshot_out" >&2
+  rm -f "$snapshot_out"
+  echo "FAIL: expected snapshotter install check to use wiki-snapshot.sh" >&2
+  exit 1
+fi
+
+if ! grep -q '"id":"vault_sync_filter_present".*"status":"pass".*not applicable' "$snapshot_out"; then
+  cat "$snapshot_out" >&2
+  rm -f "$snapshot_out"
+  echo "FAIL: expected snapshotter filter check to be not applicable" >&2
+  exit 1
+fi
+
+rm -f "$snapshot_out"
+rm -rf "$snapshot_home"
+echo "PASS: --read-only snapshotter status skips leaf wiki-push assets"

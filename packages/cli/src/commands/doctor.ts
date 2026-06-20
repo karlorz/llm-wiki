@@ -949,14 +949,27 @@ function checkVfsCacheHealth(resolvedPath: string | undefined): CheckResult {
     `${stats.files} files, ${(stats.bytesUsed / 1024 / 1024).toFixed(1)}MB — clean (0 errored, 0 pending)`);
 }
 
-// ── Vault sync health checks (5 checks) ──────────────────────
+// ── Vault sync health checks (6 checks) ──────────────────────
+
+interface VaultSyncRuntimeConfig {
+  installed: boolean;
+  role?: string;
+  serviceScope?: string;
+  snapshotScript?: string;
+  snapshotProfile?: string;
+  snapshotWorktree?: string;
+}
 
 /** Read vault_sync.* keys from the .env file bypassing the whitelist filter. */
-function readVaultSyncConfig(home: string): { installed: boolean; role?: string } {
+function readVaultSyncConfig(home: string): VaultSyncRuntimeConfig {
   try {
     const content = readFileSync(join(home, ".skillwiki", ".env"), "utf8");
     let installed = false;
     let role: string | undefined;
+    let serviceScope: string | undefined;
+    let snapshotScript: string | undefined;
+    let snapshotProfile: string | undefined;
+    let snapshotWorktree: string | undefined;
     for (const line of content.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
@@ -967,17 +980,49 @@ function readVaultSyncConfig(home: string): { installed: boolean; role?: string 
       if (v.length === 0) continue;
       if (k === "vault_sync.installed" && v === "true") installed = true;
       if (k === "vault_sync.role") role = v;
+      if (k === "vault_sync.service_scope") serviceScope = v;
+      if (k === "vault_sync.snapshot_script") snapshotScript = v;
+      if (k === "vault_sync.snapshot_profile") snapshotProfile = v;
+      if (k === "vault_sync.snapshot_worktree") snapshotWorktree = v;
     }
-    return { installed, role };
+    return { installed, role, serviceScope, snapshotScript, snapshotProfile, snapshotWorktree };
   } catch {
     return { installed: false };
   }
+}
+
+function readKeyFromEnvFile(path: string, keys: string[]): string | undefined {
+  try {
+    const content = readFileSync(path, "utf8");
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      if (!keys.includes(key)) continue;
+      const value = trimmed.slice(eq + 1).trim();
+      if (value.length > 0) return value;
+    }
+  } catch { /* profile is optional */ }
+  return undefined;
+}
+
+function resolveSnapshotGitWorktree(config: VaultSyncRuntimeConfig): string | undefined {
+  if (config.snapshotWorktree) return config.snapshotWorktree;
+  if (config.snapshotProfile) {
+    const fromProfile = readKeyFromEnvFile(config.snapshotProfile, ["WIKI_GIT_WORKTREE", "SNAPSHOT_WORKTREE", "GIT_DIR"]);
+    if (fromProfile) return fromProfile;
+  }
+  const defaultPath = "/root/wiki-git";
+  return existsSync(defaultPath) ? defaultPath : undefined;
 }
 
 interface VaultSyncInput {
   home: string;
   vaultSyncInstalled: boolean;
   vaultSyncRole?: string;
+  vaultSyncServiceScope?: string;
   os?: string;
   logDir?: string;
   shareDir?: string;
@@ -987,9 +1032,6 @@ interface VaultSyncInput {
 
 /**
  * Six vault-sync health checks.
- *
- * All checks are info/warn severity. None affect doctor's exit code
- * (matching the existing s3_mount_* skip pattern).
  *
  * Top-level skip: if vault_sync.installed is not true, all 6 return
  * pass-with-skip-detail.
@@ -1026,8 +1068,72 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
       : join(home, ".local", "share", "vault-sync", "bin"));
   const filterPath =
     input.filterPath ?? join(home, ".config", "rclone", "wiki-push-filters.txt");
+  const packagedSnapshotPath = join(shareDir, "wiki-snapshot.sh");
+  const legacySnapshotPath = "/root/.hermes/scripts/wiki-snapshot-v3.sh";
   const snapshotPath =
-    input.snapshotScriptPath ?? "/root/.hermes/scripts/wiki-snapshot-v3.sh";
+    input.snapshotScriptPath ??
+    (existsSync(packagedSnapshotPath) ? packagedSnapshotPath : legacySnapshotPath);
+
+  if (input.vaultSyncRole === "snapshotter") {
+    const c1 = existsSync(snapshotPath)
+      ? check("pass", "vault_sync_installed", "Vault sync installed", `Found snapshot script: ${snapshotPath}`)
+      : check("error", "vault_sync_installed", "Vault sync installed", `Snapshot script not found at ${snapshotPath}`);
+
+    const serviceScope = input.vaultSyncServiceScope ?? "user";
+    const userTimerPath = join(home, ".config", "systemd", "user", "wiki-snapshot.timer");
+    const systemTimerPath = "/etc/systemd/system/wiki-snapshot.timer";
+    let c2: CheckResult;
+    if (serviceScope === "user" && existsSync(userTimerPath)) {
+      c2 = check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `Found: ${userTimerPath}`);
+    } else if (serviceScope === "system" && existsSync(systemTimerPath)) {
+      c2 = check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `Found: ${systemTimerPath}`);
+    } else if (os !== "linux") {
+      c2 = check("warn", "vault_sync_jobs_enabled", "Vault sync jobs enabled", "Snapshotter scheduler is Linux-only and no wiki-snapshot.timer file was found");
+    } else {
+      try {
+        const command = serviceScope === "system"
+          ? "systemctl is-enabled wiki-snapshot.timer"
+          : "systemctl --user is-enabled wiki-snapshot.timer";
+        const out = execSync(command, {
+          encoding: "utf8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"],
+        }).trim();
+        c2 = out === "enabled"
+          ? check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `systemd: wiki-snapshot.timer enabled (${serviceScope})`)
+          : check("error", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `systemd: wiki-snapshot.timer is ${out || "not enabled"} (${serviceScope})`);
+      } catch {
+        c2 = check("error", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `wiki-snapshot.timer check failed (${serviceScope})`);
+      }
+    }
+
+    const c3 = check("pass", "vault_sync_last_push_age", "Vault sync last push recency",
+      "Snapshotter host — leaf wiki-push log not applicable");
+    const cFetch = check("pass", "vault_sync_last_fetch_status", "Vault sync last fetch status",
+      "Snapshotter host — leaf wiki-fetch-notify log not applicable");
+    const c4 = check("pass", "vault_sync_filter_present", "Vault sync filter file present",
+      "Snapshotter host — leaf wiki-push filter not applicable");
+
+    let c5: CheckResult;
+    try {
+      if (!existsSync(snapshotPath)) {
+        c5 = check("error", "vault_sync_snapshot_guard", "Snapshot script guard",
+          `Snapshot script not found at ${snapshotPath}`);
+      } else {
+        const content = readFileSync(snapshotPath, "utf8");
+        if (!content.includes("--max-delete")) {
+          c5 = check("error", "vault_sync_snapshot_guard", "Snapshot script guard",
+            `${snapshotPath} is missing --max-delete guard — dangerous without it`);
+        } else {
+          c5 = check("pass", "vault_sync_snapshot_guard", "Snapshot script guard",
+            `--max-delete present in ${snapshotPath}`);
+        }
+      }
+    } catch {
+      c5 = check("error", "vault_sync_snapshot_guard", "Snapshot script guard",
+        `Cannot read ${snapshotPath}`);
+    }
+
+    return [c1, c2, c3, cFetch, c4, c5];
+  }
 
   // ── Check 1: vault_sync_installed ──────────────────────────────
   const pushScriptPath = join(shareDir, "wiki-push.sh");
@@ -1320,21 +1426,24 @@ export async function runDoctor(
     checks.push(check("error", "wiki_path_set", "WIKI_PATH configured", "No vault configured. Run `skillwiki init` or pass --vault."));
   }
   const resolvedPath = resolved.ok ? resolved.data.path : undefined;
+  const gitCheckPath = vsConfig.role === "snapshotter"
+    ? (resolveSnapshotGitWorktree(vsConfig) ?? resolvedPath)
+    : resolvedPath;
 
   checks.push(checkWikiPathExists(resolvedPath));
   checks.push(checkVaultStructure(resolvedPath));
   checks.push(checkObsidianTemplates(resolvedPath));
-  checks.push(checkVaultGitRemote(resolvedPath));
+  checks.push(checkVaultGitRemote(gitCheckPath));
   checks.push(await checkFleetIdentity({
     vaultPath: resolvedPath,
     home: input.home,
     cwd: input.cwd,
     envValue: input.envValue,
   }));
-  checks.push(checkSyncLastPush(resolvedPath));
-  checks.push(checkVaultGitDirty(resolvedPath));
-  checks.push(checkVaultGitAhead(resolvedPath));
-  checks.push(checkVaultGitBehind(resolvedPath));
+  checks.push(checkSyncLastPush(gitCheckPath));
+  checks.push(checkVaultGitDirty(gitCheckPath));
+  checks.push(checkVaultGitAhead(gitCheckPath));
+  checks.push(checkVaultGitBehind(gitCheckPath));
   checks.push(checkVaultGitPullFailures(input.home));
   checks.push(checkDotStoreClean(resolvedPath));
   checks.push(checkS3MountPerf(resolvedPath));
@@ -1353,6 +1462,8 @@ export async function runDoctor(
     home: input.home,
     vaultSyncInstalled: vsConfig.installed,
     vaultSyncRole: vsConfig.role,
+    vaultSyncServiceScope: vsConfig.serviceScope,
+    snapshotScriptPath: vsConfig.snapshotScript,
   }));
 
   // Vault graph/health metrics (5 info rows, no exit code impact)

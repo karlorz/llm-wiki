@@ -802,12 +802,15 @@ describe("runDoctor", () => {
 
   // ── Vault sync doctor checks ─────────────────────────────────
 
-  function vaultSyncConfig(home: string, installed: boolean, role?: string): void {
+  function vaultSyncConfig(home: string, installed: boolean, role?: string, extras: Record<string, string> = {}): void {
     let existing = "";
     try { existing = readFileSync(join(home, ".skillwiki", ".env"), "utf8"); } catch { /* no file yet */ }
     const lines = existing.split("\n").filter(l => !l.startsWith("vault_sync."));
     if (installed) lines.push("vault_sync.installed=true");
     if (role) lines.push(`vault_sync.role=${role}`);
+    for (const [key, value] of Object.entries(extras)) {
+      lines.push(`vault_sync.${key}=${value}`);
+    }
     writeFileSync(join(home, ".skillwiki", ".env"), lines.join("\n"));
   }
 
@@ -961,6 +964,68 @@ describe("runDoctor", () => {
       expect(guard).toBeDefined();
       expect(guard!.status).toBe("error");
       expect(guard!.detail).toContain("not found");
+    });
+
+    it("snapshotter role uses configured snapshot script and skips leaf push checks", async () => {
+      const h = home();
+      const shareDir = createVaultSyncShareDir(h);
+      const snapshotScript = join(shareDir, "wiki-snapshot.sh");
+      writeFileSync(snapshotScript, "#!/usr/bin/env bash\n# --max-delete 10\n");
+      mkdirSync(join(h, ".config", "systemd", "user"), { recursive: true });
+      writeFileSync(join(h, ".config", "systemd", "user", "wiki-snapshot.timer"), "[Timer]\n");
+      vaultSyncConfig(h, true, "snapshotter", {
+        snapshot_script: snapshotScript,
+        service_scope: "user",
+      });
+
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+
+      const installed = r.result.data.checks.find(c => c.id === "vault_sync_installed");
+      expect(installed?.status).toBe("pass");
+      expect(installed?.detail).toContain("wiki-snapshot.sh");
+
+      const jobs = r.result.data.checks.find(c => c.id === "vault_sync_jobs_enabled");
+      expect(jobs?.status).toBe("pass");
+      expect(jobs?.detail).toContain("wiki-snapshot.timer");
+
+      for (const id of ["vault_sync_last_push_age", "vault_sync_last_fetch_status", "vault_sync_filter_present"]) {
+        const roleSkipped = r.result.data.checks.find(c => c.id === id);
+        expect(roleSkipped?.status).toBe("pass");
+        expect(roleSkipped?.detail).toContain("not applicable");
+      }
+
+      const guard = r.result.data.checks.find(c => c.id === "vault_sync_snapshot_guard");
+      expect(guard?.status).toBe("pass");
+      expect(guard?.detail).toContain("--max-delete");
+    });
+
+    it("snapshotter git checks use configured snapshot worktree when WIKI_PATH is a non-git mount", async () => {
+      const h = home();
+      const mountVault = mkdtempSync(join(tmpdir(), "fuse-vault-"));
+      writeFileSync(join(mountVault, "SCHEMA.md"), SCHEMA);
+      for (const d of ["raw", "entities", "concepts", "meta"]) mkdirSync(join(mountVault, d), { recursive: true });
+      const gitVault = fullVault();
+      gitCommit(gitVault, "snapshot worktree init");
+      const profilePath = join(h, "snapshotter.env");
+      writeFileSync(profilePath, `WIKI_GIT_WORKTREE=${gitVault}\n`);
+      writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${mountVault}\n`);
+      vaultSyncConfig(h, false, "snapshotter", {
+        snapshot_profile: profilePath,
+      });
+
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+
+      const gitRemote = r.result.data.checks.find(c => c.id === "vault_git_remote");
+      expect(gitRemote?.status).toBe("pass");
+      expect(gitRemote?.detail).toContain("Remote:");
+
+      const gitDirty = r.result.data.checks.find(c => c.id === "vault_git_dirty");
+      expect(gitDirty?.status).toBe("pass");
+      expect(gitDirty?.detail).toContain("Clean worktree");
     });
   });
 });

@@ -97,6 +97,19 @@ classify_log_tail() {
 restart_jobs() {
   assert_read_only_allows_no_state_changes "restart-jobs" || return $?
 
+  if [ "${ROLE:-}" = "snapshotter" ]; then
+    if [ "$VS_OS" != "linux" ]; then
+      fatal "snapshotter jobs require Linux"
+    fi
+    if [ "${SERVICE_SCOPE:-user}" = "system" ]; then
+      systemctl restart wiki-snapshot.timer
+    else
+      systemctl --user restart wiki-snapshot.timer
+    fi
+    log "snapshot job restarted"
+    return 0
+  fi
+
   if [ "$VS_OS" = "macos" ]; then
     launchctl kickstart -k "gui/$UID/com.karlchow.wiki-push"
     launchctl kickstart -k "gui/$UID/com.karlchow.wiki-fetch"
@@ -168,12 +181,41 @@ SHARE_BIN="$(platform_share_dir)/bin"
 LOG_DIR="$(platform_log_dir)"
 FILTER_PATH="$(platform_rclone_config_dir)/wiki-push-filters.txt"
 
+ROLE="${VS_ROLE:-}"
+if role_val=$(config_value "vault_sync.role"); then
+  [ -n "$role_val" ] && ROLE="$role_val"
+fi
+
+SERVICE_SCOPE="${VS_SERVICE_SCOPE:-user}"
+if scope_val=$(config_value "vault_sync.service_scope"); then
+  [ -n "$scope_val" ] && SERVICE_SCOPE="$scope_val"
+fi
+
+SNAPSHOT_SCRIPT="${VS_SNAPSHOT_SCRIPT:-}"
+if snapshot_val=$(config_value "vault_sync.snapshot_script"); then
+  [ -n "$snapshot_val" ] && SNAPSHOT_SCRIPT="$snapshot_val"
+fi
+if [ -z "$SNAPSHOT_SCRIPT" ]; then
+  SNAPSHOT_SCRIPT="$SHARE_BIN/wiki-snapshot.sh"
+  if [ ! -f "$SNAPSHOT_SCRIPT" ] && [ -f "/root/.hermes/scripts/wiki-snapshot-v3.sh" ]; then
+    SNAPSHOT_SCRIPT="/root/.hermes/scripts/wiki-snapshot-v3.sh"
+  fi
+fi
+
 # Check 1: installed footprint
-PUSH_SCRIPT="$SHARE_BIN/wiki-push.sh"
-if [ -f "$PUSH_SCRIPT" ]; then
-  add_check "vault_sync_installed" "Vault sync installed" "pass" "Found: $PUSH_SCRIPT"
+if [ "$ROLE" = "snapshotter" ]; then
+  if [ -f "$SNAPSHOT_SCRIPT" ]; then
+    add_check "vault_sync_installed" "Vault sync installed" "pass" "Found snapshot script: $SNAPSHOT_SCRIPT"
+  else
+    add_check "vault_sync_installed" "Vault sync installed" "error" "Snapshot script missing: $SNAPSHOT_SCRIPT"
+  fi
 else
-  add_check "vault_sync_installed" "Vault sync installed" "error" "Script missing: $PUSH_SCRIPT"
+  PUSH_SCRIPT="$SHARE_BIN/wiki-push.sh"
+  if [ -f "$PUSH_SCRIPT" ]; then
+    add_check "vault_sync_installed" "Vault sync installed" "pass" "Found: $PUSH_SCRIPT"
+  else
+    add_check "vault_sync_installed" "Vault sync installed" "error" "Script missing: $PUSH_SCRIPT"
+  fi
 fi
 
 # Check 1b: presync terminal helper
@@ -227,7 +269,33 @@ done
 add_check "vault_sync_presync_helper" "Vault sync presync helper" "$presync_status" "$presync_detail"
 
 # Check 2: scheduler enabled
-if [ "$READ_ONLY" -eq 1 ]; then
+if [ "$ROLE" = "snapshotter" ]; then
+  if [ "$READ_ONLY" -eq 1 ]; then
+    snapshot_user_timer="$HOME/.config/systemd/user/wiki-snapshot.timer"
+    snapshot_system_timer="/etc/systemd/system/wiki-snapshot.timer"
+    if [ -f "$snapshot_user_timer" ]; then
+      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "wiki-snapshot.timer unit file present (user scope, read-only mode)"
+    elif [ -f "$snapshot_system_timer" ]; then
+      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "wiki-snapshot.timer unit file present (system scope, read-only mode)"
+    else
+      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "wiki-snapshot.timer unit file missing (read-only mode)"
+    fi
+  else
+    if [ "$VS_OS" != "linux" ]; then
+      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "snapshotter scheduler requires Linux"
+    elif [ "$SERVICE_SCOPE" = "system" ]; then
+      if systemctl is-enabled wiki-snapshot.timer >/dev/null 2>&1; then
+        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "systemd: wiki-snapshot.timer enabled (system)"
+      else
+        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "systemd: wiki-snapshot.timer disabled or unavailable (system)"
+      fi
+    elif systemctl --user is-enabled wiki-snapshot.timer >/dev/null 2>&1; then
+      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "systemd: wiki-snapshot.timer enabled (user)"
+    else
+      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "systemd: wiki-snapshot.timer disabled or unavailable (user)"
+    fi
+  fi
+elif [ "$READ_ONLY" -eq 1 ]; then
   if [ "$VS_OS" = "macos" ]; then
     push_plist="$HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist"
     fetch_plist="$HOME/Library/LaunchAgents/com.karlchow.wiki-fetch.plist"
@@ -283,45 +351,43 @@ else
   fi
 fi
 
-# Check 3: last push recency/result
-classify_log_tail "$LOG_DIR/wiki-push.log" "vault_sync_last_push_age" "Vault sync last push recency" 'OK push'
-
-# Additional fetch log status for operator visibility
-classify_log_tail "$LOG_DIR/wiki-fetch.log" "vault_sync_last_fetch_status" "Vault sync last fetch status" 'NOTIFY|OK behind'
-
-# Check 4: filter file presence
-if [ ! -f "$FILTER_PATH" ]; then
-  add_check "vault_sync_filter_present" "Vault sync filter file present" "error" "Filter missing: $FILTER_PATH"
+if [ "$ROLE" = "snapshotter" ]; then
+  add_check "vault_sync_last_push_age" "Vault sync last push recency" "pass" "Snapshotter host — leaf wiki-push log not applicable"
+  add_check "vault_sync_last_fetch_status" "Vault sync last fetch status" "pass" "Snapshotter host — leaf wiki-fetch-notify log not applicable"
+  add_check "vault_sync_filter_present" "Vault sync filter file present" "pass" "Snapshotter host — leaf wiki-push filter not applicable"
 else
-  required_missing=()
-  for needle in "remotely-save/data.json" ".skillwiki/sync.lock" ".skillwiki/memory/" ".skillwiki/memory-topics.json" ".claude/settings.local.json"; do
-    if ! grep -q "$needle" "$FILTER_PATH"; then
-      required_missing+=("$needle")
-    fi
-  done
-  if [ "${#required_missing[@]}" -gt 0 ]; then
-    add_check "vault_sync_filter_present" "Vault sync filter file present" "warn" "Missing excludes: ${required_missing[*]}"
+  # Check 3: last push recency/result
+  classify_log_tail "$LOG_DIR/wiki-push.log" "vault_sync_last_push_age" "Vault sync last push recency" 'OK push'
+
+  # Additional fetch log status for operator visibility
+  classify_log_tail "$LOG_DIR/wiki-fetch.log" "vault_sync_last_fetch_status" "Vault sync last fetch status" 'NOTIFY|OK behind'
+
+  # Check 4: filter file presence
+  if [ ! -f "$FILTER_PATH" ]; then
+    add_check "vault_sync_filter_present" "Vault sync filter file present" "error" "Filter missing: $FILTER_PATH"
   else
-    add_check "vault_sync_filter_present" "Vault sync filter file present" "pass" "Required excludes present"
+    required_missing=()
+    for needle in "remotely-save/data.json" ".skillwiki/sync.lock" ".skillwiki/memory/" ".skillwiki/memory-topics.json" ".claude/settings.local.json"; do
+      if ! grep -q "$needle" "$FILTER_PATH"; then
+        required_missing+=("$needle")
+      fi
+    done
+    if [ "${#required_missing[@]}" -gt 0 ]; then
+      add_check "vault_sync_filter_present" "Vault sync filter file present" "warn" "Missing excludes: ${required_missing[*]}"
+    else
+      add_check "vault_sync_filter_present" "Vault sync filter file present" "pass" "Required excludes present"
+    fi
   fi
 fi
 
 # Check 5: snapshot guard (role-aware)
-role=""
-if role_val=$(config_value "vault_sync.role"); then
-  role="$role_val"
-elif [ -n "${VS_ROLE:-}" ]; then
-  role="$VS_ROLE"
-fi
-
-snapshot_script="${VS_SNAPSHOT_SCRIPT:-/root/.hermes/scripts/wiki-snapshot-v3.sh}"
-if [ "$role" != "snapshotter" ]; then
+if [ "$ROLE" != "snapshotter" ]; then
   add_check "vault_sync_snapshot_guard" "Snapshot script guard" "pass" "Not a snapshotter host — check skipped"
 else
-  if [ ! -f "$snapshot_script" ]; then
-    add_check "vault_sync_snapshot_guard" "Snapshot script guard" "error" "Missing snapshot script: $snapshot_script"
-  elif grep -q -- '--max-delete' "$snapshot_script"; then
-    add_check "vault_sync_snapshot_guard" "Snapshot script guard" "pass" "--max-delete guard present"
+  if [ ! -f "$SNAPSHOT_SCRIPT" ]; then
+    add_check "vault_sync_snapshot_guard" "Snapshot script guard" "error" "Missing snapshot script: $SNAPSHOT_SCRIPT"
+  elif grep -q -- '--max-delete' "$SNAPSHOT_SCRIPT"; then
+    add_check "vault_sync_snapshot_guard" "Snapshot script guard" "pass" "--max-delete guard present in $SNAPSHOT_SCRIPT"
   else
     add_check "vault_sync_snapshot_guard" "Snapshot script guard" "error" "--max-delete guard missing"
   fi
