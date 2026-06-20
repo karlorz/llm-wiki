@@ -4,14 +4,18 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AgentInput } from "../src/input.js";
 import {
+  buildClaudePrintRequest,
   buildCodexExecRequest,
+  createFallbackSynthesisRunner,
   createCodexSynthesisRunner,
   loadCodexSynthesisPrompt,
+  resolveSynthesisRuntimeOptions,
   runCodexSynthesis,
   type CodexRunResult,
   type CodexRunner,
 } from "../src/runner.js";
 import type { SynthesisRunner } from "../src/synthesis.js";
+import { err, ok } from "../src/types.js";
 
 function inputFixture(overrides: Partial<AgentInput> = {}): AgentInput {
   return {
@@ -160,6 +164,181 @@ describe("Codex synthesis runner", () => {
     });
   });
 
+  it("retries the primary runner once by default before returning success", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "agent-memory-trends-runner-"));
+    const input = inputFixture();
+    const attempts: string[] = [];
+    const primary: SynthesisRunner = async (request) => {
+      attempts.push(request.outputLastMessagePath);
+      if (attempts.length === 1) return err("CODEX_RUN_FAILED", "temporary codex failure");
+      return ok({
+        manifestPath: `${request.input.vault}/${request.input.manifestPath}`,
+        outputLastMessagePath: request.outputLastMessagePath,
+        stdout: "primary-ok",
+        stderr: "",
+        output: { proposals: [] },
+      });
+    };
+    const fallback: SynthesisRunner = async () => {
+      throw new Error("fallback should not run after retry success");
+    };
+
+    const runner = createFallbackSynthesisRunner({
+      primary,
+      fallback,
+      primaryRetries: 1,
+    });
+    const result = await runner({
+      input,
+      tmpDir: tmp,
+      outputLastMessagePath: join(tmp, "last-message.md"),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(attempts).toHaveLength(2);
+    if (!result.ok) throw new Error("expected retry success");
+    expect(result.data.stdout).toBe("primary-ok");
+  });
+
+  it("falls back to Claude only after the configured primary retries are exhausted", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "agent-memory-trends-runner-"));
+    const input = inputFixture();
+    const attempts: string[] = [];
+    const fallbackAttempts: string[] = [];
+    const primary: SynthesisRunner = async () => {
+      attempts.push("codex");
+      return err("CODEX_MANIFEST_MISSING", { manifestPath: "/vault/.skillwiki/agent-memory-trends/run.json" });
+    };
+    const fallback: SynthesisRunner = async (request) => {
+      fallbackAttempts.push("claude");
+      return ok({
+        manifestPath: `${request.input.vault}/${request.input.manifestPath}`,
+        outputLastMessagePath: request.outputLastMessagePath,
+        stdout: "fallback-ok",
+        stderr: "",
+        output: { proposals: [] },
+      });
+    };
+
+    const runner = createFallbackSynthesisRunner({
+      primary,
+      fallback,
+      primaryRetries: 1,
+    });
+    const result = await runner({
+      input,
+      tmpDir: tmp,
+      outputLastMessagePath: join(tmp, "last-message.md"),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(attempts).toEqual(["codex", "codex"]);
+    expect(fallbackAttempts).toEqual(["claude"]);
+    if (!result.ok) throw new Error("expected fallback success");
+    expect(result.data.stdout).toBe("fallback-ok");
+  });
+
+  it("does not fallback when the primary runner returns deterministic proposal validation errors", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "agent-memory-trends-runner-"));
+    const input = inputFixture();
+    const fallbackAttempts: string[] = [];
+    const primary: SynthesisRunner = async (request) =>
+      ok({
+        manifestPath: `${request.input.vault}/${request.input.manifestPath}`,
+        outputLastMessagePath: request.outputLastMessagePath,
+        stdout: "primary-ok",
+        stderr: "",
+        output: {
+          proposals: [],
+          proposalErrors: ["proposals[0].evidence must contain at least one item"],
+        },
+      });
+    const fallback: SynthesisRunner = async () => {
+      fallbackAttempts.push("claude");
+      return err("CLAUDE_RUN_FAILED", "should not run");
+    };
+
+    const runner = createFallbackSynthesisRunner({
+      primary,
+      fallback,
+      primaryRetries: 1,
+    });
+    const result = await runner({
+      input,
+      tmpDir: tmp,
+      outputLastMessagePath: join(tmp, "last-message.md"),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(fallbackAttempts).toEqual([]);
+    if (!result.ok) throw new Error("expected primary success");
+    expect(result.data.output.proposalErrors).toEqual(["proposals[0].evidence must contain at least one item"]);
+  });
+
+  it("composes a Claude print request that preserves the same prompt and output contract", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "agent-memory-trends-runner-"));
+    const lastMessagePath = join(tmp, "claude-last-message.md");
+    const request = buildClaudePrintRequest({
+      input: inputFixture(),
+      tmpDir: tmp,
+      outputLastMessagePath: lastMessagePath,
+    });
+
+    expect(request.args).toEqual([
+      "--print",
+      "--permission-mode",
+      "bypassPermissions",
+      "--input-format",
+      "text",
+      "--output-format",
+      "text",
+      "--add-dir",
+      "/repo/llm-wiki",
+      "--add-dir",
+      tmp,
+    ]);
+    expect(request.stdin).toContain("# Agent Memory Trends Codex Synthesis");
+    expect(request.stdin).toContain("BEGIN_AGENT_MEMORY_TRENDS_INPUT_JSON");
+    expect(request.stdin).toContain("END_AGENT_MEMORY_TRENDS_INPUT_JSON");
+    expect(request.cwd).toBe("/vault");
+    expect(request.outputLastMessagePath).toBe(lastMessagePath);
+  });
+
+  it("resolves synthesis retry, fallback, and timeout runtime options with safe defaults", () => {
+    expect(resolveSynthesisRuntimeOptions(new Map(), {})).toEqual({
+      primaryRetries: 1,
+      fallback: "claude",
+      timeoutMs: 1_200_000,
+    });
+
+    expect(
+      resolveSynthesisRuntimeOptions(
+        new Map([
+          ["synthesis-retries", "3"],
+          ["synthesis-fallback", "none"],
+          ["synthesis-timeout-ms", "45000"],
+        ]),
+        {}
+      )
+    ).toEqual({
+      primaryRetries: 3,
+      fallback: "none",
+      timeoutMs: 45_000,
+    });
+
+    expect(
+      resolveSynthesisRuntimeOptions(new Map(), {
+        AGENT_MEMORY_TRENDS_SYNTHESIS_RETRIES: "2",
+        AGENT_MEMORY_TRENDS_SYNTHESIS_FALLBACK: "claude",
+        AGENT_MEMORY_TRENDS_SYNTHESIS_TIMEOUT_MS: "60000",
+      })
+    ).toEqual({
+      primaryRetries: 2,
+      fallback: "claude",
+      timeoutMs: 60_000,
+    });
+  });
+
   it("runs Codex through an injected command and requires the manifest output", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "agent-memory-trends-runner-"));
     const vault = join(tmp, "vault");
@@ -182,6 +361,7 @@ describe("Codex synthesis runner", () => {
     const runner: CodexRunner = async (args, options): Promise<CodexRunResult> => {
       calls.push({ args, stdin: options.stdin, cwd: options.cwd });
       writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-11-run.json"), '{"ok":true}\n', "utf8");
+      writeFileSync(join(tmp, "last-message.md"), '{"proposals":[]}\n', "utf8");
       return { exitCode: 0, stdout: "done", stderr: "" };
     };
 

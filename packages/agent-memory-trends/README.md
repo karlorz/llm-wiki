@@ -43,7 +43,7 @@ Legacy configs with a flat `github.queries` list still parse through an explicit
 
 ## Synthesis Contract
 
-`agent-memory-trends` keeps the shared synthesis boundary agent-client-neutral. The core pipeline depends on `SynthesisRunner`; Codex is the only live adapter today. This keeps the package compatible with a later Claude Code or other agent-client runner without changing the downstream publisher contract.
+`agent-memory-trends` keeps the shared synthesis boundary agent-client-neutral. The core pipeline depends on `SynthesisRunner`; Codex is the primary live adapter and Claude Code CLI is an optional fallback adapter. Both feed the same downstream publisher contract.
 
 GitHub READMEs are fetched for deterministic scoring, but full README bodies are not sent to the agent prompt. The collector extracts bounded `readme_evidence` items with:
 
@@ -63,6 +63,7 @@ TypeScript validates proposals all-or-zero before creating captures:
 - Post-proposal duplicates are suppressed without failing the run.
 - Suppression details are recorded in the run manifest, while evidence and digest output can still publish when valid.
 - Rendered captures carry `outputs.task_capture_renderer: "typescript"` in the manifest; publisher validation rejects transcript captures without that marker.
+- Retry and fallback are limited to runner/output-production failures: non-zero runner exit, timeout, missing manifest, or missing last-message output. Proposal validation, capture rendering, publisher validation, vault guards, and git/publish failures remain deterministic errors and do not trigger fallback.
 
 ## Codex Invocation
 
@@ -82,6 +83,25 @@ codex --search --ask-for-approval never exec \
 
 Do not use `codex exec --search ...` with this CLI generation; it is rejected
 before the job starts.
+
+By default, synthesis retries Codex once before fallback. The subprocess
+timeout defaults to 20 minutes so the systemd unit's 30 minute `RuntimeMaxSec`
+still has room to record failure state. Configure these only in the service env
+file or one-off CLI flags:
+
+```bash
+AGENT_MEMORY_TRENDS_SYNTHESIS_RETRIES=1
+AGENT_MEMORY_TRENDS_SYNTHESIS_FALLBACK=claude  # claude or none
+AGENT_MEMORY_TRENDS_SYNTHESIS_TIMEOUT_MS=1200000
+```
+
+Equivalent CLI flags are `--synthesis-retries <n>`,
+`--synthesis-fallback <claude|none>`, and `--synthesis-timeout-ms <ms>`.
+
+Claude fallback uses `claude --print --permission-mode bypassPermissions` with
+the same prompt and bounded input JSON on stdin. Fallback is attempted only when
+`claude` is executable on the service `PATH`; otherwise Codex retry exhaustion
+returns the primary runner failure.
 
 ## Runtime Host
 
@@ -108,9 +128,10 @@ Before running the installer, verify these prerequisites on `sg02`:
 3. `git`, `ssh`, and `rsync` are installed; the vault checkout can fetch and push `origin main`.
 4. GitHub CLI (`gh`) is installed and can authenticate as the `agent-memory` Unix user before live runs.
 5. Codex CLI is installed, logged in as `agent-memory`, and `codex doctor` passes before live runs.
-6. `skillwiki` is installed from npm and its `bin/skillwiki` symlink is on the service PATH. This is load-bearing: the publisher gate shells out to `skillwiki validate`, `skillwiki lint`, and `skillwiki audit`.
-7. The `llm-wiki` repo checkout and wiki vault checkout are present at the paths in `/home/agent-memory/.config/agent-memory-trends/env`.
-8. Optional heartbeat configuration is ready; `AGENT_MEMORY_TRENDS_HEARTBEAT_URL` stays only in the untracked service env file.
+6. Optional Claude Code CLI fallback is installed, logged in as `agent-memory`, and available on `PATH` when `AGENT_MEMORY_TRENDS_SYNTHESIS_FALLBACK=claude`.
+7. `skillwiki` is installed from npm and its `bin/skillwiki` symlink is on the service PATH. This is load-bearing: the publisher gate shells out to `skillwiki validate`, `skillwiki lint`, and `skillwiki audit`.
+8. The `llm-wiki` repo checkout and wiki vault checkout are present at the paths in `/home/agent-memory/.config/agent-memory-trends/env`.
+9. Optional heartbeat configuration is ready; `AGENT_MEMORY_TRENDS_HEARTBEAT_URL` stays only in the untracked service env file.
 
 Quick tool smoke before installing:
 

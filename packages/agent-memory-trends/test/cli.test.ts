@@ -378,7 +378,7 @@ describe("agent-memory-trends CLI", () => {
     if (result.result.ok) throw new Error("expected usage error");
     expect(result.result.error).toBe("USAGE");
     expect(result.result.detail).toEqual({
-      message: "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--help] [--version]",
+      message: "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]",
     });
   });
 

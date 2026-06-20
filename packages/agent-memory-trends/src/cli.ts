@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,12 @@ import { maybeSendHeartbeat } from "./heartbeat.js";
 import { buildAgentInput, writeAgentInput, type AgentInput, type AllowedOutputs } from "./input.js";
 import { materializeOperationalRunManifest, publishGeneratedChanges } from "./publish.js";
 import { materializePreviewRun } from "./preview.js";
-import { createCodexSynthesisRunner } from "./runner.js";
+import {
+  createClaudeSynthesisRunner,
+  createCodexSynthesisRunner,
+  createFallbackSynthesisRunner,
+  resolveSynthesisRuntimeOptions,
+} from "./runner.js";
 import { writeRunState, type AgentMemoryTrendRunState, type HeartbeatState } from "./run-state.js";
 import {
   err,
@@ -29,7 +34,7 @@ import {
 } from "./types.js";
 
 const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "publish", "version"]);
-const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--help] [--version]";
+const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
 const SESSION_BRIEF_FILES = [
@@ -931,7 +936,7 @@ async function runDaily(
   };
   const synthesis = context.runSynthesis
     ? await context.runSynthesis(synthesisInput)
-    : await createCodexSynthesisRunner(createCodexRunner())(synthesisInput);
+    : await createDefaultSynthesisRunner(options, context)(synthesisInput);
   if (!synthesis.ok) {
     writeFailureState(collected.data.options, context, startedAt, "agent");
     return err("AGENT_FAILED", synthesis.detail ?? synthesis.error);
@@ -1351,17 +1356,59 @@ function createGhRunner(cwd: string) {
 }
 
 function createCodexRunner() {
-  return (args: string[], options: { stdin: string; cwd: string }) =>
+  return (args: string[], options: { stdin: string; cwd: string; timeoutMs?: number }) =>
     new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
-      const child = execFile("codex", args, { cwd: options.cwd, encoding: "utf8" }, (error, stdout, stderr) => {
+      const child = execFile("codex", args, { cwd: options.cwd, encoding: "utf8", timeout: options.timeoutMs }, (error, stdout, stderr) => {
         resolve({
           exitCode: typeof error?.code === "number" ? error.code : error ? 1 : 0,
           stdout,
-          stderr,
+          stderr: stderr || (error ? error.message : ""),
         });
       });
       child.stdin?.end(options.stdin);
     });
+}
+
+function createClaudeRunner() {
+  return (args: string[], options: { stdin: string; cwd: string; timeoutMs?: number }) =>
+    new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
+      const child = execFile("claude", args, { cwd: options.cwd, encoding: "utf8", timeout: options.timeoutMs }, (error, stdout, stderr) => {
+        resolve({
+          exitCode: typeof error?.code === "number" ? error.code : error ? 1 : 0,
+          stdout,
+          stderr: stderr || (error ? error.message : ""),
+        });
+      });
+      child.stdin?.end(options.stdin);
+    });
+}
+
+function createDefaultSynthesisRunner(options: ParsedCliOptions, context: AgentMemoryTrendsContext) {
+  const runtime = resolveSynthesisRuntimeOptions(options.values, context.env);
+  const primary = createCodexSynthesisRunner(createCodexRunner(), { timeoutMs: runtime.timeoutMs });
+  const fallback =
+    runtime.fallback === "claude" && commandAvailable("claude", context.env)
+      ? createClaudeSynthesisRunner(createClaudeRunner(), { timeoutMs: runtime.timeoutMs })
+      : undefined;
+  return createFallbackSynthesisRunner({
+    primary,
+    fallback,
+    primaryRetries: runtime.primaryRetries,
+  });
+}
+
+function commandAvailable(command: string, env: Record<string, string | undefined>): boolean {
+  const pathValue = env.PATH ?? process.env.PATH ?? "";
+  for (const dir of pathValue.split(":")) {
+    if (!dir) continue;
+    try {
+      accessSync(join(dir, command), constants.X_OK);
+      return true;
+    } catch {
+      // Keep searching PATH.
+    }
+  }
+  return false;
 }
 
 function createCommandRunner(): CommandRunner {
