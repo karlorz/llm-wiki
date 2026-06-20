@@ -372,6 +372,7 @@ function pushIndependentVaultChange(root: string, vault: string): void {
   const clone = join(root, "independent-vault-writer");
   const origin = git(vault, "remote", "get-url", "origin");
   execFileSync("git", ["clone", origin, clone], { stdio: "ignore" });
+  git(clone, "branch", "-M", "main");
   git(clone, "config", "user.email", "skillwiki-maintenance@example.invalid");
   git(clone, "config", "user.name", "SkillWiki Maintenance Test");
   writeFileSync(join(clone, "log.md"), "# Log\n\n## concurrent sync\n", "utf8");
@@ -384,6 +385,7 @@ function pushIndependentVaultConflict(root: string, vault: string): void {
   const clone = join(root, "independent-vault-conflict");
   const origin = git(vault, "remote", "get-url", "origin");
   execFileSync("git", ["clone", origin, clone], { stdio: "ignore" });
+  git(clone, "branch", "-M", "main");
   git(clone, "config", "user.email", "skillwiki-maintenance@example.invalid");
   git(clone, "config", "user.name", "SkillWiki Maintenance Test");
   mkdirSync(join(clone, "queries"), { recursive: true });
