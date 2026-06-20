@@ -56,6 +56,99 @@ describe("runStage1Maintenance", () => {
     expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
   });
 
+  it("rebases and retries when the vault remote advances after the daily commit", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-race-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const events: MaintenanceEvent[] = [];
+    let remoteAdvanced = false;
+
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "daily",
+      now: new Date("2026-06-13T00:00:00Z"),
+      emit: (event) => events.push(event),
+      runCommand: async (command, args, options) => {
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          writeGeneratedTrendOutputs(vault);
+          pushIndependentVaultChange(root, vault);
+          remoteAdvanced = true;
+          return commandResult(JSON.stringify({
+            ok: true,
+            data: {
+              mutations: [
+                ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+                ".skillwiki/agent-memory-trends/latest-run.json",
+                "queries/2026-06-13-agent-memory-trends-digest.md",
+              ],
+            },
+          }) + "\n");
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    if (!result.ok) throw new Error(JSON.stringify(result, null, 2));
+    expect(remoteAdvanced).toBe(true);
+    expect(events.find((event) => event.job === "vault-push")?.status).toBe("pass");
+    git(vault, "fetch", "origin", "main");
+    expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
+    expect(git(vault, "log", "--pretty=%s", "-2")).toBe([
+      "research(agent-memory): daily digest",
+      "auto: wiki sync during maintenance run",
+    ].join("\n"));
+  });
+
+  it("aborts the retry rebase when the vault remote advances with a conflicting file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-race-conflict-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const events: MaintenanceEvent[] = [];
+
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "daily",
+      now: new Date("2026-06-13T00:00:00Z"),
+      emit: (event) => events.push(event),
+      runCommand: async (command, args, options) => {
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          writeGeneratedTrendOutputs(vault);
+          pushIndependentVaultConflict(root, vault);
+          return commandResult(JSON.stringify({
+            ok: true,
+            data: {
+              mutations: [
+                ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+                ".skillwiki/agent-memory-trends/latest-run.json",
+                "queries/2026-06-13-agent-memory-trends-digest.md",
+              ],
+            },
+          }) + "\n");
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected maintenance to fail");
+    expect(result.detail).toMatchObject({ detail: expect.stringContaining("rebase before retry failed") });
+    expect(events.find((event) => event.job === "vault-push")?.status).toBe("fail");
+    expect(git(vault, "status", "--porcelain", "--untracked-files=all")).toBe("");
+    expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("1\t1");
+  });
+
   it("runs agent-memory-trends-daily through the write transaction and defers later writers after a commit", async () => {
     const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-"));
     const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
@@ -273,6 +366,31 @@ function writeGeneratedTrendOutputs(vault: string): void {
   writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-13-run.json"), "{}\n", "utf8");
   writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"), "{}\n", "utf8");
   writeFileSync(join(vault, "queries", "2026-06-13-agent-memory-trends-digest.md"), "# Digest\n", "utf8");
+}
+
+function pushIndependentVaultChange(root: string, vault: string): void {
+  const clone = join(root, "independent-vault-writer");
+  const origin = git(vault, "remote", "get-url", "origin");
+  execFileSync("git", ["clone", origin, clone], { stdio: "ignore" });
+  git(clone, "config", "user.email", "skillwiki-maintenance@example.invalid");
+  git(clone, "config", "user.name", "SkillWiki Maintenance Test");
+  writeFileSync(join(clone, "log.md"), "# Log\n\n## concurrent sync\n", "utf8");
+  git(clone, "add", "log.md");
+  git(clone, "commit", "-m", "auto: wiki sync during maintenance run");
+  git(clone, "push", "origin", "main");
+}
+
+function pushIndependentVaultConflict(root: string, vault: string): void {
+  const clone = join(root, "independent-vault-conflict");
+  const origin = git(vault, "remote", "get-url", "origin");
+  execFileSync("git", ["clone", origin, clone], { stdio: "ignore" });
+  git(clone, "config", "user.email", "skillwiki-maintenance@example.invalid");
+  git(clone, "config", "user.name", "SkillWiki Maintenance Test");
+  mkdirSync(join(clone, "queries"), { recursive: true });
+  writeFileSync(join(clone, "queries", "2026-06-13-agent-memory-trends-digest.md"), "# Concurrent Digest\n", "utf8");
+  git(clone, "add", "queries/2026-06-13-agent-memory-trends-digest.md");
+  git(clone, "commit", "-m", "auto: conflicting wiki sync during maintenance run");
+  git(clone, "push", "origin", "main");
 }
 
 function runGit(args: string[], cwd: string): CommandRunResult {

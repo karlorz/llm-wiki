@@ -152,13 +152,32 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
 async function pushVaultChanges(vaultPath: string, runCommand: CommandRunner): Promise<{ ok: true } | { ok: false; detail: string }> {
   const push = await runCommand("git", ["-C", vaultPath, "push", "origin", "main"], { cwd: vaultPath });
   if (push.exitCode === 0) return { ok: true };
-  return { ok: false, detail: firstLine(push.stderr || push.stdout || "git push failed") };
+
+  const fetch = await runCommand("git", ["-C", vaultPath, "fetch", "origin", "main"], { cwd: vaultPath });
+  if (fetch.exitCode !== 0) {
+    return { ok: false, detail: `git push failed (${commandSummary(push)}); fetch before retry failed (${commandSummary(fetch)})` };
+  }
+
+  const rebase = await runCommand("git", ["-C", vaultPath, "rebase", "origin/main"], { cwd: vaultPath });
+  if (rebase.exitCode !== 0) {
+    await runCommand("git", ["-C", vaultPath, "rebase", "--abort"], { cwd: vaultPath });
+    return { ok: false, detail: `git push failed (${commandSummary(push)}); rebase before retry failed (${commandSummary(rebase)})` };
+  }
+
+  const retry = await runCommand("git", ["-C", vaultPath, "push", "origin", "main"], { cwd: vaultPath });
+  if (retry.exitCode === 0) return { ok: true };
+  return { ok: false, detail: `git push retry failed: ${commandSummary(retry)}` };
 }
 
 export function defaultFleetPath(vaultPath: string): string {
   return join(vaultPath, "projects", "llm-wiki", "architecture", "fleet.yaml");
 }
 
-function firstLine(text: string): string {
-  return text.trim().split(/\r?\n/, 1)[0] || "no output";
+function commandSummary(result: { stdout: string; stderr: string }): string {
+  const text = `${result.stderr}\n${result.stdout}`;
+  const meaningful = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0 && !line.startsWith("To "));
+  return meaningful ?? "no output";
 }
