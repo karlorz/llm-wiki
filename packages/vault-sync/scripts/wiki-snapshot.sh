@@ -73,12 +73,12 @@ snapshot_direct_s3_preflight() {
         return 0
     fi
 
-    grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" > "$direct_notes" || true
+    grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" | LC_ALL=C sort -u > "$direct_notes" || true
     (
         cd "$SNAPSHOT_WORKTREE" || exit 1
-        find . -type f ! -path "./.git/*" | sed 's#^\./##' | LC_ALL=C sort
+        git -c core.quotePath=false ls-files | LC_ALL=C sort -u
     ) > "$git_paths" 2>/dev/null || {
-        echo "[wiki-snapshot] WARN: direct-S3 preflight could not list snapshot worktree $SNAPSHOT_WORKTREE"
+        echo "[wiki-snapshot] WARN: direct-S3 preflight could not list tracked files in snapshot worktree $SNAPSHOT_WORKTREE"
         rm -rf "$tmp_dir"
         return 0
     }

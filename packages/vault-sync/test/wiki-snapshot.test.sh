@@ -50,6 +50,10 @@ test_snapshot_dry_run_warns_on_direct_s3_note_not_in_git() {
   : > "$root/rclone.calls"
   printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
   printf '# Index\n' > "$git_dir/index.md"
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" add -A >/dev/null
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m init >/dev/null
 
   cat > "$bin_dir/uname" <<'STUB'
 #!/bin/bash
