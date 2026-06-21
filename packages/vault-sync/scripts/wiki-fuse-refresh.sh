@@ -333,6 +333,14 @@ fi
 RC_CODE=$?
 
 if [ "$RC_CODE" -ne 0 ]; then
+  if printf '%s\n' "$RC_OUT" | grep -qi 'file does not exist'; then
+    print "WARN: root vfs/refresh with dir=/ failed; retrying without dir=/"
+    RC_OUT="$(rclone rc --url "$RC_URL" vfs/refresh recursive=true 2>&1)"
+    RC_CODE=$?
+  fi
+fi
+
+if [ "$RC_CODE" -ne 0 ]; then
   print "FAIL: vfs/refresh rc=$RC_CODE url=$RC_URL"
   log "$RC_OUT"
   [ "$DIR_CACHE_STATUS" -eq 0 ] && exit "$RC_CODE" || exit 1

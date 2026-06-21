@@ -41,6 +41,54 @@ assert_contains "snapshot preserves max-delete guard" "--max-delete 10"
 assert_contains "snapshot has raw dedup guard function" "raw_dedup_guard()"
 assert_contains "snapshot calls raw dedup guard before commit" "raw_dedup_guard; then"
 
+test_snapshot_dry_run_warns_on_direct_s3_note_not_in_git() {
+  local root
+  root="$(mktemp -d)"
+  local git_dir="$root/wiki-git"
+  local bin_dir="$root/bin"
+  mkdir -p "$git_dir/raw/transcripts" "$bin_dir"
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  printf '# Index\n' > "$git_dir/index.md"
+
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "lsf" ]; then
+  printf 'SCHEMA.md\n'
+  printf 'index.md\n'
+  printf 'raw/transcripts/new.md\n'
+  exit 0
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/rclone"
+
+  local out_file="$root/out.txt"
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" --dry-run >"$out_file" 2>&1
+  local rc=$?
+
+  if [ "$rc" -eq 0 ] && grep -q 'direct-S3-not-git warning' "$out_file" && grep -q 'raw/transcripts/new.md' "$out_file" && ! grep -q 'delete' "$root/rclone.calls"; then
+    printf "PASS: snapshot dry-run warns on direct-S3 note missing from Git\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: snapshot dry-run direct-S3 warning missing (rc=%s output=%s calls=%s)\n" "$rc" "$(tr '\n' ' ' < "$out_file" 2>/dev/null)" "$(tr '\n' ';' < "$root/rclone.calls" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  rm -rf "$root"
+}
+
+test_snapshot_dry_run_warns_on_direct_s3_note_not_in_git
+
 if [ "$(uname -s)" != "Linux" ]; then
   printf "SKIP: Linux-only runtime snapshot guard test\n"
   printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"

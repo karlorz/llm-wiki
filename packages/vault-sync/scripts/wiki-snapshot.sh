@@ -59,6 +59,42 @@ REPAIR_SCRIPT="${WIKI_GIT_REPAIR_SCRIPT:-$SCRIPT_DIR/wiki-git-repair-v3.sh}"
 DATE=$(date +%Y%m%d_%H%M%S)
 RCLONE_LOG="/tmp/rclone-${DATE}.log"
 
+snapshot_direct_s3_preflight() {
+    local tmp_dir
+    tmp_dir="$(mktemp -d)"
+    local direct_paths="$tmp_dir/direct-s3.paths"
+    local direct_notes="$tmp_dir/direct-s3-notes.paths"
+    local git_paths="$tmp_dir/git.paths"
+    local direct_not_git="$tmp_dir/direct-s3-not-git.paths"
+
+    if ! rclone lsf "$CLOUD_REMOTE" --recursive --files-only 2>/dev/null | LC_ALL=C sort > "$direct_paths"; then
+        echo "[wiki-snapshot] WARN: direct-S3 preflight could not list $CLOUD_REMOTE"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" > "$direct_notes" || true
+    (
+        cd "$SNAPSHOT_WORKTREE" || exit 1
+        find . -type f ! -path "./.git/*" | sed 's#^\./##' | LC_ALL=C sort
+    ) > "$git_paths" 2>/dev/null || {
+        echo "[wiki-snapshot] WARN: direct-S3 preflight could not list snapshot worktree $SNAPSHOT_WORKTREE"
+        rm -rf "$tmp_dir"
+        return 0
+    }
+
+    comm -23 "$direct_notes" "$git_paths" > "$direct_not_git"
+    local count
+    count="$(wc -l < "$direct_not_git" | tr -d ' ')"
+    if [ "$count" != "0" ]; then
+        echo "[wiki-snapshot] WARN: direct-S3-not-git warning: $count note path(s) exist in direct S3 but not in $SNAPSHOT_WORKTREE"
+        sed -n '1,20p' "$direct_not_git" | sed 's/^/[wiki-snapshot] WARN: direct-S3-not-git: /'
+    fi
+
+    rm -rf "$tmp_dir"
+    return 0
+}
+
 # ── Guard: --max-delete verification ───────────────────────
 # Verify that this script (or a target script) has the --max-delete guard.
 # Returns 0 if guard is present, 1 if missing.
@@ -99,6 +135,7 @@ if [ "$DRY_RUN" = true ]; then
     echo "  CLOUD_REMOTE      = $CLOUD_REMOTE"
     echo "  REPAIR_SCRIPT     = $REPAIR_SCRIPT"
     echo "[wiki-snapshot] DRY RUN: --max-delete guard verified (present in $0)"
+    snapshot_direct_s3_preflight
     echo "[wiki-snapshot] DRY RUN: would acquire $LOCK_FILE, rclone sync, git commit, push."
     echo "[wiki-snapshot] DRY RUN: Complete. No changes made."
     exit 0
@@ -196,6 +233,8 @@ if [ ! -f "$SNAPSHOT_WORKTREE/index.md" ]; then
     log "ERROR: Sync verification failed - index.md not found in git dir"
     exit 1
 fi
+
+snapshot_direct_s3_preflight
 
 # Change to git dir for operations
 cd "$SNAPSHOT_WORKTREE" || { log "ERROR: Failed to cd to $SNAPSHOT_WORKTREE"; exit 1; }

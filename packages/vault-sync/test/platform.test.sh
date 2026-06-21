@@ -139,7 +139,50 @@ else
   FAIL=$((FAIL + SYNTAX_FAIL))
 fi
 
-# 11. Case-only tracked path collisions are detected before sync scripts publish them.
+# 11. FUSE refresh retries root refresh without dir=/ when rclone rejects it.
+FUSE_ROOT=$(mktemp -d)
+FUSE_BIN="$FUSE_ROOT/bin"
+mkdir -p "$FUSE_BIN"
+cat > "$FUSE_BIN/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+cat > "$FUSE_BIN/pgrep" <<'STUB'
+#!/bin/bash
+printf '12345\n'
+STUB
+cat > "$FUSE_BIN/ps" <<'STUB'
+#!/bin/bash
+printf 'rclone mount cloud:cloud/wiki /root/wiki --rc --rc-addr 127.0.0.1:5572 --dir-cache-time 5m\n'
+STUB
+cat > "$FUSE_BIN/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$FUSE_ROOT/rclone.calls"
+if [ "$1" = "rc" ] && printf '%s\n' "$*" | grep -q 'dir=/'; then
+  printf 'ERROR : /: file does not exist\n' >&2
+  exit 1
+fi
+if [ "$1" = "rc" ]; then
+  printf '{"result":{"":"OK"}}\n'
+  exit 0
+fi
+exit 99
+STUB
+chmod +x "$FUSE_BIN/uname" "$FUSE_BIN/pgrep" "$FUSE_BIN/ps" "$FUSE_BIN/rclone"
+
+FUSE_OUT="$FUSE_ROOT/out.txt"
+FUSE_ROOT="$FUSE_ROOT" PATH="$FUSE_BIN:$PATH" HOME="$FUSE_ROOT/home" bash "$SCRIPT_DIR/../scripts/wiki-fuse-refresh.sh" >"$FUSE_OUT" 2>&1
+FUSE_RC=$?
+if [ "$FUSE_RC" -eq 0 ] && grep -q 'recursive=true dir=/' "$FUSE_ROOT/rclone.calls" && grep -q 'recursive=true$' "$FUSE_ROOT/rclone.calls"; then
+  printf "PASS: fuse refresh retries without dir=/ after root refresh rejection\n"
+  PASS=$((PASS + 1))
+else
+  printf "FAIL: fuse refresh fallback failed (rc=%s output=%s calls=%s)\n" "$FUSE_RC" "$(tr '\n' ' ' < "$FUSE_OUT" 2>/dev/null)" "$(tr '\n' ';' < "$FUSE_ROOT/rclone.calls" 2>/dev/null)"
+  FAIL=$((FAIL + 1))
+fi
+rm -rf "$FUSE_ROOT"
+
+# 12. Case-only tracked path collisions are detected before sync scripts publish them.
 CASE_ROOT=$(mktemp -d)
 CASE_REPO="$CASE_ROOT/repo"
 git -C "$CASE_ROOT" init repo >/dev/null
