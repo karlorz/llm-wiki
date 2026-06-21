@@ -89,6 +89,8 @@ snapshot_direct_s3_preflight() {
     if [ "$count" != "0" ]; then
         echo "[wiki-snapshot] WARN: direct-S3-not-git warning: $count note path(s) exist in direct S3 but not in $SNAPSHOT_WORKTREE"
         sed -n '1,20p' "$direct_not_git" | sed 's/^/[wiki-snapshot] WARN: direct-S3-not-git: /'
+        rm -rf "$tmp_dir"
+        return 2
     fi
 
     rm -rf "$tmp_dir"
@@ -135,7 +137,7 @@ if [ "$DRY_RUN" = true ]; then
     echo "  CLOUD_REMOTE      = $CLOUD_REMOTE"
     echo "  REPAIR_SCRIPT     = $REPAIR_SCRIPT"
     echo "[wiki-snapshot] DRY RUN: --max-delete guard verified (present in $0)"
-    snapshot_direct_s3_preflight
+    snapshot_direct_s3_preflight || true
     echo "[wiki-snapshot] DRY RUN: would acquire $LOCK_FILE, rclone sync, git commit, push."
     echo "[wiki-snapshot] DRY RUN: Complete. No changes made."
     exit 0
@@ -214,6 +216,16 @@ RCLONE_OPTS=(
     --max-delete 10
 )
 
+if ! snapshot_direct_s3_preflight; then
+    if [ "${WIKI_SNAPSHOT_ALLOW_S3_ONLY_NOTES:-0}" = "1" ]; then
+        log "WARNING: direct-S3 preflight found note paths missing from Git; WIKI_SNAPSHOT_ALLOW_S3_ONLY_NOTES=1 allows this live snapshot"
+    else
+        log "ERROR: direct-S3 preflight found note paths missing from Git; refusing live snapshot before rclone sync"
+        log "ERROR: Review and promote/delete the S3-only note paths first, or set WIKI_SNAPSHOT_ALLOW_S3_ONLY_NOTES=1 for an explicitly approved promotion run"
+        exit 1
+    fi
+fi
+
 # Sync from cloud directly to git dir using rclone
 echo "Syncing from cloud to git repo (via rclone)..."
 
@@ -234,7 +246,7 @@ if [ ! -f "$SNAPSHOT_WORKTREE/index.md" ]; then
     exit 1
 fi
 
-snapshot_direct_s3_preflight
+snapshot_direct_s3_preflight || true
 
 # Change to git dir for operations
 cd "$SNAPSHOT_WORKTREE" || { log "ERROR: Failed to cd to $SNAPSHOT_WORKTREE"; exit 1; }

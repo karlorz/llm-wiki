@@ -47,6 +47,7 @@ test_snapshot_dry_run_warns_on_direct_s3_note_not_in_git() {
   local git_dir="$root/wiki-git"
   local bin_dir="$root/bin"
   mkdir -p "$git_dir/raw/transcripts" "$bin_dir"
+  : > "$root/rclone.calls"
   printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
   printf '# Index\n' > "$git_dir/index.md"
 
@@ -88,6 +89,70 @@ STUB
 }
 
 test_snapshot_dry_run_warns_on_direct_s3_note_not_in_git
+
+test_snapshot_live_blocks_before_sync_on_direct_s3_note_not_in_git() {
+  local root
+  root="$(mktemp -d)"
+  local git_dir="$root/wiki-git"
+  local bin_dir="$root/bin"
+  mkdir -p "$git_dir/raw/transcripts" "$bin_dir"
+  : > "$root/rclone.calls"
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  printf '# Index\n' > "$git_dir/index.md"
+
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" add -A >/dev/null
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m init >/dev/null
+
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  cat > "$bin_dir/flock" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "lsf" ]; then
+  printf 'SCHEMA.md\n'
+  printf 'index.md\n'
+  printf 'raw/transcripts/new.md\n'
+  exit 0
+fi
+if [ "$1" = "sync" ]; then
+  printf 'unexpected sync\n'
+  exit 0
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/rclone"
+
+  local out_file="$root/out.txt"
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOCK="$root/wiki-snapshot.lock" \
+    WIKI_SNAPSHOT_LOG="$root/wiki-snapshot.log" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >"$out_file" 2>&1
+  local rc=$?
+
+  if [ "$rc" -ne 0 ] && grep -q 'direct-S3-not-git warning' "$out_file" && grep -q 'refusing live snapshot' "$out_file" && ! grep -q '^sync ' "$root/rclone.calls"; then
+    printf "PASS: snapshot live blocks before sync on direct-S3 note missing from Git\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: snapshot live did not block before sync (rc=%s output=%s calls=%s)\n" "$rc" "$(tr '\n' ' ' < "$out_file" 2>/dev/null)" "$(tr '\n' ';' < "$root/rclone.calls" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  rm -rf "$root"
+}
+
+test_snapshot_live_blocks_before_sync_on_direct_s3_note_not_in_git
 
 if [ "$(uname -s)" != "Linux" ]; then
   printf "SKIP: Linux-only runtime snapshot guard test\n"
