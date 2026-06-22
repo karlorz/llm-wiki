@@ -158,6 +158,86 @@ STUB
 
 test_snapshot_live_blocks_before_sync_on_direct_s3_note_not_in_git
 
+test_snapshot_live_allows_when_override_env_set() {
+  local root
+  root="$(mktemp -d)"
+  local git_dir="$root/wiki-git"
+  local bin_dir="$root/bin"
+  mkdir -p "$git_dir/raw/transcripts" "$bin_dir"
+  : > "$root/rclone.calls"
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  printf '# Index\n' > "$git_dir/index.md"
+
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" add -A >/dev/null
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m init >/dev/null
+
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  cat > "$bin_dir/flock" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  # rclone stub: lsf returns the S3-only note path; sync exits non-zero so the
+  # script halts immediately after passing the preflight gate. This is enough
+  # to confirm the override path was taken without exercising downstream git
+  # repair logic in tests.
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "lsf" ]; then
+  printf 'SCHEMA.md\n'
+  printf 'index.md\n'
+  printf 'raw/transcripts/new.md\n'
+  exit 0
+fi
+if [ "$1" = "sync" ]; then
+  printf 'stub: refusing sync to halt test\n' >&2
+  exit 1
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/rclone"
+
+  local out_file="$root/out.txt"
+  local log_file="$root/wiki-snapshot.log"
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOCK="$root/wiki-snapshot.lock" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_ALLOW_S3_ONLY_NOTES=1 \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >"$out_file" 2>&1
+  local rc=$?
+
+  # Success criteria for the override path:
+  #   - "refusing live snapshot" must NOT appear (gate did not block)
+  #   - The override warning must appear in the log
+  #   - rclone sync must have been attempted (proves we passed the gate)
+  if ! grep -q 'refusing live snapshot' "$out_file" "$log_file" 2>/dev/null \
+      && grep -q 'WIKI_SNAPSHOT_ALLOW_S3_ONLY_NOTES=1 allows this live snapshot' "$log_file" \
+      && grep -q '^sync ' "$root/rclone.calls"; then
+    printf "PASS: snapshot live override env allows snapshot past preflight gate (rc=%s)\n" "$rc"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: snapshot live override did not pass gate (rc=%s output=%s log=%s calls=%s)\n" \
+      "$rc" \
+      "$(tr '\n' ' ' < "$out_file" 2>/dev/null)" \
+      "$(tr '\n' ' ' < "$log_file" 2>/dev/null)" \
+      "$(tr '\n' ';' < "$root/rclone.calls" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  rm -rf "$root"
+}
+
+test_snapshot_live_allows_when_override_env_set
+
 if [ "$(uname -s)" != "Linux" ]; then
   printf "SKIP: Linux-only runtime snapshot guard test\n"
   printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"

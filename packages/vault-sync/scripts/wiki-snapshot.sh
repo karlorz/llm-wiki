@@ -62,6 +62,8 @@ RCLONE_LOG="/tmp/rclone-${DATE}.log"
 snapshot_direct_s3_preflight() {
     local tmp_dir
     tmp_dir="$(mktemp -d)"
+    # Ensure tmp_dir is cleaned up on any return path or interrupt.
+    trap 'rm -rf "$tmp_dir"' RETURN
     local direct_paths="$tmp_dir/direct-s3.paths"
     local direct_notes="$tmp_dir/direct-s3-notes.paths"
     local git_paths="$tmp_dir/git.paths"
@@ -69,7 +71,6 @@ snapshot_direct_s3_preflight() {
 
     if ! rclone lsf "$CLOUD_REMOTE" --recursive --files-only 2>/dev/null | LC_ALL=C sort > "$direct_paths"; then
         echo "[wiki-snapshot] WARN: direct-S3 preflight could not list $CLOUD_REMOTE"
-        rm -rf "$tmp_dir"
         return 0
     fi
 
@@ -79,7 +80,6 @@ snapshot_direct_s3_preflight() {
         git -c core.quotePath=false ls-files | LC_ALL=C sort -u
     ) > "$git_paths" 2>/dev/null || {
         echo "[wiki-snapshot] WARN: direct-S3 preflight could not list tracked files in snapshot worktree $SNAPSHOT_WORKTREE"
-        rm -rf "$tmp_dir"
         return 0
     }
 
@@ -89,11 +89,9 @@ snapshot_direct_s3_preflight() {
     if [ "$count" != "0" ]; then
         echo "[wiki-snapshot] WARN: direct-S3-not-git warning: $count note path(s) exist in direct S3 but not in $SNAPSHOT_WORKTREE"
         sed -n '1,20p' "$direct_not_git" | sed 's/^/[wiki-snapshot] WARN: direct-S3-not-git: /'
-        rm -rf "$tmp_dir"
         return 2
     fi
 
-    rm -rf "$tmp_dir"
     return 0
 }
 
