@@ -72,6 +72,16 @@ describe("RawSourceSchema", () => {
     expect(RawSourceSchema.parse(v)).toBeTruthy();
   });
 
+  it("accepts project task capture as a non-executing queue item", () => {
+    const v = {
+      source_url: null,
+      ingested: "2026-06-23",
+      kind: "task",
+      project: "[[llm-wiki]]"
+    };
+    expect(RawSourceSchema.parse(v)).toMatchObject(v);
+  });
+
   it("accepts created field (Obsidian auto-fill)", () => {
     const v = { ...remote, created: "2026-05-08" };
     expect(RawSourceSchema.parse(v)).toMatchObject({ created: "2026-05-08" });

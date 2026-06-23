@@ -21,6 +21,11 @@ This sets the language of generated page prose. Frontmatter keys, schema section
 
 Four shapes: typed-knowledge, raw, work-item, compound. See spec for full Zod schemas.
 
+## Work Item Queue Contract
+
+Work-item statuses are `planned`, `in-progress`, `completed`, and `abandoned`.
+`status: proposed` is not supported by the current SkillWiki schema. Non-executing queued findings use raw `task` or `bug` captures under `raw/transcripts/` with a `project` wikilink; humans promote them into `planned` work items.
+
 ## Tag Taxonomy
 
 ```yaml

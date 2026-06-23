@@ -58,6 +58,9 @@ describe("runInit", () => {
     expect(schema).not.toContain("{{DOMAIN}}");
     expect(schema).not.toContain("{{TAXONOMY_YAML}}");
     expect(schema).not.toContain("{{WIKI_LANG}}");
+    expect(schema).toContain("Work-item statuses are `planned`, `in-progress`, `completed`, and `abandoned`.");
+    expect(schema).toContain("`status: proposed` is not supported by the current SkillWiki schema.");
+    expect(schema).toContain("Non-executing queued findings use raw `task` or `bug` captures");
     const env = readFileSync(join(h, ".skillwiki", ".env"), "utf8");
     expect(env).toContain(`WIKI_PATH=${target}`);
     expect(env).toContain("WIKI_LANG=en");

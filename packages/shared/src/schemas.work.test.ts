@@ -25,6 +25,12 @@ describe("WorkItemSchema", () => {
     expect(() => WorkItemSchema.parse({ ...v, kind: "epic" })).toThrow();
   });
 
+  it("rejects proposed status for non-executing queued findings", () => {
+    expect(() => WorkItemSchema.parse({ ...v, status: "proposed" })).toThrow(
+      /planned.*in-progress.*completed.*abandoned/
+    );
+  });
+
   it("accepts optional related/parent wikilinks", () => {
     expect(WorkItemSchema.parse({ ...v, parent: "[[2026-04-10-foo]]", related: ["[[2026-04-12-bar]]"] })).toBeTruthy();
   });
