@@ -295,7 +295,7 @@ remote_hosts: [sg01]      # kept for context (e2e-remote/e2e-plugin targets), no
 # Release-trigger policy (consumed by step 10 PUSH)
 release_policy:
   auto_bump: true
-  channel: beta                          # next bump → 0.6.1-beta.1, then -beta.2, ...; tag pattern v<X.Y.Z>-beta.<N>
+  channel: stable                        # autonomous bumps land as vX.Y.Z (e.g. 0.9.16); pass channel=beta via bump_script env to override
   trigger_globs:                          # any committed file matching these globs makes PUSH fire
     - "packages/skills/**"
     - "packages/cli/**"
@@ -350,18 +350,23 @@ notes:
     SCHEMA.md, index.md, log.md conventions are shared.
   push_workflow: |
     Sequence (step 10 PUSH — fires when release_policy.trigger_globs match committed files):
-    1. Compute next version: read current root package.json version (e.g. 0.6.0),
-       then list existing tags `git tag --list 'v<base>-beta.*'`, increment -beta.N
-       (e.g. v0.6.1-beta.1, then -beta.2). Stable bumps require explicit user request.
+    1. Compute next version: read current root package.json version and increment patch
+       (e.g. 0.9.15 → 0.9.16). Channel is `stable` by default; tag pattern is v<X.Y.Z>.
+       Beta cycles are an explicit override: pass RELEASE_CHANNEL=beta to bump_script so it
+       lists existing `v<base>-beta.*` tags and increments -beta.N (e.g. v0.9.16-beta.1).
+       Stable minor/major bumps still require explicit user request.
     2. Bump all 14 manifests in lock-step via bump_script.
-    3. Commit (`chore: bump version to <X.Y.Z-beta.N>`) and push to main branch
-       — this push IS the plugin release (Claude Code plugin uses HEAD of main).
-    4. Tag `v<version>` and push the tag → publish.yml fires via OIDC → npm publish --tag beta/latest.
+    3. Commit (`chore: release v<X.Y.Z>` for stable, `chore: bump version to <X.Y.Z-beta.N>`
+       for beta) and push to main branch — this push IS the plugin release (Claude Code
+       plugin uses HEAD of main).
+    4. Tag `v<version>` and push the tag → publish.yml fires via OIDC → npm publish
+       --tag latest for stable, --tag beta for beta channels.
     5. Verify tag landed on remote: `git ls-remote origin refs/tags/v<version>`.
     6. Verify CI: `gh run watch --exit-status` on the publish.yml run.
-    7. Stable releases are explicit: after `npm run bump <X.Y.Z>`, commit and tag `v<X.Y.Z>`, then run
-       `scripts/release.sh <X.Y.Z> --watch`. A bump commit on main alone only runs CI and updates plugin
-       source; it does not publish npm.
+    7. Override protocol: when an attended cycle overrides the configured channel
+       (e.g. cuts a stable from a `channel: beta` config, or a beta from this
+       `channel: stable` config), record the override in the cycle's retro or work-item
+       spec so future cycles can detect drift between config and shipped artifact.
     8. Never run `npm dist-tag add` or `npm publish` locally — OIDC tag routing only.
   release_policy_notes: |
     PUSH (step 10) is intentionally separate from MERGE (step 6b). MERGE always
