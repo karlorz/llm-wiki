@@ -27,6 +27,12 @@ Do not write raw/transcripts files. Task, bug, and idea captures are rendered
 later by TypeScript from your structured proposals. Direct transcript writes are
 ignored or rejected by the publisher gate.
 
+Digest wording must keep that distinction clear. Do not claim no
+raw/transcripts files were created when returning proposals. Instead, say the
+synthesis agent did not directly write transcript captures and TypeScript will
+render validated proposals into `raw/transcripts` after your structured JSON is
+validated.
+
 Quiet days are valid: write evidence, digest, refreshed run state, and return an
 empty proposals array when no new actionable item clears the bar.
 

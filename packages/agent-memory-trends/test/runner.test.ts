@@ -54,6 +54,9 @@ describe("Codex synthesis runner", () => {
     expect(prompt).toContain("run manifest");
     expect(prompt).toContain("publisher gate");
     expect(prompt).toContain("Do not modify existing raw files");
+    expect(prompt.replace(/\s+/g, " ")).toContain(
+      "Do not claim no raw/transcripts files were created when returning proposals"
+    );
   });
 
   it("composes prompt plus input JSON through stdin and uses the required codex exec flags", () => {
