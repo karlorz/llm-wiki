@@ -45,6 +45,8 @@ describe("Codex synthesis runner", () => {
     const prompt = loadCodexSynthesisPrompt();
 
     expect(prompt).toContain("Return structured JSON");
+    expect(prompt).toContain("non-interactive synthesis subagent");
+    expect(prompt).toContain("Do not invoke skills");
     expect(prompt).toContain("capture_kind");
     expect(prompt).toContain("Do not write raw/transcripts");
     expect(prompt).toContain("metadata-only");
@@ -67,6 +69,8 @@ describe("Codex synthesis runner", () => {
       "--search",
       "--ask-for-approval",
       "never",
+      "--disable",
+      "hooks",
       "exec",
       "--sandbox",
       "workspace-write",
@@ -198,6 +202,19 @@ describe("Codex synthesis runner", () => {
     expect(attempts).toHaveLength(2);
     if (!result.ok) throw new Error("expected retry success");
     expect(result.data.stdout).toBe("primary-ok");
+    expect(result.data.synthesis).toMatchObject({
+      invoked: true,
+      primaryBackend: "codex",
+      primaryAttempts: 2,
+      primaryFailed: false,
+      fallbackBackend: "claude",
+      fallbackAvailable: true,
+      fallbackInvoked: false,
+      resultBackend: "codex",
+      failureCode: null,
+      primaryErrorCode: null,
+      fallbackErrorCode: null,
+    });
   });
 
   it("falls back to Claude only after the configured primary retries are exhausted", async () => {
@@ -236,6 +253,19 @@ describe("Codex synthesis runner", () => {
     expect(fallbackAttempts).toEqual(["claude"]);
     if (!result.ok) throw new Error("expected fallback success");
     expect(result.data.stdout).toBe("fallback-ok");
+    expect(result.data.synthesis).toMatchObject({
+      invoked: true,
+      primaryBackend: "codex",
+      primaryAttempts: 2,
+      primaryFailed: true,
+      fallbackBackend: "claude",
+      fallbackAvailable: true,
+      fallbackInvoked: true,
+      resultBackend: "claude",
+      failureCode: null,
+      primaryErrorCode: "CODEX_MANIFEST_MISSING",
+      fallbackErrorCode: null,
+    });
   });
 
   it("does not fallback when the primary runner returns deterministic proposal validation errors", async () => {
@@ -378,6 +408,103 @@ describe("Codex synthesis runner", () => {
     expect(calls[0].args).toContain("exec");
     expect(calls[0].stdin).toContain('"allowed_outputs"');
     expect(result.data.manifestPath).toBe(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-11-run.json"));
+    expect(result.data.synthesis).toMatchObject({
+      invoked: true,
+      primaryBackend: "codex",
+      primaryAttempts: 1,
+      primaryFailed: false,
+      fallbackBackend: null,
+      fallbackAvailable: false,
+      fallbackInvoked: false,
+      resultBackend: "codex",
+      failureCode: null,
+    });
+  });
+
+  it("recovers Codex synthesis output from stdout when the last-message file is missing", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "agent-memory-trends-runner-"));
+    const vault = join(tmp, "vault");
+    const repo = join(tmp, "repo");
+    const outputLastMessagePath = join(tmp, "last-message.md");
+    mkdirSync(join(vault, ".skillwiki", "agent-memory-trends"), { recursive: true });
+    mkdirSync(repo, { recursive: true });
+    const input = inputFixture({
+      vault,
+      repo,
+      manifestPath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      allowedOutputs: {
+        evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+        taskCaptureGlob: "raw/transcripts/2026-06-11-task-*.md",
+        manifestPath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      },
+    });
+
+    const codexRunner: CodexRunner = async () => {
+      writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-11-run.json"), '{"ok":true}\n', "utf8");
+      return {
+        exitCode: 0,
+        stdout: [
+          "OpenAI Codex v0.142.0",
+          "codex",
+          '{"proposals":[]}',
+          "tokens used",
+          "123",
+          '{"proposals":[]}',
+        ].join("\n"),
+        stderr: "",
+      };
+    };
+
+    const result = await runCodexSynthesis({
+      input,
+      tmpDir: tmp,
+      outputLastMessagePath,
+      runCodex: codexRunner,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected stdout recovery success");
+    expect(result.data.output.proposals).toEqual([]);
+  });
+
+  it("does not recover from unrelated JSON in stdout when the last-message file is missing", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "agent-memory-trends-runner-"));
+    const vault = join(tmp, "vault");
+    const repo = join(tmp, "repo");
+    mkdirSync(join(vault, ".skillwiki", "agent-memory-trends"), { recursive: true });
+    mkdirSync(repo, { recursive: true });
+    const input = inputFixture({
+      vault,
+      repo,
+      manifestPath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      allowedOutputs: {
+        evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+        taskCaptureGlob: "raw/transcripts/2026-06-11-task-*.md",
+        manifestPath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+      },
+    });
+
+    const codexRunner: CodexRunner = async () => {
+      writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-11-run.json"), '{"ok":true}\n', "utf8");
+      return {
+        exitCode: 0,
+        stdout: 'BEGIN_AGENT_MEMORY_TRENDS_INPUT_JSON\n{"selected_candidates":[]}\nEND_AGENT_MEMORY_TRENDS_INPUT_JSON\n',
+        stderr: "",
+      };
+    };
+
+    const result = await runCodexSynthesis({
+      input,
+      tmpDir: tmp,
+      outputLastMessagePath: join(tmp, "last-message.md"),
+      runCodex: codexRunner,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected missing last-message failure");
+    expect(result.error).toBe("CODEX_LAST_MESSAGE_MISSING");
   });
 
   it("adapts Codex exec behind the neutral SynthesisRunner boundary", async () => {

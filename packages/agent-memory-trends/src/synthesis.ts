@@ -42,6 +42,22 @@ export interface SynthesisOutput {
   proposalErrors?: string[];
 }
 
+export type SynthesisBackend = "codex" | "claude";
+
+export interface SynthesisTelemetry {
+  invoked: boolean;
+  primaryBackend: SynthesisBackend;
+  primaryAttempts: number;
+  primaryFailed: boolean;
+  fallbackBackend: SynthesisBackend | null;
+  fallbackAvailable: boolean;
+  fallbackInvoked: boolean;
+  resultBackend: SynthesisBackend | null;
+  failureCode: string | null;
+  primaryErrorCode: string | null;
+  fallbackErrorCode: string | null;
+}
+
 export interface SynthesisRequest {
   input: AgentInput;
   tmpDir: string;
@@ -54,6 +70,7 @@ export interface SynthesisRunOutput {
   stdout: string;
   stderr: string;
   output: SynthesisOutput;
+  synthesis?: SynthesisTelemetry;
 }
 
 export type SynthesisRunner = (request: SynthesisRequest) => Promise<Result<SynthesisRunOutput>>;

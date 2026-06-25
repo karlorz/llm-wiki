@@ -806,6 +806,19 @@ describe("agent-memory-trends CLI", () => {
             stdout: "",
             stderr: "",
             output: { proposals: [] },
+            synthesis: {
+              invoked: true,
+              primaryBackend: "codex",
+              primaryAttempts: 2,
+              primaryFailed: true,
+              fallbackBackend: "claude",
+              fallbackAvailable: true,
+              fallbackInvoked: true,
+              resultBackend: "claude",
+              failureCode: null,
+              primaryErrorCode: "CODEX_RUN_FAILED",
+              fallbackErrorCode: null,
+            },
           },
         };
       },
@@ -821,6 +834,14 @@ describe("agent-memory-trends CLI", () => {
         expect(vault).toBe("/vault");
         expect(state.status).toBe("success");
         expect(state.heartbeat).toEqual({ status: "skipped", reason: "dry-run" });
+        expect(state.synthesis).toMatchObject({
+          primaryBackend: "codex",
+          primaryAttempts: 2,
+          primaryFailed: true,
+          fallbackInvoked: true,
+          resultBackend: "claude",
+          primaryErrorCode: "CODEX_RUN_FAILED",
+        });
         return {
           ok: true,
           data: {
@@ -837,6 +858,71 @@ describe("agent-memory-trends CLI", () => {
     expect(calls).toEqual(["synthesis:2026-06-11T00-10-00+08-00"]);
     expect(result.result.data.mutations).toContain("/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json");
     expect(result.result.data.humanHint).toContain("daily: ok (dry-run)");
+  });
+
+  it("writes synthesis telemetry to failure run-state when the agent and fallback fail", async () => {
+    let capturedState: unknown;
+    const result = await runAgentMemoryTrendsCli(["daily", "--dry-run", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
+      cwd: "/repo",
+      env: {},
+      now: new Date("2026-06-11T00:10:00+08:00"),
+      readFile: () => CONFIG,
+      collectGithubCandidates: async () => ({ ok: true, data: {
+        rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+        apiCallsUsed: 12,
+        rawCandidateCount: 1,
+        selectedCandidates: [selectedCandidate()],
+        runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+      } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+      writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
+      runSynthesis: async () => ({
+        ok: false,
+        error: "SYNTHESIS_FALLBACK_FAILED",
+        detail: {
+          synthesis: {
+            invoked: true,
+            primaryBackend: "codex",
+            primaryAttempts: 1,
+            primaryFailed: true,
+            fallbackBackend: "claude",
+            fallbackAvailable: true,
+            fallbackInvoked: true,
+            resultBackend: null,
+            failureCode: "SYNTHESIS_FALLBACK_FAILED",
+            primaryErrorCode: "CODEX_RUN_FAILED",
+            fallbackErrorCode: "CLAUDE_RUN_FAILED",
+          },
+        },
+      }),
+      writeRunState: (vault, state) => {
+        expect(vault).toBe("/vault");
+        capturedState = state;
+        return {
+          ok: true,
+          data: {
+            runStatePath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
+            latestRunPath: "/vault/.skillwiki/agent-memory-trends/latest-run.json",
+          },
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    expect(capturedState).toMatchObject({
+      status: "failure",
+      failureClass: "agent",
+      synthesis: {
+        primaryBackend: "codex",
+        primaryAttempts: 1,
+        fallbackInvoked: true,
+        resultBackend: null,
+        failureCode: "SYNTHESIS_FALLBACK_FAILED",
+        primaryErrorCode: "CODEX_RUN_FAILED",
+        fallbackErrorCode: "CLAUDE_RUN_FAILED",
+      },
+    });
   });
 
   it("wires live daily through publish without rewriting run-state after the publish commit", async () => {
@@ -1268,6 +1354,19 @@ describe("agent-memory-trends CLI", () => {
             stdout: "",
             stderr: "",
             output: { proposals: [] },
+            synthesis: {
+              invoked: true,
+              primaryBackend: "codex",
+              primaryAttempts: 1,
+              primaryFailed: false,
+              fallbackBackend: "claude",
+              fallbackAvailable: true,
+              fallbackInvoked: false,
+              resultBackend: "codex",
+              failureCode: null,
+              primaryErrorCode: null,
+              fallbackErrorCode: null,
+            },
           },
         };
       },
@@ -1323,6 +1422,14 @@ describe("agent-memory-trends CLI", () => {
     const manifest = JSON.parse(readFileSync(join(vault, manifestPath), "utf8"));
     const latest = JSON.parse(readFileSync(join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"), "utf8"));
     expect(manifest.outputs.latest_run_path).toBe(".skillwiki/agent-memory-trends/latest-run.json");
+    expect(manifest.synthesis).toMatchObject({
+      primary_backend: "codex",
+      primary_attempts: 1,
+      fallback_backend: "claude",
+      fallback_available: true,
+      fallback_invoked: false,
+      result_backend: "codex",
+    });
     expect(manifest.changed_files).toEqual([
       ".skillwiki/agent-memory-trends/2026-06-11-input.json",
       ".skillwiki/agent-memory-trends/2026-06-11-run.json",

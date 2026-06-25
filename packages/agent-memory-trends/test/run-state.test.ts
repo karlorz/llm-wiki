@@ -90,6 +90,45 @@ describe("agent-memory-trends run state and heartbeat", () => {
     expect(body.failure_class).toBe("push");
   });
 
+  it("writes synthesis backend telemetry when synthesis was invoked", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-state-"));
+    const result = writeRunState(
+      vault,
+      runState({
+        synthesis: {
+          invoked: true,
+          primaryBackend: "codex",
+          primaryAttempts: 2,
+          primaryFailed: true,
+          fallbackBackend: "claude",
+          fallbackAvailable: true,
+          fallbackInvoked: true,
+          resultBackend: "claude",
+          failureCode: null,
+          primaryErrorCode: "CODEX_RUN_FAILED",
+          fallbackErrorCode: null,
+        },
+      })
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected state write");
+    const body = JSON.parse(readFileSync(result.data.runStatePath, "utf8"));
+    expect(body.synthesis).toEqual({
+      invoked: true,
+      primary_backend: "codex",
+      primary_attempts: 2,
+      primary_failed: true,
+      fallback_backend: "claude",
+      fallback_available: true,
+      fallback_invoked: true,
+      result_backend: "claude",
+      failure_code: null,
+      primary_error_code: "CODEX_RUN_FAILED",
+      fallback_error_code: null,
+    });
+  });
+
   it("skips heartbeat when disabled, URL is missing, or push has not succeeded", async () => {
     const fetchCalls: string[] = [];
     const fetchFn: HeartbeatFetch = async (url) => {

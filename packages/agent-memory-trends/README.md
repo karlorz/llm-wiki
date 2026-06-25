@@ -67,12 +67,12 @@ TypeScript validates proposals all-or-zero before creating captures:
 
 ## Codex Invocation
 
-The Codex adapter is tested against `codex-cli 0.139.0`, where live search and
+The Codex adapter is tested against `codex-cli 0.142.0`, where live search and
 approval policy are top-level Codex flags. Keep them before the `exec`
 subcommand:
 
 ```bash
-codex --search --ask-for-approval never exec \
+codex --search --ask-for-approval never --disable hooks exec \
   --sandbox workspace-write \
   --cd "$AGENT_MEMORY_TRENDS_VAULT" \
   --add-dir "$AGENT_MEMORY_TRENDS_REPO" \
@@ -102,6 +102,12 @@ Claude fallback uses `claude --print --permission-mode bypassPermissions` with
 the same prompt and bounded input JSON on stdin. Fallback is attempted only when
 `claude` is executable on the service `PATH`; otherwise Codex retry exhaustion
 returns the primary runner failure.
+
+When synthesis is invoked, run state includes a `synthesis` telemetry block with
+the selected primary backend, primary attempt count, fallback
+availability/invocation, result backend, and primary/fallback error codes.
+Generated/live operational manifests are stamped with the same block. Quiet
+duplicate-only runs do not include it because no synthesis backend was invoked.
 
 ## Runtime Host
 
@@ -215,6 +221,11 @@ agent-memory-trends doctor
 agent-memory-trends collect --dry-run
 agent-memory-trends daily --dry-run
 ```
+
+`daily --dry-run` still writes generated input and run-state files to the
+configured vault so the synthesis path can be inspected. For smoke checks that
+must not touch the real wiki, point `--vault` at a temporary vault checkout or
+scratch directory.
 
 Run generation-only mode when another orchestrator owns the transaction
 boundary. This mode writes generated trend outputs and the operational run

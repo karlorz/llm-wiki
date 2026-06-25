@@ -12,13 +12,14 @@ import { maybeSendHeartbeat } from "./heartbeat.js";
 import { buildAgentInput, writeAgentInput, type AgentInput, type AllowedOutputs } from "./input.js";
 import { materializeOperationalRunManifest, publishGeneratedChanges } from "./publish.js";
 import { materializePreviewRun } from "./preview.js";
+import type { SynthesisTelemetry } from "./synthesis.js";
 import {
   createClaudeSynthesisRunner,
   createCodexSynthesisRunner,
   createFallbackSynthesisRunner,
   resolveSynthesisRuntimeOptions,
 } from "./runner.js";
-import { writeRunState, type AgentMemoryTrendRunState, type HeartbeatState } from "./run-state.js";
+import { synthesisTelemetryToWire, writeRunState, type AgentMemoryTrendRunState, type HeartbeatState } from "./run-state.js";
 import {
   err,
   ok,
@@ -938,8 +939,16 @@ async function runDaily(
     ? await context.runSynthesis(synthesisInput)
     : await createDefaultSynthesisRunner(options, context)(synthesisInput);
   if (!synthesis.ok) {
-    writeFailureState(collected.data.options, context, startedAt, "agent");
+    writeFailureState(collected.data.options, context, startedAt, "agent", synthesisTelemetryFromResult(synthesis));
     return err("AGENT_FAILED", synthesis.detail ?? synthesis.error);
+  }
+  const synthesisTelemetry = synthesis.data.synthesis;
+  const stamped = dryRun
+    ? ok({ stamped: false })
+    : stampSynthesisTelemetry(collected.data.options.vault, collected.data.input.manifestPath, synthesisTelemetry);
+  if (!stamped.ok) {
+    writeFailureState(collected.data.options, context, startedAt, "validation", synthesisTelemetry);
+    return stamped;
   }
 
   let changedFiles: string[] = [];
@@ -961,7 +970,7 @@ async function runDaily(
       },
     });
     if (!rendered.ok) {
-      writeFailureState(collected.data.options, context, startedAt, "validation");
+      writeFailureState(collected.data.options, context, startedAt, "validation", synthesisTelemetry);
       return rendered;
     }
 
@@ -974,7 +983,7 @@ async function runDaily(
         project: collected.data.options.project,
       });
       if (!refreshResult.ok) {
-        writeFailureState(collected.data.options, context, startedAt, "validation");
+        writeFailureState(collected.data.options, context, startedAt, "validation", synthesisTelemetry);
         return refreshResult;
       }
       refreshed = refreshResult.data;
@@ -992,7 +1001,7 @@ async function runDaily(
         ],
       });
       if (!materialized.ok) {
-        writeFailureState(collected.data.options, context, startedAt, "validation");
+        writeFailureState(collected.data.options, context, startedAt, "validation", synthesisTelemetry);
         return materialized;
       }
       changedFiles = materialized.data.changedFiles;
@@ -1005,7 +1014,7 @@ async function runDaily(
 
     const published = await runPublish(options, context, false);
     if (!published.ok) {
-      writeFailureState(collected.data.options, context, startedAt, classifyFailure(published.error));
+      writeFailureState(collected.data.options, context, startedAt, classifyFailure(published.error), synthesisTelemetry);
       return published;
     }
     changedFiles = published.data.mutations;
@@ -1026,6 +1035,7 @@ async function runDaily(
       changedFiles,
       failureClass: null,
       heartbeat,
+      synthesis: synthesisTelemetry,
     });
     if (!stateResult.ok) return stateResult;
     mutations.push(stateResult.data.runStatePath, stateResult.data.latestRunPath);
@@ -1394,6 +1404,9 @@ function createDefaultSynthesisRunner(options: ParsedCliOptions, context: AgentM
     primary,
     fallback,
     primaryRetries: runtime.primaryRetries,
+    primaryBackend: "codex",
+    fallbackBackend: runtime.fallback === "claude" ? "claude" : null,
+    fallbackAvailable: Boolean(fallback),
   });
 }
 
@@ -1458,7 +1471,8 @@ function writeFailureState(
   options: ResolvedRunOptions,
   context: AgentMemoryTrendsContext,
   startedAt: string,
-  failureClass: AgentMemoryTrendRunState["failureClass"]
+  failureClass: AgentMemoryTrendRunState["failureClass"],
+  synthesis?: SynthesisTelemetry
 ): void {
   const state = context.writeRunState ?? writeRunState;
   state(options.vault, {
@@ -1472,7 +1486,54 @@ function writeFailureState(
     changedFiles: [],
     failureClass,
     heartbeat: { status: "skipped", reason: `${failureClass ?? "unknown"} failed` },
+    synthesis,
   });
+}
+
+function stampSynthesisTelemetry(
+  vault: string,
+  manifestPath: string,
+  synthesis: SynthesisTelemetry | undefined
+): Result<{ stamped: boolean }> {
+  if (!synthesis) return ok({ stamped: false });
+  const path = join(vault, manifestPath);
+  if (!existsSync(path)) return ok({ stamped: false });
+
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (!isRecord(parsed)) return err("MANIFEST_INVALID", "run manifest must be an object");
+    parsed.synthesis = synthesisTelemetryToWire(synthesis);
+    writeFileSync(path, JSON.stringify(parsed, null, 2) + "\n", "utf8");
+    return ok({ stamped: true });
+  } catch (error) {
+    return err("MANIFEST_INVALID", error instanceof Error ? error.message : String(error));
+  }
+}
+
+function synthesisTelemetryFromResult(result: Result<{ synthesis?: SynthesisTelemetry }>): SynthesisTelemetry | undefined {
+  if (result.ok) return result.data.synthesis;
+  const detail = result.detail;
+  if (!isRecord(detail)) return undefined;
+  const synthesis = detail.synthesis;
+  return isSynthesisTelemetry(synthesis) ? synthesis : undefined;
+}
+
+function isSynthesisTelemetry(value: unknown): value is SynthesisTelemetry {
+  return (
+    isRecord(value) &&
+    typeof value.invoked === "boolean" &&
+    (value.primaryBackend === "codex" || value.primaryBackend === "claude") &&
+    typeof value.primaryAttempts === "number" &&
+    typeof value.primaryFailed === "boolean" &&
+    (value.fallbackBackend === null || value.fallbackBackend === "codex" || value.fallbackBackend === "claude") &&
+    typeof value.fallbackAvailable === "boolean" &&
+    typeof value.fallbackInvoked === "boolean" &&
+    (value.resultBackend === null || value.resultBackend === "codex" || value.resultBackend === "claude")
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function classifyFailure(error: string): AgentMemoryTrendRunState["failureClass"] {

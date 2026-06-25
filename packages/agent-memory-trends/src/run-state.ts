@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { SynthesisTelemetry } from "./synthesis.js";
 import { err, ok, type Result } from "./types.js";
 
 export const FAILURE_CLASSES = [
@@ -44,6 +45,7 @@ export interface AgentMemoryTrendRunState {
   changedFiles: string[];
   failureClass: FailureClass | null;
   heartbeat: HeartbeatState;
+  synthesis?: SynthesisTelemetry;
 }
 
 export interface WriteRunStateOutput {
@@ -71,7 +73,7 @@ export function writeRunState(vault: string, state: AgentMemoryTrendRunState): R
 }
 
 function toWireRunState(state: AgentMemoryTrendRunState): Record<string, unknown> {
-  return {
+  const wire: Record<string, unknown> = {
     run_date: state.runDate,
     run_id: state.runId,
     status: state.status,
@@ -82,6 +84,24 @@ function toWireRunState(state: AgentMemoryTrendRunState): Record<string, unknown
     changed_files: state.changedFiles,
     failure_class: state.failureClass,
     heartbeat: toWireHeartbeat(state.heartbeat),
+  };
+  if (state.synthesis) wire.synthesis = synthesisTelemetryToWire(state.synthesis);
+  return wire;
+}
+
+export function synthesisTelemetryToWire(synthesis: SynthesisTelemetry): Record<string, unknown> {
+  return {
+    invoked: synthesis.invoked,
+    primary_backend: synthesis.primaryBackend,
+    primary_attempts: synthesis.primaryAttempts,
+    primary_failed: synthesis.primaryFailed,
+    fallback_backend: synthesis.fallbackBackend,
+    fallback_available: synthesis.fallbackAvailable,
+    fallback_invoked: synthesis.fallbackInvoked,
+    result_backend: synthesis.resultBackend,
+    failure_code: synthesis.failureCode,
+    primary_error_code: synthesis.primaryErrorCode,
+    fallback_error_code: synthesis.fallbackErrorCode,
   };
 }
 
