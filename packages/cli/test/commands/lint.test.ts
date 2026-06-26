@@ -1284,6 +1284,28 @@ same body content here
       }
     });
 
+    it("does not traverse archive or unrelated lint buckets for cli_refs-only", async () => {
+      const v = vault();
+      mkdirSync(join(v, "_archive", "queries"), { recursive: true });
+      const secret = "Bearer " + "A".repeat(48);
+      writeFileSync(
+        join(v, "_archive", "queries", "archived-cli-ref.md"),
+        `Authorization: ${secret}\n\nArchived note: \`skillwiki frobnicate\`.\n`
+      );
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "cli_refs" });
+
+      expect(r.exitCode).toBe(0);
+      expect(r.result.ok).toBe(true);
+      if (r.result.ok) {
+        expect(r.result.data.summary.errors).toBe(0);
+        expect(r.result.data.summary.warnings).toBe(0);
+        expect(r.result.data.summary.info).toBe(0);
+        expect(JSON.stringify(r.result.data)).not.toContain("_archive");
+        expect(JSON.stringify(r.result.data)).not.toContain("sensitive_content");
+      }
+    });
+
     it("still reports cli_refs violations in typed knowledge pages", async () => {
       const v = vault();
       writeFileSync(

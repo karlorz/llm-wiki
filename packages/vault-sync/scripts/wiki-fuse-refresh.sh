@@ -3,7 +3,8 @@
 #
 # Linux-focused helper that:
 #   1) audits active rclone mount --dir-cache-time
-#   2) optionally triggers `rclone rc vfs/refresh recursive=true dir=/`
+#   2) optionally forgets stale VFS directory cache entries
+#   3) optionally triggers `rclone rc vfs/refresh recursive=true dir=/`
 #
 # Intended to run under systemd timer (wiki-fuse-refresh.timer) and manually via
 # the vault-fuse-freshness skill.
@@ -187,6 +188,12 @@ DRY_RUN=0
 CHECK_ONLY=0
 MAX_DIR_CACHE_RAW="${VS_FUSE_MAX_DIR_CACHE:-15m}"
 RC_ADDR_OVERRIDE="${VS_FUSE_RC_ADDR:-}"
+RC_TIMEOUT_SECONDS="${VS_FUSE_RC_TIMEOUT_SECONDS:-60}"
+FORGET_DIRS=()
+
+if [ -n "${VS_FUSE_FORGET_DIRS:-}" ]; then
+  read -r -a FORGET_DIRS <<< "$VS_FUSE_FORGET_DIRS"
+fi
 
 usage() {
   cat <<USAGE
@@ -197,6 +204,7 @@ Options:
   --check-only             Audit dir-cache-time only (no rc refresh)
   --max-dir-cache <dur>    Freshness threshold (default: 15m)
   --rc-addr <host:port>    Override rc endpoint (default: from mount flags, else 127.0.0.1:5572)
+  --forget-dir <path>      Forget a VFS directory cache path before refresh (repeatable)
   --help                   Show this help
 
 Environment overrides:
@@ -204,6 +212,8 @@ Environment overrides:
   VS_FUSE_CHECK_ONLY=1|0
   VS_FUSE_MAX_DIR_CACHE=<duration>
   VS_FUSE_RC_ADDR=<host:port>
+  VS_FUSE_RC_TIMEOUT_SECONDS=<seconds>
+  VS_FUSE_FORGET_DIRS="<path> [path...]"
 USAGE
 }
 
@@ -234,6 +244,11 @@ while [ "$#" -gt 0 ]; do
       RC_ADDR_OVERRIDE="$2"
       shift 2
       ;;
+    --forget-dir)
+      [ "$#" -ge 2 ] || { print "FATAL: --forget-dir requires a value"; exit 2; }
+      FORGET_DIRS+=("$2")
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -254,6 +269,13 @@ if ! command -v rclone >/dev/null 2>&1; then
   print "WARN: rclone not found in PATH"
   exit 0
 fi
+
+case "$RC_TIMEOUT_SECONDS" in
+  ''|*[!0-9]*)
+    print "FATAL: VS_FUSE_RC_TIMEOUT_SECONDS must be an integer number of seconds"
+    exit 2
+    ;;
+esac
 
 MAX_DIR_CACHE_SECONDS="$(duration_to_seconds "$MAX_DIR_CACHE_RAW" 2>/dev/null || true)"
 if [ -z "$MAX_DIR_CACHE_SECONDS" ]; then
@@ -316,26 +338,59 @@ esac
 
 REMOTE="$(extract_mount_remote "$RCLONE_PID" 2>/dev/null || true)"
 
+if ! command -v timeout >/dev/null 2>&1; then
+  print "WARN: timeout not found in PATH; cannot run bounded rclone rc operations"
+  [ "$DIR_CACHE_STATUS" -eq 0 ] && exit 1 || exit 1
+fi
+
+run_rclone_rc() {
+  timeout "$RC_TIMEOUT_SECONDS" rclone rc --url "$RC_URL" "$@" 2>&1
+}
+
 if [ "$DRY_RUN" -eq 1 ]; then
+  for forget_dir in "${FORGET_DIRS[@]}"; do
+    if [ -n "$REMOTE" ]; then
+      print "[dry-run] timeout $RC_TIMEOUT_SECONDS rclone rc --url $RC_URL vfs/forget dir=$forget_dir fs=$REMOTE"
+    else
+      print "[dry-run] timeout $RC_TIMEOUT_SECONDS rclone rc --url $RC_URL vfs/forget dir=$forget_dir"
+    fi
+  done
   if [ -n "$REMOTE" ]; then
-    print "[dry-run] rclone rc --url $RC_URL vfs/refresh recursive=true dir=/ fs=$REMOTE"
+    print "[dry-run] timeout $RC_TIMEOUT_SECONDS rclone rc --url $RC_URL vfs/refresh recursive=true dir=/ fs=$REMOTE"
   else
-    print "[dry-run] rclone rc --url $RC_URL vfs/refresh recursive=true dir=/"
+    print "[dry-run] timeout $RC_TIMEOUT_SECONDS rclone rc --url $RC_URL vfs/refresh recursive=true dir=/"
   fi
   [ "$DIR_CACHE_STATUS" -eq 0 ] && exit 0 || exit 1
 fi
 
+for forget_dir in "${FORGET_DIRS[@]}"; do
+  if [ -n "$REMOTE" ]; then
+    RC_OUT="$(run_rclone_rc vfs/forget "dir=$forget_dir" "fs=$REMOTE")"
+  else
+    RC_OUT="$(run_rclone_rc vfs/forget "dir=$forget_dir")"
+  fi
+  RC_CODE=$?
+
+  if [ "$RC_CODE" -ne 0 ]; then
+    print "FAIL: vfs/forget dir=$forget_dir rc=$RC_CODE url=$RC_URL"
+    log "$RC_OUT"
+    [ "$DIR_CACHE_STATUS" -eq 0 ] && exit "$RC_CODE" || exit 1
+  fi
+
+  print "OK: vfs/forget dir=$forget_dir completed via $RC_URL"
+done
+
 if [ -n "$REMOTE" ]; then
-  RC_OUT="$(rclone rc --url "$RC_URL" vfs/refresh recursive=true dir=/ fs="$REMOTE" 2>&1)"
+  RC_OUT="$(run_rclone_rc vfs/refresh recursive=true dir=/ "fs=$REMOTE")"
 else
-  RC_OUT="$(rclone rc --url "$RC_URL" vfs/refresh recursive=true dir=/ 2>&1)"
+  RC_OUT="$(run_rclone_rc vfs/refresh recursive=true dir=/)"
 fi
 RC_CODE=$?
 
 if [ "$RC_CODE" -ne 0 ]; then
   if printf '%s\n' "$RC_OUT" | grep -qi 'file does not exist'; then
     print "WARN: root vfs/refresh with dir=/ failed; retrying without dir=/"
-    RC_OUT="$(rclone rc --url "$RC_URL" vfs/refresh recursive=true 2>&1)"
+    RC_OUT="$(run_rclone_rc vfs/refresh recursive=true)"
     RC_CODE=$?
   fi
 fi

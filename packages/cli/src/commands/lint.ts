@@ -1,8 +1,8 @@
-import { ok, ExitCode, type ExitCodeValue, type Result } from "@skillwiki/shared";
+import { ok, err, ExitCode, type ExitCodeValue, type Result } from "@skillwiki/shared";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { runLinks } from "./links.js";
 import { runTagAudit } from "./tag-audit.js";
 import { runIndexCheck } from "./index-check.js";
@@ -126,6 +126,7 @@ const ERROR_ORDER = ["sensitive_content", "broken_wikilinks", "invalid_frontmatt
 const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file_source_url", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram"] as const;
 const INFO_ORDER = ["bridges", "sparse_community", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
 const KNOWN_BUCKETS = [...ERROR_ORDER, ...WARNING_ORDER, ...INFO_ORDER] as const;
+const CLI_REFS_TYPED_DIRS = ["entities", "concepts", "comparisons", "queries", "meta"] as const;
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -202,6 +203,69 @@ export function summarizeLintOutput(output: LintOutput, examplesLimit = 3): Lint
   };
 }
 
+async function walkMarkdownFiles(absDir: string, vaultRoot: string): Promise<VaultPage[]> {
+  const entries = await readdir(absDir, { withFileTypes: true });
+  const pages: VaultPage[] = [];
+  for (const entry of entries) {
+    const absPath = join(absDir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === ".git" || entry.name === "node_modules") continue;
+      pages.push(...await walkMarkdownFiles(absPath, vaultRoot));
+    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      pages.push({ absPath, relPath: relative(vaultRoot, absPath).split(sep).join("/") });
+    }
+  }
+  return pages;
+}
+
+async function collectCliRefsPages(vault: string): Promise<Result<VaultPage[]>> {
+  if (!existsSync(join(vault, "SCHEMA.md"))) {
+    return err("VAULT_PATH_INVALID", { root: vault, reason: "SCHEMA.md missing" });
+  }
+
+  const pages: VaultPage[] = [];
+  for (const dir of CLI_REFS_TYPED_DIRS) {
+    const absDir = join(vault, dir);
+    if (!existsSync(absDir)) continue;
+    pages.push(...await walkMarkdownFiles(absDir, vault));
+  }
+  return ok(pages);
+}
+
+async function runCliRefsOnly(input: LintInput | LintSummaryInput): Promise<{ exitCode: number; result: Result<LintOutput | LintSummaryOutput> }> {
+  const pages = await collectCliRefsPages(input.vault);
+  if (!pages.ok) {
+    return { exitCode: ExitCode.VAULT_PATH_INVALID, result: pages };
+  }
+
+  const cliRefFlags: string[] = [];
+  const cliSurface = buildCliSurface();
+  for (const page of pages.data) {
+    const text = await readPage(page);
+    const violations = validateCliRefs(text, page.relPath, cliSurface);
+    for (const v of violations) {
+      cliRefFlags.push(`${v.page}: ${v.ref} (${v.reason})`);
+    }
+  }
+
+  const infoOut: Bucket[] = cliRefFlags.length > 0 ? [{ kind: "cli_refs", items: cliRefFlags }] : [];
+  const summary = { errors: 0, warnings: 0, info: cliRefFlags.length };
+  const exitCode = cliRefFlags.length > 0 ? ExitCode.LINT_HAS_WARNINGS : ExitCode.OK;
+  const output: LintOutput = {
+    vault: { path: input.vault, source: input.source ?? "resolved" },
+    summary,
+    by_severity: { error: [], warning: [], info: infoOut },
+    fixed: [],
+    unresolved: [],
+    humanHint: `--only cli_refs\n${cliRefFlags.length === 0 ? "0 violations" : `  cli_refs: ${cliRefFlags.length}`}`
+  };
+
+  return {
+    exitCode,
+    result: ok(input.summary ? summarizeLintOutput(output, input.examplesLimit) : output)
+  };
+}
+
 export function runLint(input: LintSummaryInput): Promise<{ exitCode: number; result: Result<LintSummaryOutput> }>;
 export function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }>;
 export async function runLint(input: LintInput | LintSummaryInput): Promise<{ exitCode: number; result: Result<LintOutput | LintSummaryOutput> }> {
@@ -210,6 +274,9 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
       exitCode: ExitCode.USAGE,
       result: { ok: false, error: "UNKNOWN_BUCKET", detail: `Unknown bucket "${input.only}". Valid: ${KNOWN_BUCKETS.join(", ")}` }
     };
+  }
+  if (input.only === "cli_refs") {
+    return runCliRefsOnly(input);
   }
 
   const shouldFix = (bucket: string): boolean => !!input.fix && (!input.only || input.only === bucket);
