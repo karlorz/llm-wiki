@@ -30,6 +30,7 @@ fi
 SSH_TARGET="${SSH_USER}@${SSH_HOST}"
 REMOTE_CLI="skillwiki"
 CLAUDE_E2E_MODEL="${CLAUDE_E2E_MODEL:-sonnet}"
+CLI_REFS_GUARD_VAULT_PATH="${READONLY_GUARD_VAULT_PATH:-$VAULT_PATH}"
 
 # Read expected version from package.json (no manual updates needed)
 EXPECTED_VERSION=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
@@ -44,7 +45,7 @@ EXPECTED_CODEX_SKILLS=$(find -L "$REPO_ROOT/packages/codex-skills/skills" -maxde
 EXPECTED_DISC=$(ls "$REPO_ROOT/packages/skills" | grep -cE '^(wiki-|proj-)')
 
 assert_cli_refs_guard() {
-  run_cli ssh "$SSH_TARGET" "$REMOTE_CLI lint '$VAULT_PATH' --only cli_refs"
+  run_cli ssh "$SSH_TARGET" "$REMOTE_CLI lint '$CLI_REFS_GUARD_VAULT_PATH' --only cli_refs"
   if [ "$RUN_RC" -eq 0 ]; then
     assert_exit 0 "$RUN_RC" "canonical vault has zero typed-knowledge cli_refs"
     assert_json_contains "$RUN_OUTPUT" "data.summary.info" "0" "cli_refs summary info is zero"
@@ -81,7 +82,8 @@ process.stdin.on("end", () => {
 
 printf "=== Plugin E2E (%s on %s) ===\n" "$HOST_CLASS" "$SSH_HOST"
 printf "Mode    : %s\n" "$([ "$READONLY_VERIFY" = "true" ] && echo "read-only" || echo "full cycle")"
-printf "Host env: %s\n\n" "$HOST_ENV"
+printf "Host env: %s\n" "$HOST_ENV"
+printf "Guard   : %s\n\n" "$CLI_REFS_GUARD_VAULT_PATH"
 
 REMOTE_HOME=$(ssh "$SSH_TARGET" "printf '%s' \"\$HOME\"")
 PLUGIN_CACHE_ROOT="$REMOTE_HOME/.claude/plugins/cache/llm-wiki/skillwiki"

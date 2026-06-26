@@ -25,6 +25,7 @@ HOST_ENV=scripts/hosts/sg02.env bash scripts/e2e-plugin.sh   # full branch only 
 | `RCLONE_REQUIRED` | `true` \| `false` — whether rclone must be present on the host |
 | `SCHEDULER` | `launchd` \| `systemd` \| `none` |
 | `VAULT_PATH` | Absolute path to the vault on the host |
+| `READONLY_GUARD_VAULT_PATH` | Optional absolute path used by read-only canonical vault guards when `VAULT_PATH` is a live mount but validation should run against a local snapshot checkout |
 | `EXPECTED_VERSION_SOURCE` | Always `package.json` (read from repo root) |
 
 ## Validation rules
