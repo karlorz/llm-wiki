@@ -74,16 +74,21 @@ snapshot_direct_s3_preflight() {
         return 0
     fi
 
-    grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" | LC_ALL=C sort -u > "$direct_notes" || true
+    grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|\.playwright-cli/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" | LC_ALL=C sort -u > "$direct_notes" || true
     (
         cd "$SNAPSHOT_WORKTREE" || exit 1
-        git -c core.quotePath=false ls-files | LC_ALL=C sort -u
+        git fetch --quiet origin main 2>/dev/null || true
+        if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+            git -c core.quotePath=false ls-tree -r --name-only origin/main
+        else
+            git -c core.quotePath=false ls-files
+        fi | LC_ALL=C sort -u
     ) > "$git_paths" 2>/dev/null || {
         echo "[wiki-snapshot] WARN: direct-S3 preflight could not list tracked files in snapshot worktree $SNAPSHOT_WORKTREE"
         return 0
     }
 
-    comm -23 "$direct_notes" "$git_paths" > "$direct_not_git"
+    LC_ALL=C comm -23 "$direct_notes" "$git_paths" > "$direct_not_git"
     local count
     count="$(wc -l < "$direct_not_git" | tr -d ' ')"
     if [ "$count" != "0" ]; then
@@ -180,6 +185,36 @@ raw_dedup_guard() {
     return 0
 }
 
+refresh_git_baseline() {
+    (
+        cd "$SNAPSHOT_WORKTREE" || exit 1
+        git fetch --quiet origin main 2>/dev/null || exit 2
+
+        if [ -n "$(git status --porcelain)" ]; then
+            exit 3
+        fi
+
+        if git merge-base --is-ancestor HEAD origin/main 2>/dev/null; then
+            if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+                git merge --ff-only origin/main >/dev/null
+                exit 4
+            fi
+            exit 0
+        fi
+
+        exit 5
+    )
+    local rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        4) log "Git baseline fast-forwarded to origin/main before S3 sync"; return 0 ;;
+        2) log "WARNING: Could not fetch origin/main before S3 sync; continuing with existing refs"; return 0 ;;
+        3) log "WARNING: Snapshot worktree dirty before S3 sync; skipping baseline fast-forward"; return 0 ;;
+        5) log "WARNING: Snapshot worktree is not an ancestor of origin/main; repair step will handle it after S3 sync"; return 0 ;;
+        *) log "WARNING: Git baseline refresh failed rc=$rc; continuing"; return 0 ;;
+    esac
+}
+
 log "=== Wiki Snapshot: $DATE ==="
 
 # Check disk space (need at least 100MB free)
@@ -195,6 +230,8 @@ if [ ! -d "$SNAPSHOT_WORKTREE/.git" ]; then
     exit 1
 fi
 
+refresh_git_baseline
+
 # Common rclone options
 # NOTE: rclone sync already deletes by default; exclusions prevent .git deletion
 RCLONE_OPTS=(
@@ -203,6 +240,9 @@ RCLONE_OPTS=(
     --exclude ".obsidian/**"
     --exclude ".skillwiki/**"
     --exclude ".claude/**"
+    --exclude ".antigravitycli/**"
+    --exclude ".playwright-cli/**"
+    --exclude "._*"
     --exclude ".conflict*"
     --exclude "*.conflict-*"
     --checksum

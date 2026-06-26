@@ -610,6 +610,23 @@ describe("runDoctor", () => {
     }
   });
 
+  it("vault_git_behind warns when remote main moved but local refs are stale", async () => {
+    const h = home();
+    const { root, vault, remote } = fullVaultWithOrigin();
+    createRemoteCommit(root, remote);
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${vault}\n`);
+
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const behind = r.result.data.checks.find(c => c.id === "vault_git_behind");
+      expect(behind).toBeDefined();
+      expect(behind!.status).toBe("warn");
+      expect(behind!.detail).toContain("Remote main differs");
+    }
+  });
+
   it("vault_git_pull_failures warns when recent pull failures are logged", async () => {
     const h = home();
     const v = fullVault();
@@ -849,6 +866,13 @@ describe("runDoctor", () => {
     return logPath;
   }
 
+  function createVaultSyncSnapshotLog(home: string, lines: string[]): string {
+    const logDir = createVaultSyncLogDir(home);
+    const logPath = join(logDir, "wiki-snapshot.log");
+    writeFileSync(logPath, lines.join("\n") + "\n");
+    return logPath;
+  }
+
   describe("vault-sync checks", () => {
     it("all 6 vault-sync checks skip when vault_sync.installed is false", async () => {
       const h = home();
@@ -966,13 +990,16 @@ describe("runDoctor", () => {
       expect(guard!.detail).toContain("not found");
     });
 
-    it("snapshotter role uses configured snapshot script and skips leaf push checks", async () => {
+    it("snapshotter role uses configured snapshot script, reports snapshot status, and skips leaf-only checks", async () => {
       const h = home();
       const shareDir = createVaultSyncShareDir(h);
       const snapshotScript = join(shareDir, "wiki-snapshot.sh");
       writeFileSync(snapshotScript, "#!/usr/bin/env bash\n# --max-delete 10\n");
       mkdirSync(join(h, ".config", "systemd", "user"), { recursive: true });
       writeFileSync(join(h, ".config", "systemd", "user", "wiki-snapshot.timer"), "[Timer]\n");
+      createVaultSyncSnapshotLog(h, [
+        "2026-06-26 10:02:25 No changes to commit",
+      ]);
       vaultSyncConfig(h, true, "snapshotter", {
         snapshot_script: snapshotScript,
         service_scope: "user",
@@ -990,7 +1017,12 @@ describe("runDoctor", () => {
       expect(jobs?.status).toBe("pass");
       expect(jobs?.detail).toContain("wiki-snapshot.timer");
 
-      for (const id of ["vault_sync_last_push_age", "vault_sync_last_fetch_status", "vault_sync_filter_present"]) {
+      const snapshotStatus = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
+      expect(snapshotStatus?.status).toBe("pass");
+      expect(snapshotStatus?.label).toBe("Vault sync last snapshot status");
+      expect(snapshotStatus?.detail).toContain("No changes to commit");
+
+      for (const id of ["vault_sync_last_fetch_status", "vault_sync_filter_present"]) {
         const roleSkipped = r.result.data.checks.find(c => c.id === id);
         expect(roleSkipped?.status).toBe("pass");
         expect(roleSkipped?.detail).toContain("not applicable");
@@ -999,6 +1031,32 @@ describe("runDoctor", () => {
       const guard = r.result.data.checks.find(c => c.id === "vault_sync_snapshot_guard");
       expect(guard?.status).toBe("pass");
       expect(guard?.detail).toContain("--max-delete");
+    });
+
+    it("snapshotter role reports the latest snapshot log failure", async () => {
+      const h = home();
+      const shareDir = createVaultSyncShareDir(h);
+      const snapshotScript = join(shareDir, "wiki-snapshot.sh");
+      writeFileSync(snapshotScript, "#!/usr/bin/env bash\n# --max-delete 10\n");
+      mkdirSync(join(h, ".config", "systemd", "user"), { recursive: true });
+      writeFileSync(join(h, ".config", "systemd", "user", "wiki-snapshot.timer"), "[Timer]\n");
+      createVaultSyncSnapshotLog(h, [
+        "2026-06-26 14:02:03 === Wiki Snapshot: 20260626_140203 ===",
+        "2026-06-26 14:02:07 ERROR: direct-S3 preflight found note paths missing from Git; refusing live snapshot before rclone sync",
+      ]);
+      vaultSyncConfig(h, true, "snapshotter", {
+        snapshot_script: snapshotScript,
+        service_scope: "user",
+      });
+
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+
+      const snapshotStatus = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
+      expect(snapshotStatus?.status).toBe("error");
+      expect(snapshotStatus?.label).toBe("Vault sync last snapshot status");
+      expect(snapshotStatus?.detail).toContain("direct-S3 preflight");
     });
 
     it("snapshotter git checks use configured snapshot worktree when WIKI_PATH is a non-git mount", async () => {

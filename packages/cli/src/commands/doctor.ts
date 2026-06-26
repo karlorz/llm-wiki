@@ -525,6 +525,8 @@ function checkVaultGitAhead(resolvedPath: string | undefined): CheckResult {
 }
 
 function checkVaultGitBehind(resolvedPath: string | undefined): CheckResult {
+  const staleRemote = checkStaleRemoteMain(resolvedPath);
+  if (staleRemote) return staleRemote;
   return checkVaultGitComparison(
     resolvedPath,
     "vault_git_behind",
@@ -533,6 +535,46 @@ function checkVaultGitBehind(resolvedPath: string | undefined): CheckResult {
     "behind origin/main",
     "0 commits behind origin/main",
   );
+}
+
+function gitRefHash(resolvedPath: string, ref: string): string | undefined {
+  try {
+    const out = execSync(`git rev-parse --verify ${ref}`, {
+      cwd: resolvedPath,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 2000,
+    }).trim();
+    return out || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function remoteMainHash(resolvedPath: string): string | undefined {
+  try {
+    const out = execSync("git ls-remote origin refs/heads/main", {
+      cwd: resolvedPath,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 3000,
+    }).trim();
+    const hash = out.split(/\s+/)[0];
+    return /^[0-9a-f]{40}$/i.test(hash) ? hash : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function checkStaleRemoteMain(resolvedPath: string | undefined): CheckResult | undefined {
+  if (resolvedPath === undefined) return undefined;
+  if (!existsSync(join(resolvedPath, ".git"))) return undefined;
+  const localOrigin = gitRefHash(resolvedPath, "origin/main");
+  if (!localOrigin) return undefined;
+  const remoteMain = remoteMainHash(resolvedPath);
+  if (!remoteMain || remoteMain === localOrigin) return undefined;
+  return check("warn", "vault_git_behind", "Vault commits behind",
+    `Remote main differs from local origin/main (${remoteMain.slice(0, 8)} != ${localOrigin.slice(0, 8)}) — run git fetch before trusting behind count`);
 }
 
 function checkVaultGitComparison(
@@ -1074,6 +1116,34 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
     input.snapshotScriptPath ??
     (existsSync(packagedSnapshotPath) ? packagedSnapshotPath : legacySnapshotPath);
 
+  function snapshotLastStatusCheck(): CheckResult {
+    const snapshotLog = join(logDir, "wiki-snapshot.log");
+    try {
+      const logContent = readFileSync(snapshotLog, "utf8");
+      const lines = logContent.trim().split("\n").filter(Boolean);
+      if (lines.length === 0) {
+        return check("warn", "vault_sync_last_push_age", "Vault sync last snapshot status",
+          "Snapshot log file is empty");
+      }
+      const lastLine = [...lines].reverse().find(line =>
+        /ERROR|Status: complete|Push successful|No changes to commit/.test(line)
+      ) ?? lines[lines.length - 1];
+      if (/ERROR/.test(lastLine)) {
+        return check("error", "vault_sync_last_push_age", "Vault sync last snapshot status",
+          `Last snapshot failed: ${lastLine.slice(0, 160)}`);
+      }
+      if (/Status: complete|Push successful|No changes to commit/.test(lastLine)) {
+        return check("pass", "vault_sync_last_push_age", "Vault sync last snapshot status",
+          lastLine.slice(0, 160));
+      }
+      return check("warn", "vault_sync_last_push_age", "Vault sync last snapshot status",
+        `Last snapshot log entry: ${lastLine.slice(0, 160)}`);
+    } catch {
+      return check("warn", "vault_sync_last_push_age", "Vault sync last snapshot status",
+        `Snapshot log not found at ${snapshotLog}`);
+    }
+  }
+
   if (input.vaultSyncRole === "snapshotter") {
     const c1 = existsSync(snapshotPath)
       ? check("pass", "vault_sync_installed", "Vault sync installed", `Found snapshot script: ${snapshotPath}`)
@@ -1105,8 +1175,7 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
       }
     }
 
-    const c3 = check("pass", "vault_sync_last_push_age", "Vault sync last push recency",
-      "Snapshotter host — leaf wiki-push log not applicable");
+    const c3 = snapshotLastStatusCheck();
     const cFetch = check("pass", "vault_sync_last_fetch_status", "Vault sync last fetch status",
       "Snapshotter host — leaf wiki-fetch-notify log not applicable");
     const c4 = check("pass", "vault_sync_filter_present", "Vault sync filter file present",

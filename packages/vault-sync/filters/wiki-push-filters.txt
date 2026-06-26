@@ -14,6 +14,7 @@
 # Noise exclusions (regenerable / per-machine state):
 #   .obsidian/workspace.json                    → Obsidian window state
 #   .obsidian/plugins/*/main.js                 → plugin code (large, version-managed by Obsidian)
+#   .playwright-cli/                            → browser automation scratch/log state
 #   .pytest_cache/                              → Python test cache
 #   .snapshots/                                 → local snapshot metadata
 #
@@ -41,5 +42,6 @@
 - .skillwiki/memory-topics.json
 - .obsidian/workspace.json
 - .obsidian/plugins/*/main.js
+- .playwright-cli/
 - .pytest_cache/
 - .snapshots/
