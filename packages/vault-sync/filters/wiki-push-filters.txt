@@ -17,6 +17,7 @@
 #   .playwright-cli/                            → browser automation scratch/log state
 #   .pytest_cache/                              → Python test cache
 #   .snapshots/                                 → local snapshot metadata
+#   logs/                                       → local tool reports, not vault content
 #
 # Standard (mirrors bisync-filters.txt):
 - .git/
@@ -45,3 +46,4 @@
 - .playwright-cli/
 - .pytest_cache/
 - .snapshots/
+- logs/

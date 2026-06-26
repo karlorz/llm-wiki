@@ -94,6 +94,88 @@ STUB
 
 test_snapshot_dry_run_warns_on_direct_s3_note_not_in_git
 
+test_snapshot_preflight_refreshes_origin_main_ref_explicitly() {
+  local root
+  root="$(mktemp -d)"
+  local git_dir="$root/wiki-git"
+  local publisher="$root/publisher"
+  local bin_dir="$root/bin"
+  mkdir -p "$git_dir/raw/transcripts" "$bin_dir"
+  : > "$root/rclone.calls"
+
+  git -C "$root" init --bare origin.git >/dev/null
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" remote add origin "$root/origin.git"
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  printf '# Index\n' > "$git_dir/index.md"
+  git -C "$git_dir" add -A >/dev/null
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m init >/dev/null
+  git -C "$git_dir" push -u origin main >/dev/null
+  git -C "$git_dir" fetch origin main >/dev/null 2>&1
+
+  # Simulate a minimal or damaged snapshot checkout where a plain
+  # `git fetch origin main` updates FETCH_HEAD but not refs/remotes/origin/main.
+  git -C "$git_dir" config --unset-all remote.origin.fetch || true
+
+  git -C "$root" clone "$root/origin.git" "$publisher" >/dev/null 2>&1
+  git -C "$publisher" checkout main >/dev/null 2>&1
+  mkdir -p "$publisher/raw/transcripts"
+  printf 'new note\n' > "$publisher/raw/transcripts/new.md"
+  git -C "$publisher" add -A >/dev/null
+  git -C "$publisher" -c user.name=test -c user.email=test@test commit -m add-note >/dev/null
+  git -C "$publisher" push origin main >/dev/null
+
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "lsf" ]; then
+  printf 'SCHEMA.md\n'
+  printf 'index.md\n'
+  printf 'raw/transcripts/new.md\n'
+  exit 0
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/rclone"
+
+  local out_file="$root/out.txt"
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" --dry-run >"$out_file" 2>&1
+  local rc=$?
+
+  local origin_has_new="no"
+  if git -C "$git_dir" cat-file -e origin/main:raw/transcripts/new.md 2>/dev/null; then
+    origin_has_new="yes"
+  fi
+
+  if [ "$rc" -eq 0 ] \
+      && [ "$origin_has_new" = "yes" ] \
+      && ! grep -q 'direct-S3-not-git warning' "$out_file"; then
+    printf "PASS: snapshot preflight explicitly refreshes origin/main\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: snapshot preflight did not refresh origin/main (rc=%s origin_has_new=%s output=%s calls=%s)\n" \
+      "$rc" \
+      "$origin_has_new" \
+      "$(tr '\n' ' ' < "$out_file" 2>/dev/null)" \
+      "$(tr '\n' ';' < "$root/rclone.calls" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  rm -rf "$root"
+}
+
+test_snapshot_preflight_refreshes_origin_main_ref_explicitly
+
 test_snapshot_live_blocks_before_sync_on_direct_s3_note_not_in_git() {
   local root
   root="$(mktemp -d)"

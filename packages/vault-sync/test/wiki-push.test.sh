@@ -4,6 +4,7 @@
 set -u
 
 SCRIPT_UNDER_TEST="$(cd "$(dirname "$0")/.." && pwd)/scripts/wiki-push.sh"
+FILTER_UNDER_TEST="$(cd "$(dirname "$0")/.." && pwd)/filters/wiki-push-filters.txt"
 PASS=0
 FAIL=0
 
@@ -17,6 +18,19 @@ assert_eq() {
     FAIL=$((FAIL + 1))
   fi
 }
+
+assert_file_contains() {
+  local label="$1" file="$2" needle="$3"
+  if grep -Fq -- "$needle" "$file"; then
+    printf "PASS: %s\n" "$label"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: %s — missing '%s'\n" "$label" "$needle"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+assert_file_contains "push filter excludes local logs directory" "$FILTER_UNDER_TEST" "- logs/"
 
 git_commit() {
   local repo="$1" msg="$2"

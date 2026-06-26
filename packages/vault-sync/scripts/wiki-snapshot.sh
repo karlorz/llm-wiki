@@ -59,6 +59,12 @@ REPAIR_SCRIPT="${WIKI_GIT_REPAIR_SCRIPT:-$SCRIPT_DIR/wiki-git-repair-v3.sh}"
 DATE=$(date +%Y%m%d_%H%M%S)
 RCLONE_LOG="/tmp/rclone-${DATE}.log"
 
+fetch_origin_main_ref() {
+    # The snapshot guards read origin/main directly. Use an explicit destination
+    # refspec so a damaged/minimal remote.fetch config cannot leave it stale.
+    git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
+}
+
 snapshot_direct_s3_preflight() {
     local tmp_dir
     tmp_dir="$(mktemp -d)"
@@ -77,7 +83,7 @@ snapshot_direct_s3_preflight() {
     grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|\.playwright-cli/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" | LC_ALL=C sort -u > "$direct_notes" || true
     (
         cd "$SNAPSHOT_WORKTREE" || exit 1
-        git fetch --quiet origin main 2>/dev/null || true
+        fetch_origin_main_ref 2>/dev/null || true
         if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
             git -c core.quotePath=false ls-tree -r --name-only origin/main
         else
@@ -188,7 +194,7 @@ raw_dedup_guard() {
 refresh_git_baseline() {
     (
         cd "$SNAPSHOT_WORKTREE" || exit 1
-        git fetch --quiet origin main 2>/dev/null || exit 2
+        fetch_origin_main_ref 2>/dev/null || exit 2
 
         if [ -n "$(git status --porcelain)" ]; then
             exit 3
