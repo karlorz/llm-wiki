@@ -1,10 +1,10 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { git } from "./git.js";
+import { git, gitStrict } from "./git.js";
 import { readLastOp, clearLastOp } from "./last-op.js";
 import { parseDotenvFile } from "./dotenv.js";
 import { configPath } from "../commands/config.js";
-import { VAULT_COMMIT_PATHSPEC, VAULT_GENERATED_COMMIT_PATHS } from "./vault-git-pathspec.js";
+import { VAULT_COMMIT_PATHSPEC, stageVaultContentChanges } from "./vault-git-pathspec.js";
 
 /**
  * Auto-commit vault changes after a successful command.
@@ -32,16 +32,9 @@ export async function postCommit(vault: string, exitCode: number): Promise<void>
   const porcelain = git(vault, ["status", "--porcelain", "--", ...VAULT_COMMIT_PATHSPEC]);
   if (!porcelain || porcelain.trim().length === 0) return;
 
-  // Import gitStrict dynamically to avoid circular imports at module level
-  const { gitStrict } = await import("./git.js");
-
-  // Stage all changes, then unstage generated cache paths. Passing ignored
-  // generated paths as negative add pathspecs makes git fail in live vaults.
+  // Stage content changes while excluding generated cache paths.
   try {
-    gitStrict(vault, ["add", "-A", "--", "."]);
-    for (const generatedPath of VAULT_GENERATED_COMMIT_PATHS) {
-      try { gitStrict(vault, ["reset", "HEAD", "--", generatedPath]); } catch (_e: unknown) { /* file may not be staged */ }
-    }
+    stageVaultContentChanges(vault);
   } catch (e: unknown) {
     process.stderr.write(`auto-commit: git add failed: ${String(e)}\n`);
     return;

@@ -231,6 +231,31 @@ describe("runSyncPush", () => {
     expect(committedArticle).toBe("content");
   });
 
+  it("commits content changes when generated skillwiki paths are ignored", async () => {
+    const dir = makeTempDir();
+    git(dir, "init -b main");
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    writeFileSync(join(dir, ".gitignore"), ".skillwiki/memory/\n.skillwiki/memory-topics.json\n");
+    writeFileSync(join(dir, "initial.txt"), "init");
+    git(dir, "add .");
+    git(dir, "commit -m init");
+
+    mkdirSync(join(dir, ".skillwiki", "memory", "llm-wiki"), { recursive: true });
+    writeFileSync(join(dir, ".skillwiki", "memory", "llm-wiki", "topics.json"), "ignored-cache\n");
+    writeFileSync(join(dir, ".skillwiki", "memory-topics.json"), "ignored-topics\n");
+    mkdirSync(join(dir, "raw/articles"), { recursive: true });
+    writeFileSync(join(dir, "raw/articles/test.md"), "content");
+
+    const { exitCode } = await runSyncPush({ vault: dir });
+
+    expect(exitCode).toBe(ExitCode.SYNC_PUSH_FAILED); // no remote, but commit succeeds
+    const committedArticle = execSync("git show HEAD:raw/articles/test.md", { cwd: dir, encoding: "utf8" });
+    expect(committedArticle).toBe("content");
+    expect(() => execSync("git cat-file -e HEAD:.skillwiki/memory/llm-wiki/topics.json", { cwd: dir, stdio: "ignore" })).toThrow();
+    expect(() => execSync("git cat-file -e HEAD:.skillwiki/memory-topics.json", { cwd: dir, stdio: "ignore" })).toThrow();
+  });
+
   it("falls back to timestamp commit when no last-op", async () => {
     const dir = makeTempDir();
     git(dir, "init -b main");
