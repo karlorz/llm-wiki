@@ -830,6 +830,8 @@ memoryCmd
   .command("index [vault]")
   .description("build the derived project memory topic cache")
   .requiredOption("--project <slug>", "project slug")
+  .option("--check", "report whether the local project memory cache is missing or stale without writing", false)
+  .option("--if-stale", "rebuild the local project memory cache only when it is missing or stale", false)
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -837,7 +839,9 @@ memoryCmd
     else emit(await runMemoryIndex({
       vault: v.vault,
       project: opts.project,
-    }), v.vault);
+      check: !!opts.check,
+      ifStale: !!opts.ifStale,
+    }), v.vault, { postCommit: !opts.check });
   });
 
 memoryCmd
@@ -845,6 +849,7 @@ memoryCmd
   .description("recall bounded source summaries for a memory topic")
   .requiredOption("--project <slug>", "project slug")
   .requiredOption("--topic <slug>", "memory topic slug")
+  .option("--scope <scope>", "memory scope: project, global, cross-agent, or all")
   .option("--limit <n>", "maximum sources to return", (s) => parseInt(s, 10), 10)
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
@@ -854,6 +859,7 @@ memoryCmd
       vault: v.vault,
       project: opts.project,
       topic: opts.topic,
+      scope: opts.scope,
       limit: opts.limit,
     }), v.vault, { postCommit: false });
   });

@@ -53,9 +53,12 @@ describe("buildCliSurface", () => {
     expect(surface.get("memory.topics")!.has("--limit")).toBe(true);
     expect(surface.get("memory.topics")!.has("--wiki")).toBe(true);
     expect(surface.get("memory.index")!.has("--project")).toBe(true);
+    expect(surface.get("memory.index")!.has("--check")).toBe(true);
+    expect(surface.get("memory.index")!.has("--if-stale")).toBe(true);
     expect(surface.get("memory.index")!.has("--wiki")).toBe(true);
     expect(surface.get("memory.recall")!.has("--project")).toBe(true);
     expect(surface.get("memory.recall")!.has("--topic")).toBe(true);
+    expect(surface.get("memory.recall")!.has("--scope")).toBe(true);
     expect(surface.get("memory.recall")!.has("--limit")).toBe(true);
     expect(surface.get("memory.recall")!.has("--wiki")).toBe(true);
     expect(surface.get("memory.import")!.has("--from")).toBe(true);
@@ -188,7 +191,7 @@ describe("validateCliRefs", () => {
   });
 
   it("accepts memory index and recall command refs", () => {
-    const text = "Run `skillwiki memory index --project llm-wiki` then `skillwiki memory recall --project llm-wiki --topic session-brief --limit 5`.";
+    const text = "Run `skillwiki memory index --project llm-wiki --check`, `skillwiki memory index --project llm-wiki --if-stale`, then `skillwiki memory recall --project llm-wiki --topic session-brief --scope project --limit 5`.";
     expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
   });
 

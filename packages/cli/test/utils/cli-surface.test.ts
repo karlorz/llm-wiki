@@ -37,6 +37,9 @@ describe("buildCliSurface", () => {
     expect(surface.get("lint")!.has("--summary")).toBe(true);
     expect(surface.get("health")!.has("--no-fail")).toBe(true);
     expect(surface.get("health")!.has("--out")).toBe(true);
+    expect(surface.get("memory.index")!.has("--check")).toBe(true);
+    expect(surface.get("memory.index")!.has("--if-stale")).toBe(true);
+    expect(surface.get("memory.recall")!.has("--scope")).toBe(true);
   });
 
   it("subcommand flag sets inherit parent + root flags", () => {
