@@ -16,13 +16,18 @@ export interface MemoryTopicsInput {
 export interface MemoryIndexInput {
   vault: string;
   project: string;
+  check?: boolean;
+  ifStale?: boolean;
 }
+
+export type MemoryRecallScope = "project" | "global" | "cross-agent" | "all";
 
 export interface MemoryRecallInput {
   vault: string;
   project: string;
   topic: string;
   limit?: number;
+  scope?: MemoryRecallScope | string;
 }
 
 export interface MemoryImportInput {
@@ -66,9 +71,12 @@ export interface MemoryTopicsOutput {
 
 export interface MemoryIndexOutput {
   project: string;
-  generated_at: string;
+  generated_at?: string;
+  cache_present?: boolean;
+  stale?: boolean;
   topic_count: number;
   source_count: number;
+  drift?: MemoryIndexDrift;
   topics: MemoryTopic[];
   files_written: string[];
   warnings: string[];
@@ -78,8 +86,15 @@ export interface MemoryIndexOutput {
 export interface MemoryRecallOutput {
   project: string;
   topic: string;
+  scope?: MemoryRecallScope;
   sources: MemorySource[];
   humanHint: string;
+}
+
+export interface MemoryIndexDrift {
+  missing_sources: string[];
+  removed_sources: string[];
+  changed_sources: string[];
 }
 
 export type MemoryImportStatus = "ready" | "written" | "rejected";
@@ -178,17 +193,27 @@ export async function runMemoryIndex(
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  const warnings: string[] = [];
-  const sourcePages = dedupePages(scan.data.allMarkdown);
-  const sources: MemorySource[] = [];
+  const state = await buildMemoryIndexState(scan.data.allMarkdown, input.project);
+  let status: MemoryIndexStatus | undefined;
+  if (input.check || input.ifStale) {
+    const checked = await checkMemoryIndex(input.vault, input.project, state);
+    if (!checked.ok) return checked.error;
+    status = checked.data;
 
-  for (const page of sourcePages) {
-    const source = await readMemorySource(page, input.project, warnings);
-    if (source) sources.push(source);
+    if (input.check || !status.stale) {
+      return {
+        exitCode: ExitCode.OK,
+        result: ok({
+          ...status,
+          files_written: [],
+          warnings: state.warnings,
+          humanHint: renderMemoryIndexStatusHint(status),
+        }),
+      };
+    }
   }
 
   const generatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-  const topics = buildTopics(input.project, sources);
   const relCachePath = memoryCacheRelPath(input.project);
   const absCachePath = join(input.vault, relCachePath);
 
@@ -196,9 +221,9 @@ export async function runMemoryIndex(
   await writeFile(absCachePath, `${JSON.stringify({
     generated_at: generatedAt,
     project: input.project,
-    topics,
-    sources,
-    warnings,
+    topics: state.topics,
+    sources: state.sources,
+    warnings: state.warnings,
   }, null, 2)}\n`, "utf8");
 
   return {
@@ -206,12 +231,15 @@ export async function runMemoryIndex(
     result: ok({
       project: input.project,
       generated_at: generatedAt,
-      topic_count: topics.length,
-      source_count: sources.length,
-      topics,
+      cache_present: status?.cache_present ?? true,
+      stale: status?.stale ?? false,
+      drift: status?.drift ?? emptyMemoryIndexDrift(),
+      topic_count: state.topics.length,
+      source_count: state.sources.length,
+      topics: state.topics,
       files_written: [relCachePath],
-      warnings,
-      humanHint: `indexed ${sources.length} memory sources into ${topics.length} topics for ${input.project}`,
+      warnings: state.warnings,
+      humanHint: `indexed ${state.sources.length} memory sources into ${state.topics.length} topics for ${input.project}`,
     }),
   };
 }
@@ -222,6 +250,17 @@ export async function runMemoryRecall(
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
+  const scope = normalizeRecallScope(input.scope);
+  if (input.scope && !scope) {
+    return {
+      exitCode: ExitCode.WRITE_FAILED,
+      result: err("WRITE_FAILED", {
+        path: "memory recall --scope",
+        message: `invalid memory recall scope: ${String(input.scope)}`,
+      }),
+    };
+  }
+
   const cacheText = await readMemoryCache(input.vault, input.project);
   if (!cacheText) {
     return {
@@ -229,6 +268,7 @@ export async function runMemoryRecall(
       result: ok({
         project: input.project,
         topic: input.topic,
+        ...(scope ? { scope } : {}),
         sources: [],
         humanHint: `no memory topics cache found for project ${input.project}`,
       }),
@@ -252,7 +292,9 @@ export async function runMemoryRecall(
   const sources = normalizeSources(parsed.sources)
     .filter((source) => source.topics.includes(input.topic))
     .filter((source) => source.memory_privacy !== "secret-blocked")
-    .sort(compareSources)
+    .filter((source) => source.memory_status !== "archived" && source.memory_status !== "rejected")
+    .filter((source) => recallScopeMatches(source, input.project, scope))
+    .sort((a, b) => compareRecallSources(a, b, input.project, scope))
     .slice(0, limit);
 
   return {
@@ -260,6 +302,7 @@ export async function runMemoryRecall(
     result: ok({
       project: input.project,
       topic: input.topic,
+      ...(scope ? { scope } : {}),
       sources,
       humanHint: renderRecallHint(input.topic, sources),
     }),
@@ -329,6 +372,169 @@ export async function runMemoryImport(
         : `memory import dry-run: ${ready} ready, ${rejected} rejected`,
     }),
   };
+}
+
+interface MemoryIndexState {
+  topics: MemoryTopic[];
+  sources: MemorySource[];
+  warnings: string[];
+}
+
+interface MemoryIndexStatus extends MemoryIndexOutput {
+  cache_present: boolean;
+  stale: boolean;
+  drift: MemoryIndexDrift;
+  files_written: string[];
+  warnings: string[];
+}
+
+type MemoryIndexCheckResult =
+  | { ok: true; data: MemoryIndexStatus }
+  | { ok: false; error: { exitCode: number; result: Result<MemoryIndexOutput> } };
+
+async function buildMemoryIndexState(pages: VaultPage[], project: string): Promise<MemoryIndexState> {
+  const warnings: string[] = [];
+  const sourcePages = dedupePages(pages);
+  const sources: MemorySource[] = [];
+
+  for (const page of sourcePages) {
+    const source = await readMemorySource(page, project, warnings);
+    if (source) sources.push(source);
+  }
+
+  return {
+    sources,
+    topics: buildTopics(project, sources),
+    warnings,
+  };
+}
+
+async function checkMemoryIndex(
+  vault: string,
+  project: string,
+  current: MemoryIndexState
+): Promise<MemoryIndexCheckResult> {
+  const relCachePath = memoryCacheRelPath(project);
+  const cacheText = await readIfExists(join(vault, relCachePath));
+  if (!cacheText) {
+    return {
+      ok: true,
+      data: {
+        project,
+        cache_present: false,
+        stale: true,
+        topic_count: current.topics.length,
+        source_count: current.sources.length,
+        topics: current.topics,
+        drift: emptyMemoryIndexDrift(),
+        files_written: [],
+        warnings: current.warnings,
+        humanHint: "",
+      },
+    };
+  }
+
+  let parsed: MemoryTopicsCache;
+  try {
+    parsed = JSON.parse(cacheText) as MemoryTopicsCache;
+  } catch (e: unknown) {
+    return {
+      ok: false,
+      error: {
+        exitCode: ExitCode.WRITE_FAILED,
+        result: err("WRITE_FAILED", {
+          path: relCachePath,
+          message: `invalid memory topics cache: ${String(e)}`,
+        }),
+      },
+    };
+  }
+
+  const cachedSources = normalizeSources(parsed.sources);
+  const cachedTopics = normalizeTopics(parsed.topics);
+  const drift = compareMemorySources(current.sources, cachedSources);
+  const stale = drift.missing_sources.length > 0
+    || drift.removed_sources.length > 0
+    || drift.changed_sources.length > 0
+    || !sameStringSet(current.topics.map((topic) => topic.name), cachedTopics.map((topic) => topic.name));
+
+  return {
+    ok: true,
+    data: {
+      project,
+      generated_at: stringField(parsed.generated_at) || undefined,
+      cache_present: true,
+      stale,
+      topic_count: current.topics.length,
+      source_count: current.sources.length,
+      topics: current.topics,
+      drift,
+      files_written: [],
+      warnings: current.warnings,
+      humanHint: "",
+    },
+  };
+}
+
+function compareMemorySources(current: MemorySource[], cached: MemorySource[]): MemoryIndexDrift {
+  const currentByPath = new Map(current.map((source) => [source.path, source]));
+  const cachedByPath = new Map(cached.map((source) => [source.path, source]));
+  const missing_sources = current
+    .filter((source) => !cachedByPath.has(source.path))
+    .map((source) => source.path)
+    .sort((a, b) => a.localeCompare(b));
+  const removed_sources = cached
+    .filter((source) => !currentByPath.has(source.path))
+    .map((source) => source.path)
+    .sort((a, b) => a.localeCompare(b));
+  const changed_sources = current
+    .filter((source) => {
+      const cachedSource = cachedByPath.get(source.path);
+      return !!cachedSource && !sameMemorySource(source, cachedSource);
+    })
+    .map((source) => source.path)
+    .sort((a, b) => a.localeCompare(b));
+  return { missing_sources, removed_sources, changed_sources };
+}
+
+function sameMemorySource(a: MemorySource, b: MemorySource): boolean {
+  return a.hash === b.hash
+    && a.updated === b.updated
+    && (a.project ?? "") === (b.project ?? "")
+    && (a.memory_kind ?? "") === (b.memory_kind ?? "")
+    && (a.memory_scope ?? "") === (b.memory_scope ?? "")
+    && (a.memory_policy ?? "") === (b.memory_policy ?? "")
+    && a.memory_privacy === b.memory_privacy
+    && a.memory_status === b.memory_status
+    && sameStringSet(a.topics, b.topics);
+}
+
+function sameStringSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort((x, y) => x.localeCompare(y));
+  const right = [...b].sort((x, y) => x.localeCompare(y));
+  return left.every((value, index) => value === right[index]);
+}
+
+function emptyMemoryIndexDrift(): MemoryIndexDrift {
+  return {
+    missing_sources: [],
+    removed_sources: [],
+    changed_sources: [],
+  };
+}
+
+function renderMemoryIndexStatusHint(status: MemoryIndexStatus): string {
+  if (!status.cache_present) {
+    return `memory index cache missing for ${status.project}; rebuild with memory index --project ${status.project}`;
+  }
+  if (!status.stale) {
+    return `memory index cache current for ${status.project}: ${status.source_count} sources, ${status.topic_count} topics`;
+  }
+  const changed = status.drift.changed_sources.length;
+  const missing = status.drift.missing_sources.length;
+  const removed = status.drift.removed_sources.length;
+  return `memory index cache stale for ${status.project}: ${missing} missing, ${removed} removed, ${changed} changed sources`;
 }
 
 async function readIfExists(path: string): Promise<string> {
@@ -592,6 +798,38 @@ function compareTopics(a: MemoryTopic, b: MemoryTopic): number {
 
 function compareSources(a: MemorySource, b: MemorySource): number {
   return b.updated.localeCompare(a.updated) || a.path.localeCompare(b.path);
+}
+
+function normalizeRecallScope(value: string | undefined): MemoryRecallScope | undefined {
+  if (!value) return undefined;
+  return isRecallScope(value) ? value : undefined;
+}
+
+function isRecallScope(value: string): value is MemoryRecallScope {
+  return value === "project" || value === "global" || value === "cross-agent" || value === "all";
+}
+
+function recallScopeMatches(source: MemorySource, project: string, scope: MemoryRecallScope | undefined): boolean {
+  if (!scope || scope === "all") return true;
+  if (scope === "project") return isProjectMemorySource(source, project);
+  return source.memory_scope === scope;
+}
+
+function compareRecallSources(
+  a: MemorySource,
+  b: MemorySource,
+  project: string,
+  scope: MemoryRecallScope | undefined
+): number {
+  if (scope !== "all") return compareSources(a, b);
+  return b.updated.localeCompare(a.updated)
+    || Number(isProjectMemorySource(b, project)) - Number(isProjectMemorySource(a, project))
+    || a.path.localeCompare(b.path);
+}
+
+function isProjectMemorySource(source: MemorySource, project: string): boolean {
+  const scope = source.memory_scope || "project";
+  return scope === "project" && (!source.project || source.project === project);
 }
 
 function renderHumanHint(topics: MemoryTopic[]): string {

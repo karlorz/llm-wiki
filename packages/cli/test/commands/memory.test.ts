@@ -17,7 +17,14 @@ async function makeVault(): Promise<string> {
   return vault;
 }
 
-function writeMemoryConcept(vault: string, file: string, extraFrontmatter: string, body: string): void {
+function writeMemoryConcept(
+  vault: string,
+  file: string,
+  extraFrontmatter: string,
+  body: string,
+  options: { provenanceProjects?: string[] } = {}
+): void {
+  const provenanceProjects = options.provenanceProjects ?? ["[[llm-wiki]]"];
   writeFileSync(join(vault, "concepts", file), `---
 title: ${file.replace(/\.md$/, "")}
 created: 2026-06-19
@@ -27,7 +34,7 @@ tags: [memory]
 sources: [raw/transcripts/2026-06-19-memory-source.md]
 confidence: high
 provenance: project
-provenance_projects: ["[[llm-wiki]]"]
+provenance_projects: ${JSON.stringify(provenanceProjects)}
 ${extraFrontmatter.trimEnd()}
 ---
 
@@ -215,6 +222,224 @@ last_seen: 2026-06-17`, "Older session brief memory should sort after the curren
     expect(result.result.data.sources[0].path).toBe("concepts/session-brief-memory.md");
     expect(result.result.data.humanHint).toContain("concepts/session-brief-memory.md");
     expect(result.result.data.humanHint).not.toContain("older-session-brief-memory");
+  });
+
+  it("filters recall sources by explicit memory scope while preserving omitted-scope behavior", async () => {
+    const vault = await makeVault();
+    writeMemoryConcept(vault, "project-agent-memory.md", `memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_policy: operational
+memory_privacy: local
+memory_status: active
+last_seen: 2026-06-21`, "Project memory for the local llm-wiki workflow.");
+    writeMemoryConcept(vault, "global-agent-memory.md", `memory_kind: convention
+memory_topics: [agent-memory]
+memory_scope: global
+memory_policy: advisory
+memory_privacy: public
+memory_status: active
+last_seen: 2026-06-21`, "Global memory that is not tied to one project.", { provenanceProjects: [] });
+    writeMemoryConcept(vault, "cross-agent-memory.md", `memory_kind: handoff
+memory_topics: [agent-memory]
+memory_scope: cross-agent
+memory_policy: operational
+memory_privacy: local
+memory_status: active
+last_seen: 2026-06-21`, "Cross-agent memory shared between assistant surfaces.", { provenanceProjects: [] });
+    await runMemoryIndex({ vault, project: "llm-wiki" });
+
+    const omitted = await runMemoryRecall({ vault, project: "llm-wiki", topic: "agent-memory" });
+    const project = await runMemoryRecall({ vault, project: "llm-wiki", topic: "agent-memory", scope: "project" });
+    const global = await runMemoryRecall({ vault, project: "llm-wiki", topic: "agent-memory", scope: "global" });
+    const crossAgent = await runMemoryRecall({ vault, project: "llm-wiki", topic: "agent-memory", scope: "cross-agent" });
+    const all = await runMemoryRecall({ vault, project: "llm-wiki", topic: "agent-memory", scope: "all" });
+
+    for (const result of [omitted, project, global, crossAgent, all]) {
+      expect(result.exitCode).toBe(0);
+      expect(result.result.ok).toBe(true);
+    }
+    if (!omitted.result.ok || !project.result.ok || !global.result.ok || !crossAgent.result.ok || !all.result.ok) {
+      throw new Error("expected ok");
+    }
+
+    expect(omitted.result.data.scope).toBeUndefined();
+    expect(omitted.result.data.sources.map((source) => source.path).sort()).toEqual([
+      "concepts/cross-agent-memory.md",
+      "concepts/global-agent-memory.md",
+      "concepts/project-agent-memory.md",
+    ]);
+    expect(project.result.data.scope).toBe("project");
+    expect(project.result.data.sources.map((source) => source.path)).toEqual(["concepts/project-agent-memory.md"]);
+    expect(global.result.data.scope).toBe("global");
+    expect(global.result.data.sources.map((source) => source.path)).toEqual(["concepts/global-agent-memory.md"]);
+    expect(crossAgent.result.data.scope).toBe("cross-agent");
+    expect(crossAgent.result.data.sources.map((source) => source.path)).toEqual(["concepts/cross-agent-memory.md"]);
+    expect(all.result.data.scope).toBe("all");
+    expect(all.result.data.sources.map((source) => source.path)).toEqual([
+      "concepts/project-agent-memory.md",
+      "concepts/cross-agent-memory.md",
+      "concepts/global-agent-memory.md",
+    ]);
+    expect(all.result.data.sources[0]).toMatchObject({
+      project: "llm-wiki",
+      memory_scope: "project",
+      memory_policy: "operational",
+      memory_privacy: "local",
+      memory_status: "active",
+    });
+    expect(all.result.data.sources[0].hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("rejects invalid memory recall scopes with a Result error", async () => {
+    const vault = await makeVault();
+
+    const result = await runMemoryRecall({ vault, project: "llm-wiki", topic: "agent-memory", scope: "invalid" });
+
+    expect(result.exitCode).toBe(10);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected error");
+    expect(result.result.error).toBe("WRITE_FAILED");
+    expect(result.result.detail?.path).toBe("memory recall --scope");
+  });
+
+  it("reports missing memory index cache as advisory stale status without writing", async () => {
+    const vault = await makeVault();
+    writeMemoryConcept(vault, "missing-cache-memory.md", `memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_privacy: local
+memory_status: active`, "A source exists but the local cache has not been built.");
+
+    const result = await runMemoryIndex({ vault, project: "llm-wiki", check: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.cache_present).toBe(false);
+    expect(result.result.data.stale).toBe(true);
+    expect(result.result.data.source_count).toBe(1);
+    expect(result.result.data.topic_count).toBe(1);
+    expect(result.result.data.files_written).toEqual([]);
+    expect(existsSync(join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json"))).toBe(false);
+  });
+
+  it("reports a current memory index cache as not stale", async () => {
+    const vault = await makeVault();
+    writeMemoryConcept(vault, "current-cache-memory.md", `memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_privacy: local
+memory_status: active`, "The local cache should match this source.");
+    await runMemoryIndex({ vault, project: "llm-wiki" });
+
+    const result = await runMemoryIndex({ vault, project: "llm-wiki", check: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.cache_present).toBe(true);
+    expect(result.result.data.stale).toBe(false);
+    expect(result.result.data.drift).toEqual({
+      missing_sources: [],
+      removed_sources: [],
+      changed_sources: [],
+    });
+    expect(result.result.data.files_written).toEqual([]);
+  });
+
+  it("reports source hash drift without rewriting the cache", async () => {
+    const vault = await makeVault();
+    writeMemoryConcept(vault, "drift-cache-memory.md", `memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_privacy: local
+memory_status: active`, "The original memory body.");
+    await runMemoryIndex({ vault, project: "llm-wiki" });
+    const cachePath = join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json");
+    const before = readFileSync(cachePath, "utf8");
+    writeMemoryConcept(vault, "drift-cache-memory.md", `memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_privacy: local
+memory_status: active`, "The changed memory body.");
+
+    const result = await runMemoryIndex({ vault, project: "llm-wiki", check: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.stale).toBe(true);
+    expect(result.result.data.drift.changed_sources).toEqual(["concepts/drift-cache-memory.md"]);
+    expect(result.result.data.files_written).toEqual([]);
+    expect(readFileSync(cachePath, "utf8")).toBe(before);
+  });
+
+  it("ignores privacy-filtered sources while checking memory index freshness", async () => {
+    const vault = await makeVault();
+    writeMemoryConcept(vault, "public-cache-memory.md", `memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_privacy: local
+memory_status: active`, "This source should be indexed.");
+    writeMemoryConcept(vault, "secret-cache-memory.md", `memory_kind: warning
+memory_topics: [agent-memory]
+memory_scope: project
+memory_privacy: secret-blocked
+memory_status: active`, "This source should never make the cache stale.");
+    await runMemoryIndex({ vault, project: "llm-wiki" });
+
+    const result = await runMemoryIndex({ vault, project: "llm-wiki", check: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.source_count).toBe(1);
+    expect(result.result.data.stale).toBe(false);
+    expect(result.result.data.drift.missing_sources).toEqual([]);
+  });
+
+  it("rebuilds a memory index only when --if-stale sees missing or stale cache", async () => {
+    const vault = await makeVault();
+    writeMemoryConcept(vault, "if-stale-cache-memory.md", `memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_privacy: local
+memory_status: active`, "The cache starts missing and should be written once.");
+
+    const missing = await runMemoryIndex({ vault, project: "llm-wiki", ifStale: true });
+    expect(missing.exitCode).toBe(0);
+    expect(missing.result.ok).toBe(true);
+    if (!missing.result.ok) throw new Error("expected ok");
+    expect(missing.result.data.cache_present).toBe(false);
+    expect(missing.result.data.stale).toBe(true);
+    expect(missing.result.data.files_written).toEqual([".skillwiki/memory/llm-wiki/topics.json"]);
+
+    const cachePath = join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json");
+    const before = readFileSync(cachePath, "utf8");
+    const current = await runMemoryIndex({ vault, project: "llm-wiki", ifStale: true });
+
+    expect(current.exitCode).toBe(0);
+    expect(current.result.ok).toBe(true);
+    if (!current.result.ok) throw new Error("expected ok");
+    expect(current.result.data.cache_present).toBe(true);
+    expect(current.result.data.stale).toBe(false);
+    expect(current.result.data.files_written).toEqual([]);
+    expect(readFileSync(cachePath, "utf8")).toBe(before);
+  });
+
+  it("returns the existing invalid-cache error for memory index freshness checks", async () => {
+    const vault = await makeVault();
+    mkdirSync(join(vault, ".skillwiki", "memory", "llm-wiki"), { recursive: true });
+    writeFileSync(join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json"), "{bad json", "utf8");
+
+    const result = await runMemoryIndex({ vault, project: "llm-wiki", check: true });
+
+    expect(result.exitCode).toBe(10);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected error");
+    expect(result.result.error).toBe("WRITE_FAILED");
+    expect(result.result.detail?.path).toBe(".skillwiki/memory/llm-wiki/topics.json");
   });
 
   it("previews local memory imports without writing vault files", async () => {
