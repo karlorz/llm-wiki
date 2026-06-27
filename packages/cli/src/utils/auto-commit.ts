@@ -35,9 +35,10 @@ export async function postCommit(vault: string, exitCode: number): Promise<void>
   // Import gitStrict dynamically to avoid circular imports at module level
   const { gitStrict } = await import("./git.js");
 
-  // Stage all changes
+  // Stage all changes, then unstage generated cache paths. Passing ignored
+  // generated paths as negative add pathspecs makes git fail in live vaults.
   try {
-    gitStrict(vault, ["add", "-A", "--", ...VAULT_COMMIT_PATHSPEC]);
+    gitStrict(vault, ["add", "-A", "--", "."]);
     for (const generatedPath of VAULT_GENERATED_COMMIT_PATHS) {
       try { gitStrict(vault, ["reset", "HEAD", "--", generatedPath]); } catch (_e: unknown) { /* file may not be staged */ }
     }

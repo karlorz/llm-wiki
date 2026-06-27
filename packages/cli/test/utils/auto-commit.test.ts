@@ -135,6 +135,30 @@ describe("postCommit", () => {
     expect(log).toContain("ingest: added test");
   });
 
+  it("commits content changes when generated skillwiki paths are ignored", async () => {
+    const vault = initTestRepo();
+    makeDotenv("true");
+    process.env.HOME = join(TMP, "home");
+    writeFileSync(
+      join(vault, ".gitignore"),
+      ".skillwiki/last-op.json\n.skillwiki/memory/\n.skillwiki/memory-topics.json\n",
+    );
+    execFileSync("git", ["-C", vault, "add", ".gitignore"], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "commit", "-m", "ignore generated skillwiki paths"], { encoding: "utf8" });
+
+    writeFileSync(join(vault, "raw", "articles", "test.md"), "content");
+    appendLastOp(vault, { operation: "ingest", summary: "added test", files: ["raw/articles/test.md"], timestamp: new Date().toISOString() });
+
+    await postCommit(vault, 0);
+
+    const lastOpPath = join(vault, ".skillwiki", "last-op.json");
+    expect(existsSync(lastOpPath)).toBe(false);
+    const committedArticle = execFileSync("git", ["-C", vault, "show", "HEAD:raw/articles/test.md"], { encoding: "utf8" });
+    expect(committedArticle).toBe("content");
+    const log = execFileSync("git", ["-C", vault, "log", "-1", "--format=%s"], { encoding: "utf8" }).trim();
+    expect(log).toContain("ingest: added test");
+  });
+
   it("does not include dirty derived memory caches in auto-commits", async () => {
     const vault = initTestRepo();
     makeDotenv("true");
