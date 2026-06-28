@@ -30,6 +30,12 @@ export interface MemoryRecallInput {
   scope?: MemoryRecallScope | string;
 }
 
+export interface MemoryReviewInput {
+  vault: string;
+  project: string;
+  dryRun?: boolean;
+}
+
 export interface MemoryImportInput {
   vault: string;
   from: string;
@@ -88,6 +94,42 @@ export interface MemoryRecallOutput {
   topic: string;
   scope?: MemoryRecallScope;
   sources: MemorySource[];
+  humanHint: string;
+}
+
+export type MemoryReviewSeverity = "info" | "warn";
+
+export type MemoryReviewFindingKind =
+  | "cache_missing"
+  | "cache_stale"
+  | "source_hash_drift"
+  | "invalid_topic_slug"
+  | "metadata_gap"
+  | "sparse_topic"
+  | "scope_gap"
+  | "consolidation_candidate";
+
+export interface MemoryReviewFinding {
+  id: string;
+  severity: MemoryReviewSeverity;
+  kind: MemoryReviewFindingKind;
+  path?: string;
+  topic?: string;
+  message: string;
+  suggested_action: string;
+}
+
+export interface MemoryReviewOutput {
+  project: string;
+  generated_at: string;
+  cache: {
+    present: boolean;
+    generated_at?: string;
+    stale: boolean;
+    source_hash_mismatches: string[];
+  };
+  findings: MemoryReviewFinding[];
+  files_written: string[];
   humanHint: string;
 }
 
@@ -309,6 +351,47 @@ export async function runMemoryRecall(
   };
 }
 
+export async function runMemoryReview(
+  input: MemoryReviewInput
+): Promise<{ exitCode: number; result: Result<MemoryReviewOutput> }> {
+  const scan = await scanVault(input.vault);
+  if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
+
+  const state = await buildMemoryIndexState(scan.data.allMarkdown, input.project);
+  const checked = await checkMemoryIndex(input.vault, input.project, state);
+  if (!checked.ok) {
+    return {
+      exitCode: checked.error.exitCode,
+      result: checked.error.result as unknown as Result<MemoryReviewOutput>,
+    };
+  }
+
+  const findings = buildMemoryReviewFindings({
+    project: input.project,
+    status: checked.data,
+    indexState: state,
+    reviewPages: state.reviewPages,
+  });
+  const generatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+  return {
+    exitCode: ExitCode.OK,
+    result: ok({
+      project: input.project,
+      generated_at: generatedAt,
+      cache: {
+        present: checked.data.cache_present,
+        ...(checked.data.generated_at ? { generated_at: checked.data.generated_at } : {}),
+        stale: checked.data.stale,
+        source_hash_mismatches: checked.data.drift.changed_sources,
+      },
+      findings,
+      files_written: [],
+      humanHint: renderMemoryReviewHint(input.project, checked.data, findings),
+    }),
+  };
+}
+
 export async function runMemoryImport(
   input: MemoryImportInput
 ): Promise<{ exitCode: number; result: Result<MemoryImportOutput> }> {
@@ -378,6 +461,7 @@ interface MemoryIndexState {
   topics: MemoryTopic[];
   sources: MemorySource[];
   warnings: string[];
+  reviewPages: MemoryReviewPage[];
 }
 
 interface MemoryIndexStatus extends MemoryIndexOutput {
@@ -388,6 +472,11 @@ interface MemoryIndexStatus extends MemoryIndexOutput {
   warnings: string[];
 }
 
+interface MemoryReviewPage {
+  path: string;
+  metadataGaps: string[];
+}
+
 type MemoryIndexCheckResult =
   | { ok: true; data: MemoryIndexStatus }
   | { ok: false; error: { exitCode: number; result: Result<MemoryIndexOutput> } };
@@ -396,16 +485,20 @@ async function buildMemoryIndexState(pages: VaultPage[], project: string): Promi
   const warnings: string[] = [];
   const sourcePages = dedupePages(pages);
   const sources: MemorySource[] = [];
+  const reviewPages: MemoryReviewPage[] = [];
 
   for (const page of sourcePages) {
-    const source = await readMemorySource(page, project, warnings);
-    if (source) sources.push(source);
+    const memoryPage = await readMemoryPage(page, project, warnings);
+    if (!memoryPage) continue;
+    sources.push(memoryPage.source);
+    if (memoryPage.reviewPage) reviewPages.push(memoryPage.reviewPage);
   }
 
   return {
     sources,
     topics: buildTopics(project, sources),
     warnings,
+    reviewPages,
   };
 }
 
@@ -522,6 +615,214 @@ function emptyMemoryIndexDrift(): MemoryIndexDrift {
     removed_sources: [],
     changed_sources: [],
   };
+}
+
+async function readMemoryPage(
+  page: VaultPage,
+  project: string,
+  warnings: string[]
+): Promise<{ source: MemorySource; reviewPage?: MemoryReviewPage } | null> {
+  const text = await readPage(page);
+  const fm = extractFrontmatter(text);
+  if (!fm.ok) return null;
+
+  const rawTopics = typeof fm.data.memory_topics === "string"
+    ? [fm.data.memory_topics]
+    : stringArray(fm.data.memory_topics);
+  if (rawTopics.length === 0) return null;
+
+  const topics = normalizeMemoryTopics(fm.data.memory_topics, page.relPath, warnings);
+  if (topics.length === 0) return null;
+
+  const scope = stringField(fm.data.memory_scope);
+  const projects = memoryProjects(page.relPath, fm.data);
+  if (!projects.includes(project) && scope !== "global" && scope !== "cross-agent") return null;
+
+  const privacy = stringField(fm.data.memory_privacy) || "local";
+  if (privacy === "secret-blocked") {
+    warnings.push(`${page.relPath}: skipped secret-blocked memory`);
+    return null;
+  }
+
+  const status = stringField(fm.data.memory_status) || "active";
+  if (status === "archived" || status === "rejected") return null;
+
+  const metadataGaps: string[] = [];
+  if (!scope) metadataGaps.push("memory_scope");
+  if (!stringField(fm.data.memory_policy)) metadataGaps.push("memory_policy");
+  if (!stringField(fm.data.memory_privacy)) metadataGaps.push("memory_privacy");
+  if (!stringField(fm.data.memory_status)) metadataGaps.push("memory_status");
+  if (!stringField(fm.data.last_seen) && !stringField(fm.data.updated) && !stringField(fm.data.ingested)) {
+    metadataGaps.push("freshness");
+  }
+
+  const split = splitFrontmatter(text);
+  const body = split.ok ? split.data.body : text;
+  const updated = stringField(fm.data.last_seen) || stringField(fm.data.updated) || stringField(fm.data.ingested) || dateFromPath(page.relPath);
+  const title = stringField(fm.data.title) || page.relPath.split("/").pop()?.replace(/\.md$/, "") || page.relPath;
+
+  return {
+    source: {
+      path: page.relPath,
+      title,
+      summary: summarize(body),
+      updated,
+      hash: createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex"),
+      topics,
+      project,
+      ...(stringField(fm.data.memory_kind) ? { memory_kind: stringField(fm.data.memory_kind) } : {}),
+      ...(scope ? { memory_scope: scope } : {}),
+      ...(stringField(fm.data.memory_policy) ? { memory_policy: stringField(fm.data.memory_policy) } : {}),
+      memory_privacy: privacy,
+      memory_status: status,
+    },
+    ...(metadataGaps.length > 0
+      ? {
+          reviewPage: {
+            path: page.relPath,
+            metadataGaps,
+          },
+        }
+      : {}),
+  };
+}
+
+function buildMemoryReviewFindings(input: {
+  project: string;
+  status: MemoryIndexStatus;
+  indexState: MemoryIndexState;
+  reviewPages: MemoryReviewPage[];
+}): MemoryReviewFinding[] {
+  const findings: MemoryReviewFinding[] = [];
+
+  if (!input.status.cache_present) {
+    findings.push({
+      id: `cache_missing:${input.project}`,
+      severity: "warn",
+      kind: "cache_missing",
+      message: `memory cache for ${input.project} is missing`,
+      suggested_action: `Run skillwiki memory index --project ${input.project} to build the local cache.`,
+    });
+  } else if (input.status.stale) {
+    findings.push({
+      id: `cache_stale:${input.project}`,
+      severity: "warn",
+      kind: "cache_stale",
+      message: `memory cache for ${input.project} is stale: ${input.status.drift.missing_sources.length} missing, ${input.status.drift.removed_sources.length} removed, ${input.status.drift.changed_sources.length} changed source(s)`,
+      suggested_action: `Run skillwiki memory index --project ${input.project} or --if-stale to refresh the local cache.`,
+    });
+  }
+
+  for (const path of input.status.drift.changed_sources) {
+    findings.push({
+      id: `source_hash_drift:${path}`,
+      severity: "warn",
+      kind: "source_hash_drift",
+      path,
+      message: `${path} changed since the last cache build`,
+      suggested_action: `Refresh the cache for ${input.project} and review whether the source summary still matches.`,
+    });
+  }
+
+  for (const warning of input.indexState.warnings) {
+    const parsed = parseInvalidTopicWarning(warning);
+    if (!parsed) continue;
+    findings.push({
+      id: `invalid_topic_slug:${parsed.path}:${parsed.topic}`,
+      severity: "warn",
+      kind: "invalid_topic_slug",
+      path: parsed.path,
+      topic: parsed.topic,
+      message: `${parsed.path} declares invalid memory topic slug ${parsed.topic}`,
+      suggested_action: "Normalize the topic slug to lowercase kebab-case so memory index and review can include it.",
+    });
+  }
+
+  for (const page of input.reviewPages) {
+    if (page.metadataGaps.length === 0) continue;
+    findings.push({
+      id: `metadata_gap:${page.path}`,
+      severity: "warn",
+      kind: "metadata_gap",
+      path: page.path,
+      message: `${page.path} is missing explicit memory metadata: ${page.metadataGaps.join(", ")}`,
+      suggested_action: "Add the missing frontmatter fields before relying on this source for cross-device memory review.",
+    });
+  }
+
+  const byTopic = groupSourcesByTopic(input.indexState.sources);
+  for (const [topic, sources] of byTopic.entries()) {
+    if (sources.length === 1) {
+      findings.push({
+        id: `sparse_topic:${topic}`,
+        severity: "info",
+        kind: "sparse_topic",
+        topic,
+        ...(sources[0]?.path ? { path: sources[0].path } : {}),
+        message: `topic ${topic} has only one active memory source`,
+        suggested_action: "Decide whether the topic needs more coverage or should stay intentionally narrow.",
+      });
+    }
+
+    const hasProjectSource = sources.some((source) => isProjectMemorySource(source, input.project));
+    const hasNonProjectScope = sources.some((source) => source.memory_scope === "global" || source.memory_scope === "cross-agent");
+    if (hasProjectSource && hasNonProjectScope) {
+      findings.push({
+        id: `scope_gap:${topic}`,
+        severity: "info",
+        kind: "scope_gap",
+        topic,
+        message: `topic ${topic} mixes project and non-project memory scopes`,
+        suggested_action: `Use skillwiki memory recall --project ${input.project} --topic ${topic} --scope <project|global|cross-agent|all> when reviewing this topic.`,
+      });
+    }
+
+    if (sources.length >= 3) {
+      findings.push({
+        id: `consolidation_candidate:${topic}`,
+        severity: "info",
+        kind: "consolidation_candidate",
+        topic,
+        message: `topic ${topic} has ${sources.length} active memory sources and may be ready for consolidation`,
+        suggested_action: "Review this topic in office-hours or proj-distill before promoting or merging related memory pages.",
+      });
+    }
+  }
+
+  return findings.sort(compareMemoryReviewFindings);
+}
+
+function parseInvalidTopicWarning(warning: string): { path: string; topic: string } | null {
+  const match = warning.match(/^(.*): invalid memory topic slug (.+)$/);
+  if (!match) return null;
+  return {
+    path: match[1] ?? "",
+    topic: match[2] ?? "",
+  };
+}
+
+function groupSourcesByTopic(sources: MemorySource[]): Map<string, MemorySource[]> {
+  const byTopic = new Map<string, MemorySource[]>();
+  for (const source of sources) {
+    for (const topic of source.topics) {
+      const list = byTopic.get(topic) ?? [];
+      list.push(source);
+      byTopic.set(topic, list);
+    }
+  }
+  return byTopic;
+}
+
+function compareMemoryReviewFindings(a: MemoryReviewFinding, b: MemoryReviewFinding): number {
+  return severityRank(b.severity) - severityRank(a.severity)
+    || a.kind.localeCompare(b.kind)
+    || (a.topic ?? "").localeCompare(b.topic ?? "")
+    || (a.path ?? "").localeCompare(b.path ?? "")
+    || a.id.localeCompare(b.id);
+}
+
+function severityRank(severity: MemoryReviewSeverity): number {
+  return severity === "warn" ? 2 : 1;
 }
 
 function renderMemoryIndexStatusHint(status: MemoryIndexStatus): string {
@@ -805,6 +1106,10 @@ function normalizeRecallScope(value: string | undefined): MemoryRecallScope | un
   return isRecallScope(value) ? value : undefined;
 }
 
+function isValidMemoryTopicSlug(value: string): boolean {
+  return /^[a-z0-9][a-z0-9-]*$/.test(value);
+}
+
 function isRecallScope(value: string): value is MemoryRecallScope {
   return value === "project" || value === "global" || value === "cross-agent" || value === "all";
 }
@@ -849,6 +1154,21 @@ function renderRecallHint(topic: string, sources: MemorySource[]): string {
     .join("\n");
 }
 
+function renderMemoryReviewHint(
+  project: string,
+  status: MemoryIndexStatus,
+  findings: MemoryReviewFinding[]
+): string {
+  const warns = findings.filter((finding) => finding.severity === "warn").length;
+  const infos = findings.length - warns;
+  const cacheStatus = !status.cache_present
+    ? "cache missing"
+    : status.stale
+      ? "cache stale"
+      : "cache current";
+  return `memory review for ${project}: ${findings.length} finding(s) (${warns} warn, ${infos} info); ${cacheStatus}`;
+}
+
 function memoryCacheRelPath(project: string): string {
   return `.skillwiki/memory/${project}/topics.json`;
 }
@@ -872,56 +1192,11 @@ function dedupePages(pages: VaultPage[]): VaultPage[] {
   return out;
 }
 
-async function readMemorySource(
-  page: VaultPage,
-  project: string,
-  warnings: string[]
-): Promise<MemorySource | null> {
-  const text = await readPage(page);
-  const fm = extractFrontmatter(text);
-  if (!fm.ok) return null;
-  const topics = normalizeMemoryTopics(fm.data.memory_topics, page.relPath, warnings);
-  if (topics.length === 0) return null;
-
-  const projects = memoryProjects(page.relPath, fm.data);
-  const scope = stringField(fm.data.memory_scope);
-  if (!projects.includes(project) && scope !== "global" && scope !== "cross-agent") return null;
-
-  const privacy = stringField(fm.data.memory_privacy) || "local";
-  if (privacy === "secret-blocked") {
-    warnings.push(`${page.relPath}: skipped secret-blocked memory`);
-    return null;
-  }
-
-  const status = stringField(fm.data.memory_status) || "active";
-  if (status === "archived" || status === "rejected") return null;
-
-  const split = splitFrontmatter(text);
-  const body = split.ok ? split.data.body : text;
-  const updated = stringField(fm.data.last_seen) || stringField(fm.data.updated) || stringField(fm.data.ingested) || dateFromPath(page.relPath);
-  const title = stringField(fm.data.title) || page.relPath.split("/").pop()?.replace(/\.md$/, "") || page.relPath;
-
-  return {
-    path: page.relPath,
-    title,
-    summary: summarize(body),
-    updated,
-    hash: createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex"),
-    topics,
-    project,
-    ...(stringField(fm.data.memory_kind) ? { memory_kind: stringField(fm.data.memory_kind) } : {}),
-    ...(scope ? { memory_scope: scope } : {}),
-    ...(stringField(fm.data.memory_policy) ? { memory_policy: stringField(fm.data.memory_policy) } : {}),
-    memory_privacy: privacy,
-    memory_status: status,
-  };
-}
-
 function normalizeMemoryTopics(value: unknown, path: string, warnings: string[]): string[] {
   const rawTopics = typeof value === "string" ? [value] : stringArray(value);
   const topics: string[] = [];
   for (const topic of rawTopics) {
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(topic)) {
+    if (!isValidMemoryTopicSlug(topic)) {
       warnings.push(`${path}: invalid memory topic slug ${topic}`);
       continue;
     }

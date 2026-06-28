@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runMemoryImport, runMemoryIndex, runMemoryRecall, runMemoryTopics } from "../../src/commands/memory.js";
+import { runMemoryImport, runMemoryIndex, runMemoryRecall, runMemoryReview, runMemoryTopics } from "../../src/commands/memory.js";
 
 async function makeVault(): Promise<string> {
   const vault = await mkdtemp(join(tmpdir(), "memory-topics-vault-"));
@@ -300,7 +300,7 @@ last_seen: 2026-06-21`, "Cross-agent memory shared between assistant surfaces.",
     expect(result.result.ok).toBe(false);
     if (result.result.ok) throw new Error("expected error");
     expect(result.result.error).toBe("WRITE_FAILED");
-    expect(result.result.detail?.path).toBe("memory recall --scope");
+    expect(result.result.detail).toEqual(expect.objectContaining({ path: "memory recall --scope" }));
   });
 
   it("reports missing memory index cache as advisory stale status without writing", async () => {
@@ -370,7 +370,10 @@ memory_status: active`, "The changed memory body.");
     expect(result.result.ok).toBe(true);
     if (!result.result.ok) throw new Error("expected ok");
     expect(result.result.data.stale).toBe(true);
-    expect(result.result.data.drift.changed_sources).toEqual(["concepts/drift-cache-memory.md"]);
+    const drift = result.result.data.drift;
+    expect(drift).toBeDefined();
+    if (!drift) throw new Error("expected drift details");
+    expect(drift.changed_sources).toEqual(["concepts/drift-cache-memory.md"]);
     expect(result.result.data.files_written).toEqual([]);
     expect(readFileSync(cachePath, "utf8")).toBe(before);
   });
@@ -396,7 +399,10 @@ memory_status: active`, "This source should never make the cache stale.");
     if (!result.result.ok) throw new Error("expected ok");
     expect(result.result.data.source_count).toBe(1);
     expect(result.result.data.stale).toBe(false);
-    expect(result.result.data.drift.missing_sources).toEqual([]);
+    const drift = result.result.data.drift;
+    expect(drift).toBeDefined();
+    if (!drift) throw new Error("expected drift details");
+    expect(drift.missing_sources).toEqual([]);
   });
 
   it("rebuilds a memory index only when --if-stale sees missing or stale cache", async () => {
@@ -428,6 +434,99 @@ memory_status: active`, "The cache starts missing and should be written once.");
     expect(readFileSync(cachePath, "utf8")).toBe(before);
   });
 
+  it("reviews a missing cache and reports metadata gaps without writing", async () => {
+    const vault = await makeVault();
+    writeMemoryConcept(vault, "review-gap-memory.md", `memory_topics: [agent-memory]`, "This memory source omits explicit metadata.");
+
+    const result = await runMemoryReview({ vault, project: "llm-wiki", dryRun: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data!.cache.present).toBe(false);
+    expect(result.result.data!.cache.stale).toBe(true);
+    expect(result.result.data!.files_written).toEqual([]);
+    expect(result.result.data!.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "cache_missing" }),
+      expect.objectContaining({ kind: "metadata_gap", path: "concepts/review-gap-memory.md" }),
+      expect.objectContaining({ kind: "sparse_topic", topic: "agent-memory" }),
+    ]));
+    expect(existsSync(join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json"))).toBe(false);
+  });
+
+  it("reviews stale caches and reports source hash drift without rewriting the cache", async () => {
+    const vault = await makeVault();
+    writeMemoryConcept(vault, "review-drift-memory.md", `memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_policy: operational
+memory_privacy: local
+memory_status: active`, "The original review body.");
+    await runMemoryIndex({ vault, project: "llm-wiki" });
+    const cachePath = join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json");
+    const before = readFileSync(cachePath, "utf8");
+    writeMemoryConcept(vault, "review-drift-memory.md", `memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_policy: operational
+memory_privacy: local
+memory_status: active`, "The updated review body.");
+
+    const result = await runMemoryReview({ vault, project: "llm-wiki", dryRun: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data!.cache.present).toBe(true);
+    expect(result.result.data!.cache.stale).toBe(true);
+    expect(result.result.data!.cache.source_hash_mismatches).toEqual(["concepts/review-drift-memory.md"]);
+    expect(result.result.data!.files_written).toEqual([]);
+    expect(result.result.data!.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "cache_stale" }),
+      expect.objectContaining({ kind: "source_hash_drift", path: "concepts/review-drift-memory.md" }),
+    ]));
+    expect(readFileSync(cachePath, "utf8")).toBe(before);
+  });
+
+  it("reviews current caches for scope gaps and consolidation candidates", async () => {
+    const vault = await makeVault();
+    writeMemoryConcept(vault, "project-agent-memory.md", `memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_policy: operational
+memory_privacy: local
+memory_status: active
+last_seen: 2026-06-28`, "Project memory for the local workflow.");
+    writeMemoryConcept(vault, "global-agent-memory.md", `memory_kind: convention
+memory_topics: [agent-memory]
+memory_scope: global
+memory_policy: advisory
+memory_privacy: public
+memory_status: active
+last_seen: 2026-06-28`, "Global memory for the same topic.", { provenanceProjects: [] });
+    writeMemoryConcept(vault, "project-agent-memory-2.md", `memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_policy: operational
+memory_privacy: local
+memory_status: active
+last_seen: 2026-06-27`, "A second project-local source for the same topic.");
+    await runMemoryIndex({ vault, project: "llm-wiki" });
+
+    const result = await runMemoryReview({ vault, project: "llm-wiki", dryRun: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data!.cache.present).toBe(true);
+    expect(result.result.data!.cache.stale).toBe(false);
+    expect(result.result.data!.files_written).toEqual([]);
+    expect(result.result.data!.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "scope_gap", topic: "agent-memory" }),
+      expect.objectContaining({ kind: "consolidation_candidate", topic: "agent-memory" }),
+    ]));
+  });
+
   it("returns the existing invalid-cache error for memory index freshness checks", async () => {
     const vault = await makeVault();
     mkdirSync(join(vault, ".skillwiki", "memory", "llm-wiki"), { recursive: true });
@@ -439,7 +538,7 @@ memory_status: active`, "The cache starts missing and should be written once.");
     expect(result.result.ok).toBe(false);
     if (result.result.ok) throw new Error("expected error");
     expect(result.result.error).toBe("WRITE_FAILED");
-    expect(result.result.detail?.path).toBe(".skillwiki/memory/llm-wiki/topics.json");
+    expect(result.result.detail).toEqual(expect.objectContaining({ path: ".skillwiki/memory/llm-wiki/topics.json" }));
   });
 
   it("previews local memory imports without writing vault files", async () => {
@@ -468,7 +567,7 @@ memory_status: active`, "The cache starts missing and should be written once.");
     expect(result.result.ok).toBe(false);
     if (result.result.ok) throw new Error("expected error");
     expect(result.result.error).toBe("WRITE_FAILED");
-    expect(result.result.detail?.path).toBe(join(vault, "missing-memory"));
+    expect(result.result.detail).toEqual(expect.objectContaining({ path: join(vault, "missing-memory") }));
   });
 
   it("applies redacted imports as validated raw captures without leaking secrets", async () => {

@@ -199,4 +199,9 @@ describe("validateCliRefs", () => {
     const text = "Run `skillwiki memory import --from /tmp/memories --project llm-wiki --dry-run --max-bytes 10000`.";
     expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
   });
+
+  it("accepts memory review command refs", () => {
+    const text = "Run `skillwiki memory review --project llm-wiki --dry-run` to inspect deterministic memory gaps.";
+    expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
+  });
 });

@@ -39,7 +39,7 @@ import { runProjectIndex } from "./commands/project-index.js";
 import { runCompound, runCompoundList, runCompoundDelete } from "./commands/compound.js";
 import { runObserve } from "./commands/observe.js";
 import { runSessionBrief } from "./commands/session-brief.js";
-import { runMemoryImport, runMemoryIndex, runMemoryRecall, runMemoryTopics } from "./commands/memory.js";
+import { runMemoryImport, runMemoryIndex, runMemoryRecall, runMemoryReview, runMemoryTopics } from "./commands/memory.js";
 import { runIngest } from "./commands/ingest.js";
 import { runTagSync } from "./commands/tag-sync.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "./commands/sync.js";
@@ -861,6 +861,22 @@ memoryCmd
       topic: opts.topic,
       scope: opts.scope,
       limit: opts.limit,
+    }), v.vault, { postCommit: false });
+  });
+
+memoryCmd
+  .command("review [vault]")
+  .description("review deterministic memory gaps and cache drift without writing")
+  .requiredOption("--project <slug>", "project slug")
+  .option("--dry-run", "preview only; writes are not supported on this surface", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runMemoryReview({
+      vault: v.vault,
+      project: opts.project,
+      dryRun: !!opts.dryRun,
     }), v.vault, { postCommit: false });
   });
 

@@ -40,6 +40,7 @@ describe("buildCliSurface", () => {
     expect(surface.get("memory.index")!.has("--check")).toBe(true);
     expect(surface.get("memory.index")!.has("--if-stale")).toBe(true);
     expect(surface.get("memory.recall")!.has("--scope")).toBe(true);
+    expect(surface.get("memory.review")!.has("--dry-run")).toBe(true);
   });
 
   it("subcommand flag sets inherit parent + root flags", () => {
