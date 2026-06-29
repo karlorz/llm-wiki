@@ -2,7 +2,8 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultFleetPath, runStage1Maintenance, type MaintenanceMode } from "./orchestrator.js";
+import { defaultFleetPath, runStage1Maintenance } from "./orchestrator.js";
+import type { MaintenanceMode } from "./types.js";
 
 interface CliOptions {
   command: string;

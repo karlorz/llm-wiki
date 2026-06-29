@@ -4,11 +4,13 @@ import { resolveSessionKind } from "@skillwiki/shared";
 import { createCommandRunner } from "./command.js";
 import { parseMaintenanceConfig, type MaintenanceConfig } from "./config.js";
 import { runAgentMemoryTrendsDaily } from "./jobs/agent-memory-trends-daily.js";
+import { runHealthSummary } from "./jobs/health-summary.js";
 import { runSelfUpdateApply, runSelfUpdateCheck } from "./jobs/self-update-check.js";
 import { runSessionBriefRefresh } from "./jobs/session-brief-refresh.js";
 import { runVaultSyncPreflight } from "./jobs/vault-sync-preflight.js";
 import { acquireLock } from "./lock.js";
-import { err, ok, type CommandRunner, type JobCheck, type Result } from "./types.js";
+import { resolveWorkflowProfile } from "./profiles.js";
+import { err, ok, type CommandRunner, type JobCheck, type MaintenanceMode, type Result } from "./types.js";
 
 export interface RunMaintenanceInput {
   fleetPath: string;
@@ -35,13 +37,12 @@ export interface RunMaintenanceOutput {
   checks: JobCheck[];
 }
 
-export type MaintenanceMode = "full" | "daily" | "self-update" | "self-update-apply";
-
 export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<Result<RunMaintenanceOutput>> {
   const parsed = parseMaintenanceConfig(readFileSync(input.fleetPath, "utf8"), input.hostId, input.fleetPath);
   if (!parsed.ok) return parsed;
   const mode = input.mode ?? "full";
-  if (!["full", "daily", "self-update", "self-update-apply"].includes(mode)) return err("CONFIG_INVALID", `unsupported maintenance mode: ${mode}`);
+  const profile = resolveWorkflowProfile(parsed.data, mode);
+  if (!profile.ok) return profile;
 
   const emit = input.emit ?? (() => undefined);
   const lock = acquireLock(input.lockDir, { owner: `skillwiki-maintenance:${input.hostId}`, now: input.now });
@@ -58,11 +59,11 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
     ts: input.now.toISOString(),
     event: "start",
     host_id: input.hostId,
-    details: { stage: 2, mode, sessionKind: sessionKind.data },
+    details: { stage: 2, mode, profile: profile.data.id, sessionKind: sessionKind.data },
   });
 
   try {
-    if (mode === "self-update-apply") {
+    if (profile.data.runsSelfUpdateApply) {
       const preflight = await runVaultSyncPreflight({ vaultPath: parsed.data.vaultPath, runCommand });
       checks.push(preflight);
       emit({ ts: ts(), event: "job", host_id: input.hostId, job: preflight.job, status: preflight.status, reason: preflight.reason, details: preflight.details });
@@ -80,23 +81,23 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
       return ok({ config: parsed.data, checks });
     }
 
-    if (mode !== "daily") {
+    if (profile.data.runsSelfUpdateCheck) {
       const selfUpdate = await runSelfUpdateCheck({ repoPath: parsed.data.repoPath, runCommand });
       checks.push(selfUpdate);
       emit({ ts: ts(), event: "job", host_id: input.hostId, job: selfUpdate.job, status: selfUpdate.status, reason: selfUpdate.reason, details: selfUpdate.details });
     }
 
-    if (mode !== "self-update") {
+    if (profile.data.runsPreflight) {
       const preflight = await runVaultSyncPreflight({ vaultPath: parsed.data.vaultPath, runCommand });
       checks.push(preflight);
       emit({ ts: ts(), event: "job", host_id: input.hostId, job: preflight.job, status: preflight.status, reason: preflight.reason, details: preflight.details });
-      if (mode === "daily" && preflight.status === "fail") {
+      if (profile.data.id === "unattended-daily" && preflight.status === "fail") {
         emit({ ts: ts(), event: "finish", host_id: input.hostId, status: "fail" });
         return err("MAINTENANCE_FAILED", preflight);
       }
     }
 
-    if (mode === "self-update") {
+    if (profile.data.id === "self-update-check") {
       const failed = checks.find((check) => check.status === "fail");
       emit({ ts: ts(), event: "finish", host_id: input.hostId, status: failed ? "fail" : "pass" });
       if (failed) return err("MAINTENANCE_FAILED", failed);
@@ -105,16 +106,17 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
 
     let writeCommitted = false;
     let writeFailed = false;
-    const jobs = mode === "daily" ? (["agent-memory-trends-daily"] as const) : parsed.data.jobs;
-    for (const job of jobs) {
+    for (const job of profile.data.selectedJobs) {
       if (job === "self-update-check" || job === "vault-sync-preflight") continue;
-      if (writeFailed) {
-        emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred because a prior writing job failed in this run" });
-        continue;
-      }
-      if (writeCommitted) {
-        emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred because a prior writing job already committed in this run" });
-        continue;
+      if (profile.data.writerJobs.includes(job)) {
+        if (writeFailed) {
+          emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred because a prior writing job failed in this run" });
+          continue;
+        }
+        if (writeCommitted) {
+          emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred because a prior writing job already committed in this run" });
+          continue;
+        }
       }
       if (job === "agent-memory-trends-daily") {
         const trendsDaily = await runAgentMemoryTrendsDaily({
@@ -127,7 +129,7 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
         writeFailed = trendsDaily.status === "fail";
         writeCommitted = trendsDaily.details.committed;
         emit({ ts: ts(), event: "job", host_id: input.hostId, job: trendsDaily.job, status: trendsDaily.status, reason: trendsDaily.reason, details: trendsDaily.details });
-        if (mode === "daily" && trendsDaily.status === "pass" && trendsDaily.details.committed) {
+        if (profile.data.pushAfterCommittedWriter && trendsDaily.status === "pass" && trendsDaily.details.committed) {
           const pushed = await pushVaultChanges(parsed.data.vaultPath, runCommand);
           emit({ ts: ts(), event: "job", host_id: input.hostId, job: "vault-push", status: pushed.ok ? "pass" : "fail", reason: pushed.ok ? "pushed maintenance commit to origin/main" : pushed.detail, details: pushed.ok ? {} : pushed });
           if (!pushed.ok) return err("MAINTENANCE_PUSH_FAILED", pushed);
@@ -145,6 +147,16 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
         writeFailed = sessionBrief.status === "fail";
         writeCommitted = sessionBrief.details.committed;
         emit({ ts: ts(), event: "job", host_id: input.hostId, job: sessionBrief.job, status: sessionBrief.status, reason: sessionBrief.reason, details: sessionBrief.details });
+        continue;
+      }
+      if (job === "health-summary") {
+        const healthSummary = await runHealthSummary({
+          vaultPath: parsed.data.vaultPath,
+          repoPath: parsed.data.repoPath,
+          runCommand,
+        });
+        checks.push(healthSummary);
+        emit({ ts: ts(), event: "job", host_id: input.hostId, job: healthSummary.job, status: healthSummary.status, reason: healthSummary.reason, details: healthSummary.details });
         continue;
       }
       emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred until dedicated transaction wiring" });

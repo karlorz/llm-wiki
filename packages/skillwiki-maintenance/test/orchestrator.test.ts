@@ -36,6 +36,10 @@ describe("runStage1Maintenance", () => {
             },
           }) + "\n");
         }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args));
+          return commandResult("");
+        }
         if (command === "node") return runNode(args, options.cwd);
         if (command === "git") return runGit(args, options.cwd);
         return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
@@ -46,12 +50,15 @@ describe("runStage1Maintenance", () => {
     expect(result.data.checks.map((check) => [check.job, check.status])).toEqual([
       ["vault-sync-preflight", "pass"],
       ["agent-memory-trends-daily", "pass"],
+      ["health-summary", "pass"],
     ]);
     expect(events.find((event) => event.event === "start")?.details).toMatchObject({ stage: 2, mode: "daily" });
     expect(events.find((event) => event.job === "self-update-check")).toBeUndefined();
     expect(events.find((event) => event.job === "session-brief-refresh")).toBeUndefined();
-    expect(events.find((event) => event.job === "health-summary")).toBeUndefined();
     expect(events.find((event) => event.job === "vault-push")?.status).toBe("pass");
+    expect(events.findIndex((event) => event.job === "vault-push")).toBeLessThan(
+      events.findIndex((event) => event.job === "health-summary" && event.event === "job")
+    );
     git(vault, "fetch", "origin", "main");
     expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
   });
@@ -73,6 +80,10 @@ describe("runStage1Maintenance", () => {
       emit: (event) => events.push(event),
       runCommand: async (command, args, options) => {
         if (command === "agent-memory-trends" && args[0] === "daily") return commandResult("");
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args));
+          return commandResult("");
+        }
         if (command === "node") return runNode(args, options.cwd);
         if (command === "git") return runGit(args, options.cwd);
         return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
@@ -125,6 +136,10 @@ describe("runStage1Maintenance", () => {
             },
           }) + "\n");
         }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args));
+          return commandResult("");
+        }
         if (command === "node") return runNode(args, options.cwd);
         if (command === "git") return runGit(args, options.cwd);
         return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
@@ -171,6 +186,10 @@ describe("runStage1Maintenance", () => {
               ],
             },
           }) + "\n");
+        }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args));
+          return commandResult("");
         }
         if (command === "node") return runNode(args, options.cwd);
         if (command === "git") return runGit(args, options.cwd);
@@ -221,6 +240,10 @@ describe("runStage1Maintenance", () => {
           writeSessionBriefOutputs(vault);
           return commandResult(JSON.stringify({ ok: true }) + "\n");
         }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args));
+          return commandResult("");
+        }
         if (command === "node") return runNode(args, options.cwd);
         if (command === "git") return runGit(args, options.cwd);
         return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
@@ -232,10 +255,11 @@ describe("runStage1Maintenance", () => {
       ["self-update-check", "pass"],
       ["vault-sync-preflight", "pass"],
       ["agent-memory-trends-daily", "pass"],
+      ["health-summary", "pass"],
     ]);
     expect(events.find((event) => event.job === "agent-memory-trends-daily" && event.event === "job")?.status).toBe("pass");
     expect(events.find((event) => event.job === "session-brief-refresh" && event.event === "skip")?.reason).toContain("prior writing job already committed");
-    expect(events.find((event) => event.job === "health-summary" && event.event === "skip")?.reason).toContain("deferred");
+    expect(events.find((event) => event.job === "health-summary" && event.event === "job")?.status).toBe("pass");
     expect(git(vault, "log", "-1", "--pretty=%s")).toBe("research(agent-memory): daily digest");
   });
 
@@ -294,6 +318,14 @@ describe("runStage1Maintenance", () => {
           writeSessionBriefOutputs(vault);
           return commandResult(JSON.stringify({ ok: true }) + "\n");
         }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args), {
+            overall_status: "warn",
+            advisory_status: "warn",
+            risk_flags: [{ id: "maintenance_backlog", status: "warn", blocking: false }],
+          });
+          return commandResult("");
+        }
         if (command === "node") return runNode(args, options.cwd);
         if (command === "git") return runGit(args, options.cwd);
         return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
@@ -303,11 +335,10 @@ describe("runStage1Maintenance", () => {
     expect(result.ok).toBe(false);
     expect(events.find((event) => event.job === "agent-memory-trends-daily" && event.event === "job")?.status).toBe("fail");
     const sessionBriefSkip = events.find((event) => event.job === "session-brief-refresh" && event.event === "skip");
-    const healthSummarySkip = events.find((event) => event.job === "health-summary" && event.event === "skip");
+    const healthSummaryEvent = events.find((event) => event.job === "health-summary" && event.event === "job");
     expect(sessionBriefSkip).toBeTruthy();
-    expect(healthSummarySkip).toBeTruthy();
     expect(sessionBriefSkip?.reason).toContain("prior writing job failed");
-    expect(healthSummarySkip?.reason).toContain("prior writing job failed");
+    expect(healthSummaryEvent?.status).toBe("warn");
     expect(git(vault, "log", "-1", "--pretty=%s")).toBe("initial");
   });
 });
@@ -405,6 +436,38 @@ function writeGeneratedTrendOutputs(vault: string): void {
   writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-13-run.json"), "{}\n", "utf8");
   writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"), "{}\n", "utf8");
   writeFileSync(join(vault, "queries", "2026-06-13-agent-memory-trends-digest.md"), "# Digest\n", "utf8");
+}
+
+function writeHealthReport(
+  path: string,
+  overrides: Partial<{
+    overall_status: "pass" | "info" | "warn" | "error" | "unknown";
+    blocking_status: "pass" | "info" | "warn" | "error" | "unknown";
+    advisory_status: "pass" | "info" | "warn" | "error" | "unknown";
+    risk_flags: Array<{ id: string; status: "pass" | "info" | "warn" | "error" | "unknown"; blocking: boolean }>;
+    warnings: Array<{ id: string; message: string }>;
+    humanHint: string;
+  }> = {}
+): void {
+  writeFileSync(path, JSON.stringify({
+    ok: true,
+    data: {
+      overall_status: "pass",
+      blocking_status: "pass",
+      advisory_status: "pass",
+      risk_flags: [],
+      warnings: [],
+      humanHint: "vault health looks good",
+      self_check: { status: "pass", errors: [] },
+      ...overrides,
+    },
+  }) + "\n", "utf8");
+}
+
+function outputPath(args: string[]): string {
+  const index = args.indexOf("--out");
+  if (index === -1 || !args[index + 1]) throw new Error(`missing --out path in args: ${args.join(" ")}`);
+  return args[index + 1]!;
 }
 
 function pushIndependentVaultChange(root: string, vault: string): void {

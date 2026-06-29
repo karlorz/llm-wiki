@@ -13,6 +13,7 @@ export const APPROVED_JOB_ORDER = [
 export interface MaintenanceConfig {
   sourcePath: string;
   hostId: string;
+  protectedHost: boolean;
   enabled: boolean;
   user: string;
   vaultPath: string;
@@ -48,9 +49,8 @@ export function parseMaintenanceConfig(text: string, hostId: string, sourcePath:
   if (!satellite.enabled) return err("CONFIG_INVALID", `host ${hostId} skillwiki satellite is disabled`);
 
   const jobs = satellite.jobs as MaintenanceJobId[];
-  if (jobs.join("\n") !== APPROVED_JOB_ORDER.join("\n")) {
-    return err("CONFIG_INVALID", `jobs must match approved Stage 1 job order: ${APPROVED_JOB_ORDER.join(", ")}`);
-  }
+  const approvedJobs = ensureApprovedJobOrder(jobs);
+  if (!approvedJobs.ok) return approvedJobs;
 
   const cadence = parseCadence(satellite.cadence, satellite.timezone ?? "Asia/Hong_Kong");
   if (!cadence.ok) return cadence;
@@ -58,6 +58,7 @@ export function parseMaintenanceConfig(text: string, hostId: string, sourcePath:
   return ok({
     sourcePath,
     hostId,
+    protectedHost: host.protected ?? false,
     enabled: satellite.enabled,
     user: satellite.user,
     vaultPath: satellite.vault_path,
@@ -65,9 +66,16 @@ export function parseMaintenanceConfig(text: string, hostId: string, sourcePath:
     sshAlias: satellite.ssh_alias,
     scheduler: satellite.scheduler,
     timezone: satellite.timezone ?? "Asia/Hong_Kong",
-    jobs,
+    jobs: approvedJobs.data,
     cadence: cadence.data,
   });
+}
+
+export function ensureApprovedJobOrder(jobs: MaintenanceJobId[]): Result<MaintenanceJobId[]> {
+  if (jobs.join("\n") !== APPROVED_JOB_ORDER.join("\n")) {
+    return err("CONFIG_INVALID", `jobs must match approved Stage 1 job order: ${APPROVED_JOB_ORDER.join(", ")}`);
+  }
+  return ok(jobs);
 }
 
 function parseCadence(

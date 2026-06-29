@@ -58,6 +58,7 @@ describe("parseMaintenanceConfig", () => {
       expect(parsed.data.sshAlias).toBe("sg02-agent-memory");
       expect(parsed.data.vaultPath).toBe("/home/agent-memory/wiki");
       expect(parsed.data.repoPath).toBe("/home/agent-memory/llm-wiki");
+      expect(parsed.data.protectedHost).toBe(false);
       expect(parsed.data.scheduler).toBe("systemd");
       expect(parsed.data.jobs).toEqual(APPROVED_JOB_ORDER);
       expect(parsed.data.cadence.selfUpdateCheck).toEqual({ everyHours: 4 });
