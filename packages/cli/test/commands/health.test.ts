@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { runHealth } from "../../src/commands/health.js";
 
@@ -129,24 +129,41 @@ describe("runHealth", () => {
     const vault = makeVault();
     writeFileSync(join(home, ".skillwiki", ".env"), `WIKI_PATH=${vault}\n`);
 
-    mkdirSync(join(home, "Library", "Application Support", "vault-sync", "bin"), { recursive: true });
-    writeFileSync(join(home, "Library", "Application Support", "vault-sync", "bin", "wiki-push.sh"), "#!/bin/sh\n");
-    mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
-    writeFileSync(join(home, "Library", "LaunchAgents", "com.karlchow.wiki-push.plist"), "<plist/>");
-    writeFileSync(join(home, "Library", "LaunchAgents", "com.karlchow.wiki-fetch.plist"), "<plist/>");
-    mkdirSync(join(home, "Library", "Logs"), { recursive: true });
+    const isMac = platform() === "darwin";
+    const binDir = isMac
+      ? join(home, "Library", "Application Support", "vault-sync", "bin")
+      : join(home, ".local", "share", "vault-sync", "bin");
+    const logDir = isMac
+      ? join(home, "Library", "Logs")
+      : join(home, ".local", "state", "vault-sync", "log");
+
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "wiki-push.sh"), "#!/bin/sh\n");
+    if (isMac) {
+      mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
+      writeFileSync(join(home, "Library", "LaunchAgents", "com.karlchow.wiki-push.plist"), "<plist/>");
+      writeFileSync(join(home, "Library", "LaunchAgents", "com.karlchow.wiki-fetch.plist"), "<plist/>");
+    } else {
+      mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-push.timer"), "[Timer]\n");
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-fetch.timer"), "[Timer]\n");
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-fuse-refresh.timer"), "[Timer]\n");
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-fuse-refresh.service"), "[Service]\n");
+    }
+    mkdirSync(logDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
     writeFileSync(
-      join(home, "Library", "Logs", "wiki-push.log"),
+      join(logDir, "wiki-push.log"),
       [
-        "2026-06-29T03:16:44Z OK push (no changes) duration=61s",
-        "2026-06-29T03:16:44Z GIT commit created",
-        "2026-06-29T03:16:47Z OK git push succeeded",
+        `${ts} OK push (no changes) duration=61s`,
+        `${ts} GIT commit created`,
+        `${ts} OK git push succeeded`,
         "{\"ok\":true,\"data\":{\"vault\":{\"path\":\"/tmp/wiki\",\"source\":\"flag\"},\"summary\":{\"errors\":0,\"warnings\":0,\"info\":0},\"by_severity\":{\"error\":[],\"warning\":[],\"info\":[]}}}",
       ].join("\n"),
     );
     writeFileSync(
-      join(home, "Library", "Logs", "wiki-fetch.log"),
-      "2026-06-29T03:15:40Z OK behind=0 delta=0 (no notify)\n",
+      join(logDir, "wiki-fetch.log"),
+      `${ts} OK behind=0 delta=0 (no notify)\n`,
     );
     mkdirSync(join(home, ".config", "rclone"), { recursive: true });
     writeFileSync(
