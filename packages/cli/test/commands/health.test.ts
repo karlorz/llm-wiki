@@ -123,4 +123,58 @@ describe("runHealth", () => {
       expect(written.data.report_written).toBe(true);
     }
   });
+
+  it("uses the latest OK push line when trailing JSON is appended to wiki-push.log", async () => {
+    const home = makeHome();
+    const vault = makeVault();
+    writeFileSync(join(home, ".skillwiki", ".env"), `WIKI_PATH=${vault}\n`);
+
+    mkdirSync(join(home, "Library", "Application Support", "vault-sync", "bin"), { recursive: true });
+    writeFileSync(join(home, "Library", "Application Support", "vault-sync", "bin", "wiki-push.sh"), "#!/bin/sh\n");
+    mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
+    writeFileSync(join(home, "Library", "LaunchAgents", "com.karlchow.wiki-push.plist"), "<plist/>");
+    writeFileSync(join(home, "Library", "LaunchAgents", "com.karlchow.wiki-fetch.plist"), "<plist/>");
+    mkdirSync(join(home, "Library", "Logs"), { recursive: true });
+    writeFileSync(
+      join(home, "Library", "Logs", "wiki-push.log"),
+      [
+        "2026-06-29T03:16:44Z OK push (no changes) duration=61s",
+        "2026-06-29T03:16:44Z GIT commit created",
+        "2026-06-29T03:16:47Z OK git push succeeded",
+        "{\"ok\":true,\"data\":{\"vault\":{\"path\":\"/tmp/wiki\",\"source\":\"flag\"},\"summary\":{\"errors\":0,\"warnings\":0,\"info\":0},\"by_severity\":{\"error\":[],\"warning\":[],\"info\":[]}}}",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(home, "Library", "Logs", "wiki-fetch.log"),
+      "2026-06-29T03:15:40Z OK behind=0 delta=0 (no notify)\n",
+    );
+    mkdirSync(join(home, ".config", "rclone"), { recursive: true });
+    writeFileSync(
+      join(home, ".config", "rclone", "wiki-push-filters.txt"),
+      [
+        "remotely-save/data.json",
+        ".skillwiki/sync.lock",
+        ".skillwiki/memory/",
+        ".skillwiki/memory-topics.json",
+        ".claude/settings.local.json",
+      ].join("\n"),
+    );
+
+    const r = await runHealth({
+      vault,
+      home,
+      envValue: undefined,
+      argv: ["node", "skillwiki", "health"],
+      currentVersion: "0.8.5-test",
+      sync: "optional",
+      noFail: true,
+    });
+
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const pushCheck = r.result.data.components.vault_sync.checks.find(check => check.id === "vault_sync_last_push_age");
+      expect(pushCheck?.status).toBe("pass");
+      expect(pushCheck?.detail).toContain("OK push (no changes)");
+    }
+  });
 });
