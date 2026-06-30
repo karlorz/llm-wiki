@@ -1,6 +1,20 @@
 import { normalizeCanonicalUrl } from "./config.js";
 import type { ProposalEvidence } from "./synthesis.js";
 
+export type EvidenceQualityDepth =
+  | "metadata_only"
+  | "readme_summary"
+  | "feature_surface"
+  | "implementation_surface"
+  | "integration_surface";
+
+export interface EvidenceQuality {
+  depth: EvidenceQualityDepth;
+  sourceInspectionRecommended: boolean;
+  signals: string[];
+  summary: string;
+}
+
 export interface CandidateForScoring {
   name: string;
   fullName: string;
@@ -9,6 +23,7 @@ export interface CandidateForScoring {
   topics: string[];
   readmeText: string;
   readmeEvidence?: ProposalEvidence[];
+  evidenceQuality?: EvidenceQuality;
   laneIds?: string[];
   qualityGate?: "passed" | "multi_query_exception" | "failed";
   evidenceFamilies?: string[];

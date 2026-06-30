@@ -122,6 +122,12 @@ describe("Codex synthesis runner", () => {
                 confidence: "medium",
               },
             ],
+            evidenceQuality: {
+              depth: "integration_surface",
+              sourceInspectionRecommended: true,
+              signals: ["agent-memory", "codex", "claude", "hook", "markdown"],
+              summary: "README evidence exposes integration surfaces: agent-memory, codex, claude, hook, markdown.",
+            },
             score: {
               score: 31,
               components: {

@@ -152,6 +152,12 @@ function candidateToWire(candidate: SelectedGithubCandidate): Record<string, unk
     lane_ids: candidate.laneIds,
     quality_gate: candidate.qualityGate,
     evidence_families: candidate.evidenceFamilies,
+    evidence_quality: {
+      depth: candidate.evidenceQuality.depth,
+      source_inspection_recommended: candidate.evidenceQuality.sourceInspectionRecommended,
+      signals: candidate.evidenceQuality.signals,
+      summary: candidate.evidenceQuality.summary,
+    },
     readme_evidence: (candidate.readmeEvidence ?? []).map((evidence) => ({
       source_url: evidence.sourceUrl,
       excerpt: evidence.excerpt,

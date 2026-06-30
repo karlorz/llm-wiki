@@ -1,7 +1,9 @@
 import { normalizeCanonicalUrl, type GithubLane, type GithubQualityGate, type ResearchConfig, type ResearchQuery } from "./config.js";
 import { err, ok, type Result } from "./types.js";
-import { scoreCandidate, type CandidateForScoring, type CandidateScore } from "./score.js";
+import { scoreCandidate, type CandidateForScoring, type CandidateScore, type EvidenceQuality } from "./score.js";
 import type { ProposalEvidence } from "./synthesis.js";
+
+export type { EvidenceQuality, EvidenceQualityDepth } from "./score.js";
 
 export interface GhRunResult {
   exitCode: number;
@@ -38,6 +40,7 @@ export interface SelectedGithubCandidate extends CandidateForScoring {
   laneIds: string[];
   qualityGate: "passed" | "multi_query_exception" | "failed";
   evidenceFamilies: string[];
+  evidenceQuality: EvidenceQuality;
   score: CandidateScore;
 }
 
@@ -115,6 +118,7 @@ export async function collectGithubCandidates(
       candidate.readmeEvidence = extractReadmeEvidence(candidate);
     }
     candidate.evidenceFamilies = extractEvidenceFamilies(candidate);
+    candidate.evidenceQuality = classifyEvidenceQuality(candidate);
     candidate.qualityGate = evaluateCandidateQualityGate(candidate, config.github.lanes);
   }
 
@@ -125,6 +129,7 @@ export async function collectGithubCandidates(
   const selectedCandidates = rawCandidates
     .map((candidate) => ({
       ...candidate,
+      evidenceQuality: candidate.evidenceQuality ?? classifyEvidenceQuality(candidate),
       score: scoreCandidate(candidate, {
         now: options.now,
         knownCanonicalUrls: options.knownCanonicalUrls ?? [],
@@ -158,6 +163,108 @@ function extractReadmeEvidence(candidate: CandidateForScoring): ProposalEvidence
       confidence: "medium",
     },
   ];
+}
+
+export function classifyEvidenceQuality(candidate: CandidateForScoring): EvidenceQuality {
+  const text = buildCandidateEvidenceText(candidate);
+  const signals = evidenceQualitySignals(text);
+  const readmeIdentity = selectReadmeIdentityText(candidate.readmeText);
+  const hasReadmeSummary = readmeIdentity.trim().length > 0;
+
+  const hardImplementationSignals = signals.filter((signal) =>
+    [
+      "api",
+      "cli",
+      "mcp",
+      "adapter",
+      "parser",
+      "plugin",
+      "registry",
+      "workflow",
+      "tests",
+      "source-capture",
+      "source-file",
+      "hook",
+      "markdown",
+      "sync",
+    ].includes(signal)
+  );
+  const featureSignals = signals.filter((signal) =>
+    ["adaptive", "dynamic", "selector", "fetcher", "hybrid-reasoning", "source-backed"].includes(signal)
+  );
+  const integrationSignals = signals.filter((signal) =>
+    ["agent-memory", "codex", "claude", "mcp", "plugin", "registry", "source-capture", "vault", "skillwiki"].includes(signal)
+  );
+
+  let depth: EvidenceQuality["depth"] = "metadata_only";
+  if (isMetadataOnlyEvidence(signals, text)) {
+    depth = "metadata_only";
+  } else if (integrationSignals.length >= 2 && hardImplementationSignals.length > 0) {
+    depth = "integration_surface";
+  } else if (hardImplementationSignals.length > 0 && featureSignals.length === 0) {
+    depth = "implementation_surface";
+  } else if (featureSignals.length > 0) {
+    depth = "feature_surface";
+  } else if (hasReadmeSummary) {
+    depth = "readme_summary";
+  }
+
+  const sourceInspectionRecommended = ["feature_surface", "implementation_surface", "integration_surface"].includes(depth);
+  return {
+    depth,
+    sourceInspectionRecommended,
+    signals,
+    summary: evidenceQualitySummary(depth, signals),
+  };
+}
+
+function evidenceQualitySignals(text: string): string[] {
+  const normalized = text.toLowerCase();
+  const matchers: Array<[string, RegExp]> = [
+    ["agent-memory", /\bagent[- ]memory\b/],
+    ["codex", /\bcodex\b/],
+    ["claude", /\bclaude\b/],
+    ["skillwiki", /\bskillwiki\b/],
+    ["vault", /\bvault\b/],
+    ["mcp", /\bmcp\b/],
+    ["api", /\bapi\b/],
+    ["cli", /\bcli\b/],
+    ["adapter", /\badapters?\b/],
+    ["parser", /\bparsers?\b/],
+    ["fetcher", /\bfetchers?\b/],
+    ["selector", /\bselectors?\b/],
+    ["plugin", /\bplugins?\b/],
+    ["registry", /\bregistr(?:y|ies)\b/],
+    ["workflow", /\bworkflows?\b/],
+    ["tests", /\btests?\b/],
+    ["source-capture", /\bsource[- ]captures?\b/],
+    ["source-file", /\bsource[- ]files?\b/],
+    ["source-backed", /\bsource[- ]backed\b/],
+    ["adaptive", /\badaptive\b/],
+    ["dynamic", /\bdynamic\b/],
+    ["hybrid-reasoning", /\bhybrid[- ]reasoning\b/],
+    ["hook", /\bhooks?\b/],
+    ["markdown", /\bmarkdown\b/],
+    ["sync", /\bsync\b/],
+  ];
+  return matchers.filter(([, pattern]) => pattern.test(normalized)).map(([signal]) => signal);
+}
+
+function isMetadataOnlyEvidence(signals: string[], text: string): boolean {
+  if (signals.length === 0) return true;
+  const metadataSignals = new Set(["agent-memory", "mcp", "codex", "claude"]);
+  const hasOnlyMetadataSignals = signals.every((signal) => metadataSignals.has(signal));
+  const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+  return hasOnlyMetadataSignals && wordCount <= 16;
+}
+
+function evidenceQualitySummary(depth: EvidenceQuality["depth"], signals: string[]): string {
+  if (depth === "metadata_only") return "Only shallow marker evidence is available; source inspection is not automatically recommended.";
+  if (depth === "readme_summary") return "README evidence has a bounded summary but no concrete implementation surface.";
+
+  const listed = signals.length > 0 ? signals.join(", ") : "none";
+  if (depth === "integration_surface") return `README evidence exposes integration surfaces: ${listed}.`;
+  return `README evidence exposes implementation surfaces: ${listed}.`;
 }
 
 function selectReadmeExcerpt(readmeText: string): string {
