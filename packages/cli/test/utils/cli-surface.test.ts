@@ -41,6 +41,7 @@ describe("buildCliSurface", () => {
     expect(surface.get("memory.index")!.has("--if-stale")).toBe(true);
     expect(surface.get("memory.recall")!.has("--scope")).toBe(true);
     expect(surface.get("memory.review")!.has("--dry-run")).toBe(true);
+    expect(surface.get("memory.review")!.has("--pre-action")).toBe(true);
   });
 
   it("subcommand flag sets inherit parent + root flags", () => {
@@ -69,6 +70,10 @@ describe("validateCliRefs", () => {
   it("accepts health and lint summary references", () => {
     expect(v("Check via `skillwiki health --sync off --no-fail --out /tmp/h.json`.")).toEqual([]);
     expect(v("Summarize via `skillwiki lint --summary --examples 2`.")).toEqual([]);
+  });
+
+  it("accepts a memory review pre-action reference", () => {
+    expect(v("Run `skillwiki memory review --project llm-wiki --pre-action packages/cli/src/utils/cli-surface.ts --dry-run` before implementation.")).toEqual([]);
   });
 
   it("flags an unknown command", () => {

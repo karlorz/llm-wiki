@@ -34,6 +34,7 @@ export interface MemoryReviewInput {
   vault: string;
   project: string;
   dryRun?: boolean;
+  preAction?: string;
 }
 
 export interface MemoryImportInput {
@@ -107,7 +108,8 @@ export type MemoryReviewFindingKind =
   | "metadata_gap"
   | "sparse_topic"
   | "scope_gap"
-  | "consolidation_candidate";
+  | "consolidation_candidate"
+  | "past_failure_match";
 
 export interface MemoryReviewFinding {
   id: string;
@@ -372,6 +374,11 @@ export async function runMemoryReview(
     indexState: state,
     reviewPages: state.reviewPages,
   });
+  const preAction = input.preAction?.trim();
+  if (preAction) {
+    findings.push(...await buildPastFailureFindings(scan.data.allMarkdown, input.project, preAction));
+    findings.sort(compareMemoryReviewFindings);
+  }
   const generatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 
   return {
@@ -790,6 +797,192 @@ function buildMemoryReviewFindings(input: {
   }
 
   return findings.sort(compareMemoryReviewFindings);
+}
+
+const COMMON_FAILURE_MATCH_TOKENS = new Set([
+  "memory",
+  "review",
+  "test",
+  "tests",
+  "plugin",
+  "cache",
+  "command",
+  "feature",
+  "project",
+  "status",
+  "error",
+  "warning",
+  "warn",
+  "info",
+  "skillwiki",
+  "dev",
+  "loop",
+]);
+
+const FAILURE_MARKER_RE = /\b(?:miss|root cause|symptom|problem|friction|regression|bug)\b/i;
+
+async function buildPastFailureFindings(
+  pages: VaultPage[],
+  project: string,
+  target: string
+): Promise<MemoryReviewFinding[]> {
+  const targetProfile = buildPastFailureTargetProfile(target);
+  if (!targetProfile) return [];
+
+  const findings: MemoryReviewFinding[] = [];
+  for (const page of dedupePages(pages)) {
+    const body = await readPastFailureCandidateBody(page, project);
+    if (!body) continue;
+
+    const match = matchPastFailureTarget(targetProfile, body);
+    if (!match) continue;
+
+    findings.push({
+      id: `past_failure_match:${page.relPath}`,
+      severity: "warn",
+      kind: "past_failure_match",
+      path: page.relPath,
+      message: `${page.relPath} matches pre-action target ${targetProfile.summary}: ${match.reason}`,
+      suggested_action: `Read ${page.relPath} before executing; reuse the prior miss/root-cause notes if relevant.`,
+    });
+  }
+
+  return findings.sort(compareMemoryReviewFindings);
+}
+
+interface PastFailureTargetProfile {
+  summary: string;
+  exactNeedles: string[];
+  distinctiveTokens: string[];
+}
+
+function buildPastFailureTargetProfile(target: string): PastFailureTargetProfile | null {
+  const normalizedTarget = normalizeMatchText(target);
+  if (!normalizedTarget) return null;
+
+  const distinctiveTokens = extractDistinctiveTargetTokens(target);
+  const includeFullPhrase = normalizedTarget.length >= 12 && distinctiveTokens.length >= 2;
+  const exactNeedles = uniqueStrings([
+    includeFullPhrase ? normalizedTarget : "",
+    ...extractPathLikeNeedles(target),
+    ...extractFlagNeedles(target),
+    ...extractCodeLikeNeedles(target),
+  ]
+    .map(normalizeMatchText)
+    .filter((needle) => needle.length >= 4)
+    .filter(hasDistinctiveNeedle));
+
+  if (exactNeedles.length === 0 && distinctiveTokens.length < 2) return null;
+
+  return {
+    summary: summarizeTarget(target),
+    exactNeedles,
+    distinctiveTokens,
+  };
+}
+
+async function readPastFailureCandidateBody(page: VaultPage, project: string): Promise<string | null> {
+  if (isProjectRetroPath(page.relPath, project)) {
+    return bodyWithoutFrontmatter(await readPage(page));
+  }
+
+  if (!isRawBugCapturePath(page.relPath)) return null;
+
+  const text = await readPage(page);
+  const fm = extractFrontmatter(text);
+  if (!fm.ok || !frontmatterProjectMatches(fm.data.project, project)) return null;
+  return bodyWithoutFrontmatter(text);
+}
+
+function isProjectRetroPath(path: string, project: string): boolean {
+  return (path.startsWith(`projects/${project}/work/`) && path.endsWith("/retro.md"))
+    || (path.startsWith(`projects/${project}/history/`) && path.endsWith("/retro.md"));
+}
+
+function isRawBugCapturePath(path: string): boolean {
+  return /^raw\/transcripts\/.*-bug-.*\.md$/.test(path);
+}
+
+function frontmatterProjectMatches(value: unknown, project: string): boolean {
+  if (typeof value === "string") return wikilinkSlug(value) === project;
+  if (Array.isArray(value)) {
+    return value.some((item) => typeof item === "string" && wikilinkSlug(item) === project);
+  }
+  return false;
+}
+
+function bodyWithoutFrontmatter(text: string): string {
+  const split = splitFrontmatter(text);
+  return split.ok ? split.data.body : text;
+}
+
+function matchPastFailureTarget(
+  target: PastFailureTargetProfile,
+  candidateBody: string
+): { reason: string } | null {
+  const candidate = normalizeMatchText(candidateBody);
+  if (!candidate) return null;
+
+  const exactMatch = target.exactNeedles.find((needle) => candidate.includes(needle));
+  if (exactMatch) {
+    return { reason: `exact signal "${exactMatch}" appeared in prior failure memory` };
+  }
+
+  if (!FAILURE_MARKER_RE.test(candidateBody)) return null;
+
+  const candidateTokens = new Set(tokenizeForMatch(candidate));
+  const overlappingTokens = target.distinctiveTokens.filter((token) => candidateTokens.has(token));
+  if (overlappingTokens.length >= 2) {
+    return { reason: `distinctive target terms overlapped prior failure memory (${overlappingTokens.slice(0, 4).join(", ")})` };
+  }
+
+  return null;
+}
+
+function extractPathLikeNeedles(value: string): string[] {
+  return value.match(/[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+/g) ?? [];
+}
+
+function extractFlagNeedles(value: string): string[] {
+  return value.match(/--[a-z][a-z0-9-]*/gi) ?? [];
+}
+
+function extractCodeLikeNeedles(value: string): string[] {
+  return (value.match(/[A-Za-z0-9_.:-]*[_.:-][A-Za-z0-9_.:-]+/g) ?? [])
+    .filter((needle) => /[A-Za-z]/.test(needle));
+}
+
+function extractDistinctiveTargetTokens(value: string): string[] {
+  return uniqueStrings(tokenizeForMatch(value)
+    .filter((token) => token.length >= 4)
+    .filter((token) => !/^\d+$/.test(token))
+    .filter((token) => !COMMON_FAILURE_MATCH_TOKENS.has(token)));
+}
+
+function hasDistinctiveNeedle(value: string): boolean {
+  return extractDistinctiveTargetTokens(value).length > 0;
+}
+
+function tokenizeForMatch(value: string): string[] {
+  return normalizeMatchText(value).match(/[a-z0-9]+/g) ?? [];
+}
+
+function normalizeMatchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[`"'“”‘’]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function summarizeTarget(target: string): string {
+  const summary = target.replace(/\s+/g, " ").trim();
+  if (summary.length <= 96) return JSON.stringify(summary);
+  return JSON.stringify(`${summary.slice(0, 93).trimEnd()}...`);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.length > 0))];
 }
 
 function parseInvalidTopicWarning(warning: string): { path: string; topic: string } | null {

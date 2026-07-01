@@ -869,6 +869,7 @@ memoryCmd
   .description("review deterministic memory gaps and cache drift without writing")
   .requiredOption("--project <slug>", "project slug")
   .option("--dry-run", "preview only; writes are not supported on this surface", false)
+  .option("--pre-action <target>", "target slug, file path, command, or error signature to check against past failure memory")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -877,6 +878,7 @@ memoryCmd
       vault: v.vault,
       project: opts.project,
       dryRun: !!opts.dryRun,
+      preAction: opts.preAction,
     }), v.vault, { postCommit: false });
   });
 
