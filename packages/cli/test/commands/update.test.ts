@@ -33,7 +33,7 @@ function home(): string {
 }
 
 /** Convenience: mock runInstall returning a successful install with given version_warnings. */
-function mockInstallSuccess(version_warnings: string[] = []) {
+function mockInstallSuccess(version_warnings: string[] = [], deferred_to_plugin = false) {
   mockInstall.mockResolvedValueOnce({
     exitCode: 0,
     result: {
@@ -43,6 +43,7 @@ function mockInstallSuccess(version_warnings: string[] = []) {
         backed_up: [],
         manifest_path: "/fake/manifest",
         version_warnings,
+        deferred_to_plugin,
         humanHint: "installed: 0",
       },
     },
@@ -196,6 +197,8 @@ describe("runUpdate", () => {
         target: join(h, ".claude", "skills"),
         dryRun: false,
         symlink: false,
+        home: h,
+        force: false,
       }),
     );
   });
@@ -321,6 +324,23 @@ describe("runUpdate", () => {
     if (r.result.ok) {
       expect(r.result.data.skills_refreshed).toBe(false);
       expect(r.result.data.version_warnings.some(w => w.includes("skill refresh error"))).toBe(true);
+    }
+  });
+
+  it("reports deferred_to_plugin when plugin channel absorbs skill refresh", async () => {
+    const h = home();
+    mockExec.mockReturnValueOnce("0.2.0-beta.16\n"); // npm view
+    mockExec.mockReturnValueOnce(undefined); // npm install
+    mockExec.mockReturnValueOnce("/usr/local/lib/node_modules\n"); // npm root -g
+    mockInstallSuccess([], true); // deferred_to_plugin: true
+
+    const r = await runUpdate({ home: h, distTag: "latest" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.deferred_to_plugin).toBe(true);
+      // refreshed is false because the plugin channel handled skills
+      expect(r.result.data.skills_refreshed).toBe(false);
+      expect(r.result.data.humanHint).toContain("deferred to plugin");
     }
   });
 });

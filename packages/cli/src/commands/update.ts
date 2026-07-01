@@ -17,6 +17,7 @@ export interface UpdateOutput {
   wasAlreadyLatest: boolean;
   version_warnings: string[];
   skills_refreshed: boolean;
+  deferred_to_plugin: boolean;
   humanHint: string;
 }
 
@@ -33,21 +34,30 @@ function resolveGlobalSkillsRoot(): string | null {
   }
 }
 
-/** Re-install skills from the updated npm package. */
-async function refreshInstalledSkills(target: string): Promise<{ warnings: string[]; refreshed: boolean }> {
+/**
+ * Re-install skills from the updated npm package.
+ * When the skillwiki@llm-wiki plugin channel is the active skills provider,
+ * defers to it instead of recreating ~/.claude/skills/ copies that
+ * `skillwiki doctor` would flag as duplicates.
+ */
+async function refreshInstalledSkills(home: string, target: string): Promise<{ warnings: string[]; refreshed: boolean; deferred_to_plugin: boolean }> {
   const skillsRoot = resolveGlobalSkillsRoot();
   if (!skillsRoot) {
-    return { warnings: ["could not locate global skillwiki installation for skill refresh"], refreshed: false };
+    return { warnings: ["could not locate global skillwiki installation for skill refresh"], refreshed: false, deferred_to_plugin: false };
   }
 
   try {
-    const result = await runInstall({ skillsRoot, target, dryRun: false, symlink: false });
+    const result = await runInstall({ skillsRoot, target, dryRun: false, symlink: false, home, force: false });
     if (result.result.ok) {
-      return { warnings: result.result.data.version_warnings, refreshed: true };
+      return {
+        warnings: result.result.data.version_warnings,
+        refreshed: !result.result.data.deferred_to_plugin,
+        deferred_to_plugin: result.result.data.deferred_to_plugin,
+      };
     }
-    return { warnings: [`skill refresh failed: ${result.result.error}`], refreshed: false };
+    return { warnings: [`skill refresh failed: ${result.result.error}`], refreshed: false, deferred_to_plugin: false };
   } catch (e: unknown) {
-    return { warnings: [`skill refresh error: ${String(e)}`], refreshed: false };
+    return { warnings: [`skill refresh error: ${String(e)}`], refreshed: false, deferred_to_plugin: false };
   }
 }
 
@@ -90,6 +100,7 @@ export async function runUpdate(
         wasAlreadyLatest: true,
         version_warnings: [],
         skills_refreshed: false,
+        deferred_to_plugin: false,
         humanHint: `Already on npm@${tag}: v${currentVersion}`,
       }),
     };
@@ -111,13 +122,16 @@ export async function runUpdate(
   writeCache(input.home, { ...cache, updateAppliedAt: Date.now() });
 
   // Re-install skills from updated package
-  const installResult = await refreshInstalledSkills(target);
+  const installResult = await refreshInstalledSkills(input.home, target);
   const version_warnings = installResult.warnings;
   const skills_refreshed = installResult.refreshed;
+  const deferred_to_plugin = installResult.deferred_to_plugin;
 
   const hintLines = [
     `Updated skillwiki ${currentVersion} → ${latest} via npm@${tag}`,
-    `skills refreshed: ${skills_refreshed}`,
+    deferred_to_plugin
+      ? `skills deferred to plugin channel (skillwiki@llm-wiki)`
+      : `skills refreshed: ${skills_refreshed}`,
   ];
   if (version_warnings.length > 0) {
     hintLines.push(`version warnings: ${version_warnings.length}`);
@@ -132,6 +146,7 @@ export async function runUpdate(
       wasAlreadyLatest: false,
       version_warnings,
       skills_refreshed,
+      deferred_to_plugin,
       humanHint: hintLines.join("\n"),
     }),
   };

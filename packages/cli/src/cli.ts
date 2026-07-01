@@ -157,9 +157,10 @@ program
   .option("--dry-run", "preview only", false)
   .option("--skills-root <dir>", "source skills directory (defaults to packaged)")
   .option("--symlink", "create symlinks instead of copies (dev mode — edits to source are immediately visible)", false)
+  .option("--force", "install CLI copies even when the skillwiki@llm-wiki plugin channel is active", false)
   .action(async (opts) => {
     const skillsRoot = opts.skillsRoot ?? new URL("../skills/", import.meta.url).pathname;
-    emit(await runInstall({ skillsRoot, target: opts.target, dryRun: !!opts.dryRun, symlink: !!opts.symlink }));
+    emit(await runInstall({ skillsRoot, target: opts.target, dryRun: !!opts.dryRun, symlink: !!opts.symlink, home: process.env.HOME ?? "", force: !!opts.force }));
   });
 
 program

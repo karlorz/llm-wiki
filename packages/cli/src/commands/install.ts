@@ -2,18 +2,22 @@ import { readdir, stat, symlink, unlink, mkdir, readFile } from "node:fs/promise
 import { join, resolve, dirname } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { atomicCopyWithBackup, writeManifest, type SkillMeta } from "../utils/install-fs.js";
+import { findPlugin } from "../utils/plugin-registry.js";
 
 export interface InstallInput {
   skillsRoot: string;   // path to packages/skills
   target: string;       // ~/.claude/skills/
   dryRun: boolean;
   symlink: boolean;     // create symlinks instead of copies (dev mode)
+  home: string;         // user home — used to detect the plugin channel
+  force: boolean;       // install even when the plugin channel is active
 }
 export interface InstallOutput {
   installed: string[];
   backed_up: string[];
   manifest_path: string;
   version_warnings: string[];
+  deferred_to_plugin: boolean;
   humanHint: string;
 }
 
@@ -59,6 +63,36 @@ export async function runInstall(input: InstallInput): Promise<{ exitCode: numbe
   }
   if (entries.length === 0) {
     return { exitCode: ExitCode.PREFLIGHT_FAILED, result: err("PREFLIGHT_FAILED", { reason: "no skills found" }) };
+  }
+
+  // Defer to the plugin channel when it is the active skills provider.
+  // `skillwiki install` / `skillwiki update` would otherwise recreate
+  // ~/.claude/skills/<name>/ copies that `skillwiki doctor`'s
+  // checkDuplicateSkills then flags as duplicates. Scoped to the default
+  // target so explicit `--target` overrides (e.g. e2e temp dirs) still
+  // write. `--force` opts out for the default target. `resolve` normalizes
+  // trailing-slash differences between the CLI default and join().
+  const defaultTarget = join(input.home, ".claude", "skills");
+  const isDefaultTarget = resolve(input.target) === resolve(defaultTarget);
+  const plugin = input.force || !isDefaultTarget ? null : findPlugin(input.home);
+  if (plugin) {
+    const manifest_path = join(input.target, "wiki-manifest.json");
+    const hintLines = [
+      `deferred to plugin: skillwiki@llm-wiki v${plugin.version}`,
+      `plugin provides skills at ${plugin.installPath}`,
+      `use --force to install CLI copies into ${input.target} anyway`,
+    ];
+    return {
+      exitCode: ExitCode.OK,
+      result: ok({
+        installed: [],
+        backed_up: [],
+        manifest_path,
+        version_warnings: [],
+        deferred_to_plugin: true,
+        humanHint: hintLines.join("\n"),
+      }),
+    };
   }
 
   const installed: string[] = [];
@@ -141,5 +175,5 @@ export async function runInstall(input: InstallInput): Promise<{ exitCode: numbe
     for (const w of version_warnings) hintLines.push(`  ${w}`);
   }
   const exitCode = version_warnings.length > 0 ? ExitCode.SKILL_VERSION_MISMATCH : ExitCode.OK;
-  return { exitCode, result: ok({ installed, backed_up, manifest_path, version_warnings, humanHint: hintLines.join("\n") }) };
+  return { exitCode, result: ok({ installed, backed_up, manifest_path, version_warnings, deferred_to_plugin: false, humanHint: hintLines.join("\n") }) };
 }
