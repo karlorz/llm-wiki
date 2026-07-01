@@ -3,7 +3,8 @@
   "version": "0.9.26",
   "type": "module",
   "bin": {
-    "skillwiki": "dist/cli.js"
+    "skillwiki": "dist/cli.js",
+    "skillwiki-mcp": "dist/skillwiki-mcp.js"
   },
   "files": [
     "dist",
@@ -21,6 +22,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1045.0",
     "@aws-sdk/credential-provider-env": "^3.972.34",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0",
     "js-yaml": "^4.1.0",
     "zod": "^3.23.0"

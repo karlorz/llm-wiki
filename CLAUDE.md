@@ -9,7 +9,7 @@ This repo ships the `skillwiki` CLI and 18 prompt-only SKILL.md files.
 - All deterministic logic lives under `packages/cli/src/`.
 - Shared types live in `packages/shared/src/` and are imported via `@skillwiki/shared`.
 - Tests are co-located with the package they cover; run them with `npm run -w <package> test`.
-- Local dev build: `npm run -w packages/cli build` (output in `packages/cli/dist/`). Run with `node packages/cli/dist/cli.js <command>`.
+- Local dev build: `npm run -w packages/cli build` (output in `packages/cli/dist/`). Run with `node packages/cli/dist/cli.js <command>`. MCP stdio server: `node packages/cli/dist/skillwiki-mcp.js` or `skillwiki mcp` (implementation under `packages/cli/src/mcp/`).
 - Run tests: `npx vitest run packages/cli/test/` (all) or `npx vitest run packages/cli/test/commands/doctor.test.ts` (single file).
 
 ## Conventions

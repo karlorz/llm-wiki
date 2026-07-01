@@ -95,6 +95,43 @@ npm run materialize:plugins:check
 
 All subcommands emit JSON by default. Pass `--human` for terminal output.
 
+## MCP Server
+
+Read-only [Model Context Protocol](https://modelcontextprotocol.io/) surface over the same deterministic command implementations (no LLM calls in the server).
+
+**Start (stdio):**
+
+```bash
+npm run -w skillwiki build
+node packages/cli/dist/skillwiki-mcp.js
+# or
+node packages/cli/dist/cli.js mcp
+```
+
+**Claude Code** (project or user MCP config):
+
+```json
+{
+  "mcpServers": {
+    "skillwiki": {
+      "command": "node",
+      "args": ["/absolute/path/to/llm-wiki/packages/cli/dist/skillwiki-mcp.js"],
+      "env": { "WIKI_PATH": "/Users/you/wiki" }
+    }
+  }
+}
+```
+
+After `npm install -g skillwiki`, use `"command": "skillwiki-mcp"` if the bin is on `PATH`.
+
+**MVP tools:** `skillwiki.query`, `skillwiki.lint_summary`, `skillwiki.doctor`, `skillwiki.graph_build`, `skillwiki.project_index`, `skillwiki.stale`, `skillwiki.config_get`.
+
+**Resources:** `skillwiki://vault/schema`, `skillwiki://vault/index`, `skillwiki://vault/log-tail`, `skillwiki://project/{slug}/index`, `skillwiki://graph/summary`.
+
+**Prompts:** `skillwiki-research-query`, `skillwiki-project-work-item`, `skillwiki-vault-health-review`, `skillwiki-citation-audit`.
+
+Tool responses are JSON `Result` envelopes (`{ ok, data }` / `{ ok: false, error, detail? }`) with `_meta.exitCode` when applicable. Vault paths are validated via `SCHEMA.md`; mutating vault operations are not exposed in MVP.
+
 ## Development
 
 ```bash

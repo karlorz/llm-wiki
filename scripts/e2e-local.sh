@@ -625,5 +625,12 @@ run_cli "${CLI[@]}" audit "$AUDIT_VAULT/concepts/audit-broken.md"
 assert_exit 11 "$RUN_RC" "audit detects unresolved markers (exit 11)"
 rm -rf "$AUDIT_VAULT" "$AUDIT_HOME"
 
+# ==== 53. mcp build artifacts ================================================
+printf "\n--- mcp ---\n"
+assert_file_exists "$REPO_ROOT/packages/cli/dist/skillwiki-mcp.js" "mcp entry built"
+assert_file_exists "$REPO_ROOT/packages/cli/dist/cli.js" "cli entry built"
+node --check "$REPO_ROOT/packages/cli/dist/skillwiki-mcp.js"
+assert_exit 0 "$?" "skillwiki-mcp.js parses as ESM"
+
 # ==== Summary ==============================================================
 summary

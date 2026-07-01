@@ -1,7 +1,7 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: { cli: "src/cli.ts", "auto-update-bg": "src/auto-update-bg.ts" },
+  entry: { cli: "src/cli.ts", "auto-update-bg": "src/auto-update-bg.ts", "skillwiki-mcp": "src/mcp-entry.ts" },
   format: ["esm"],
   target: "node20",
   clean: true,

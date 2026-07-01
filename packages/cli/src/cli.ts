@@ -58,6 +58,7 @@ import { triggerAutoUpdate } from "./utils/auto-update.js";
 import { parseDotenvFile } from "./utils/dotenv.js";
 import { configPath } from "./commands/config.js";
 import { readCliPackageJson } from "./utils/package-info.js";
+import { runSkillwikiMcpStdio } from "./mcp/server.js";
 
 const pkg = readCliPackageJson();
 
@@ -957,6 +958,13 @@ fleetCmd
   });
 
 // Emit deprecation warnings for any installed skills marked deprecated
+program
+  .command("mcp")
+  .description("start stdio Model Context Protocol server (read-only vault tools)")
+  .action(async () => {
+    await runSkillwikiMcpStdio();
+  });
+
 for (const w of getDeprecatedWarnings(process.env.HOME ?? "")) {
   process.stderr.write(w + "\n");
 }
