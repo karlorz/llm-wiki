@@ -136,7 +136,7 @@ After `npm install -g skillwiki`, use `"command": "skillwiki-mcp"` if the bin is
 
 **MVP tools:** `skillwiki.query`, `skillwiki.lint_summary`, `skillwiki.doctor`, `skillwiki.graph_build`, `skillwiki.project_index`, `skillwiki.stale`, `skillwiki.config_get`.
 
-**Resources:** `skillwiki://vault/schema`, `skillwiki://vault/index`, `skillwiki://vault/log-tail`, `skillwiki://project/{slug}/index`, `skillwiki://graph/summary`.
+**Resources:** `skillwiki://vault/schema`, `skillwiki://vault/index`, `skillwiki://vault/log-tail`, `skillwiki://vault/pages` (paginated paths), `skillwiki://project/{slug}/index`, `skillwiki://graph/summary`, `skillwiki://lint/{bucket}` (paginated bucket items), `skillwiki://query/preview?text=...` (paginated query hits).
 
 **Prompts:** `skillwiki-research-query`, `skillwiki-project-work-item`, `skillwiki-vault-health-review`, `skillwiki-citation-audit`.
 

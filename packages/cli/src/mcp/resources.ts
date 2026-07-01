@@ -3,6 +3,9 @@ import { join } from "node:path";
 import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveMcpVault } from "./vault-resolve.js";
+import { fetchLintBucketPage } from "./lint-bucket.js";
+import { listVaultPages, type VaultPageLayer } from "./vault-pages.js";
+import { fetchQueryPreview } from "./query-preview.js";
 
 async function readVaultFile(vault: string, rel: string): Promise<string> {
   return readFile(join(vault, rel), "utf8");
@@ -120,6 +123,92 @@ export function registerMcpResources(server: McpServer): void {
         }, null, 2);
         return { contents: [{ uri: uri.href, mimeType: "application/json", text }] };
       }
+    },
+  );
+
+  server.registerResource(
+    "vault-pages",
+    new ResourceTemplate("skillwiki://vault/pages{?layer,offset,limit}", { list: undefined }),
+    {
+      description: "Paginated vault page paths (layer: typed|raw|work|all; default typed; limit max 200)",
+      mimeType: "application/json",
+    },
+    async (uri, variables) => {
+      const v = await resolveMcpVault({});
+      if (!v.ok) {
+        return { contents: [{ uri: uri.href, mimeType: "text/plain", text: JSON.stringify(v) }] };
+      }
+      const layer = (variables.layer as VaultPageLayer | undefined) ?? "typed";
+      const offset = parseInt(String(variables.offset ?? "0"), 10);
+      const limit = parseInt(String(variables.limit ?? "50"), 10);
+      const r = await listVaultPages({
+        vault: v.data.vault,
+        layer,
+        offset: Number.isFinite(offset) ? offset : 0,
+        limit: Number.isFinite(limit) ? limit : 50,
+      });
+      const text = JSON.stringify(r.result, null, 2);
+      return { contents: [{ uri: uri.href, mimeType: "application/json", text }] };
+    },
+  );
+
+  server.registerResource(
+    "lint-bucket",
+    new ResourceTemplate("skillwiki://lint/{bucket}{?offset,limit}", { list: undefined }),
+    {
+      description: "Paginated lint bucket items for one bucket kind (read-only; limit max 100)",
+      mimeType: "application/json",
+    },
+    async (uri, variables) => {
+      const v = await resolveMcpVault({});
+      if (!v.ok) {
+        return { contents: [{ uri: uri.href, mimeType: "text/plain", text: JSON.stringify(v) }] };
+      }
+      const bucket = String(variables.bucket ?? "");
+      const offset = parseInt(String(variables.offset ?? "0"), 10);
+      const limit = parseInt(String(variables.limit ?? "20"), 10);
+      const r = await fetchLintBucketPage({
+        vault: v.data.vault,
+        bucket,
+        offset: Number.isFinite(offset) ? offset : 0,
+        limit: Number.isFinite(limit) ? limit : 20,
+      });
+      const text = JSON.stringify(r.result, null, 2);
+      return { contents: [{ uri: uri.href, mimeType: "application/json", text }] };
+    },
+  );
+
+  server.registerResource(
+    "query-preview",
+    new ResourceTemplate("skillwiki://query/preview{?text,offset,limit}", { list: undefined }),
+    {
+      description: "Paginated slice of skillwiki.query results (text query param required; limit max 50)",
+      mimeType: "application/json",
+    },
+    async (uri, variables) => {
+      const v = await resolveMcpVault({});
+      if (!v.ok) {
+        return { contents: [{ uri: uri.href, mimeType: "text/plain", text: JSON.stringify(v) }] };
+      }
+      const text = String(variables.text ?? "").trim();
+      if (!text) {
+        return {
+          contents: [{
+            uri: uri.href,
+            mimeType: "application/json",
+            text: JSON.stringify({ ok: false, error: "MISSING_QUERY", detail: "text query parameter required" }),
+          }],
+        };
+      }
+      const offset = parseInt(String(variables.offset ?? "0"), 10);
+      const limit = parseInt(String(variables.limit ?? "10"), 10);
+      const r = await fetchQueryPreview({
+        vault: v.data.vault,
+        text,
+        offset: Number.isFinite(offset) ? offset : 0,
+        limit: Number.isFinite(limit) ? limit : 10,
+      });
+      return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(r.result, null, 2) }] };
     },
   );
 }

@@ -57,6 +57,6 @@ describe("skillwiki MCP integration (in-memory)", () => {
     const allPatterns = [...uris, ...templateUris];
     expect(allPatterns.some((u) => u.includes("log-tail"))).toBe(true);
     expect(allPatterns.some((u) => u.includes("project"))).toBe(true);
-    expect(MCP_RESOURCE_URIS.length).toBe(5);
+    expect(MCP_RESOURCE_URIS.length).toBe(8);
   });
 });

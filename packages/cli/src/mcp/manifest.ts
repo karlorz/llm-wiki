@@ -13,8 +13,11 @@ export const MCP_RESOURCE_URIS = [
   "skillwiki://vault/schema",
   "skillwiki://vault/index",
   "skillwiki://vault/log-tail",
+  "skillwiki://vault/pages",
   "skillwiki://project/{slug}/index",
   "skillwiki://graph/summary",
+  "skillwiki://lint/{bucket}",
+  "skillwiki://query/preview",
 ] as const;
 
 export const MCP_PROMPT_NAMES = [

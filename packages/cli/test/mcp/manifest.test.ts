@@ -18,8 +18,8 @@ describe("MCP MVP manifest", () => {
     ]);
   });
 
-  it("exposes five resource URI patterns", () => {
-    expect(MCP_RESOURCE_URIS).toHaveLength(5);
+  it("exposes eight resource URI patterns (incl. v2 pagination)", () => {
+    expect(MCP_RESOURCE_URIS).toHaveLength(8);
     expect(MCP_RESOURCE_URIS).toContain("skillwiki://vault/schema");
     expect(MCP_RESOURCE_URIS).toContain("skillwiki://graph/summary");
   });
