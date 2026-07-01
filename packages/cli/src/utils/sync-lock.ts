@@ -18,9 +18,15 @@ export interface LockFile {
  * 3. process.pid as string
  * 4. "unknown"
  */
-export function getSessionId(): string {
+function getEnvSessionId(): string | undefined {
   if (process.env.CLAUDE_SESSION_ID) return process.env.CLAUDE_SESSION_ID;
   if (process.env.SKILLWIKI_SESSION_ID) return process.env.SKILLWIKI_SESSION_ID;
+  return undefined;
+}
+
+export function getSessionId(): string {
+  const envSessionId = getEnvSessionId();
+  if (envSessionId) return envSessionId;
   return process.pid.toString();
 }
 
@@ -31,6 +37,12 @@ export function getCwdHash(cwd?: string): string {
   const path = cwd || process.cwd();
   const hash = createHash("sha256").update(path).digest("hex");
   return hash.slice(0, 8);
+}
+
+export function getCliSessionId(cwd?: string): string {
+  const envSessionId = getEnvSessionId();
+  if (envSessionId) return envSessionId;
+  return `cli-${getCwdHash(cwd)}`;
 }
 
 /**

@@ -476,6 +476,7 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
 
 export interface SyncPeersInput {
   vault: string;
+  sessionId?: string;
 }
 
 export interface PeerLock {
@@ -513,7 +514,7 @@ export function runSyncPeers(input: SyncPeersInput): { exitCode: number; result:
   const locks: PeerLock[] = [];
   const existingLock = readLock(vault);
   if (existingLock) {
-    const self = existingLock.session_id === getSessionId();
+    const self = existingLock.session_id === (input.sessionId ?? getSessionId());
     locks.push({ ...existingLock, is_self: self });
   }
 

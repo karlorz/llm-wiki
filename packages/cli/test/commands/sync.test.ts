@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readdirSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExitCode } from "@skillwiki/shared";
@@ -17,6 +17,26 @@ function makeTempDir(): string {
 
 function git(cwd: string, cmd: string): void {
   execSync(`git ${cmd}`, { cwd, stdio: "pipe" });
+}
+
+function cliEnvWithoutSession(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.CLAUDE_SESSION_ID;
+  delete env.SKILLWIKI_SESSION_ID;
+  return env;
+}
+
+function runSkillwikiCli(args: string[]): string {
+  return execFileSync(
+    process.platform === "win32" ? "npx.cmd" : "npx",
+    ["tsx", "packages/cli/src/cli.ts", ...args],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: cliEnvWithoutSession(),
+      stdio: "pipe",
+    },
+  );
 }
 
 describe("runSyncStatus", () => {
@@ -604,6 +624,20 @@ describe("runSyncUnlock", () => {
       expect(result.data.humanHint).toContain("stale-peer");
     }
     // Lockfile is gone
+    expect(existsSync(join(dir, ".skillwiki", "sync.lock"))).toBe(false);
+  });
+
+  it("CLI unlock releases a lock acquired by a previous CLI process without force", () => {
+    const dir = makeTempDir();
+
+    runSkillwikiCli(["sync", "lock", dir, "--summary", "cross-process-test", "--ttl-minutes", "30"]);
+    expect(existsSync(join(dir, ".skillwiki", "sync.lock"))).toBe(true);
+
+    const peers = JSON.parse(runSkillwikiCli(["sync", "peers", dir]));
+    expect(peers.data.locks[0].is_self).toBe(true);
+
+    runSkillwikiCli(["sync", "unlock", dir]);
+
     expect(existsSync(join(dir, ".skillwiki", "sync.lock"))).toBe(false);
   });
 });

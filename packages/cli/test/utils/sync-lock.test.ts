@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import {
   getSessionId,
   getCwdHash,
+  getCliSessionId,
   lockPath,
   readLock,
   isStale,
@@ -50,6 +51,25 @@ describe("getCwdHash", () => {
 
   it("is deterministic", () => {
     expect(getCwdHash("/x")).toBe(getCwdHash("/x"));
+  });
+});
+
+describe("getCliSessionId", () => {
+  const saved = { c: process.env.CLAUDE_SESSION_ID, s: process.env.SKILLWIKI_SESSION_ID };
+  beforeEach(() => { delete process.env.CLAUDE_SESSION_ID; delete process.env.SKILLWIKI_SESSION_ID; });
+  afterEach(() => {
+    if (saved.c === undefined) delete process.env.CLAUDE_SESSION_ID; else process.env.CLAUDE_SESSION_ID = saved.c;
+    if (saved.s === undefined) delete process.env.SKILLWIKI_SESSION_ID; else process.env.SKILLWIKI_SESSION_ID = saved.s;
+  });
+
+  it("uses explicit session environment before cwd fallback", () => {
+    process.env.CLAUDE_SESSION_ID = "claude-cli";
+    expect(getCliSessionId("/repo")).toBe("claude-cli");
+  });
+
+  it("falls back to a deterministic cwd-based CLI session id", () => {
+    expect(getCliSessionId("/repo")).toBe(`cli-${getCwdHash("/repo")}`);
+    expect(getCliSessionId("/repo")).toBe(getCliSessionId("/repo"));
   });
 });
 

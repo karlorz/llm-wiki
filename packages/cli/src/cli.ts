@@ -43,6 +43,7 @@ import { runMemoryImport, runMemoryIndex, runMemoryRecall, runMemoryReview, runM
 import { runIngest } from "./commands/ingest.js";
 import { runTagSync } from "./commands/tag-sync.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "./commands/sync.js";
+import { getCliSessionId } from "./utils/sync-lock.js";
 import { runBackupSync, runBackupRestore } from "./commands/backup.js";
 import { runStatus } from "./commands/status.js";
 import { runSeed } from "./commands/seed.js";
@@ -681,7 +682,7 @@ syncCmd
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else {
       const ttl = parseInt(opts.ttlMinutes, 10) || 30;
-      emit(runSyncLock({ vault: v.vault, summary: opts.summary, ttlMinutes: ttl, force: !!opts.force }));
+      emit(runSyncLock({ vault: v.vault, summary: opts.summary, ttlMinutes: ttl, force: !!opts.force, sessionId: getCliSessionId() }));
     }
   });
 
@@ -693,7 +694,7 @@ syncCmd
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(runSyncUnlock({ vault: v.vault, force: !!opts.force }));
+    else emit(runSyncUnlock({ vault: v.vault, force: !!opts.force, sessionId: getCliSessionId() }));
   });
 
 syncCmd
@@ -703,7 +704,7 @@ syncCmd
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(runSyncPeers({ vault: v.vault }));
+    else emit(runSyncPeers({ vault: v.vault, sessionId: getCliSessionId() }));
   });
 
 // backup — grouped under a parent command
