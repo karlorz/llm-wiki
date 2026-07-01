@@ -10,7 +10,7 @@ import { appendLastOp } from "../../src/utils/last-op.js";
 
 let tmpDirs: string[] = [];
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
-const cliEntry = join(repoRoot, "packages/cli/src/cli.ts");
+const cliEntry = join(repoRoot, "packages/cli/dist/cli.js");
 
 function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "sync-test-"));
@@ -31,8 +31,8 @@ function cliEnvWithoutSession(): NodeJS.ProcessEnv {
 
 function runSkillwikiCli(args: string[]): string {
   return execFileSync(
-    process.platform === "win32" ? "npx.cmd" : "npx",
-    ["tsx", cliEntry, ...args],
+    process.execPath,
+    [cliEntry, ...args],
     {
       cwd: repoRoot,
       encoding: "utf8",
