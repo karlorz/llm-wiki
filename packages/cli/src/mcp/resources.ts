@@ -7,6 +7,7 @@ import { fetchLintBucketPage } from "./lint-bucket.js";
 import { listVaultPages, type VaultPageLayer } from "./vault-pages.js";
 import { fetchQueryPreview } from "./query-preview.js";
 import { fetchGraphHtmlReport } from "./graph-html.js";
+import { fetchMemoryTopicsSummary, fetchStaleSummary } from "./agent-memory-resource.js";
 
 async function readVaultFile(vault: string, rel: string): Promise<string> {
   return readFile(join(vault, rel), "utf8");
@@ -232,6 +233,50 @@ export function registerMcpResources(server: McpServer): void {
         text,
         offset: Number.isFinite(offset) ? offset : 0,
         limit: Number.isFinite(limit) ? limit : 10,
+      });
+      return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(r.result, null, 2) }] };
+    },
+  );
+
+  server.registerResource(
+    "memory-topics",
+    new ResourceTemplate("skillwiki://memory/topics{?project,limit}", { list: undefined }),
+    {
+      description: "Agent-memory-trends topic summary from .skillwiki memory cache (read-only)",
+      mimeType: "application/json",
+    },
+    async (uri, variables) => {
+      const v = await resolveMcpVault({});
+      if (!v.ok) {
+        return { contents: [{ uri: uri.href, mimeType: "text/plain", text: JSON.stringify(v) }] };
+      }
+      const limit = parseInt(String(variables.limit ?? "20"), 10);
+      const r = await fetchMemoryTopicsSummary({
+        vault: v.data.vault,
+        project: variables.project ? String(variables.project) : undefined,
+        limit: Number.isFinite(limit) ? limit : 20,
+      });
+      return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(r.result, null, 2) }] };
+    },
+  );
+
+  server.registerResource(
+    "memory-stale-summary",
+    new ResourceTemplate("skillwiki://memory/stale-summary{?days,project}", { list: undefined }),
+    {
+      description: "Stale transcripts and incomplete work items (read-only; complements memory-trends drift signals)",
+      mimeType: "application/json",
+    },
+    async (uri, variables) => {
+      const v = await resolveMcpVault({});
+      if (!v.ok) {
+        return { contents: [{ uri: uri.href, mimeType: "text/plain", text: JSON.stringify(v) }] };
+      }
+      const days = parseInt(String(variables.days ?? "90"), 10);
+      const r = await fetchStaleSummary({
+        vault: v.data.vault,
+        days: Number.isFinite(days) ? days : 90,
+        project: variables.project ? String(variables.project) : undefined,
       });
       return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(r.result, null, 2) }] };
     },

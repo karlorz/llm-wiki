@@ -133,10 +133,13 @@ After `npm install -g skillwiki`, use `"command": "skillwiki-mcp"` if the bin is
 | `SKILLWIKI_MCP_VAULT_ALLOWLIST` | Optional comma-separated absolute vault roots; deny resolved vaults outside the list (`VAULT_PATH_DENIED`). |
 | `SKILLWIKI_MCP_AUDIT` | Set `0` or `false` to disable per-tool JSON audit lines (default: on). |
 | `SKILLWIKI_MCP_AUDIT_FILE` | If set, append audit JSONL to this path instead of stderr (`[skillwiki-mcp-audit]` prefix on stderr when unset). |
+| `SKILLWIKI_MCP_ALLOW_MUTATIONS` | Set `true` to enable `skillwiki.observe` (writes `raw/transcripts/`). Requires `confirm_mutation: true` on the tool call. |
+
+**Mutating tool (opt-in):** `skillwiki.observe` — disabled unless `SKILLWIKI_MCP_ALLOW_MUTATIONS=true`.
 
 **MVP tools:** `skillwiki.query`, `skillwiki.lint_summary`, `skillwiki.doctor`, `skillwiki.graph_build`, `skillwiki.project_index`, `skillwiki.stale`, `skillwiki.config_get`.
 
-**Resources:** `skillwiki://vault/schema`, `skillwiki://vault/index`, `skillwiki://vault/log-tail`, `skillwiki://vault/pages` (paginated paths), `skillwiki://project/{slug}/index`, `skillwiki://graph/summary`, `skillwiki://graph/report` (static HTML+SVG; optional `maxNodes`), `skillwiki://lint/{bucket}` (paginated bucket items), `skillwiki://query/preview?text=...` (paginated query hits).
+**Resources:** `skillwiki://vault/schema`, `skillwiki://vault/index`, `skillwiki://vault/log-tail`, `skillwiki://vault/pages` (paginated paths), `skillwiki://project/{slug}/index`, `skillwiki://graph/summary`, `skillwiki://graph/report` (static HTML+SVG; optional `maxNodes`), `skillwiki://lint/{bucket}` (paginated bucket items), `skillwiki://query/preview?text=...` (paginated query hits), `skillwiki://memory/topics`, `skillwiki://memory/stale-summary`.
 
 **Prompts:** `skillwiki-research-query`, `skillwiki-project-work-item`, `skillwiki-vault-health-review`, `skillwiki-citation-audit`.
 

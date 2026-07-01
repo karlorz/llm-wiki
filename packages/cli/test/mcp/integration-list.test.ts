@@ -4,6 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createSkillwikiMcpServer } from "../../src/mcp/server.js";
 import {
   MCP_READ_ONLY_TOOLS,
+  MCP_MUTATING_TOOLS,
   MCP_PROMPT_NAMES,
   MCP_RESOURCE_URIS,
 } from "../../src/mcp/manifest.js";
@@ -34,7 +35,8 @@ describe("skillwiki MCP integration (in-memory)", () => {
     const c = await connectPair();
     const { tools } = await c.listTools();
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual([...MCP_READ_ONLY_TOOLS].sort());
+    const expected = [...MCP_READ_ONLY_TOOLS, ...MCP_MUTATING_TOOLS].sort();
+    expect(names).toEqual(expected);
   });
 
   it("lists four prompts matching manifest", async () => {
@@ -57,6 +59,6 @@ describe("skillwiki MCP integration (in-memory)", () => {
     const allPatterns = [...uris, ...templateUris];
     expect(allPatterns.some((u) => u.includes("log-tail"))).toBe(true);
     expect(allPatterns.some((u) => u.includes("project"))).toBe(true);
-    expect(MCP_RESOURCE_URIS.length).toBe(9);
+    expect(MCP_RESOURCE_URIS.length).toBe(11);
   });
 });
