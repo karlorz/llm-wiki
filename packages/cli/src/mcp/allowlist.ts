@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { resolve, sep } from "node:path";
 import { realpathSync } from "node:fs";
 
 /** Comma-separated absolute vault roots; unset = no extra restriction beyond SCHEMA.md scan. */
@@ -22,7 +22,7 @@ export function vaultAllowedByList(vaultPath: string, allowlist: string[] | null
   const resolved = resolve(canonical);
   return allowlist.some((root) => {
     const r = resolve(root);
-    return resolved === r || resolved.startsWith(r + "/");
+    return resolved === r || resolved.startsWith(r + sep);
   });
 }
 

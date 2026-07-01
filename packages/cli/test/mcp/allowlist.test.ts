@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { parseVaultAllowlist, vaultAllowedByList } from "../../src/mcp/allowlist.js";
 
 describe("MCP vault allowlist", () => {
@@ -8,10 +10,12 @@ describe("MCP vault allowlist", () => {
   });
 
   it("vaultAllowedByList permits paths under allowed root", () => {
-    const roots = parseVaultAllowlist("/Users/alice/wiki,/tmp/other");
-    expect(vaultAllowedByList("/Users/alice/wiki", roots)).toBe(true);
-    expect(vaultAllowedByList("/Users/alice/wiki/projects/x", roots)).toBe(true);
-    expect(vaultAllowedByList("/Users/bob/wiki", roots)).toBe(false);
+    const wiki = join(tmpdir(), "skillwiki-mcp-allow-wiki");
+    const other = join(tmpdir(), "skillwiki-mcp-allow-other");
+    const roots = parseVaultAllowlist(`${wiki},${other}`);
+    expect(vaultAllowedByList(wiki, roots)).toBe(true);
+    expect(vaultAllowedByList(join(wiki, "projects", "x"), roots)).toBe(true);
+    expect(vaultAllowedByList(join(tmpdir(), "skillwiki-mcp-denied"), roots)).toBe(false);
   });
 
   it("null allowlist allows any path", () => {
