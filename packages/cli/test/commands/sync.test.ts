@@ -2,12 +2,15 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync, execSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ExitCode } from "@skillwiki/shared";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "../../src/commands/sync.js";
 import { appendLastOp } from "../../src/utils/last-op.js";
 
 let tmpDirs: string[] = [];
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+const cliEntry = join(repoRoot, "packages/cli/src/cli.ts");
 
 function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "sync-test-"));
@@ -29,9 +32,9 @@ function cliEnvWithoutSession(): NodeJS.ProcessEnv {
 function runSkillwikiCli(args: string[]): string {
   return execFileSync(
     process.platform === "win32" ? "npx.cmd" : "npx",
-    ["tsx", "packages/cli/src/cli.ts", ...args],
+    ["tsx", cliEntry, ...args],
     {
-      cwd: process.cwd(),
+      cwd: repoRoot,
       encoding: "utf8",
       env: cliEnvWithoutSession(),
       stdio: "pipe",
