@@ -7,7 +7,7 @@ describe("skillwiki MCP server", () => {
     const server = createSkillwikiMcpServer();
     expect(server).toBeDefined();
     expect(MCP_READ_ONLY_TOOLS).toHaveLength(7);
-    expect(MCP_RESOURCE_URIS).toHaveLength(8);
+    expect(MCP_RESOURCE_URIS).toHaveLength(9);
     expect(MCP_PROMPT_NAMES).toHaveLength(4);
   });
 });

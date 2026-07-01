@@ -6,6 +6,7 @@ import { resolveMcpVault } from "./vault-resolve.js";
 import { fetchLintBucketPage } from "./lint-bucket.js";
 import { listVaultPages, type VaultPageLayer } from "./vault-pages.js";
 import { fetchQueryPreview } from "./query-preview.js";
+import { fetchGraphHtmlReport } from "./graph-html.js";
 
 async function readVaultFile(vault: string, rel: string): Promise<string> {
   return readFile(join(vault, rel), "utf8");
@@ -123,6 +124,30 @@ export function registerMcpResources(server: McpServer): void {
         }, null, 2);
         return { contents: [{ uri: uri.href, mimeType: "application/json", text }] };
       }
+    },
+  );
+
+  server.registerResource(
+    "graph-report",
+    new ResourceTemplate("skillwiki://graph/report{?maxNodes}", { list: undefined }),
+    {
+      description: "Static HTML+SVG wikilink graph report from .skillwiki/graph.json (maxNodes default 120, max 500)",
+      mimeType: "text/html",
+    },
+    async (uri, variables) => {
+      const v = await resolveMcpVault({});
+      if (!v.ok) {
+        return { contents: [{ uri: uri.href, mimeType: "text/plain", text: JSON.stringify(v) }] };
+      }
+      const maxNodes = parseInt(String(variables.maxNodes ?? "120"), 10);
+      const r = await fetchGraphHtmlReport({
+        vault: v.data.vault,
+        maxNodes: Number.isFinite(maxNodes) ? maxNodes : 120,
+      });
+      if (!r.result.ok) {
+        return { contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(r.result) }] };
+      }
+      return { contents: [{ uri: uri.href, mimeType: "text/html", text: r.result.data.html }] };
     },
   );
 

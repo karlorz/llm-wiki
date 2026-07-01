@@ -16,6 +16,7 @@ export const MCP_RESOURCE_URIS = [
   "skillwiki://vault/pages",
   "skillwiki://project/{slug}/index",
   "skillwiki://graph/summary",
+  "skillwiki://graph/report",
   "skillwiki://lint/{bucket}",
   "skillwiki://query/preview",
 ] as const;
