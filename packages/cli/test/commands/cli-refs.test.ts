@@ -204,4 +204,9 @@ describe("validateCliRefs", () => {
     const text = "Run `skillwiki memory review --project llm-wiki --dry-run` to inspect deterministic memory gaps.";
     expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
   });
+
+  it("accepts memory review pre-action command refs", () => {
+    const text = "Run `skillwiki memory review --project llm-wiki --pre-action packages/cli/src/utils/cli-surface.ts --dry-run` before implementation.";
+    expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
+  });
 });

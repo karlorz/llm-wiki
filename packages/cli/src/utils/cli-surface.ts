@@ -110,7 +110,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   memoryCmd.command("topics").option("--project <slug>").option("--limit <n>").option("--wiki <name>");
   memoryCmd.command("index").requiredOption("--project <slug>").option("--check").option("--if-stale").option("--wiki <name>");
   memoryCmd.command("recall").requiredOption("--project <slug>").requiredOption("--topic <slug>").option("--scope <scope>").option("--limit <n>").option("--wiki <name>");
-  memoryCmd.command("review").requiredOption("--project <slug>").option("--dry-run").option("--wiki <name>");
+  memoryCmd.command("review").requiredOption("--project <slug>").option("--dry-run").option("--pre-action <target>").option("--wiki <name>");
   memoryCmd.command("import").requiredOption("--from <path>").requiredOption("--project <slug>").option("--dry-run").option("--apply").option("--max-bytes <n>").option("--wiki <name>");
 
   const fleetCmd = program.commands.find(c => c.name() === "fleet")!;

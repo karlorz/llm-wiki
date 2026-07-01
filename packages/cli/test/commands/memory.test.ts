@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runMemoryImport, runMemoryIndex, runMemoryRecall, runMemoryReview, runMemoryTopics } from "../../src/commands/memory.js";
 
 async function makeVault(): Promise<string> {
@@ -40,6 +40,25 @@ ${extraFrontmatter.trimEnd()}
 
 ${body}
 `);
+}
+
+function writeBugCapture(vault: string, file: string, project: string, body: string): void {
+  mkdirSync(join(vault, "raw", "transcripts"), { recursive: true });
+  writeFileSync(join(vault, "raw", "transcripts", file), `---
+source_url:
+ingested: 2026-07-01
+kind: bug
+project: "[[${project}]]"
+---
+
+${body}
+`);
+}
+
+function writeRetro(vault: string, relPath: string, body: string): void {
+  const absPath = join(vault, relPath);
+  mkdirSync(dirname(absPath), { recursive: true });
+  writeFileSync(absPath, body);
 }
 
 describe("runMemoryTopics", () => {
@@ -524,6 +543,123 @@ last_seen: 2026-06-27`, "A second project-local source for the same topic.");
     expect(result.result.data!.findings).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "scope_gap", topic: "agent-memory" }),
       expect.objectContaining({ kind: "consolidation_candidate", topic: "agent-memory" }),
+    ]));
+  });
+
+  it("reports a past failure match from a project bug capture", async () => {
+    const vault = await makeVault();
+    writeBugCapture(
+      vault,
+      "2026-07-01-bug-cli-surface-pre-action.md",
+      "llm-wiki",
+      "# bug: CLI surface drift\n\n## Root cause\n`packages/cli/src/utils/cli-surface.ts` missed `--pre-action` during a command surface update.\n"
+    );
+
+    const result = await runMemoryReview({
+      vault,
+      project: "llm-wiki",
+      dryRun: true,
+      preAction: "packages/cli/src/utils/cli-surface.ts --pre-action",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "past_failure_match",
+        severity: "warn",
+        path: "raw/transcripts/2026-07-01-bug-cli-surface-pre-action.md",
+      }),
+    ]));
+    expect(result.result.data.files_written).toEqual([]);
+  });
+
+  it("reports past failure matches from active and history retros", async () => {
+    const vault = await makeVault();
+    writeRetro(
+      vault,
+      "projects/llm-wiki/work/2026-06-01-cli-surface-drift/retro.md",
+      "- Miss: `packages/cli/src/utils/cli-surface.ts` was not updated when a new flag was added.\n"
+    );
+    writeRetro(
+      vault,
+      "projects/llm-wiki/history/2026-06-01-cli-surface-drift/retro.md",
+      "- Improve: update cli-surface alongside Commander options for `--pre-action` style flags.\n"
+    );
+
+    const result = await runMemoryReview({
+      vault,
+      project: "llm-wiki",
+      dryRun: true,
+      preAction: "packages/cli/src/utils/cli-surface.ts --pre-action",
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "past_failure_match",
+        severity: "warn",
+        path: "projects/llm-wiki/work/2026-06-01-cli-surface-drift/retro.md",
+      }),
+      expect.objectContaining({
+        kind: "past_failure_match",
+        severity: "warn",
+        path: "projects/llm-wiki/history/2026-06-01-cli-surface-drift/retro.md",
+      }),
+    ]));
+  });
+
+  it("does not report past failure matches for another project or broad terms", async () => {
+    const vault = await makeVault();
+    writeBugCapture(
+      vault,
+      "2026-07-01-bug-other-project-cli-surface.md",
+      "other-project",
+      "# bug: CLI surface drift\n\n## Root cause\n`packages/cli/src/utils/cli-surface.ts` missed `--pre-action` during a command surface update.\n"
+    );
+
+    const otherProject = await runMemoryReview({
+      vault,
+      project: "llm-wiki",
+      dryRun: true,
+      preAction: "packages/cli/src/utils/cli-surface.ts --pre-action",
+    });
+    const broadTerms = await runMemoryReview({
+      vault,
+      project: "llm-wiki",
+      dryRun: true,
+      preAction: "memory review test plugin cache",
+    });
+
+    for (const result of [otherProject, broadTerms]) {
+      expect(result.exitCode).toBe(0);
+      expect(result.result.ok).toBe(true);
+      if (!result.result.ok) throw new Error("expected ok");
+      expect(result.result.data.findings).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: "past_failure_match" }),
+      ]));
+    }
+  });
+
+  it("omits past failure findings when preAction is omitted", async () => {
+    const vault = await makeVault();
+    writeBugCapture(
+      vault,
+      "2026-07-01-bug-cli-surface-pre-action.md",
+      "llm-wiki",
+      "# bug: CLI surface drift\n\n## Root cause\n`packages/cli/src/utils/cli-surface.ts` missed `--pre-action` during a command surface update.\n"
+    );
+
+    const result = await runMemoryReview({ vault, project: "llm-wiki", dryRun: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.findings).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "past_failure_match" }),
     ]));
   });
 
