@@ -125,6 +125,7 @@ function renderPreviewEvidenceCandidate(candidate: AgentInput["selectedCandidate
     `- Queries: ${candidate.queryIds.join(", ")}`,
     `- Quality gate: ${candidate.qualityGate}`,
     `- Evidence families: ${candidate.evidenceFamilies.join(", ")}`,
+    ...previewEvidenceQualityLines(candidate),
     `- Score: ${candidate.score.score}`,
     ...previewReadmeEvidenceLines(candidate),
     "",
@@ -181,6 +182,7 @@ function renderPreviewDigestCandidate(candidate: AgentInput["selectedCandidates"
     `- Stars/forks: ${candidate.stargazersCount} / ${candidate.forksCount}`,
     `- Lanes: ${candidate.laneIds.join(", ")}`,
     `- Evidence families: ${candidate.evidenceFamilies.join(", ")}`,
+    ...previewEvidenceQualityLines(candidate),
     `- Description: ${candidate.description || "(no description)"}`,
     "",
   ];
@@ -203,4 +205,14 @@ function previewReadmeEvidenceLines(candidate: AgentInput["selectedCandidates"][
     `- README supports: ${item.supportsClaim}`,
     `- README confidence: ${item.confidence}`,
   ]);
+}
+
+function previewEvidenceQualityLines(candidate: AgentInput["selectedCandidates"][number]): string[] {
+  const quality = candidate.evidenceQuality;
+  return [
+    `- Evidence quality: ${quality.depth}`,
+    `- Source inspection: ${quality.sourceInspectionRecommended ? "recommended" : "not recommended"}`,
+    `- Evidence signals: ${quality.signals.length > 0 ? quality.signals.join(", ") : "none"}`,
+    `- Evidence summary: ${quality.summary}`,
+  ];
 }

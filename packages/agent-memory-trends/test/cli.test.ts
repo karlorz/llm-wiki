@@ -47,6 +47,12 @@ function selectedCandidate(): SelectedGithubCandidate {
     description: "Markdown agent memory with local-first sync.",
     topics: ["agent-memory", "markdown"],
     readmeText: "Useful for Codex and Claude session continuity.",
+    evidenceQuality: {
+      depth: "implementation_surface",
+      sourceInspectionRecommended: true,
+      signals: ["markdown", "sync", "codex", "claude"],
+      summary: "README evidence exposes implementation surfaces: markdown, sync, codex, claude.",
+    },
     stargazersCount: 120,
     forksCount: 12,
     pushedAt: "2026-06-10T00:00:00Z",
@@ -1504,8 +1510,12 @@ describe("agent-memory-trends CLI", () => {
 
     expect(digest).toContain("Agent Memory Trends Preview - 2026-06-11");
     expect(digest).toContain("acme/local-agent-memory");
+    expect(digest).toContain("Evidence quality: implementation_surface");
+    expect(digest).toContain("Source inspection: recommended");
     expect(evidence).toContain("Deterministic preview evidence");
     expect(evidence).toContain("https://github.com/acme/local-agent-memory");
+    expect(evidence).toContain("Evidence quality: implementation_surface");
+    expect(evidence).toContain("Evidence signals: markdown, sync, codex, claude");
     expect(manifest.mode).toBe("preview-only");
     expect(manifest.outputs.digest_path).toBe("queries/2026-06-11-agent-memory-trends-digest.md");
     expect(manifest.outputs.latest_run_path).toBe(".skillwiki/agent-memory-trends/latest-run.json");

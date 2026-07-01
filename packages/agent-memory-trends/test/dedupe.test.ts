@@ -94,6 +94,12 @@ function candidate(overrides: Partial<SelectedGithubCandidate>): SelectedGithubC
     description: "Agent memory for llm-wiki.",
     topics: ["agent-memory"],
     readmeText: "Markdown memory.",
+    evidenceQuality: {
+      depth: "implementation_surface",
+      sourceInspectionRecommended: true,
+      signals: ["markdown", "sync", "memory"],
+      summary: "README evidence exposes implementation surfaces: markdown, sync, memory.",
+    },
     laneIds: ["weekly_momentum"],
     qualityGate: "passed",
     evidenceFamilies: ["coding_agent", "memory_state", "knowledge_store"],
@@ -212,6 +218,12 @@ describe("agent-memory-trends duplicate suppression and input generation", () =>
       lane_ids: ["weekly_momentum"],
       quality_gate: "passed",
       evidence_families: ["coding_agent", "memory_state", "knowledge_store"],
+      evidence_quality: {
+        depth: "implementation_surface",
+        source_inspection_recommended: true,
+        signals: ["markdown", "sync", "memory"],
+        summary: "README evidence exposes implementation surfaces: markdown, sync, memory.",
+      },
       score: {
         components: {
           implementation_evidence: 20,

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { parseResearchConfig } from "../src/config.js";
-import { collectGithubCandidates, type GhRunResult, type GhRunner } from "../src/github.js";
+import {
+  classifyEvidenceQuality,
+  collectGithubCandidates,
+  type GhRunResult,
+  type GhRunner,
+} from "../src/github.js";
 
 const CONFIG = `version: 1
 project: llm-wiki
@@ -123,6 +128,73 @@ watchlist:
 `;
 
 describe("agent-memory-trends GitHub collector", () => {
+  it("classifies shallow markers separately from actionable implementation evidence", () => {
+    const marker = classifyEvidenceQuality({
+      name: "mcp-memory-marker",
+      fullName: "acme/mcp-memory-marker",
+      canonicalUrl: "https://github.com/acme/mcp-memory-marker",
+      description: "MCP agent memory",
+      topics: ["agent-memory", "mcp"],
+      readmeText: "# MCP Memory\n\nMCP agent memory.",
+      stargazersCount: 25,
+      forksCount: 2,
+      pushedAt: "2026-06-10T00:00:00Z",
+      archived: false,
+    });
+
+    expect(marker).toMatchObject({
+      depth: "metadata_only",
+      sourceInspectionRecommended: false,
+      signals: expect.arrayContaining(["mcp", "agent-memory"]),
+    });
+
+    const featureSurface = classifyEvidenceQuality({
+      name: "adaptive-memory-collector",
+      fullName: "acme/adaptive-memory-collector",
+      canonicalUrl: "https://github.com/acme/adaptive-memory-collector",
+      description: "Coding agent memory collector",
+      topics: ["agent-memory"],
+      readmeText: [
+        "# Adaptive Memory Collector",
+        "",
+        "Collects source-backed agent memory pages with adaptive selector behavior and dynamic fetcher routing.",
+      ].join("\n"),
+      stargazersCount: 120,
+      forksCount: 12,
+      pushedAt: "2026-06-10T00:00:00Z",
+      archived: false,
+    });
+
+    expect(featureSurface).toMatchObject({
+      depth: "feature_surface",
+      sourceInspectionRecommended: true,
+      signals: expect.arrayContaining(["adaptive", "selector", "fetcher"]),
+    });
+
+    const implementationSurface = classifyEvidenceQuality({
+      name: "agent-memory-cli",
+      fullName: "acme/agent-memory-cli",
+      canonicalUrl: "https://github.com/acme/agent-memory-cli",
+      description: "Coding agent memory CLI and MCP integration",
+      topics: ["agent-memory", "mcp"],
+      readmeText: [
+        "# Agent Memory CLI",
+        "",
+        "Ships a CLI, MCP server, parser adapters, plugin registry workflow, and tests for source capture.",
+      ].join("\n"),
+      stargazersCount: 220,
+      forksCount: 24,
+      pushedAt: "2026-06-10T00:00:00Z",
+      archived: false,
+    });
+
+    expect(implementationSurface).toMatchObject({
+      depth: "integration_surface",
+      sourceInspectionRecommended: true,
+      signals: expect.arrayContaining(["cli", "mcp", "parser", "adapter", "plugin", "workflow", "tests"]),
+    });
+  });
+
   it("preflights gh auth, checks rate limits, searches repositories, fetches READMEs, and respects budgets", async () => {
     const parsed = parseResearchConfig(CONFIG, "github-test.yaml");
     if (!parsed.ok) throw new Error("expected config to parse");
@@ -215,6 +287,11 @@ describe("agent-memory-trends GitHub collector", () => {
     expect(result.data.selectedCandidates[0].readmeText.length).toBeGreaterThan(
       readmeEvidence[0]?.excerpt.length ?? 0
     );
+    expect(result.data.selectedCandidates[0].evidenceQuality).toMatchObject({
+      depth: "integration_surface",
+      sourceInspectionRecommended: true,
+      signals: expect.arrayContaining(["markdown", "sync", "hook"]),
+    });
     expect(result.data.rateLimit.resources.search.remaining).toBe(29);
     expect(result.data.runSummary).toMatchObject({
       rawCandidateCount: 50,
