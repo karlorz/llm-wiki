@@ -38,7 +38,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("index-check").option("--wiki <name>");
   program.command("index-link-format").option("--wiki <name>");
   program.command("topic-map-check").option("--threshold <n>").option("--wiki <name>");
-  program.command("stale").option("--archive").option("--days <n>").option("--force-scan").option("--project <slug>").option("--refresh").option("--wiki <name>");
+  program.command("stale").option("--archive").option("--days <n>").option("--force-scan").option("--project <slug>").option("--wiki <name>");
   program.command("claim").option("--project <slug>").option("--slug <slug>").option("--wiki <name>");
   program.command("pagesize").option("--lines <n>").option("--wiki <name>");
   program.command("log-rotate").option("--threshold <n>").option("--apply").option("--wiki <name>");
@@ -95,7 +95,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   compoundCmd.command("delete").requiredOption("--project <slug>").option("--wiki <name>");
 
   const syncCmd = program.commands.find(c => c.name() === "sync")!;
-  syncCmd.command("status").option("--wiki <name>");
+  syncCmd.command("status").option("--wiki <name>").option("--include-stashes");
   syncCmd.command("push").option("--wiki <name>");
   syncCmd.command("pull").option("--wiki <name>");
   syncCmd.command("lock").option("--summary <text>").option("--ttl-minutes <n>").option("--force").option("--wiki <name>");
