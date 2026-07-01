@@ -2,6 +2,7 @@ import { join, resolve } from "node:path";
 import { ok, err, type Result } from "@skillwiki/shared";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 import { scanVault } from "../utils/vault.js";
+import { getVaultAllowlistFromEnv, vaultAllowedByList } from "./allowlist.js";
 
 export interface ResolveVaultInput {
   vault?: string;
@@ -35,6 +36,15 @@ export async function resolveMcpVault(input: ResolveVaultInput): Promise<Result<
   if (!scan.ok) {
     return err("VAULT_PATH_INVALID", { root: vaultPath, reason: scan.detail ?? scan.error });
   }
+
+  const allowlist = getVaultAllowlistFromEnv();
+  if (!vaultAllowedByList(vaultPath, allowlist)) {
+    return err("VAULT_PATH_DENIED", {
+      root: vaultPath,
+      hint: "Set SKILLWIKI_MCP_VAULT_ALLOWLIST to comma-separated permitted vault roots, or unset to allow any valid vault.",
+    });
+  }
+
   return ok({ vault: vaultPath, source });
 }
 

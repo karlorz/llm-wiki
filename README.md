@@ -128,6 +128,12 @@ After `npm install -g skillwiki`, use `"command": "skillwiki-mcp"` if the bin is
 
 **Security:** MCP exposes structured read access to your vault. Set `WIKI_PATH` (or pass `vault` on tools) to an explicit wiki root; the server rejects paths without `SCHEMA.md`. Mutating CLI operations are not registered in the MVP.
 
+| Variable | Purpose |
+|----------|---------|
+| `SKILLWIKI_MCP_VAULT_ALLOWLIST` | Optional comma-separated absolute vault roots; deny resolved vaults outside the list (`VAULT_PATH_DENIED`). |
+| `SKILLWIKI_MCP_AUDIT` | Set `0` or `false` to disable per-tool JSON audit lines (default: on). |
+| `SKILLWIKI_MCP_AUDIT_FILE` | If set, append audit JSONL to this path instead of stderr (`[skillwiki-mcp-audit]` prefix on stderr when unset). |
+
 **MVP tools:** `skillwiki.query`, `skillwiki.lint_summary`, `skillwiki.doctor`, `skillwiki.graph_build`, `skillwiki.project_index`, `skillwiki.stale`, `skillwiki.config_get`.
 
 **Resources:** `skillwiki://vault/schema`, `skillwiki://vault/index`, `skillwiki://vault/log-tail`, `skillwiki://project/{slug}/index`, `skillwiki://graph/summary`.
