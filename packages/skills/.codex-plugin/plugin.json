@@ -18,6 +18,7 @@
     "karpathy"
   ],
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "hooks": "./hooks/hooks-codex.json",
   "interface": {
     "displayName": "SkillWiki",

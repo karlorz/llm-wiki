@@ -124,6 +124,10 @@ node packages/cli/dist/cli.js mcp
 
 After `npm install -g skillwiki`, use `"command": "skillwiki-mcp"` if the bin is on `PATH`.
 
+**Codex plugin:** The SkillWiki marketplace plugin can bundle the same stdio server via `mcpServers` → `.mcp.json` (requires `skillwiki-mcp` on `PATH`, typically from `npm install -g skillwiki`). Users tune enablement and tool approval under `[plugins."skillwiki".mcp_servers.skillwiki]` in `~/.codex/config.toml`. See [Codex plugins — bundled MCP](https://developers.openai.com/codex/plugins/build#bundled-mcp-servers-and-lifecycle-hooks).
+
+**Security:** MCP exposes structured read access to your vault. Set `WIKI_PATH` (or pass `vault` on tools) to an explicit wiki root; the server rejects paths without `SCHEMA.md`. Mutating CLI operations are not registered in the MVP.
+
 **MVP tools:** `skillwiki.query`, `skillwiki.lint_summary`, `skillwiki.doctor`, `skillwiki.graph_build`, `skillwiki.project_index`, `skillwiki.stale`, `skillwiki.config_get`.
 
 **Resources:** `skillwiki://vault/schema`, `skillwiki://vault/index`, `skillwiki://vault/log-tail`, `skillwiki://project/{slug}/index`, `skillwiki://graph/summary`.

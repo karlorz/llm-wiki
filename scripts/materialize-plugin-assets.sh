@@ -174,6 +174,9 @@ sync_skill_mirror "$SKILLS_DIR/skills" "packages/skills/skills"
 sync_file "$SKILLS_DIR/.codex-plugin/plugin.json" \
   "$CODEX_PLUGIN_ROOT/.codex-plugin/plugin.json" \
   "packages/codex-skills/.codex-plugin/plugin.json"
+sync_file "$SKILLS_DIR/.mcp.json" \
+  "$CODEX_PLUGIN_ROOT/.mcp.json" \
+  "packages/codex-skills/.mcp.json"
 sync_skill_mirror "$CODEX_PLUGIN_ROOT/skills" "packages/codex-skills/skills"
 ensure_real_dir "$CODEX_PLUGIN_ROOT/hooks" "packages/codex-skills/hooks"
 sync_file "$SKILLS_DIR/hooks/hooks-codex.json" "$CODEX_PLUGIN_ROOT/hooks/hooks-codex.json" "packages/codex-skills/hooks/hooks-codex.json"
