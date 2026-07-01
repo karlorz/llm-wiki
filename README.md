@@ -95,55 +95,9 @@ npm run materialize:plugins:check
 
 All subcommands emit JSON by default. Pass `--human` for terminal output.
 
-## MCP Server
+## MCP Server (experimental, hidden)
 
-Read-only [Model Context Protocol](https://modelcontextprotocol.io/) surface over the same deterministic command implementations (no LLM calls in the server).
-
-**Start (stdio):**
-
-```bash
-npm run -w skillwiki build
-node packages/cli/dist/skillwiki-mcp.js
-# or
-node packages/cli/dist/cli.js mcp
-```
-
-**Claude Code** (project or user MCP config):
-
-```json
-{
-  "mcpServers": {
-    "skillwiki": {
-      "command": "node",
-      "args": ["/absolute/path/to/llm-wiki/packages/cli/dist/skillwiki-mcp.js"],
-      "env": { "WIKI_PATH": "/Users/you/wiki" }
-    }
-  }
-}
-```
-
-After `npm install -g skillwiki`, use `"command": "skillwiki-mcp"` if the bin is on `PATH`.
-
-**Codex plugin:** The SkillWiki marketplace plugin can bundle the same stdio server via `mcpServers` → `.mcp.json` (requires `skillwiki-mcp` on `PATH`, typically from `npm install -g skillwiki`). Users tune enablement and tool approval under `[plugins."skillwiki".mcp_servers.skillwiki]` in `~/.codex/config.toml`. See [Codex plugins — bundled MCP](https://developers.openai.com/codex/plugins/build#bundled-mcp-servers-and-lifecycle-hooks).
-
-**Security:** MCP exposes structured read access to your vault. Set `WIKI_PATH` (or pass `vault` on tools) to an explicit wiki root; the server rejects paths without `SCHEMA.md`. Mutating CLI operations are not registered in the MVP.
-
-| Variable | Purpose |
-|----------|---------|
-| `SKILLWIKI_MCP_VAULT_ALLOWLIST` | Optional comma-separated absolute vault roots; deny resolved vaults outside the list (`VAULT_PATH_DENIED`). |
-| `SKILLWIKI_MCP_AUDIT` | Set `0` or `false` to disable per-tool JSON audit lines (default: on). |
-| `SKILLWIKI_MCP_AUDIT_FILE` | If set, append audit JSONL to this path instead of stderr (`[skillwiki-mcp-audit]` prefix on stderr when unset). |
-| `SKILLWIKI_MCP_ALLOW_MUTATIONS` | Set `true` to enable `skillwiki.observe` (writes `raw/transcripts/`). Requires `confirm_mutation: true` on the tool call. |
-
-**Mutating tool (opt-in):** `skillwiki.observe` — disabled unless `SKILLWIKI_MCP_ALLOW_MUTATIONS=true`.
-
-**MVP tools:** `skillwiki.query`, `skillwiki.lint_summary`, `skillwiki.doctor`, `skillwiki.graph_build`, `skillwiki.project_index`, `skillwiki.stale`, `skillwiki.config_get`.
-
-**Resources:** `skillwiki://vault/schema`, `skillwiki://vault/index`, `skillwiki://vault/log-tail`, `skillwiki://vault/pages` (paginated paths), `skillwiki://project/{slug}/index`, `skillwiki://graph/summary`, `skillwiki://graph/report` (static HTML+SVG; optional `maxNodes`), `skillwiki://lint/{bucket}` (paginated bucket items), `skillwiki://query/preview?text=...` (paginated query hits), `skillwiki://memory/topics`, `skillwiki://memory/stale-summary`.
-
-**Prompts:** `skillwiki-research-query`, `skillwiki-project-work-item`, `skillwiki-vault-health-review`, `skillwiki-citation-audit`.
-
-Tool responses are JSON `Result` envelopes (`{ ok, data }` / `{ ok: false, error, detail? }`) with `_meta.exitCode` when applicable. Vault paths are validated via `SCHEMA.md`; mutating vault operations are not exposed in MVP.
+> **Status:** shelved. The MCP surface is **not advertised** and **not bundled** in the plugins. It will be revisited once the brain moves to a real remote, centrally-managed wiki. Code remains under `packages/cli/src/mcp/` and `skillwiki mcp` / `skillwiki-mcp` for local experiments; no docs, no manifest declaration, no support.
 
 ## Development
 
