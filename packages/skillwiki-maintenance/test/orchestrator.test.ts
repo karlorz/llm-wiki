@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -294,6 +294,45 @@ describe("runStage1Maintenance", () => {
     ]);
     expect(events.find((event) => event.job === "agent-memory-trends-daily")).toBeUndefined();
     expect(events.find((event) => event.job === "session-brief-refresh")).toBeUndefined();
+  });
+
+  it("writes latest-run.json with status fail when agent-memory-trends-daily fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-fail-state-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+
+    await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      now: new Date("2026-06-13T00:00:00Z"),
+      runCommand: async (command, args, options) => {
+        if (command === "npm" && args.join(" ") === "view skillwiki version") return commandResult("0.8.10\n");
+        if (command === "skillwiki" && args.join(" ") === "--version") return commandResult("0.8.10\n");
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          return commandResult(
+            JSON.stringify({ ok: false, error: "AGENT_MEMORY_TRENDS_DAILY_FAILED", detail: "simulated failure" }) + "\n"
+          );
+        }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args));
+          return commandResult("");
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    const latestPath = join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json");
+    expect(existsSync(latestPath)).toBe(true);
+    const latest = JSON.parse(readFileSync(latestPath, "utf8"));
+    expect(latest.status).toBe("fail");
+    expect(latest.failure_class).toBe("AGENT_MEMORY_TRENDS_DAILY_FAILED");
+    expect(latest.heartbeat).toEqual({ status: "skipped", reason: "writer failed" });
+    expect(latest.changed_files).toEqual([]);
   });
 
   it("does not run later writing jobs after agent-memory-trends-daily fails", async () => {

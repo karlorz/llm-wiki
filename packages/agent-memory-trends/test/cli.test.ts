@@ -763,7 +763,7 @@ describe("agent-memory-trends CLI", () => {
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
       } }),
-      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: (input) => {
         expect(input.selectedCandidates).toHaveLength(1);
         return { ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } };
@@ -800,7 +800,7 @@ describe("agent-memory-trends CLI", () => {
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
       } }),
-      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
       runSynthesis: async (input) => {
         calls.push(`synthesis:${input.input.runId}`);
@@ -880,7 +880,7 @@ describe("agent-memory-trends CLI", () => {
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
       } }),
-      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
       runSynthesis: async () => ({
         ok: false,
@@ -969,7 +969,7 @@ describe("agent-memory-trends CLI", () => {
           runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
         } };
       },
-      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: (input) => {
         expect(input.allowedOutputs.evidencePath).toBe(evidencePath);
         return { ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } };
@@ -1225,7 +1225,7 @@ describe("agent-memory-trends CLI", () => {
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
       } }),
-      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
       runSynthesis: async () => ({
         ok: true,
@@ -1336,7 +1336,7 @@ describe("agent-memory-trends CLI", () => {
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
       } }),
-      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: inputPath } }),
       runSynthesis: async (input) => {
         calls.push("synthesis");
@@ -1467,7 +1467,7 @@ describe("agent-memory-trends CLI", () => {
           selectedCandidates: [selectedCandidate()],
           runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
         } }),
-        collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+        collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
         runSynthesis: async () => {
           calls.push("synthesis");
           throw new Error("preview should not call synthesis");
@@ -1542,7 +1542,7 @@ describe("agent-memory-trends CLI", () => {
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
       } }),
-      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: join(vault, ".skillwiki/agent-memory-trends/2026-06-11-input.json") } }),
       runSynthesis: async (input) => ({
         ok: true,

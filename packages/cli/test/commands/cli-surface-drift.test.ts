@@ -49,7 +49,7 @@ describe("cli-surface drift detection", () => {
       { parent: "sync", subs: ["status", "push", "pull"] },
       { parent: "backup", subs: ["sync", "restore"] },
       { parent: "memory", subs: ["topics", "index", "recall", "review", "import"] },
-      { parent: "fleet", subs: ["validate", "context"] },
+      { parent: "fleet", subs: ["validate", "context", "health"] },
     ];
 
     for (const group of subcommandGroups) {

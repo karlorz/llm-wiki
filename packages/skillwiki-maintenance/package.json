@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@skillwiki/agent-memory-trends": "*",
     "@skillwiki/shared": "*",
     "js-yaml": "^4.1.0"
   },

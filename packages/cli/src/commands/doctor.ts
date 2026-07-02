@@ -11,7 +11,11 @@ import { semverGt } from "../utils/semver.js";
 import { findPlugin, findPluginInstallations, type PluginChannelInstall } from "../utils/plugin-registry.js";
 import { scanVault } from "../utils/vault.js";
 import { buildWikilinkAdjacency, toUndirectedWeighted, louvain, communityCohesion } from "../utils/community.js";
-import { runFleetContext } from "./fleet.js";
+import { loadFleetManifestAndHost, satelliteGateFromFleetLoad, type FleetManifestAndHost } from "./fleet.js";
+import {
+  evaluateSatelliteRunHealth,
+  satelliteLatestRunPath,
+} from "../utils/satellite-run-health.js";
 import {
   findRcloneMountPid,
   parseRcloneFlags,
@@ -609,40 +613,121 @@ function checkVaultGitComparison(
   }
 }
 
+export function checkSatelliteLastRun(vaultPath: string | undefined, satelliteExpected: boolean): CheckResult {
+  if (!satelliteExpected) {
+    return check("pass", "satellite_job_last_run", "Satellite job last run", "Satellite job not expected on this host");
+  }
+  if (vaultPath === undefined) {
+    return check("pass", "satellite_job_last_run", "Satellite job last run", "No vault path — check skipped");
+  }
+  const latestPath = satelliteLatestRunPath(vaultPath);
+  if (!existsSync(latestPath)) {
+    return check("pass", "satellite_job_last_run", "Satellite job last run", "No latest-run.json — satellite has not run yet");
+  }
+  try {
+    const health = evaluateSatelliteRunHealth(vaultPath, new Date());
+    if (health.failed) {
+      const fc = health.failureClass;
+      const detail = fc ? `Last satellite run failed (failure_class: ${fc})` : "Last satellite run failed";
+      return check("error", "satellite_job_last_run", "Satellite job last run", detail);
+    }
+    if (health.stale && health.finishedAt) {
+      return check(
+        "warn",
+        "satellite_job_last_run",
+        "Satellite job last run",
+        `Last run finished_at is older than 26h (${health.finishedAt})`
+      );
+    }
+    return check(
+      "pass",
+      "satellite_job_last_run",
+      "Satellite job last run",
+      health.finishedAt ? `Last run ok (finished_at ${health.finishedAt})` : "Last run ok"
+    );
+  } catch {
+    return check("warn", "satellite_job_last_run", "Satellite job last run", `Could not read ${latestPath}`);
+  }
+}
+
+export interface SatelliteTimerDeps {
+  platform: () => NodeJS.Platform;
+  systemctlIsActive: (unit: string) => string | undefined;
+}
+
+function defaultSatelliteTimerDeps(): SatelliteTimerDeps {
+  return {
+    platform: () => platform(),
+    systemctlIsActive: (unit) => {
+      try {
+        return execSync(`systemctl is-active ${unit}`, {
+          encoding: "utf8",
+          timeout: 2000,
+          stdio: ["pipe", "pipe", "pipe"],
+        }).trim();
+      } catch {
+        return undefined;
+      }
+    },
+  };
+}
+
+export function checkSatelliteTimer(
+  satelliteExpected: boolean,
+  deps: SatelliteTimerDeps = defaultSatelliteTimerDeps()
+): CheckResult {
+  if (!satelliteExpected) {
+    return check("pass", "satellite_job_timer", "Satellite job timer", "Satellite job not expected on this host");
+  }
+  if (deps.platform() !== "linux") {
+    return check("pass", "satellite_job_timer", "Satellite job timer", "Timer check skipped — Linux only");
+  }
+  const out = deps.systemctlIsActive("agent-memory-trends.timer");
+  if (out === undefined) {
+    return check("pass", "satellite_job_timer", "Satellite job timer", "systemctl unavailable");
+  }
+  if (out === "active") {
+    return check("pass", "satellite_job_timer", "Satellite job timer", "systemd: agent-memory-trends.timer active");
+  }
+  return check(
+    "error",
+    "satellite_job_timer",
+    "Satellite job timer",
+    `systemd: agent-memory-trends.timer is ${out || "not active"}`
+  );
+}
+
 async function checkFleetIdentity(input: {
   vaultPath?: string;
   home: string;
   cwd?: string;
   envValue?: string;
+  fleetLoad?: FleetManifestAndHost | null;
 }): Promise<CheckResult> {
   if (!input.vaultPath) {
     return check("pass", "fleet_identity", "Fleet identity", "No vault path — check skipped");
   }
 
-  const r = await runFleetContext({
-    vault: input.vaultPath,
-    env: { ...process.env, WIKI_PATH: input.envValue ?? input.vaultPath },
-    home: input.home,
-    cwd: input.cwd ?? process.cwd(),
-    osHostname: process.env.HOSTNAME,
-    user: process.env.USER,
-  });
+  const load =
+    input.fleetLoad !== undefined
+      ? input.fleetLoad
+      : await loadFleetManifestAndHost({
+          vault: input.vaultPath,
+          env: { ...process.env, WIKI_PATH: input.envValue ?? input.vaultPath },
+          home: input.home,
+          cwd: input.cwd ?? process.cwd(),
+          osHostname: process.env.HOSTNAME,
+          user: process.env.USER,
+        });
 
-  if (!r.result.ok) {
-    return check("warn", "fleet_identity", "Fleet identity", "Could not evaluate fleet identity");
-  }
-
-  const data = r.result.data;
-  if (!data.manifest_loaded) {
+  if (!load) {
     return check("pass", "fleet_identity", "Fleet identity", "Fleet manifest unavailable — check skipped");
   }
-  if (data.identity_status === "known") {
-    return check("pass", "fleet_identity", "Fleet identity", `Resolved ${data.host_id ?? "unknown"} via ${data.source ?? "unknown"}`);
+  if (load.identityStatus === "known") {
+    return check("pass", "fleet_identity", "Fleet identity", `Resolved ${load.hostId ?? "unknown"} via ${load.source ?? "unknown"}`);
   }
 
-  const detail = data.warnings.length > 0
-    ? data.warnings.join("; ")
-    : "Fleet identity is unresolved";
+  const detail = load.warnings.length > 0 ? load.warnings.join("; ") : "Fleet identity is unresolved";
   return check("warn", "fleet_identity", "Fleet identity", detail);
 }
 
@@ -1503,11 +1588,23 @@ export async function runDoctor(
   checks.push(checkVaultStructure(resolvedPath));
   checks.push(checkObsidianTemplates(resolvedPath));
   checks.push(checkVaultGitRemote(gitCheckPath));
+  const fleetLoad = resolvedPath
+    ? await loadFleetManifestAndHost({
+        vault: resolvedPath,
+        env: { ...process.env, WIKI_PATH: input.envValue ?? resolvedPath },
+        home: input.home,
+        cwd: input.cwd,
+        osHostname: process.env.HOSTNAME,
+        user: process.env.USER,
+      })
+    : null;
+
   checks.push(await checkFleetIdentity({
     vaultPath: resolvedPath,
     home: input.home,
     cwd: input.cwd,
     envValue: input.envValue,
+    fleetLoad,
   }));
   checks.push(checkSyncLastPush(gitCheckPath));
   checks.push(checkVaultGitDirty(gitCheckPath));
@@ -1534,6 +1631,10 @@ export async function runDoctor(
     vaultSyncServiceScope: vsConfig.serviceScope,
     snapshotScriptPath: vsConfig.snapshotScript,
   }));
+
+  const satelliteGate = satelliteGateFromFleetLoad(fleetLoad);
+  checks.push(checkSatelliteLastRun(resolvedPath, satelliteGate.satelliteExpected));
+  checks.push(checkSatelliteTimer(satelliteGate.satelliteExpected));
 
   // Vault graph/health metrics (5 info rows, no exit code impact)
   checks.push(...await vaultMetrics(resolvedPath));

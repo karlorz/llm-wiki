@@ -52,6 +52,7 @@ import { runQuery } from "./commands/query.js";
 import { runIndexLinkFormat } from "./commands/index-link-format.js";
 import { runTopicMapCheck } from "./commands/topic-map-check.js";
 import { runFleetContext, runFleetValidate } from "./commands/fleet.js";
+import { runFleetHealth } from "./commands/fleet-health.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 import { postCommit } from "./utils/auto-commit.js";
 import { triggerAutoUpdate } from "./utils/auto-update.js";
@@ -956,6 +957,27 @@ fleetCmd
       osHostname: process.env.HOSTNAME,
       user: process.env.USER,
     }));
+  });
+
+fleetCmd
+  .command("health [vault]")
+  .description("read-only health probe for skillwiki satellite hosts")
+  .option("--file <path>", "fleet manifest path")
+  .option("--host-id <id>", "explicit current fleet host id")
+  .option("--json", "emit JSON result")
+  .action(async (vault, opts) => {
+    const r = await runFleetHealth({
+      vault,
+      file: opts.file,
+      hostId: opts.hostId,
+      json: !!opts.json,
+      env: process.env,
+      home: process.env.HOME ?? "",
+      cwd: process.cwd(),
+      osHostname: process.env.HOSTNAME,
+      user: process.env.USER,
+    });
+    emit(r, vault);
   });
 
 // Emit deprecation warnings for any installed skills marked deprecated

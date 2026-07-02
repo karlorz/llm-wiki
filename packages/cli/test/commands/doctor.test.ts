@@ -3,7 +3,11 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
-import { runDoctor } from "../../src/commands/doctor.js";
+import {
+  runDoctor,
+  checkSatelliteLastRun,
+  checkSatelliteTimer,
+} from "../../src/commands/doctor.js";
 
 function home(): string {
   const h = mkdtempSync(join(tmpdir(), "home-"));
@@ -283,12 +287,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 38 checks", async () => {
+  it("always returns exactly 40 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(38);
+      expect(r.result.data.checks).toHaveLength(40);
       const freshness = r.result.data.checks.find(c => c.id === "s3_mount_freshness");
       expect(freshness).toBeDefined();
       expect(freshness?.status).toBe("pass");
@@ -1084,6 +1088,159 @@ describe("runDoctor", () => {
       const gitDirty = r.result.data.checks.find(c => c.id === "vault_git_dirty");
       expect(gitDirty?.status).toBe("pass");
       expect(gitDirty?.detail).toContain("Clean worktree");
+    });
+  });
+
+  // ── Satellite job doctor checks ─────────────────────────────────
+
+  const FLEET_SG02_SATELLITE = `schema_version: 1
+vault_remote: git@github.com:karlorz/wiki.git
+s3_remote: seaweed-wiki:cloud/wiki
+hosts:
+  sg01:
+    class: prod-linux
+    role: snapshotter
+    writes_to: [github]
+    protected: true
+    identity:
+      hostnames: [sg01]
+  sg02:
+    class: dev-linux
+    role: leaf
+    writes_to: [github]
+    identity:
+      hostnames: [sg02]
+    maintenance:
+      skillwiki_satellite:
+        enabled: true
+        user: agent-memory
+        vault_path: /home/agent-memory/wiki
+        repo_path: /home/agent-memory/llm-wiki
+        ssh_alias: sg02-agent-memory
+        scheduler: systemd
+        jobs:
+          - agent-memory-trends-daily
+`;
+
+  function writeLatestRun(vault: string, body: Record<string, unknown>): void {
+    const dir = join(vault, ".skillwiki", "agent-memory-trends");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "latest-run.json"), JSON.stringify(body, null, 2) + "\n");
+  }
+
+  describe("satellite job checks", () => {
+    it("checkSatelliteLastRun errors when status is fail", () => {
+      const v = mkdtempSync(join(tmpdir(), "vault-sat-"));
+      writeLatestRun(v, { status: "fail", finished_at: new Date().toISOString(), failure_class: "agent" });
+      const c = checkSatelliteLastRun(v, true);
+      expect(c.status).toBe("error");
+      expect(c.id).toBe("satellite_job_last_run");
+    });
+
+    it("checkSatelliteLastRun errors when status is failure", () => {
+      const v = mkdtempSync(join(tmpdir(), "vault-sat-"));
+      writeLatestRun(v, { status: "failure", finished_at: new Date().toISOString(), failure_class: "push" });
+      const c = checkSatelliteLastRun(v, true);
+      expect(c.status).toBe("error");
+    });
+
+    it("checkSatelliteLastRun warns when success finished_at is older than 26h", () => {
+      const v = mkdtempSync(join(tmpdir(), "vault-sat-"));
+      const old = new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString();
+      writeLatestRun(v, { status: "success", finished_at: old });
+      const c = checkSatelliteLastRun(v, true);
+      expect(c.status).toBe("warn");
+      expect(c.detail).toContain("26h");
+    });
+
+    it("checkSatelliteLastRun passes on recent success", () => {
+      const v = mkdtempSync(join(tmpdir(), "vault-sat-"));
+      writeLatestRun(v, { status: "success", finished_at: new Date().toISOString() });
+      const c = checkSatelliteLastRun(v, true);
+      expect(c.status).toBe("pass");
+    });
+
+    it("checkSatelliteLastRun skips when satellite not expected", () => {
+      const c = checkSatelliteLastRun("/any", false);
+      expect(c.status).toBe("pass");
+      expect(c.detail).toContain("not expected");
+    });
+
+    it("checkSatelliteTimer skips on non-Linux", () => {
+      const c = checkSatelliteTimer(true, {
+        platform: () => "darwin",
+        systemctlIsActive: () => "active",
+      });
+      expect(c.status).toBe("pass");
+      expect(c.detail).toContain("Linux only");
+    });
+
+    it("checkSatelliteTimer passes when timer active on Linux", () => {
+      const c = checkSatelliteTimer(true, {
+        platform: () => "linux",
+        systemctlIsActive: () => "active",
+      });
+      expect(c.status).toBe("pass");
+      expect(c.detail).toContain("active");
+    });
+
+    it("checkSatelliteTimer errors when timer not active on Linux", () => {
+      const c = checkSatelliteTimer(true, {
+        platform: () => "linux",
+        systemctlIsActive: () => "inactive",
+      });
+      expect(c.status).toBe("error");
+    });
+
+    it("runDoctor skips both satellite checks when satellite not enabled on host", async () => {
+      const h = home();
+      const v = fullVault();
+      addFleet(v);
+      writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+      const r = await runDoctor({
+        home: h,
+        envValue: v,
+        argv: ["node", "skillwiki", "doctor"],
+        currentVersion: "0.2.0-beta.15",
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const lastRun = r.result.data.checks.find(c => c.id === "satellite_job_last_run");
+      const timer = r.result.data.checks.find(c => c.id === "satellite_job_timer");
+      expect(lastRun?.status).toBe("pass");
+      expect(lastRun?.detail).toContain("not expected");
+      expect(timer?.status).toBe("pass");
+      expect(timer?.detail).toContain("not expected");
+    });
+
+    it("runDoctor satellite_job_last_run errors when enabled host has fail latest-run", async () => {
+      const h = home();
+      const v = fullVault();
+      const dir = join(v, "projects", "llm-wiki", "architecture");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "fleet.yaml"), FLEET_SG02_SATELLITE);
+      writeLatestRun(v, { status: "fail", finished_at: new Date().toISOString(), failure_class: "validation" });
+      writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\nSKILLWIKI_HOST_ID=sg02\n`);
+
+      const prior = process.env.SKILLWIKI_HOST_ID;
+      process.env.SKILLWIKI_HOST_ID = "sg02";
+      let r!: Awaited<ReturnType<typeof runDoctor>>;
+      try {
+        r = await runDoctor({
+          home: h,
+          envValue: v,
+          argv: ["node", "skillwiki", "doctor"],
+          currentVersion: "0.2.0-beta.15",
+        });
+      } finally {
+        if (prior === undefined) delete process.env.SKILLWIKI_HOST_ID;
+        else process.env.SKILLWIKI_HOST_ID = prior;
+      }
+
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const lastRun = r.result.data.checks.find(c => c.id === "satellite_job_last_run");
+      expect(lastRun?.status).toBe("error");
     });
   });
 });

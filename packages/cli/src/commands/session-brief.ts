@@ -4,6 +4,7 @@ import { err, ok, ExitCode, type Result } from "@skillwiki/shared";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { appendLastOp } from "../utils/last-op.js";
+import { evaluateSatelliteRunHealth, satelliteLatestRunPath } from "../utils/satellite-run-health.js";
 
 export interface SessionBriefInput {
   vault: string;
@@ -70,7 +71,10 @@ export async function runSessionBrief(
     const transcripts = await loadTranscriptInfo(scan.data.raw);
     const workItems = await loadWorkItems(scan.data.workItems);
     const digests = await loadTrendDigests(scan.data.typedKnowledge);
-    const healthWarnings = await loadHealthWarnings(input.vault);
+    const healthWarnings = [
+      ...(await loadHealthWarnings(input.vault)),
+      ...satelliteHealthWarnings(await loadSatelliteHealth(input.vault)),
+    ];
     const memoryTopics = project ? await loadMemoryTopics(input.vault, project) : [];
 
     const latestLogs = newest(transcripts.filter((t) => t.kind === "session-log"), 3);
@@ -315,6 +319,35 @@ function appendTextSection(lines: string[], title: string, items: string[], empt
     lines.push(`- ${item}`);
   }
   lines.push("");
+}
+
+async function loadSatelliteHealth(vaultPath: string): Promise<string | null> {
+  const health = evaluateSatelliteRunHealth(vaultPath, new Date());
+  if (!health.failed && !health.stale) {
+    const runPath = satelliteLatestRunPath(vaultPath);
+    const hasRun = await readIfExists(runPath);
+    if (!hasRun) return null;
+  }
+  if (health.failed) {
+    const fc =
+      health.failureClass && health.failureClass.length > 0 ? health.failureClass : "unknown";
+    return `agent-memory-trends: last run failed (${fc})`;
+  }
+  if (health.stale && health.finishedAt) {
+    const finishedMs = Date.parse(health.finishedAt);
+    if (!Number.isNaN(finishedMs)) {
+      const ageHours = (Date.now() - finishedMs) / (60 * 60 * 1000);
+      const hoursRounded = Math.floor(ageHours);
+      const datePart = health.finishedAt.slice(0, 10);
+      return `agent-memory-trends: no run in ${hoursRounded}h (last: ${datePart})`;
+    }
+  }
+
+  return null;
+}
+
+function satelliteHealthWarnings(warning: string | null): string[] {
+  return warning ? [warning] : [];
 }
 
 async function loadHealthWarnings(vault: string): Promise<string[]> {

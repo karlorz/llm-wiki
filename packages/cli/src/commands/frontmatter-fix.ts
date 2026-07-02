@@ -21,7 +21,7 @@ function isoToday(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function fixFrontmatter(rawFm: string): string {
+export function fixFrontmatter(rawFm: string): string {
   const additions: string[] = [];
 
   // Add missing fields (rawFm is the YAML between --- delimiters, no --- itself)

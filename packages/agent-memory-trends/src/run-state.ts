@@ -16,7 +16,7 @@ export const FAILURE_CLASSES = [
 
 export type FailureClass = (typeof FAILURE_CLASSES)[number];
 
-export type RunStatus = "success" | "failure";
+export type RunStatus = "success" | "failure" | "fail";
 
 export type HeartbeatState =
   | {
@@ -34,6 +34,11 @@ export type HeartbeatState =
       body?: string;
     };
 
+export interface DedupeParseErrorWire {
+  path: string;
+  error: string;
+}
+
 export interface AgentMemoryTrendRunState {
   runDate: string;
   runId: string;
@@ -46,6 +51,7 @@ export interface AgentMemoryTrendRunState {
   failureClass: FailureClass | null;
   heartbeat: HeartbeatState;
   synthesis?: SynthesisTelemetry;
+  dedupeParseErrors?: DedupeParseErrorWire[];
 }
 
 export interface WriteRunStateOutput {
@@ -86,7 +92,51 @@ function toWireRunState(state: AgentMemoryTrendRunState): Record<string, unknown
     heartbeat: toWireHeartbeat(state.heartbeat),
   };
   if (state.synthesis) wire.synthesis = synthesisTelemetryToWire(state.synthesis);
+  if (state.dedupeParseErrors && state.dedupeParseErrors.length > 0) {
+    wire.dedupe_parse_errors = state.dedupeParseErrors;
+  }
   return wire;
+}
+
+/** Writes latest-run.json for maintenance failure paths (no dated run file, no commit). */
+export function writeLatestRunStateOnly(
+  vault: string,
+  entry: {
+    runDate: string;
+    runId: string;
+    status: RunStatus;
+    failureClassCode: string | null;
+    startedAt: string;
+    finishedAt: string;
+    heartbeat: HeartbeatState;
+  }
+): Result<{ latestRunPath: string }> {
+  try {
+    const dir = join(vault, ".skillwiki", "agent-memory-trends");
+    mkdirSync(dir, { recursive: true });
+    const latestRunPath = join(dir, "latest-run.json");
+    const body =
+      JSON.stringify(
+        {
+          run_date: entry.runDate,
+          run_id: entry.runId,
+          status: entry.status,
+          started_at: entry.startedAt,
+          finished_at: entry.finishedAt,
+          selected_candidate_count: 0,
+          task_capture_count: 0,
+          changed_files: [] as string[],
+          failure_class: entry.failureClassCode,
+          heartbeat: toWireHeartbeat(entry.heartbeat),
+        },
+        null,
+        2
+      ) + "\n";
+    writeFileSync(latestRunPath, body, "utf8");
+    return ok({ latestRunPath });
+  } catch (error) {
+    return err("RUN_STATE_WRITE_FAILED", error instanceof Error ? error.message : String(error));
+  }
 }
 
 export function synthesisTelemetryToWire(synthesis: SynthesisTelemetry): Record<string, unknown> {

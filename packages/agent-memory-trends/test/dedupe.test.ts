@@ -175,6 +175,72 @@ describe("agent-memory-trends duplicate suppression and input generation", () =>
     expect(novel.duplicate).toBe(false);
   });
 
+  it("returns ok with signals from valid specs and parseErrors for malformed YAML", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-dedupe-malformed-"));
+    mkdirSync(join(vault, "projects", "llm-wiki", "work", "2026-07-01-bad-spec"), { recursive: true });
+    mkdirSync(join(vault, "projects", "llm-wiki", "work", "2026-07-01-good-spec"), { recursive: true });
+    mkdirSync(join(vault, "raw", "transcripts"), { recursive: true });
+    mkdirSync(join(vault, "queries"), { recursive: true });
+
+    writeFileSync(
+      join(vault, "projects", "llm-wiki", "work", "2026-07-01-bad-spec", "spec.md"),
+      ["---", "title: Bad spec", "status: planned", 'provenance_projects: ["[[llm-wiki]]"', "---", "", "# Bad", ""].join("\n"),
+      "utf8"
+    );
+    writeFileSync(
+      join(vault, "projects", "llm-wiki", "work", "2026-07-01-good-spec", "spec.md"),
+      [
+        "---",
+        "title: Good spec",
+        "status: planned",
+        'project: "[[llm-wiki]]"',
+        "description: https://github.com/acme/good-repo",
+        "---",
+        "",
+        "# Good",
+        "",
+      ].join("\n"),
+      "utf8"
+    );
+
+    const signals = collectDuplicateSignals(vault, "llm-wiki");
+    expect(signals.ok).toBe(true);
+    if (!signals.ok) throw new Error("expected duplicate signals");
+    expect(signals.data.activeWork).toHaveLength(1);
+    expect(signals.data.activeWork[0]?.title).toBe("Good spec");
+    expect(signals.data.parseErrors).toHaveLength(1);
+    expect(signals.data.parseErrors[0]?.path).toContain("2026-07-01-bad-spec/spec.md");
+    expect(signals.data.parseErrors[0]?.error.length).toBeGreaterThan(0);
+  });
+
+  it("returns ok with empty signals and all paths in parseErrors when every spec is malformed", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-dedupe-all-bad-"));
+    mkdirSync(join(vault, "projects", "llm-wiki", "work", "2026-07-01-bad-a"), { recursive: true });
+    mkdirSync(join(vault, "projects", "llm-wiki", "work", "2026-07-01-bad-b"), { recursive: true });
+
+    for (const slug of ["2026-07-01-bad-a", "2026-07-01-bad-b"]) {
+      writeFileSync(
+        join(vault, "projects", "llm-wiki", "work", slug, "spec.md"),
+        ["---", "title: Bad", "status: planned", 'provenance_projects: ["[[llm-wiki]]"', "---", "", "# Bad", ""].join("\n"),
+        "utf8"
+      );
+    }
+
+    const signals = collectDuplicateSignals(vault, "llm-wiki");
+    expect(signals.ok).toBe(true);
+    if (!signals.ok) throw new Error("expected duplicate signals");
+    expect(signals.data.activeWork).toHaveLength(0);
+    expect(signals.data.parseErrors).toHaveLength(2);
+  });
+
+  it("returns ok with empty parseErrors when all scanned pages are valid", () => {
+    const vault = makeVault();
+    const signals = collectDuplicateSignals(vault, "llm-wiki");
+    expect(signals.ok).toBe(true);
+    if (!signals.ok) throw new Error("expected duplicate signals");
+    expect(signals.data.parseErrors).toEqual([]);
+  });
+
   it("writes dated Codex input JSON with selected candidates, duplicate suppressions, and allowed outputs", () => {
     const vault = makeVault();
     const selectedCandidates = [
