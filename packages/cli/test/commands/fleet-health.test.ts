@@ -5,7 +5,36 @@ import { join } from "node:path";
 import { ExitCode } from "@skillwiki/shared";
 import { runFleetHealth } from "../../src/commands/fleet-health.js";
 
+const { LOCAL_SATELLITE_VAULT, localLatestRunFixture } = vi.hoisted(() => ({
+  LOCAL_SATELLITE_VAULT: "/home/agent-memory/wiki",
+  localLatestRunFixture: { body: null as Record<string, unknown> | null },
+}));
+
 const execSyncMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const { satelliteLatestRunPath } = await import("../../src/utils/satellite-run-health.js");
+  const latestPath = satelliteLatestRunPath(LOCAL_SATELLITE_VAULT);
+  return {
+    ...actual,
+    existsSync: (path: Parameters<typeof actual.existsSync>[0]) => {
+      if (String(path) === latestPath) {
+        return localLatestRunFixture.body !== null;
+      }
+      return actual.existsSync(path);
+    },
+    readFileSync: (
+      path: Parameters<typeof actual.readFileSync>[0],
+      options?: Parameters<typeof actual.readFileSync>[1]
+    ) => {
+      if (String(path) === latestPath && localLatestRunFixture.body !== null) {
+        return JSON.stringify(localLatestRunFixture.body) + "\n";
+      }
+      return actual.readFileSync(path, options);
+    },
+  };
+});
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -25,13 +54,11 @@ function writeVaultFleet(vault: string, text: string): void {
   writeFileSync(join(dir, "fleet.yaml"), text);
 }
 
-function writeLatestRun(vault: string, body: Record<string, unknown>): void {
-  const dir = join(vault, ".skillwiki", "agent-memory-trends");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "latest-run.json"), JSON.stringify(body) + "\n");
+function setLocalLatestRun(body: Record<string, unknown> | null): void {
+  localLatestRunFixture.body = body;
 }
 
-function fleetWithLocalSatellite(vaultPath: string): string {
+function fleetWithLocalSatellite(): string {
   return `schema_version: 1
 vault_remote: git@github.com:karlorz/wiki.git
 hosts:
@@ -52,7 +79,7 @@ hosts:
       skillwiki_satellite:
         enabled: true
         user: agent-memory
-        vault_path: ${vaultPath}
+        vault_path: ${LOCAL_SATELLITE_VAULT}
         repo_path: /home/agent-memory/llm-wiki
         ssh_alias: local-sat-alias
         scheduler: systemd
@@ -109,6 +136,7 @@ hosts:
 
 describe("fleet health", () => {
   beforeEach(() => {
+    localLatestRunFixture.body = null;
     execSyncMock.mockReset();
   });
 
@@ -136,8 +164,8 @@ describe("fleet health", () => {
 
   it("local satellite host with fail status → non-zero exit and fail row", async () => {
     const vault = tempDir();
-    writeVaultFleet(vault, fleetWithLocalSatellite(vault));
-    writeLatestRun(vault, {
+    writeVaultFleet(vault, fleetWithLocalSatellite());
+    setLocalLatestRun({
       status: "fail",
       finished_at: new Date().toISOString(),
       failure_class: "DEDUPE_SCAN_FAILED",
@@ -225,8 +253,8 @@ describe("fleet health", () => {
 
   it("all hosts healthy → exit 0", async () => {
     const vault = tempDir();
-    writeVaultFleet(vault, fleetWithLocalSatellite(vault));
-    writeLatestRun(vault, { status: "success", finished_at: new Date().toISOString() });
+    writeVaultFleet(vault, fleetWithLocalSatellite());
+    setLocalLatestRun({ status: "success", finished_at: new Date().toISOString() });
 
     const r = await runFleetHealth({
       vault,
