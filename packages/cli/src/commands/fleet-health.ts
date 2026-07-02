@@ -20,7 +20,7 @@ const TIMER_UNIT = "agent-memory-trends.timer";
 
 export type FleetHealthTimer = "active" | "inactive" | "unknown";
 export type FleetHealthRunStatus = "success" | "fail" | "unknown" | "none";
-export type FleetHealthReachable = "yes" | "no";
+export type FleetHealthReachable = "yes" | "no" | "no-access";
 
 export interface FleetHealthHostRow {
   host: string;
@@ -255,15 +255,30 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
-function satelliteHosts(manifest: FleetManifest): Array<{ id: string; vaultPath: string; sshAlias: string }> {
-  const out: Array<{ id: string; vaultPath: string; sshAlias: string }> = [];
+function satelliteHosts(manifest: FleetManifest): Array<{ id: string; vaultPath: string; sshAlias: string; host: FleetManifest["hosts"][string] }> {
+  const out: Array<{ id: string; vaultPath: string; sshAlias: string; host: FleetManifest["hosts"][string] }> = [];
   for (const [id, host] of Object.entries(manifest.hosts)) {
     const sat = host.maintenance?.skillwiki_satellite;
     if (sat?.enabled === true) {
-      out.push({ id, vaultPath: sat.vault_path, sshAlias: sat.ssh_alias });
+      out.push({ id, vaultPath: sat.vault_path, sshAlias: sat.ssh_alias, host });
     }
   }
   return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/**
+ * Returns true when the local host has declared SSH access to the remote
+ * satellite host. SSH aliases are only declared under
+ * `host.access.from[localHostId].ssh_aliases` — e.g. sg02 is only reachable
+ * from macos-dev. Running `fleet health` from a host without declared access
+ * must NOT probe (and must NOT false-positive "unreachable").
+ */
+function hasDeclaredSshAccess(host: FleetManifest["hosts"][string], localHostId: string, satelliteAlias: string): boolean {
+  const profile = host.access?.from?.[localHostId];
+  if (!profile) return false;
+  if (profile.status !== "configured" && profile.status !== "local") return false;
+  const aliases = profile.ssh_aliases ?? [];
+  return aliases.includes(satelliteAlias as never);
 }
 
 function formatTable(rows: FleetHealthHostRow[]): string {
@@ -283,6 +298,8 @@ function rowHealthy(
   timerBad: boolean,
   platform: NodeJS.Platform
 ): boolean {
+  // no-access rows are not probed (SSH not declared from this host); don't alarm.
+  if (reachable === "no-access") return true;
   if (reachable === "no") return false;
   if (runUnhealthy) return false;
   if (platform === "linux" && timerBad) return false;
@@ -352,6 +369,22 @@ export async function runFleetHealth(
         healthy,
       });
     } else {
+      // Remote satellite — only probe when SSH access is declared from the
+      // local host. sg02 is only SSH-reachable from macos-dev; from any other
+      // host (sg01, a fresh dev box), skip with no-access instead of
+      // false-positive "unreachable".
+      if (!hasDeclaredSshAccess(t.host, localHostId, t.sshAlias)) {
+        rows.push({
+          host: t.id,
+          timer: "unknown",
+          last_run_status: "unknown",
+          last_run_age: "never",
+          failure_class: "-",
+          reachable: "no-access",
+          healthy: true,
+        });
+        continue;
+      }
       const p = probeRemote(t.sshAlias, t.vaultPath, deps);
       const healthy = rowHealthy(p.reachable, p.timer, p.runUnhealthy, p.timerBad, "linux");
       rows.push({

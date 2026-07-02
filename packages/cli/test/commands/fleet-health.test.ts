@@ -110,6 +110,13 @@ hosts:
     writes_to: [github]
     identity:
       hostnames: [sg02]
+    access:
+      from:
+        macos-dev:
+          status: configured
+          ssh_aliases: [sg02-agent-memory]
+          users: [agent-memory]
+          transports: [public-ip]
     maintenance:
       skillwiki_satellite:
         enabled: true
@@ -274,6 +281,28 @@ describe("fleet health", () => {
     expect(r.exitCode).toBe(ExitCode.OK);
     if (r.result.ok) {
       expect(r.result.data.hosts[0]?.healthy).toBe(true);
+    }
+  });
+
+  it("remote satellite with no declared SSH access from local host → no-access row, exit 0, no SSH attempt", async () => {
+    const vault = tempDir();
+    writeVaultFleet(vault, FLEET_REMOTE_SATELLITE);
+    // Run as sg01 (no access.from.sg01 declared for sg02) — must NOT probe.
+    const r = await runFleetHealth({
+      vault,
+      hostId: "sg01",
+      env: {},
+      home: tempDir(),
+      osHostname: "sg01",
+      deps: { platform: () => "linux", execSync: execSyncMock },
+    });
+
+    expect(execSyncMock).not.toHaveBeenCalled();
+    expect(r.exitCode).toBe(ExitCode.OK);
+    if (r.result.ok) {
+      expect(r.result.data.hosts[0]?.reachable).toBe("no-access");
+      expect(r.result.data.hosts[0]?.healthy).toBe(true);
+      expect(r.result.data.humanHint).toContain("no-access");
     }
   });
 });
