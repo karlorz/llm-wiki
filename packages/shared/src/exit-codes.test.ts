@@ -47,6 +47,7 @@ describe("exit-codes", () => {
     expect(ExitCode.INGEST_VALIDATION_FAILED).toBe(41);
     expect(ExitCode.FLEET_MANIFEST_INVALID).toBe(50);
     expect(ExitCode.SENSITIVE_CONTENT_DETECTED).toBe(51);
+    expect(ExitCode.FLEET_SATELLITE_HEALTH_FAILED).toBe(52);
     expect(ExitCode.SYNC_LOCK_HELD).toBe(48);
     expect(ExitCode.LOG_APPEND_LOCK_HELD).toBe(49);
   });

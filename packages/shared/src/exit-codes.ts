@@ -50,7 +50,8 @@ export const ExitCode = {
   SYNC_LOCK_HELD: 48,
   LOG_APPEND_LOCK_HELD: 49,
   FLEET_MANIFEST_INVALID: 50,
-  SENSITIVE_CONTENT_DETECTED: 51
+  SENSITIVE_CONTENT_DETECTED: 51,
+  FLEET_SATELLITE_HEALTH_FAILED: 52
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -107,7 +108,8 @@ const NAMES: Record<number, string> = {
   48: "SYNC_LOCK_HELD",
   49: "LOG_APPEND_LOCK_HELD",
   50: "FLEET_MANIFEST_INVALID",
-  51: "SENSITIVE_CONTENT_DETECTED"
+  51: "SENSITIVE_CONTENT_DETECTED",
+  52: "FLEET_SATELLITE_HEALTH_FAILED"
 };
 
 export function exitCodeName(code: number): string {

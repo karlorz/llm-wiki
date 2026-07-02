@@ -3,6 +3,9 @@
   "version": "0.9.29",
   "private": true,
   "type": "module",
+  "exports": {
+    "./src/run-state.js": "./src/run-state.ts"
+  },
   "bin": {
     "agent-memory-trends": "dist/cli.js"
   },

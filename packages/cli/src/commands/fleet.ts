@@ -64,7 +64,7 @@ interface OutboundAccess {
   users: string[];
 }
 
-const FLEET_REL_PATH = join("projects", "llm-wiki", "architecture", "fleet.yaml");
+export const FLEET_REL_PATH = join("projects", "llm-wiki", "architecture", "fleet.yaml");
 
 export async function runFleetValidate(input: FleetValidateInput): Promise<{ exitCode: number; result: Result<FleetValidateOutput> }> {
   const loaded = await loadFleetManifest(input.file);
@@ -128,7 +128,7 @@ export async function runFleetContext(input: FleetContextInput): Promise<{ exitC
     };
   }
 
-  const resolved = await resolveHostId({
+  const resolved = await resolveFleetHostId({
     manifest: loaded.manifest,
     hostId: input.hostId,
     env,
@@ -220,7 +220,95 @@ export async function runFleetContext(input: FleetContextInput): Promise<{ exitC
   };
 }
 
-async function loadFleetManifest(file: string): Promise<LoadedFleet> {
+export interface FleetSatelliteGate {
+  satelliteExpected: boolean;
+}
+
+export interface FleetManifestAndHost {
+  manifest: FleetManifest;
+  hostId: string | undefined;
+  source: string | undefined;
+  warnings: string[];
+  identityStatus: FleetContextOutput["identity_status"];
+}
+
+function fleetContextEnv(input: FleetContextInput): {
+  env: Record<string, string | undefined>;
+  home: string;
+  osHostname: string;
+  vault: string | undefined;
+  file: string | undefined;
+} {
+  const env = input.env ?? process.env;
+  const home = input.home ?? env.HOME ?? "";
+  const osHostname = input.osHostname ?? safeEnvValue(env.HOSTNAME) ?? nodeHostname();
+  const vault = input.vault ?? safeEnvValue(env.WIKI_PATH);
+  const file = input.file ?? (vault ? join(vault, FLEET_REL_PATH) : undefined);
+  return { env, home, osHostname, vault, file };
+}
+
+/** Single load + host resolve for doctor and satellite gate (avoids duplicate YAML parse). */
+export async function loadFleetManifestAndHost(
+  input: FleetContextInput
+): Promise<FleetManifestAndHost | null> {
+  const { env, home, osHostname, file } = fleetContextEnv(input);
+  if (!file) return null;
+
+  const loaded = await loadFleetManifest(file);
+  if (!loaded.ok) return null;
+
+  const resolved = await resolveFleetHostId({
+    manifest: loaded.manifest,
+    hostId: input.hostId,
+    env,
+    home,
+    osHostname,
+  });
+
+  if (!resolved.hostId) {
+    return {
+      manifest: loaded.manifest,
+      hostId: undefined,
+      source: resolved.source,
+      warnings: ["host identity is unresolved"],
+      identityStatus: "unknown",
+    };
+  }
+
+  if (!loaded.manifest.hosts[resolved.hostId]) {
+    const source = resolved.source ?? "unknown";
+    return {
+      manifest: loaded.manifest,
+      hostId: resolved.hostId,
+      source: resolved.source,
+      warnings: [`resolved host id \`${resolved.hostId}\` from ${source} is not in fleet.yaml`],
+      identityStatus: "invalid",
+    };
+  }
+
+  return {
+    manifest: loaded.manifest,
+    hostId: resolved.hostId,
+    source: resolved.source,
+    warnings: [],
+    identityStatus: "known",
+  };
+}
+
+export function satelliteGateFromFleetLoad(load: FleetManifestAndHost | null): FleetSatelliteGate {
+  if (!load?.hostId) return { satelliteExpected: false };
+  const host = load.manifest.hosts[load.hostId];
+  if (!host) return { satelliteExpected: false };
+  return { satelliteExpected: host.maintenance?.skillwiki_satellite?.enabled === true };
+}
+
+/** True when the resolved fleet host has maintenance.skillwiki_satellite.enabled. */
+export async function resolveFleetSatelliteGate(input: FleetContextInput): Promise<FleetSatelliteGate> {
+  const load = await loadFleetManifestAndHost(input);
+  return satelliteGateFromFleetLoad(load);
+}
+
+export async function loadFleetManifest(file: string): Promise<LoadedFleet> {
   let text: string;
   try {
     text = await readFile(file, "utf8");
@@ -286,7 +374,7 @@ function findSnapshotter(manifest: FleetManifest): string | undefined {
   return Object.entries(manifest.hosts).find(([, host]) => host.role === "snapshotter")?.[0];
 }
 
-async function resolveHostId(input: {
+export async function resolveFleetHostId(input: {
   manifest: FleetManifest;
   hostId?: string;
   env: Record<string, string | undefined>;

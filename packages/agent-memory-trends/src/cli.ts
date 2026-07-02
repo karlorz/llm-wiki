@@ -177,6 +177,7 @@ interface CollectedInput {
   config: ResearchConfig;
   input: AgentInput;
   inputPath: string;
+  dedupeParseErrors: { path: string; error: string }[];
 }
 
 async function runDoctor(options: ParsedCliOptions, context: AgentMemoryTrendsContext): Promise<Result<DoctorCheck[]>> {
@@ -882,6 +883,7 @@ async function collectInput(options: ParsedCliOptions, context: AgentMemoryTrend
     config: config.data,
     input: input.data,
     inputPath: written.data.path,
+    dedupeParseErrors: signals.data.parseErrors,
   });
 }
 
@@ -908,7 +910,11 @@ async function runDaily(
   }
 
   const collected = await collectInput(options, context);
-  if (!collected.ok) return collected;
+  if (!collected.ok) {
+    const resolved = resolveRunOptions(options, context);
+    writeFailureState(resolved, context, startedAt, failureClassForCollectError(collected.error));
+    return collected;
+  }
 
   if (previewOnly) {
     const preview = materializePreviewRun({
@@ -1004,6 +1010,11 @@ async function runDaily(
         writeFailureState(collected.data.options, context, startedAt, "validation", synthesisTelemetry);
         return materialized;
       }
+      stampDedupeParseErrors(
+        collected.data.options.vault,
+        collected.data.input.manifestPath,
+        collected.data.dedupeParseErrors
+      );
       changedFiles = materialized.data.changedFiles;
       mutations.push(...changedFiles);
       return ok({
@@ -1036,6 +1047,7 @@ async function runDaily(
       failureClass: null,
       heartbeat,
       synthesis: synthesisTelemetry,
+      dedupeParseErrors: collected.data.dedupeParseErrors,
     });
     if (!stateResult.ok) return stateResult;
     mutations.push(stateResult.data.runStatePath, stateResult.data.latestRunPath);
@@ -1543,6 +1555,29 @@ function classifyFailure(error: string): AgentMemoryTrendRunState["failureClass"
   if (error === "ALLOWLIST_REJECTED") return "allowlist";
   if (error === "GIT_FAILED") return "push";
   return "validation";
+}
+
+function failureClassForCollectError(error: string): AgentMemoryTrendRunState["failureClass"] {
+  if (error === "COLLECTOR_FAILED" || error === "DEDUPE_SCAN_FAILED") return "collector";
+  return classifyFailure(error);
+}
+
+function stampDedupeParseErrors(
+  vault: string,
+  manifestPath: string,
+  parseErrors: { path: string; error: string }[]
+): void {
+  if (parseErrors.length === 0) return;
+  const path = join(vault, manifestPath);
+  if (!existsSync(path)) return;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    parsed.dedupe_parse_errors = parseErrors;
+    const body = JSON.stringify(parsed, null, 2) + "\n";
+    writeFileSync(path, body, "utf8");
+  } catch {
+    // advisory stamp; daily run continues
+  }
 }
 
 function formatInstant(date: Date): string {

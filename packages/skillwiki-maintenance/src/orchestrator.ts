@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeLatestRunStateOnly } from "@skillwiki/agent-memory-trends/src/run-state.js";
 import { resolveSessionKind } from "@skillwiki/shared";
 import { createCommandRunner } from "./command.js";
 import { parseMaintenanceConfig, type MaintenanceConfig } from "./config.js";
@@ -119,6 +120,7 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
         }
       }
       if (job === "agent-memory-trends-daily") {
+        const trendsStartedAt = input.now.toISOString();
         const trendsDaily = await runAgentMemoryTrendsDaily({
           vaultPath: parsed.data.vaultPath,
           repoPath: parsed.data.repoPath,
@@ -126,6 +128,18 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
           runCommand,
         });
         checks.push(trendsDaily);
+        if (trendsDaily.status === "fail") {
+          const jobError = trendsDaily.details.jobError;
+          writeLatestRunStateOnly(parsed.data.vaultPath, {
+            runDate: formatMaintenanceRunDate(input.now),
+            runId: formatMaintenanceRunId(input.now),
+            status: "fail",
+            failureClassCode: jobError?.error ?? "AGENT_MEMORY_TRENDS_DAILY_FAILED",
+            startedAt: trendsStartedAt,
+            finishedAt: new Date().toISOString(),
+            heartbeat: { status: "skipped", reason: "writer failed" },
+          });
+        }
         writeFailed = trendsDaily.status === "fail";
         writeCommitted = trendsDaily.details.committed;
         emit({ ts: ts(), event: "job", host_id: input.hostId, job: trendsDaily.job, status: trendsDaily.status, reason: trendsDaily.reason, details: trendsDaily.details });
@@ -202,4 +216,12 @@ function commandSummary(result: { stdout: string; stderr: string }): string {
     .map((line) => line.trim())
     .find((line) => line.length > 0 && !line.startsWith("To "));
   return meaningful ?? "no output";
+}
+
+function formatMaintenanceRunDate(now: Date): string {
+  return now.toISOString().slice(0, 10);
+}
+
+function formatMaintenanceRunId(now: Date): string {
+  return now.toISOString().replace(/\.\d{3}Z$/, "Z").replace(/:/g, "-");
 }

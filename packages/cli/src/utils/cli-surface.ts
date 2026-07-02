@@ -116,6 +116,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   const fleetCmd = program.commands.find(c => c.name() === "fleet")!;
   fleetCmd.command("validate");
   fleetCmd.command("context").option("--file <path>").option("--host-id <id>");
+  fleetCmd.command("health").option("--file <path>").option("--host-id <id>").option("--json");
 
   // Extract surface map
   const surface = new Map<string, Set<string>>();

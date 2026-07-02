@@ -237,4 +237,67 @@ Review a new memory source candidate.
     if (!inferredResult.result.ok) throw new Error("expected ok");
     expect(inferredResult.result.data.project).toBe("llm-wiki");
   });
+
+  function writeLatestRun(vault: string, body: Record<string, unknown>): void {
+    mkdirSync(join(vault, ".skillwiki", "agent-memory-trends"), { recursive: true });
+    writeFileSync(
+      join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"),
+      `${JSON.stringify(body, null, 2)}\n`,
+      "utf8"
+    );
+  }
+
+  it("includes satellite failure in Health Warnings when latest-run status is fail", async () => {
+    const vault = await makeVault();
+    writeLatestRun(vault, {
+      status: "fail",
+      failure_class: "dedupe",
+      finished_at: new Date().toISOString(),
+    });
+
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: false });
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.brief).toContain("Health Warnings");
+    expect(result.result.data.brief).toContain("agent-memory-trends: last run failed (dedupe)");
+  });
+
+  it("includes satellite stale warning when finished_at is older than 26h", async () => {
+    const vault = await makeVault();
+    const stale = new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString();
+    writeLatestRun(vault, {
+      status: "success",
+      failure_class: null,
+      finished_at: stale,
+    });
+
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: false });
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.brief).toContain("agent-memory-trends: no run in");
+    expect(result.result.data.brief).toContain("last:");
+  });
+
+  it("omits satellite warning when latest-run.json is absent", async () => {
+    const vault = await makeVault();
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: false });
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.brief).not.toContain("agent-memory-trends:");
+  });
+
+  it("omits satellite warning on recent successful run", async () => {
+    const vault = await makeVault();
+    writeLatestRun(vault, {
+      status: "success",
+      failure_class: null,
+      finished_at: new Date().toISOString(),
+    });
+
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: false });
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.brief).not.toMatch(/agent-memory-trends: last run failed/);
+    expect(result.result.data.brief).not.toMatch(/agent-memory-trends: no run in/);
+  });
 });

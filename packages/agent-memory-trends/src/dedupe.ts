@@ -27,10 +27,16 @@ export interface RecentDigestSignal {
   repoNames: string[];
 }
 
+export interface DedupeParseError {
+  path: string;
+  error: string;
+}
+
 export interface DuplicateSignals {
   existingTasks: ExistingTaskSignal[];
   activeWork: ActiveWorkSignal[];
   recentDigests: RecentDigestSignal[];
+  parseErrors: DedupeParseError[];
 }
 
 export interface DuplicateDecision {
@@ -41,11 +47,13 @@ export interface DuplicateDecision {
 const ACTIVE_WORK_STATUSES = new Set(["planned", "in-progress"]);
 
 export function collectDuplicateSignals(vault: string, project: string): Result<DuplicateSignals> {
+  const parseErrors: DedupeParseError[] = [];
   try {
     return ok({
-      existingTasks: collectExistingTasks(vault, project),
-      activeWork: collectActiveWork(vault, project),
-      recentDigests: collectRecentDigests(vault),
+      existingTasks: collectExistingTasks(vault, project, parseErrors),
+      activeWork: collectActiveWork(vault, project, parseErrors),
+      recentDigests: collectRecentDigests(vault, parseErrors),
+      parseErrors,
     });
   } catch (error) {
     return err("DEDUPE_SCAN_FAILED", error instanceof Error ? error.message : String(error));
@@ -84,72 +92,83 @@ export function evaluateDuplicateCandidate(candidate: SelectedGithubCandidate, s
   return { duplicate: reasons.length > 0, reasons };
 }
 
-function collectExistingTasks(vault: string, project: string): ExistingTaskSignal[] {
+function collectExistingTasks(vault: string, project: string, parseErrors: DedupeParseError[]): ExistingTaskSignal[] {
   const dir = join(vault, "raw", "transcripts");
   if (!existsSync(dir)) return [];
-  return listMarkdownFiles(dir)
-    .filter((path) => /task/i.test(path))
-    .map((path) => {
-      const parsed = readMarkdownPage(vault, path);
-      return { path: parsed.relPath, parsed };
-    })
-    .filter(({ parsed }) => parsed.frontmatter.kind === "task" && frontmatterProjectMatches(parsed.frontmatter.project, project))
-    .map(({ path, parsed }) => {
-      const sourceUrl = stringValue(parsed.frontmatter.source_url);
-      return {
-        path,
-        title: pageTitle(parsed, path),
-        sourceUrl,
-        repoName: repoNameFromText([sourceUrl, parsed.body].join("\n")),
-      };
+  const results: ExistingTaskSignal[] = [];
+  for (const filePath of listMarkdownFiles(dir).filter((path) => /task/i.test(path))) {
+    const parsed = tryReadMarkdownPage(vault, filePath, parseErrors);
+    if (!parsed) continue;
+    if (parsed.frontmatter.kind !== "task" || !frontmatterProjectMatches(parsed.frontmatter.project, project)) continue;
+    const sourceUrl = stringValue(parsed.frontmatter.source_url);
+    results.push({
+      path: parsed.relPath,
+      title: pageTitle(parsed, parsed.relPath),
+      sourceUrl,
+      repoName: repoNameFromText([sourceUrl, parsed.body].join("\n")),
     });
+  }
+  return results;
 }
 
-function collectActiveWork(vault: string, project: string): ActiveWorkSignal[] {
+function collectActiveWork(vault: string, project: string, parseErrors: DedupeParseError[]): ActiveWorkSignal[] {
   const dir = join(vault, "projects", project, "work");
   if (!existsSync(dir)) return [];
-  return listMarkdownFiles(dir)
-    .filter((path) => path.endsWith("/spec.md"))
-    .map((path) => {
-      const parsed = readMarkdownPage(vault, path);
-      return { path: parsed.relPath, parsed };
-    })
-    .filter(({ parsed }) => ACTIVE_WORK_STATUSES.has(stringValue(parsed.frontmatter.status)))
-    .map(({ path, parsed }) => {
-      const sourceUrls = extractUrls([stringValue(parsed.frontmatter.source_url), parsed.body].join("\n"));
-      return {
-        path,
-        title: pageTitle(parsed, path),
-        status: stringValue(parsed.frontmatter.status) as "planned" | "in-progress",
-        sourceUrls,
-        repoNames: unique(sourceUrls.map(repoNameFromGithubUrl).filter(isString).concat(extractRepoNames(parsed.body))),
-      };
+  const results: ActiveWorkSignal[] = [];
+  for (const filePath of listMarkdownFiles(dir).filter((path) => path.endsWith("/spec.md"))) {
+    const parsed = tryReadMarkdownPage(vault, filePath, parseErrors);
+    if (!parsed) continue;
+    if (!ACTIVE_WORK_STATUSES.has(stringValue(parsed.frontmatter.status))) continue;
+    const sourceUrls = extractUrls([stringValue(parsed.frontmatter.source_url), parsed.body].join("\n"));
+    results.push({
+      path: parsed.relPath,
+      title: pageTitle(parsed, parsed.relPath),
+      status: stringValue(parsed.frontmatter.status) as "planned" | "in-progress",
+      sourceUrls,
+      repoNames: unique(sourceUrls.map(repoNameFromGithubUrl).filter(isString).concat(extractRepoNames(parsed.body))),
     });
+  }
+  return results;
 }
 
-function collectRecentDigests(vault: string): RecentDigestSignal[] {
+function collectRecentDigests(vault: string, parseErrors: DedupeParseError[]): RecentDigestSignal[] {
   const dir = join(vault, "queries");
   if (!existsSync(dir)) return [];
-  return listMarkdownFiles(dir)
+  const results: RecentDigestSignal[] = [];
+  for (const filePath of listMarkdownFiles(dir)
     .filter((path) => /agent-memory-trends-digest/i.test(path))
     .sort((left, right) => right.localeCompare(left))
-    .slice(0, 30)
-    .map((path) => {
-      const parsed = readMarkdownPage(vault, path);
-      const sourceUrls = extractUrls([stringValue(parsed.frontmatter.source_url), parsed.body].join("\n"));
-      return {
-        path: parsed.relPath,
-        title: pageTitle(parsed, parsed.relPath),
-        sourceUrls,
-        repoNames: unique(sourceUrls.map(repoNameFromGithubUrl).filter(isString).concat(extractRepoNames(parsed.body))),
-      };
+    .slice(0, 30)) {
+    const parsed = tryReadMarkdownPage(vault, filePath, parseErrors);
+    if (!parsed) continue;
+    const sourceUrls = extractUrls([stringValue(parsed.frontmatter.source_url), parsed.body].join("\n"));
+    results.push({
+      path: parsed.relPath,
+      title: pageTitle(parsed, parsed.relPath),
+      sourceUrls,
+      repoNames: unique(sourceUrls.map(repoNameFromGithubUrl).filter(isString).concat(extractRepoNames(parsed.body))),
     });
+  }
+  return results;
 }
 
 interface ParsedPage {
   relPath: string;
   frontmatter: Record<string, unknown>;
   body: string;
+}
+
+function tryReadMarkdownPage(vault: string, path: string, parseErrors: DedupeParseError[]): ParsedPage | null {
+  try {
+    return readMarkdownPage(vault, path);
+  } catch (error) {
+    const absolutePath = path.startsWith(vault) ? path : join(vault, path);
+    parseErrors.push({
+      path: relative(vault, absolutePath),
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
 }
 
 function readMarkdownPage(vault: string, path: string): ParsedPage {

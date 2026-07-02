@@ -1766,4 +1766,73 @@ Access key: ${secret}
       expect(after).toMatch(/^sha256: [0-9a-f]{64}$/m);
     });
   });
+
+  describe("frontmatter_yaml_invalid", () => {
+    it("flags malformed YAML frontmatter with path and message", async () => {
+      const v = vault();
+      mkdirSync(join(v, "projects", "demo", "work", "2026-07-01-bad-spec"), { recursive: true });
+      writeFileSync(
+        join(v, "projects", "demo", "work", "2026-07-01-bad-spec", "spec.md"),
+        `---
+title: Bad Spec
+provenance_projects: ["[[demo]]"
+---
+Body
+`
+      );
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) throw new Error("expected ok");
+      const warningKinds = r.result.data.by_severity.warning.map((b) => b.kind);
+      expect(warningKinds).toContain("frontmatter_yaml_invalid");
+      const bucket = r.result.data.by_severity.warning.find((b) => b.kind === "frontmatter_yaml_invalid");
+      expect(bucket?.items).toHaveLength(1);
+      const item = bucket?.items[0] as { path: string; message: string };
+      expect(item.path).toContain("2026-07-01-bad-spec/spec.md");
+      expect(item.message.length).toBeGreaterThan(0);
+    });
+
+    it("--only frontmatter_yaml_invalid returns only that bucket", async () => {
+      const v = vault();
+      writeFileSync(join(v, "concepts", "bad-tag.md"), FM(["rogue"]) + "## Overview\n\nx\n\n## Related\n\n- x\n");
+      mkdirSync(join(v, "projects", "demo", "work", "2026-07-01-bad-spec"), { recursive: true });
+      writeFileSync(
+        join(v, "projects", "demo", "work", "2026-07-01-bad-spec", "spec.md"),
+        `---
+title: Bad
+tags: [unclosed
+---
+Body
+`
+      );
+
+      const r = await runLint({
+        vault: v,
+        days: 90,
+        lines: 200,
+        logThreshold: 500,
+        only: "frontmatter_yaml_invalid",
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) throw new Error("expected ok");
+      const allKinds = [
+        ...r.result.data.by_severity.error.map((b) => b.kind),
+        ...r.result.data.by_severity.warning.map((b) => b.kind),
+        ...r.result.data.by_severity.info.map((b) => b.kind),
+      ];
+      expect(allKinds).toEqual(["frontmatter_yaml_invalid"]);
+    });
+
+    it("leaves bucket empty on a clean vault", async () => {
+      const v = vault();
+      writeFileSync(join(v, "concepts", "ok.md"), FM(["model"]) + "## Overview\n\nok\n\n## Related\n\n- [[ok]]\n");
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "frontmatter_yaml_invalid" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) throw new Error("expected ok");
+      const bucket = r.result.data.by_severity.warning.find((b) => b.kind === "frontmatter_yaml_invalid");
+      expect(bucket).toBeUndefined();
+    });
+  });
 });

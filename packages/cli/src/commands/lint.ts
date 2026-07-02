@@ -18,6 +18,7 @@ import { runDedup } from "./dedup.js";
 import { safeWritePage } from "../utils/safe-write.js";
 import { runRawBodyDedup } from "./raw-body-dedup.js";
 import { validateCompoundReferences } from "./audit.js";
+import { fixFrontmatter } from "./frontmatter-fix.js";
 import { fixPathTooLong, runPathTooLong } from "./path-too-long.js";
 import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
@@ -123,7 +124,7 @@ export interface LintSummaryOutput {
 }
 
 const ERROR_ORDER = ["sensitive_content", "broken_wikilinks", "invalid_frontmatter", "raw_source_identity_conflict", "raw_dedup", "broken_sources", "tag_not_in_taxonomy", "path_too_long"] as const;
-const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file_source_url", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram"] as const;
+const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file_source_url", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "frontmatter_yaml_invalid", "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram"] as const;
 const INFO_ORDER = ["bridges", "sparse_community", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
 const KNOWN_BUCKETS = [...ERROR_ORDER, ...WARNING_ORDER, ...INFO_ORDER] as const;
 const CLI_REFS_TYPED_DIRS = ["entities", "concepts", "comparisons", "queries", "meta"] as const;
@@ -374,6 +375,22 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
       }
     }
     if (sensitiveFlags.length > 0) buckets.sensitive_content = sensitiveFlags;
+
+    const fmYamlInvalid: { path: string; message: string }[] = [];
+    for (const page of scan.data.allMarkdown) {
+      try {
+        const text = await readPage(page);
+        const fm = extractFrontmatter(text);
+        if (!fm.ok && fm.error === "INVALID_FRONTMATTER") {
+          const detail = fm.detail as { message?: string } | undefined;
+          const message = detail?.message ?? "invalid YAML";
+          fmYamlInvalid.push({ path: page.relPath, message });
+        }
+      } catch {
+        // Skip unreadable pages.
+      }
+    }
+    if (fmYamlInvalid.length > 0) buckets.frontmatter_yaml_invalid = fmYamlInvalid;
 
     // Raw subdirectory duplicate detection
     // Raw files should be at depth 2: raw/{type}/{file}.md
@@ -982,6 +999,48 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
         if (remaining.length > 0) buckets.path_too_long = remaining;
         else delete buckets.path_too_long;
       }
+    }
+
+    if (shouldFix("frontmatter_yaml_invalid") && buckets.frontmatter_yaml_invalid) {
+      const invalidItems = buckets.frontmatter_yaml_invalid as { path: string; message: string }[];
+      const remaining: { path: string; message: string }[] = [];
+      for (const item of invalidItems) {
+        const page = scan.data.allMarkdown.find(p => p.relPath === item.path);
+        if (!page) {
+          unresolved.push(item.path);
+          remaining.push(item);
+          continue;
+        }
+        try {
+          const text = await readPage(page);
+          const split = splitFrontmatter(text);
+          if (!split.ok) {
+            unresolved.push(item.path);
+            remaining.push(item);
+            continue;
+          }
+          const newFm = fixFrontmatter(split.data.rawFrontmatter);
+          const newText = `---\n${newFm}\n---\n${split.data.body}`;
+          const recheck = extractFrontmatter(newText);
+          if (!recheck.ok) {
+            unresolved.push(item.path);
+            remaining.push(item);
+            continue;
+          }
+          const w = await safeWritePage(page.absPath, newText, { minBodyRatio: null });
+          if (!w.ok) {
+            unresolved.push(item.path);
+            remaining.push(item);
+            continue;
+          }
+          fixed.push(item.path);
+        } catch {
+          unresolved.push(item.path);
+          remaining.push(item);
+        }
+      }
+      if (remaining.length > 0) buckets.frontmatter_yaml_invalid = remaining;
+      else delete buckets.frontmatter_yaml_invalid;
     }
   }
 
