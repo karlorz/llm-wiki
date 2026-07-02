@@ -17,6 +17,8 @@ import {
 } from "../utils/satellite-run-health.js";
 const SSH_TIMEOUT_MS = 15_000;
 const TIMER_UNIT = "agent-memory-trends.timer";
+const SERVICE_UNIT = "agent-memory-trends.service";
+const SYSTEMD_SERVICE_FAILED_CLASS = "SYSTEMD_SERVICE_FAILED";
 
 export type FleetHealthTimer = "active" | "inactive" | "unknown";
 export type FleetHealthRunStatus = "success" | "fail" | "unknown" | "none";
@@ -126,20 +128,42 @@ function deriveRunFields(parsed: {
   };
 }
 
-function systemctlIsActiveLocal(deps: FleetHealthDeps, unit: string): FleetHealthTimer {
-  if (deps.platform() !== "linux") return "unknown";
+function systemctlPropLocal(deps: FleetHealthDeps, unit: string, prop: "is-active" | "is-failed"): string | null {
+  if (deps.platform() !== "linux") return null;
   try {
-    const out = deps
-      .execSync(`systemctl is-active ${unit}`, {
+    return deps
+      .execSync(`systemctl ${prop} ${unit}`, {
         encoding: "utf8",
         timeout: 2000,
         stdio: ["pipe", "pipe", "pipe"],
       })
       .trim();
-    return out === "active" ? "active" : "inactive";
   } catch {
-    return "unknown";
+    return null;
   }
+}
+
+function systemctlIsActiveLocal(deps: FleetHealthDeps, unit: string): FleetHealthTimer {
+  const out = systemctlPropLocal(deps, unit, "is-active");
+  if (out === null) return "unknown";
+  return out === "active" ? "active" : "inactive";
+}
+
+function systemctlIsFailedLocal(deps: FleetHealthDeps, unit: string): boolean {
+  return systemctlPropLocal(deps, unit, "is-failed") === "failed";
+}
+
+function applyServiceFailedOverlay(
+  run: ReturnType<typeof deriveRunFields>,
+  serviceFailed: boolean
+): ReturnType<typeof deriveRunFields> {
+  if (!serviceFailed) return run;
+  return {
+    ...run,
+    last_run_status: "fail",
+    failure_class: run.failure_class === "-" ? SYSTEMD_SERVICE_FAILED_CLASS : run.failure_class,
+    runUnhealthy: true,
+  };
 }
 
 function probeLocal(vaultPath: string, deps: FleetHealthDeps): Omit<FleetHealthHostRow, "host" | "reachable" | "healthy"> & {
@@ -167,8 +191,9 @@ function probeLocal(vaultPath: string, deps: FleetHealthDeps): Omit<FleetHealthH
       parsed = null;
     }
   }
-  const run = deriveRunFields(parsed);
   const timer = systemctlIsActiveLocal(deps, TIMER_UNIT);
+  const serviceFailed = systemctlIsFailedLocal(deps, SERVICE_UNIT);
+  const run = applyServiceFailedOverlay(deriveRunFields(parsed), serviceFailed);
   const timerBad = deps.platform() === "linux" && timer === "inactive";
   return {
     timer,
@@ -192,7 +217,7 @@ function probeRemote(
     "echo __SW_TIMER__",
     `systemctl is-active ${TIMER_UNIT} 2>/dev/null || echo inactive`,
     "echo __SW_FAILED__",
-    "systemctl is-failed agent-memory-trends.service 2>/dev/null || echo unknown",
+    `systemctl is-failed ${SERVICE_UNIT} 2>/dev/null || echo unknown`,
   ].join("\n");
   const sshCmd = `ssh -o ConnectTimeout=10 ${sshAlias} ${shellQuote(remoteCmd)}`;
   try {
@@ -211,6 +236,7 @@ function probeRemote(
       failedIdx >= 0
         ? afterTimer.slice(0, failedIdx)
         : afterTimer;
+    const failedRaw = failedIdx >= 0 ? afterTimer.slice(failedIdx + failedMarker.length) : "";
     const jsonText = jsonPart.trim();
     const parsed = jsonText.startsWith("{")
       ? (() => {
@@ -223,11 +249,13 @@ function probeRemote(
           };
         })()
       : null;
-    const run = deriveRunFields(parsed);
     const timerLine = timerRaw.trim().split("\n")[0]?.trim() ?? "unknown";
     let timer: FleetHealthTimer = "unknown";
     if (timerLine === "active") timer = "active";
     else if (timerLine === "inactive") timer = "inactive";
+    const failedLine = failedRaw.trim().split("\n")[0]?.trim() ?? "unknown";
+    const serviceFailed = failedLine === "failed";
+    const run = applyServiceFailedOverlay(deriveRunFields(parsed), serviceFailed);
     const timerBad = timer === "inactive";
     return {
       timer,

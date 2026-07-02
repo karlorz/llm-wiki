@@ -63,6 +63,84 @@ describe("runStage1Maintenance", () => {
     expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
   });
 
+  it("records a failed latest-run when health-summary fails after a successful daily writer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-health-fail-state-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "daily",
+      now: new Date("2026-06-13T00:00:00Z"),
+      runCommand: async (command, args, options) => {
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          writeGeneratedTrendOutputs(vault);
+          writeFileSync(
+            join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"),
+            JSON.stringify(
+              {
+                run_date: "2026-06-13",
+                run_id: "2026-06-13T00-00-00Z",
+                status: "success",
+                started_at: "2026-06-13T00:00:00Z",
+                finished_at: "2026-06-13T00:00:01Z",
+                selected_candidate_count: 0,
+                task_capture_count: 0,
+                changed_files: [
+                  ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+                  ".skillwiki/agent-memory-trends/latest-run.json",
+                  "queries/2026-06-13-agent-memory-trends-digest.md",
+                ],
+                failure_class: null,
+                heartbeat: { status: "skipped", reason: "generate-only" },
+              },
+              null,
+              2
+            ) + "\n",
+            "utf8"
+          );
+          return commandResult(JSON.stringify({
+            ok: true,
+            data: {
+              mutations: [
+                ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+                ".skillwiki/agent-memory-trends/latest-run.json",
+                "queries/2026-06-13-agent-memory-trends-digest.md",
+              ],
+            },
+          }) + "\n");
+        }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args), {
+            overall_status: "error",
+            blocking_status: "error",
+            advisory_status: "error",
+            risk_flags: [{ id: "content_integrity_risk", status: "error", blocking: true }],
+            humanHint: "vault health failed",
+          });
+          return commandResult("");
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    const latestPath = join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json");
+    const latest = JSON.parse(readFileSync(latestPath, "utf8"));
+    expect(latest.status).toBe("fail");
+    expect(latest.failure_class).toBe("HEALTH_SUMMARY_FAILED");
+    expect(latest.heartbeat).toEqual({ status: "skipped", reason: "maintenance job failed: health-summary" });
+    expect(git(vault, "status", "--porcelain", "--untracked-files=all")).toBe("");
+    git(vault, "fetch", "origin", "main");
+    expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
+  });
+
   it("emits the resolved satellite session policy on start", async () => {
     const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-session-kind-"));
     const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));

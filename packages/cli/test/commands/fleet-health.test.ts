@@ -169,6 +169,35 @@ describe("fleet health", () => {
     expect(execSyncMock).not.toHaveBeenCalled();
   });
 
+  it("local satellite with failed systemd service → non-zero exit even when latest-run is success", async () => {
+    const vault = tempDir();
+    writeVaultFleet(vault, fleetWithLocalSatellite());
+    setLocalLatestRun({ status: "success", finished_at: new Date().toISOString() });
+
+    const r = await runFleetHealth({
+      vault,
+      hostId: "local-sat",
+      env: {},
+      home: tempDir(),
+      osHostname: "local-sat",
+      deps: {
+        platform: () => "linux",
+        execSync: (cmd: string) => {
+          if (cmd.includes("systemctl is-active")) return "active\n";
+          if (cmd.includes("systemctl is-failed")) return "failed\n";
+          throw new Error(`unexpected: ${cmd}`);
+        },
+      },
+    });
+
+    expect(r.exitCode).toBe(ExitCode.FLEET_SATELLITE_HEALTH_FAILED);
+    if (r.result.ok) {
+      expect(r.result.data.hosts[0]?.healthy).toBe(false);
+      expect(r.result.data.hosts[0]?.last_run_status).toBe("fail");
+      expect(r.result.data.hosts[0]?.failure_class).toBe("SYSTEMD_SERVICE_FAILED");
+    }
+  });
+
   it("local satellite host with fail status → non-zero exit and fail row", async () => {
     const vault = tempDir();
     writeVaultFleet(vault, fleetWithLocalSatellite());
@@ -232,6 +261,31 @@ describe("fleet health", () => {
       expect(r.result.data.hosts[0]?.reachable).toBe("yes");
       expect(r.result.data.hosts[0]?.last_run_status).toBe("success");
       expect(r.result.data.hosts[0]?.timer).toBe("active");
+    }
+  });
+
+  it("remote satellite with failed systemd service → non-zero exit even when latest-run is success", async () => {
+    const vault = tempDir();
+    writeVaultFleet(vault, FLEET_REMOTE_SATELLITE);
+    const finished = new Date().toISOString();
+    execSyncMock.mockReturnValue(
+      `${JSON.stringify({ status: "success", finished_at: finished })}\n__SW_TIMER__\nactive\n__SW_FAILED__\nfailed\n`
+    );
+
+    const r = await runFleetHealth({
+      vault,
+      hostId: "macos-dev",
+      env: {},
+      home: tempDir(),
+      osHostname: "macos-dev",
+      deps: { platform: () => "darwin", execSync: execSyncMock },
+    });
+
+    expect(r.exitCode).toBe(ExitCode.FLEET_SATELLITE_HEALTH_FAILED);
+    if (r.result.ok) {
+      expect(r.result.data.hosts[0]?.healthy).toBe(false);
+      expect(r.result.data.hosts[0]?.last_run_status).toBe("fail");
+      expect(r.result.data.hosts[0]?.failure_class).toBe("SYSTEMD_SERVICE_FAILED");
     }
   });
 
