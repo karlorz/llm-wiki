@@ -30,6 +30,48 @@ describe("MetaSchema", () => {
     expect(MetaSchema.parse(generated)).toMatchObject(generated);
   });
 
+  it("accepts session-pins meta without provenance_projects", () => {
+    const pins = {
+      title: "Session Pins",
+      created: "2026-07-04",
+      updated: "2026-07-04",
+      type: "meta" as const,
+      meta_kind: "session-pins" as const,
+      tags: ["meta", "session-pins"],
+      stale_ttl: 3650,
+      pins: [
+        {
+          title: "Monetization Strategy",
+          path: "queries/2026-07-04-knowledge-monetization-strategy.md",
+          scope: "global" as const,
+          project: "[[llm-wiki]]",
+          summary: "Keep strategy visible without making it claimable work.",
+          updated: "2026-07-04",
+        },
+      ],
+    };
+
+    expect(MetaSchema.parse(pins)).toMatchObject(pins);
+  });
+
+  it("rejects raw transcript paths as session pin targets", () => {
+    expect(() => MetaSchema.parse({
+      title: "Session Pins",
+      created: "2026-07-04",
+      updated: "2026-07-04",
+      type: "meta",
+      meta_kind: "session-pins",
+      tags: ["meta", "session-pins"],
+      pins: [
+        {
+          title: "Raw Capture",
+          path: "raw/transcripts/2026-07-04-task-monetization-strategy.md",
+          scope: "global",
+        },
+      ],
+    })).toThrow();
+  });
+
   it("rejects unknown generated_kind values", () => {
     expect(() => MetaSchema.parse({
       ...v,

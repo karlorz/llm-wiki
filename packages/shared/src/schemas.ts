@@ -91,6 +91,30 @@ export const CompoundSchema = z.object({
 
 export type Compound = z.infer<typeof CompoundSchema>;
 
+const sessionPinPath = z.string().regex(
+  /^(entities|concepts|comparisons|queries|meta)\/.+\.md$/,
+  "must reference a typed-knowledge markdown page"
+);
+
+export const SessionPinSchema = z.object({
+  title: z.string().min(1),
+  path: sessionPinPath,
+  scope: z.enum(["global", "project"]),
+  project: wikilink.optional(),
+  summary: z.string().min(1).optional(),
+  updated: isoDate.optional()
+}).superRefine((v, ctx) => {
+  if (v.scope === "project" && v.project === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["project"],
+      message: "project is required when scope is project"
+    });
+  }
+});
+
+export type SessionPin = z.infer<typeof SessionPinSchema>;
+
 export const MetaSchema = z.object({
   title: z.string().min(1),
   aliases: z.array(z.string()).optional(),
@@ -103,9 +127,17 @@ export const MetaSchema = z.object({
   provenance_projects: z.array(wikilink).optional(),
   generated_by: z.string().min(1).optional(),
   generated_at: z.string().datetime().optional(),
-  generated_kind: z.enum(["session-brief"]).optional()
+  generated_kind: z.enum(["session-brief"]).optional(),
+  meta_kind: z.enum(["session-pins"]).optional(),
+  stale_ttl: z.number().int().positive().optional(),
+  pins: z.array(SessionPinSchema).optional()
 }).superRefine((v, ctx) => {
-  if (v.generated_kind !== "session-brief" && (!v.provenance_projects || v.provenance_projects.length < 2)) {
+  const isGeneratedSessionBrief = v.generated_kind === "session-brief";
+  const isSessionPins = v.meta_kind === "session-pins";
+  if (isSessionPins && (!v.pins || v.pins.length === 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["pins"], message: "required when meta_kind is session-pins" });
+  }
+  if (!isGeneratedSessionBrief && !isSessionPins && (!v.provenance_projects || v.provenance_projects.length < 2)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["provenance_projects"], message: "meta pages must reference ≥2 projects" });
   }
   if (v.provenance && v.provenance !== "research" && (!v.provenance_projects || v.provenance_projects.length === 0)) {

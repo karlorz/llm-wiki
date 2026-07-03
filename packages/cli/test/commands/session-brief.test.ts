@@ -161,6 +161,80 @@ describe("runSessionBrief", () => {
     ]);
   });
 
+  it("renders global session pins from the meta registry before active work", async () => {
+    const vault = await makeVault();
+    writeFileSync(join(vault, "meta", "session-pins.md"), `---
+title: Session Pins
+created: 2026-07-04
+updated: 2026-07-04
+type: meta
+meta_kind: session-pins
+tags: [meta, session-pins]
+confidence: high
+stale_ttl: 3650
+pins:
+  - title: Monetization Strategy
+    path: queries/2026-07-04-knowledge-monetization-strategy.md
+    scope: global
+    project: "[[llm-wiki]]"
+    summary: Keep the 3 major profit pillars visible without making them claimable work.
+    updated: 2026-07-04
+---
+
+Registry for startup-visible, non-claimable context.
+`);
+    const result = await runSessionBrief({ vault, project: "portfolio-lab", write: false });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    const brief = result.result.data.brief;
+    expect(brief).toContain("## Pinned Context");
+    expect(brief).toContain("Monetization Strategy");
+    expect(brief).toContain("queries/2026-07-04-knowledge-monetization-strategy.md");
+    expect(brief).toContain("Keep the 3 major profit pillars visible");
+    expect(brief.indexOf("## Pinned Context")).toBeLessThan(brief.indexOf("## Active Work"));
+  });
+
+  it("shows only global and matching project session pins", async () => {
+    const vault = await makeVault();
+    writeFileSync(join(vault, "meta", "session-pins.md"), `---
+title: Session Pins
+created: 2026-07-04
+updated: 2026-07-04
+type: meta
+meta_kind: session-pins
+tags: [meta, session-pins]
+confidence: high
+pins:
+  - title: Global Pin
+    path: queries/global-pin.md
+    scope: global
+    summary: Visible in every session brief.
+  - title: LLM Wiki Pin
+    path: concepts/llm-wiki-pin.md
+    scope: project
+    project: "[[llm-wiki]]"
+    summary: Visible only for llm-wiki.
+  - title: Other Project Pin
+    path: concepts/other-project-pin.md
+    scope: project
+    project: "[[other]]"
+    summary: Hidden from llm-wiki.
+---
+
+Registry for startup-visible, non-claimable context.
+`);
+
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: false });
+
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.brief).toContain("Global Pin");
+    expect(result.result.data.brief).toContain("LLM Wiki Pin");
+    expect(result.result.data.brief).not.toContain("Other Project Pin");
+  });
+
   it("appends log entries for later material changes, not timestamp-only refreshes", async () => {
     const vault = await makeVault();
 

@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import { err, ok, ExitCode, type Result } from "@skillwiki/shared";
+import { err, ok, ExitCode, MetaSchema, type Result } from "@skillwiki/shared";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { appendLastOp } from "../utils/last-op.js";
@@ -29,6 +29,7 @@ export interface SessionBriefOutput {
   index_updated: boolean;
   log_updated: boolean;
   generated_at: string;
+  session_pins: SessionBriefItem[];
   memory_topics: SessionBriefMemoryTopic[];
   humanHint: string;
 }
@@ -68,14 +69,27 @@ export async function runSessionBrief(
   const project = await resolveProject(input);
 
   try {
-    const transcripts = await loadTranscriptInfo(scan.data.raw);
-    const workItems = await loadWorkItems(scan.data.workItems);
-    const digests = await loadTrendDigests(scan.data.typedKnowledge);
+    const [
+      transcripts,
+      workItems,
+      digests,
+      baseHealthWarnings,
+      satelliteHealth,
+      sessionPins,
+      memoryTopics,
+    ] = await Promise.all([
+      loadTranscriptInfo(scan.data.raw),
+      loadWorkItems(scan.data.workItems),
+      loadTrendDigests(scan.data.typedKnowledge),
+      loadHealthWarnings(input.vault),
+      loadSatelliteHealth(input.vault),
+      loadSessionPins(input.vault, project),
+      project ? loadMemoryTopics(input.vault, project) : Promise.resolve([]),
+    ]);
     const healthWarnings = [
-      ...(await loadHealthWarnings(input.vault)),
-      ...satelliteHealthWarnings(await loadSatelliteHealth(input.vault)),
+      ...baseHealthWarnings,
+      ...satelliteHealthWarnings(satelliteHealth),
     ];
-    const memoryTopics = project ? await loadMemoryTopics(input.vault, project) : [];
 
     const latestLogs = newest(transcripts.filter((t) => t.kind === "session-log"), 3);
     const unclaimedCaptures = newest(transcripts.filter((t) => {
@@ -94,6 +108,7 @@ export async function runSessionBrief(
     const brief = capWords(renderBrief({
       project,
       generatedAt,
+      sessionPins,
       latestLogs,
       unclaimedCaptures,
       activeWork,
@@ -132,6 +147,7 @@ export async function runSessionBrief(
         index_updated: indexUpdated,
         log_updated: logUpdated,
         generated_at: generatedAt,
+        session_pins: sessionPins,
         memory_topics: memoryTopics,
         humanHint,
       }),
@@ -246,9 +262,37 @@ async function loadTrendDigests(typedPages: VaultPage[]): Promise<PageInfo[]> {
   return out;
 }
 
+async function loadSessionPins(vault: string, project: string | undefined): Promise<PageInfo[]> {
+  const text = await readIfExists(join(vault, "meta", "session-pins.md"));
+  if (!text) return [];
+
+  const fm = extractFrontmatter(text);
+  if (!fm.ok) return [];
+
+  const parsed = MetaSchema.safeParse(fm.data);
+  if (!parsed.success || parsed.data.meta_kind !== "session-pins") return [];
+
+  const registryUpdated = parsed.data.updated;
+  const out: PageInfo[] = [];
+  for (const pin of parsed.data.pins ?? []) {
+    const pinProject = wikilinkSlug(pin.project);
+    if (pin.scope === "project" && (!project || pinProject !== project)) continue;
+    out.push({
+      path: pin.path,
+      title: pin.title,
+      summary: pin.summary ?? "",
+      date: pin.updated ?? registryUpdated,
+      project: pinProject,
+      kind: "session-pin",
+    });
+  }
+  return newest(out, 5);
+}
+
 function renderBrief(input: {
   project?: string;
   generatedAt: string;
+  sessionPins: PageInfo[];
   latestLogs: PageInfo[];
   unclaimedCaptures: PageInfo[];
   activeWork: PageInfo[];
@@ -265,6 +309,7 @@ function renderBrief(input: {
     "",
   ];
 
+  appendPinnedContextSection(lines, input.sessionPins);
   appendSection(lines, "Active Work", input.activeWork, "No active project work found.");
   appendSection(lines, "Unclaimed Captures", input.unclaimedCaptures, "No unclaimed task or bug captures found.");
   appendSection(lines, "Recent Session Logs", input.project ? input.projectLogs : input.latestLogs, "No recent session logs found.");
@@ -290,6 +335,17 @@ function appendMemoryTopicsSection(lines: string[], project: string | undefined,
   for (const topic of topics.slice(0, 5)) {
     const sourceCount = topic.paths.length === 1 ? "1 source" : `${topic.paths.length} sources`;
     lines.push(`- ${topic.updated} ${topic.name} (${sourceCount}) — ${topic.summary}; recall: \`skillwiki memory recall --project ${project} --topic ${topic.name}\``);
+  }
+  lines.push("");
+}
+
+function appendPinnedContextSection(lines: string[], pins: PageInfo[]): void {
+  if (pins.length === 0) return;
+  lines.push("## Pinned Context", "");
+  for (const pin of pins) {
+    const date = pin.date ? `${pin.date} ` : "";
+    const summary = pin.summary ? ` — ${pin.summary}` : "";
+    lines.push(`- ${date}${pin.title} (${pin.path})${summary}`);
   }
   lines.push("");
 }
