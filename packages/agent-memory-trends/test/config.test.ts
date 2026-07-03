@@ -205,6 +205,7 @@ describe("agent-memory-trends research config", () => {
     expect(parsed.data.github.maxRawCandidates).toBe(50);
     expect(parsed.data.github.maxSelectedCandidates).toBe(10);
     expect(parsed.data.github.apiCallBudget).toBe(100);
+    expect(parsed.data.dedupe.digestTtlDays).toBe(14);
     expect(parsed.data.scoring.weights).toEqual({
       relevance: 30,
       implementationEvidence: 25,
@@ -270,6 +271,27 @@ describe("agent-memory-trends research config", () => {
     if (parsed.ok) throw new Error("expected invalid config");
     expect(parsed.error).toBe("CONFIG_INVALID");
     expect(String(parsed.detail)).toContain("github.lanes[0].sort");
+  });
+
+  it("accepts an explicit digest duplicate TTL and rejects negative values", () => {
+    const explicit = parseResearchConfig(
+      LANE_CONFIG.replace("watchlist:\n", "dedupe:\n  digest_ttl_days: 21\nwatchlist:\n"),
+      "explicit-dedupe.yaml"
+    );
+
+    expect(explicit.ok).toBe(true);
+    if (!explicit.ok) throw new Error("expected explicit dedupe config to parse");
+    expect(explicit.data.dedupe.digestTtlDays).toBe(21);
+
+    const negative = parseResearchConfig(
+      LANE_CONFIG.replace("watchlist:\n", "dedupe:\n  digest_ttl_days: -1\nwatchlist:\n"),
+      "negative-dedupe.yaml"
+    );
+
+    expect(negative.ok).toBe(false);
+    if (negative.ok) throw new Error("expected invalid config");
+    expect(negative.error).toBe("CONFIG_INVALID");
+    expect(String(negative.detail)).toContain("dedupe.digest_ttl_days");
   });
 
   it("reads YAML from disk with the same validation", () => {

@@ -25,6 +25,7 @@ export interface RecentDigestSignal {
   title: string;
   sourceUrls: string[];
   repoNames: string[];
+  digestDate?: string;
 }
 
 export interface DedupeParseError {
@@ -44,6 +45,11 @@ export interface DuplicateDecision {
   reasons: string[];
 }
 
+export interface DuplicateEvaluationOptions {
+  now: Date;
+  digestTtlDays: number;
+}
+
 const ACTIVE_WORK_STATUSES = new Set(["planned", "in-progress"]);
 
 export function collectDuplicateSignals(vault: string, project: string): Result<DuplicateSignals> {
@@ -60,7 +66,11 @@ export function collectDuplicateSignals(vault: string, project: string): Result<
   }
 }
 
-export function evaluateDuplicateCandidate(candidate: SelectedGithubCandidate, signals: DuplicateSignals): DuplicateDecision {
+export function evaluateDuplicateCandidate(
+  candidate: SelectedGithubCandidate,
+  signals: DuplicateSignals,
+  options?: DuplicateEvaluationOptions
+): DuplicateDecision {
   const reasons: string[] = [];
   const candidateUrl = normalizeCanonicalUrl(candidate.canonicalUrl);
   const candidateRepo = normalizeRepoName(candidate.fullName);
@@ -76,11 +86,17 @@ export function evaluateDuplicateCandidate(candidate: SelectedGithubCandidate, s
   for (const work of signals.activeWork) {
     for (const repoName of work.repoNames) existingRepos.set(normalizeRepoName(repoName), work.path);
   }
-  for (const digest of signals.recentDigests) {
-    for (const repoName of digest.repoNames) existingRepos.set(normalizeRepoName(repoName), digest.path);
-  }
   const repoMatch = existingRepos.get(candidateRepo);
   if (repoMatch) reasons.push(`duplicate repo name ${candidate.fullName} already appears in ${repoMatch}`);
+
+  const digestMatch = signals.recentDigests.find(
+    (digest) =>
+      digestWithinTtl(digest, options) &&
+      digest.repoNames.some((repoName) => normalizeRepoName(repoName) === candidateRepo)
+  );
+  if (digestMatch) {
+    reasons.push(`duplicate repo name ${candidate.fullName} already appears in ${digestMatch.title} (${digestMatch.path})`);
+  }
 
   const titles = [
     ...signals.existingTasks.map((task) => ({ title: task.title, path: task.path })),
@@ -147,9 +163,25 @@ function collectRecentDigests(vault: string, parseErrors: DedupeParseError[]): R
       title: pageTitle(parsed, parsed.relPath),
       sourceUrls,
       repoNames: unique(sourceUrls.map(repoNameFromGithubUrl).filter(isString).concat(extractRepoNames(parsed.body))),
+      digestDate: digestDateFromPath(parsed.relPath),
     });
   }
   return results;
+}
+
+function digestWithinTtl(digest: RecentDigestSignal, options?: DuplicateEvaluationOptions): boolean {
+  if (!options) return true;
+  if (!digest.digestDate) return true;
+  const digestTime = Date.parse(`${digest.digestDate}T00:00:00Z`);
+  if (!Number.isFinite(digestTime)) return true;
+  const now = options.now.getTime();
+  if (!Number.isFinite(now)) return true;
+  const ttlMs = options.digestTtlDays * 24 * 60 * 60 * 1000;
+  return digestTime >= now - ttlMs && digestTime <= now;
+}
+
+function digestDateFromPath(path: string): string | undefined {
+  return path.match(/(\d{4}-\d{2}-\d{2})/)?.[1];
 }
 
 interface ParsedPage {

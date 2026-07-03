@@ -1306,6 +1306,90 @@ describe("agent-memory-trends CLI", () => {
     ]);
   });
 
+  it("allows stale digest-only duplicates through daily synthesis after the digest TTL", async () => {
+    const calls: string[] = [];
+    const oldCandidate: SelectedGithubCandidate = {
+      ...selectedCandidate(),
+      name: "old-memory",
+      fullName: "acme/old-memory",
+      canonicalUrl: "https://github.com/acme/old-memory",
+    };
+
+    const result = await runAgentMemoryTrendsCli(["daily", "--dry-run", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
+      cwd: "/repo",
+      env: {},
+      now: new Date("2026-07-04T00:10:00+08:00"),
+      readFile: () => CONFIG,
+      collectGithubCandidates: async () => ({ ok: true, data: {
+        rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+        apiCallsUsed: 12,
+        rawCandidateCount: 1,
+        selectedCandidates: [oldCandidate],
+        runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+      } }),
+      collectDuplicateSignals: () => ({
+        ok: true,
+        data: {
+          existingTasks: [],
+          activeWork: [],
+          recentDigests: [
+            {
+              path: "queries/2026-06-14-agent-memory-trends-digest.md",
+              title: "Old digest",
+              sourceUrls: ["https://github.com/acme/old-memory"],
+              repoNames: ["acme/old-memory"],
+              digestDate: "2026-06-14",
+            },
+          ],
+          parseErrors: [],
+        },
+      }),
+      writeAgentInput: (input) => {
+        calls.push("write-input");
+        expect(input.selectedCandidates).toHaveLength(1);
+        expect(input.duplicateSuppressions).toHaveLength(0);
+        return { ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-07-04-input.json" } };
+      },
+      runSynthesis: async () => {
+        calls.push("synthesis");
+        return {
+          ok: true,
+          data: {
+            manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-07-04-run.json",
+            outputLastMessagePath: "/tmp/last-message.md",
+            stdout: "",
+            stderr: "",
+            output: { proposals: [] },
+            synthesis: {
+              invoked: true,
+              primaryBackend: "codex",
+              primaryAttempts: 1,
+              primaryFailed: false,
+              fallbackBackend: "claude",
+              fallbackAvailable: true,
+              fallbackInvoked: false,
+              resultBackend: "codex",
+              failureCode: null,
+              primaryErrorCode: null,
+              fallbackErrorCode: null,
+            },
+          },
+        };
+      },
+      writeRunState: () => {
+        calls.push("write-state");
+        return { ok: true, data: {
+          runStatePath: "/vault/.skillwiki/agent-memory-trends/2026-07-04-run.json",
+          latestRunPath: "/vault/.skillwiki/agent-memory-trends/latest-run.json",
+        } };
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    expect(calls).toEqual(["write-input", "synthesis", "write-state"]);
+  });
+
   it("cleans generated preflight leftovers before live daily sync", async () => {
     const calls: string[] = [];
     const result = await runAgentMemoryTrendsCli(["daily", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {

@@ -4,6 +4,7 @@ import {
   collectDuplicateSignals,
   evaluateDuplicateCandidate,
   type ActiveWorkSignal,
+  type DuplicateEvaluationOptions,
   type DuplicateSignals,
   type ExistingTaskSignal,
   type RecentDigestSignal,
@@ -26,6 +27,7 @@ export interface BuildAgentInputArgs {
   runId: string;
   selectedCandidates: SelectedGithubCandidate[];
   allowedOutputs: AllowedOutputs;
+  duplicateEvaluation?: DuplicateEvaluationOptions;
   duplicateSignals?: DuplicateSignals;
 }
 
@@ -63,7 +65,7 @@ export function buildAgentInput(args: BuildAgentInputArgs): Result<AgentInput> {
   const selectedCandidates: SelectedGithubCandidate[] = [];
   const duplicateSuppressions: DuplicateSuppression[] = [];
   for (const candidate of args.selectedCandidates) {
-    const decision = evaluateDuplicateCandidate(candidate, signals);
+    const decision = evaluateDuplicateCandidate(candidate, signals, args.duplicateEvaluation);
     if (decision.duplicate) duplicateSuppressions.push({ candidate, reasons: decision.reasons });
     else selectedCandidates.push(candidate);
   }

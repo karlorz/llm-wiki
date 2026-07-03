@@ -38,6 +38,13 @@ Known repositories are not hidden at scoring time. They receive
 duplicate-suppression payloads, while TypeScript capture rendering still
 suppresses duplicate raw transcript creation.
 
+Digest-only duplicate suppression is age-bounded. Repositories already present
+in `queries/*-agent-memory-trends-digest.md` are suppressed only while the
+matching digest is inside `dedupe.digest_ttl_days` from the owned research
+config; the default is 14 days. Raw task captures and active work items remain
+hard suppressions because they represent explicit ownership, not historical
+trend coverage.
+
 Legacy configs with a flat `github.queries` list still parse through an explicit
 `legacy_flat` compatibility lane. New owned config should use `github.lanes`.
 
@@ -108,6 +115,9 @@ the selected primary backend, primary attempt count, fallback
 availability/invocation, result backend, and primary/fallback error codes.
 Generated/live operational manifests are stamped with the same block. Quiet
 duplicate-only runs do not include it because no synthesis backend was invoked.
+If all collected candidates are suppressed by fresh digest/task/work duplicate
+signals, changing Codex/Claude permission flags will not exercise providers; the
+collector must surface at least one non-suppressed candidate.
 
 ## Runtime Host
 

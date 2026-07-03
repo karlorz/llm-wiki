@@ -146,6 +146,7 @@ describe("agent-memory-trends duplicate suppression and input generation", () =>
     });
     expect(signals.data.recentDigests).toHaveLength(30);
     expect(signals.data.recentDigests[0].path).toBe("queries/2026-05-32-agent-memory-trends-digest.md");
+    expect(signals.data.recentDigests[0].digestDate).toBe("2026-05-32");
   });
 
   it("suppresses duplicate source URLs, repo names, and near-title matches", () => {
@@ -173,6 +174,47 @@ describe("agent-memory-trends duplicate suppression and input generation", () =>
 
     const novel = evaluateDuplicateCandidate(candidate({ fullName: "acme/novel-memory", name: "Novel memory sync" }), signals.data);
     expect(novel.duplicate).toBe(false);
+  });
+
+  it("suppresses digest-only duplicate repos only while the digest is inside the TTL", () => {
+    const signals = {
+      existingTasks: [],
+      activeWork: [],
+      recentDigests: [
+        {
+          path: "queries/2026-06-25-agent-memory-trends-digest.md",
+          title: "Fresh digest",
+          sourceUrls: ["https://github.com/acme/fresh-memory"],
+          repoNames: ["acme/fresh-memory"],
+          digestDate: "2026-06-25",
+        },
+        {
+          path: "queries/2026-06-14-agent-memory-trends-digest.md",
+          title: "Old digest",
+          sourceUrls: ["https://github.com/acme/old-memory"],
+          repoNames: ["acme/old-memory"],
+          digestDate: "2026-06-14",
+        },
+      ],
+      parseErrors: [],
+    };
+
+    const options = { now: new Date("2026-07-04T00:00:00Z"), digestTtlDays: 14 };
+
+    const fresh = evaluateDuplicateCandidate(
+      candidate({ fullName: "acme/fresh-memory", canonicalUrl: "https://github.com/acme/fresh-memory" }),
+      signals,
+      options
+    );
+    expect(fresh.duplicate).toBe(true);
+    expect(fresh.reasons.join("\n")).toContain("Fresh digest");
+
+    const old = evaluateDuplicateCandidate(
+      candidate({ fullName: "acme/old-memory", canonicalUrl: "https://github.com/acme/old-memory" }),
+      signals,
+      options
+    );
+    expect(old.duplicate).toBe(false);
   });
 
   it("returns ok with signals from valid specs and parseErrors for malformed YAML", () => {

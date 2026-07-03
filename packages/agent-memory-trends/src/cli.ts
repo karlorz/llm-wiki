@@ -1007,6 +1007,10 @@ async function collectInput(options: ParsedCliOptions, context: AgentMemoryTrend
     runDate: resolved.runDate,
     runId: resolved.runId,
     selectedCandidates: collection.data.selectedCandidates,
+    duplicateEvaluation: {
+      now: runDateToInstant(resolved.runDate),
+      digestTtlDays: config.data.dedupe.digestTtlDays,
+    },
     allowedOutputs: buildAllowedOutputs(resolved.runDate, resolved.runId),
     duplicateSignals: signals.data,
   });
@@ -1501,6 +1505,10 @@ function buildAllowedOutputs(runDate: string, runId: string): AllowedOutputs {
     taskCaptureGlob: `raw/transcripts/${runDate}-task-*.md`,
     manifestPath: `.skillwiki/agent-memory-trends/${runDate}-run.json`,
   };
+}
+
+function runDateToInstant(runDate: string): Date {
+  return new Date(`${runDate}T00:00:00Z`);
 }
 
 function createGhRunner(cwd: string) {

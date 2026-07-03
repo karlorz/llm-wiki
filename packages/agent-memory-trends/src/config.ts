@@ -50,6 +50,9 @@ export interface ResearchConfig {
   version: 1;
   project: string;
   timezone: string;
+  dedupe: {
+    digestTtlDays: number;
+  };
   scoring: {
     threshold: number;
     weights: ScoringWeights;
@@ -127,6 +130,7 @@ export function parseResearchConfig(text: string, sourcePath: string): Result<Re
     const scoring = asRecord(root.scoring, "scoring");
     const weights = asRecord(scoring.weights, "scoring.weights");
     const github = asRecord(root.github, "github");
+    const dedupe = root.dedupe === undefined || root.dedupe === null ? {} : asRecord(root.dedupe, "dedupe");
     const watchlist = asRecord(root.watchlist, "watchlist");
     const autoAppend = asRecord(watchlist.auto_append, "watchlist.auto_append");
 
@@ -139,6 +143,9 @@ export function parseResearchConfig(text: string, sourcePath: string): Result<Re
       version: asNumber(root.version, "version") as 1,
       project: asString(root.project, "project"),
       timezone: asString(root.timezone, "timezone"),
+      dedupe: {
+        digestTtlDays: asOptionalNonNegativeNumber(dedupe.digest_ttl_days, "dedupe.digest_ttl_days", 14),
+      },
       scoring: {
         threshold: asNumber(scoring.threshold, "scoring.threshold"),
         weights: parseScoringWeights(weights),
