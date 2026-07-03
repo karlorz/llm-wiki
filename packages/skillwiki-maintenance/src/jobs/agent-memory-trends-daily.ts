@@ -34,7 +34,9 @@ export async function runAgentMemoryTrendsDaily(
     commitMessage: "research(agent-memory): daily digest",
     runCommand: input.runCommand,
     run: async () => {
-      const configPath = join(input.vaultPath, "projects", input.project, "architecture", "agent-memory-research-sources.yaml");
+      const configPath =
+        process.env.AGENT_MEMORY_TRENDS_CONFIG ??
+        join(input.vaultPath, "projects", input.project, "architecture", "agent-memory-research-sources.yaml");
       const result = await input.runCommand(
         "agent-memory-trends",
         [
@@ -54,6 +56,7 @@ export async function runAgentMemoryTrendsDaily(
           env: {
             AGENT_MEMORY_TRENDS_VAULT: input.vaultPath,
             AGENT_MEMORY_TRENDS_REPO: input.repoPath,
+            AGENT_MEMORY_TRENDS_CONFIG: configPath,
             SKILLWIKI_PROJECT: input.project,
           },
         }

@@ -68,6 +68,52 @@ describe("runAgentMemoryTrendsDaily", () => {
     expect(calls[0]?.env?.AGENT_MEMORY_TRENDS_REPO).toBe(repo);
   });
 
+  it("honors AGENT_MEMORY_TRENDS_CONFIG for controlled research runs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-trends-config-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const customConfig = join(root, "real-candidate-config.yaml");
+    writeFileSync(customConfig, "version: 1\n", "utf8");
+    const calls: Array<{ args: string[]; cwd: string; env?: NodeJS.ProcessEnv }> = [];
+    const previousConfig = process.env.AGENT_MEMORY_TRENDS_CONFIG;
+    process.env.AGENT_MEMORY_TRENDS_CONFIG = customConfig;
+    try {
+      const check = await runAgentMemoryTrendsDaily({
+        vaultPath: vault,
+        repoPath: repo,
+        project: "llm-wiki",
+        runCommand: async (command, args, options) => {
+          if (command === "git") return runGit(args, options.cwd);
+          if (command !== "agent-memory-trends") return result("", 127, `unexpected command: ${command}`);
+          calls.push({ args, cwd: options.cwd, env: options.env });
+          writeGeneratedTrendOutputs(vault);
+          return result(JSON.stringify({
+            ok: true,
+            data: {
+              mutations: [
+                ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+                ".skillwiki/agent-memory-trends/latest-run.json",
+              ],
+              humanHint: "daily: ok (generate-only); selected 1 candidate(s)",
+            },
+          }) + "\n");
+        },
+      });
+
+      expect(check.status).toBe("pass");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.args).toContain("--config");
+      expect(calls[0]?.args.at(calls[0].args.indexOf("--config") + 1)).toBe(customConfig);
+      expect(calls[0]?.env?.AGENT_MEMORY_TRENDS_CONFIG).toBe(customConfig);
+    } finally {
+      if (previousConfig === undefined) {
+        delete process.env.AGENT_MEMORY_TRENDS_CONFIG;
+      } else {
+        process.env.AGENT_MEMORY_TRENDS_CONFIG = previousConfig;
+      }
+    }
+  });
+
   it("parses the final JSON envelope when the package build writes logs first", async () => {
     const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-trends-logs-"));
     const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
