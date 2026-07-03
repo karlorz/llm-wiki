@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh SkillWiki agent memory session brief
+
+[Timer]
+OnCalendar=*-*-* 01:05:00 Asia/Hong_Kong
+RandomizedDelaySec=300
+Persistent=true
+AccuracySec=60s
+Unit=agent-memory-session-brief-refresh.service
+
+[Install]
+WantedBy=timers.target

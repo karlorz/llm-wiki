@@ -72,7 +72,7 @@ export async function runHealthSummary(input: HealthSummaryInput): Promise<JobCh
     const report = parsed.data.data;
     return {
       job: "health-summary",
-      status: mapHealthStatus(report.overallStatus),
+      status: mapHealthReportStatus(report),
       reason: summarize(report),
       details: {
         overallStatus: report.overallStatus,
@@ -164,6 +164,20 @@ function mapHealthStatus(status: HealthStatus): "pass" | "warn" | "fail" {
   if (status === "warn") return "warn";
   if (status === "error" || status === "unknown") return "fail";
   return "pass";
+}
+
+function mapHealthReportStatus(report: ParsedHealthReport): "pass" | "warn" | "fail" {
+  if (report.overallStatus === "unknown") return "fail";
+
+  const blocking = mapHealthStatus(report.blockingStatus);
+  if (blocking === "fail") return "fail";
+  if (blocking === "warn") return "warn";
+
+  const advisory = mapHealthStatus(report.advisoryStatus);
+  if (advisory !== "pass") return "warn";
+
+  const overall = mapHealthStatus(report.overallStatus);
+  return overall === "fail" ? "warn" : overall;
 }
 
 function summarize(report: ParsedHealthReport): string {

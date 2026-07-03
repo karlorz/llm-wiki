@@ -63,7 +63,7 @@ describe("runStage1Maintenance", () => {
     expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
   });
 
-  it("records a failed latest-run when health-summary fails after a successful daily writer", async () => {
+  it("preserves successful latest-run when health-summary fails after a successful daily writer", async () => {
     const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-health-fail-state-"));
     const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
     const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
@@ -133,12 +133,51 @@ describe("runStage1Maintenance", () => {
     expect(result.ok).toBe(false);
     const latestPath = join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json");
     const latest = JSON.parse(readFileSync(latestPath, "utf8"));
-    expect(latest.status).toBe("fail");
-    expect(latest.failure_class).toBe("HEALTH_SUMMARY_FAILED");
-    expect(latest.heartbeat).toEqual({ status: "skipped", reason: "maintenance job failed: health-summary" });
+    expect(latest.status).toBe("success");
+    expect(latest.failure_class).toBeNull();
+    expect(latest.heartbeat).toEqual({ status: "skipped", reason: "generate-only" });
     expect(git(vault, "status", "--porcelain", "--untracked-files=all")).toBe("");
     git(vault, "fetch", "origin", "main");
     expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
+  });
+
+  it("runs session-brief-refresh as a dedicated writing profile and pushes its commit", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-session-brief-mode-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const events: MaintenanceEvent[] = [];
+
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "session-brief-refresh" as never,
+      now: new Date("2026-06-13T01:05:00Z"),
+      emit: (event) => events.push(event),
+      runCommand: async (command, args, options) => {
+        if (command === "skillwiki" && args[0] === "session-brief") {
+          writeSessionBriefOutputs(vault);
+          return commandResult(JSON.stringify({ ok: true }) + "\n");
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    if (!result.ok) throw new Error(JSON.stringify(result, null, 2));
+    expect(result.data.checks.map((check) => [check.job, check.status])).toEqual([
+      ["vault-sync-preflight", "pass"],
+      ["session-brief-refresh", "pass"],
+    ]);
+    expect(events.find((event) => event.job === "agent-memory-trends-daily")).toBeUndefined();
+    expect(events.find((event) => event.job === "health-summary")).toBeUndefined();
+    expect(events.find((event) => event.job === "vault-push")?.status).toBe("pass");
+    git(vault, "fetch", "origin", "main");
+    expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
+    expect(git(vault, "log", "-1", "--pretty=%s")).toBe("chore(maintenance): refresh session brief");
   });
 
   it("emits the resolved satellite session policy on start", async () => {

@@ -84,6 +84,37 @@ describe("runHealthSummary", () => {
     ]);
   });
 
+  it("does not fail maintenance for advisory-only health errors when blocking status passes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-health-advisory-error-"));
+    const repo = join(root, "repo");
+    const vault = join(root, "vault");
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(vault, { recursive: true });
+
+    const check = await runHealthSummary({
+      vaultPath: vault,
+      repoPath: repo,
+      runCommand: async (command, args) => {
+        if (command !== "skillwiki") return result("", 127, `unexpected command: ${command}`);
+        writeHealthEnvelope(outputPath(args), {
+          overall_status: "error",
+          blocking_status: "pass",
+          advisory_status: "error",
+          risk_flags: [
+            { id: "sync_visibility_risk", status: "error", blocking: false },
+          ],
+          humanHint: "optional sync visibility is advisory",
+        });
+        return result("");
+      },
+    });
+
+    expect(check.status).toBe("warn");
+    expect(check.reason).toContain("health status error (blocking pass, advisory error)");
+    expect(check.details.blockingStatus).toBe("pass");
+    expect(check.details.advisoryStatus).toBe("error");
+  });
+
   it("fails when the written health envelope reports an error", async () => {
     const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-health-fail-"));
     const repo = join(root, "repo");
@@ -112,6 +143,33 @@ describe("runHealthSummary", () => {
     expect(check.details.riskFlags).toEqual([
       { id: "content_integrity_risk", status: "error", blocking: true },
     ]);
+  });
+
+  it("fails when health report self-check leaves overall status unknown", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-health-unknown-"));
+    const repo = join(root, "repo");
+    const vault = join(root, "vault");
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(vault, { recursive: true });
+
+    const check = await runHealthSummary({
+      vaultPath: vault,
+      repoPath: repo,
+      runCommand: async (command, args) => {
+        if (command !== "skillwiki") return result("", 127, `unexpected command: ${command}`);
+        writeHealthEnvelope(outputPath(args), {
+          overall_status: "unknown",
+          blocking_status: "pass",
+          advisory_status: "pass",
+          warnings: [{ id: "self_check", message: "health self-check failed" }],
+          humanHint: "self-check: error",
+        });
+        return result("");
+      },
+    });
+
+    expect(check.status).toBe("fail");
+    expect(check.reason).toContain("health status unknown");
   });
 });
 

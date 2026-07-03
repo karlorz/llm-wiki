@@ -37,6 +37,35 @@ describe("sg02 systemd rollout artifacts", () => {
     expect(timer).toContain("WantedBy=timers.target");
   });
 
+  it("ships dedicated session-brief refresh service and timer", () => {
+    const service = readPackageFile("service-units/systemd/agent-memory-session-brief-refresh.service");
+    const timer = readPackageFile("service-units/systemd/agent-memory-session-brief-refresh.timer");
+
+    expect(service).toContain("Description=SkillWiki agent memory session brief refresh");
+    expect(service).toContain("User=agent-memory");
+    expect(service).toContain("Environment=SKILLWIKI_MAINTENANCE_MODE=session-brief-refresh");
+    expect(service).toContain("ExecStart=/home/agent-memory/.local/bin/agent-memory-trends-daily");
+    expect(service).toContain("RuntimeMaxSec=900");
+    expect(timer).toContain("OnCalendar=*-*-* 01:05:00 Asia/Hong_Kong");
+    expect(timer).toContain("Persistent=true");
+    expect(timer).toContain("Unit=agent-memory-session-brief-refresh.service");
+  });
+
+  it("ships a four-hour self-update service and timer", () => {
+    const service = readPackageFile("service-units/systemd/agent-memory-self-update.service");
+    const timer = readPackageFile("service-units/systemd/agent-memory-self-update.timer");
+
+    expect(service).toContain("Description=SkillWiki agent memory self-update");
+    expect(service).toContain("User=agent-memory");
+    expect(service).toContain("Environment=SKILLWIKI_MAINTENANCE_MODE=self-update-apply");
+    expect(service).toContain("ExecStart=/home/agent-memory/.local/bin/agent-memory-trends-daily");
+    expect(service).toContain("RuntimeMaxSec=1800");
+    expect(timer).toContain("OnCalendar=*-*-* 00/4:20:00 Asia/Hong_Kong");
+    expect(timer).toContain("RandomizedDelaySec=900");
+    expect(timer).toContain("Persistent=true");
+    expect(timer).toContain("Unit=agent-memory-self-update.service");
+  });
+
   it("ships a guided sg02 installer that stops before manual auth gates by default", () => {
     const installer = readPackageFile("scripts/install-sg02.sh");
 
@@ -62,6 +91,10 @@ describe("sg02 systemd rollout artifacts", () => {
     expect(installer).toContain("node \"$REPO/packages/skillwiki-maintenance/dist/cli.js\" run");
     expect(installer).toContain("systemctl daemon-reload");
     expect(installer).toContain("systemctl enable --now agent-memory-trends.timer");
+    expect(installer).toContain("agent-memory-session-brief-refresh.timer");
+    expect(installer).toContain("agent-memory-self-update.timer");
+    expect(installer).toContain("systemctl enable --now agent-memory-session-brief-refresh.timer");
+    expect(installer).toContain("systemctl enable --now agent-memory-self-update.timer");
 
     const dailyWrapperStart = installer.indexOf('cat > "$BIN_DIR/agent-memory-trends-daily"');
     expect(dailyWrapperStart).toBeGreaterThan(-1);

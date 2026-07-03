@@ -258,6 +258,20 @@ function runVaultSyncHealth(home: string, syncMode: SyncMode): VaultSyncComponen
   const checks: CheckResult[] = [];
 
   const pushScript = join(shareDir, "wiki-push.sh");
+  if (syncMode === "optional" && !existsSync(pushScript)) {
+    return {
+      status: "pass",
+      blocking: false,
+      installed: false,
+      summary: { pass: 1, info: 0, warn: 0, error: 0, skipped: 1 },
+      checks: [{
+        id: "vault_sync_installed",
+        status: "pass",
+        detail: `vault-sync not installed at ${pushScript}; optional check skipped`,
+      }],
+    };
+  }
+
   checks.push(existsSync(pushScript)
     ? { id: "vault_sync_installed", label: "Vault sync installed", status: "pass", detail: `Found: ${pushScript}` }
     : { id: "vault_sync_installed", label: "Vault sync installed", status: "error", detail: `Script missing: ${pushScript}` });
@@ -421,6 +435,11 @@ export async function runHealth(input: HealthInput): Promise<{ exitCode: number;
 
   const doctorStatus = statusFromCounts(doctor.result.data.summary);
   const vaultSync = runVaultSyncHealth(input.home, syncMode);
+  const vaultSyncCoverage: CoverageEntry = syncMode === "off"
+    ? { state: "skipped", status: "pass", reason: "--sync off" }
+    : !vaultSync.installed && vaultSync.summary.skipped > 0 && vaultSync.summary.warn === 0 && vaultSync.summary.error === 0
+      ? { state: "skipped", status: vaultSync.status, reason: "vault-sync not installed and --sync optional" }
+      : { state: "checked", status: vaultSync.status };
   const queryReadiness = deriveQueryReadiness(lint.result.data);
   const sourceFreshness: HealthReport["components"]["source_freshness"] = {
     status: bucketCount(lint.result.data.buckets, "stale_page") > 0 || bucketCount(lint.result.data.buckets, "file_source_url") > 0 ? "warn" : "pass",
@@ -475,7 +494,7 @@ export async function runHealth(input: HealthInput): Promise<{ exitCode: number;
     coverage: {
       doctor: { state: "checked", status: doctorStatus },
       lint: { state: "checked", status: lintComponent.status },
-      vault_sync: syncMode === "off" ? { state: "skipped", status: "pass", reason: "--sync off" } : { state: "checked", status: vaultSync.status },
+      vault_sync: vaultSyncCoverage,
       query_readiness: { state: "checked", status: queryReadiness.status },
       source_freshness: { state: "checked", status: sourceFreshness.status },
     },

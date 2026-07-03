@@ -56,11 +56,26 @@ describe("resolveWorkflowProfile", () => {
       runsSelfUpdateApply: false,
       pushAfterCommittedWriter: false,
     });
+
+    const sessionBrief = resolveWorkflowProfile(baseConfig(), "session-brief-refresh" as never);
+    expect(sessionBrief.ok).toBe(true);
+    if (!sessionBrief.ok) return;
+    expect(sessionBrief.data).toMatchObject({
+      id: "session-brief-refresh",
+      mode: "session-brief-refresh",
+      selectedJobs: ["session-brief-refresh"],
+      readOnlyJobs: [],
+      writerJobs: ["session-brief-refresh"],
+      runsSelfUpdateCheck: false,
+      runsPreflight: true,
+      runsSelfUpdateApply: false,
+      pushAfterCommittedWriter: true,
+    });
   });
 
   it("fails closed when a protected host is asked to run a mutating profile", () => {
-    for (const mode of ["full", "daily", "self-update-apply"] as const) {
-      const resolved = resolveWorkflowProfile(baseConfig({ protectedHost: true }), mode);
+    for (const mode of ["full", "daily", "self-update-apply", "session-brief-refresh"] as const) {
+      const resolved = resolveWorkflowProfile(baseConfig({ protectedHost: true }), mode as never);
       expect(resolved.ok).toBe(false);
       if (!resolved.ok) {
         expect(String(resolved.detail)).toContain("protected");

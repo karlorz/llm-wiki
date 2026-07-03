@@ -117,11 +117,15 @@ Tracked rollout files:
 
 - `service-units/systemd/agent-memory-trends.service`
 - `service-units/systemd/agent-memory-trends.timer`
+- `service-units/systemd/agent-memory-session-brief-refresh.service`
+- `service-units/systemd/agent-memory-session-brief-refresh.timer`
+- `service-units/systemd/agent-memory-self-update.service`
+- `service-units/systemd/agent-memory-self-update.timer`
 - `scripts/install-sg02.sh`
 
 The systemd service is a system-level unit under `/etc/systemd/system`, runs with `User=agent-memory`, reads `/home/agent-memory/.config/agent-memory-trends/env`, and executes `/home/agent-memory/.local/bin/agent-memory-trends-daily`. The daily wrapper calls the guarded `@skillwiki/maintenance` runner in `--mode daily`, which performs vault preflight, runs `agent-memory-trends daily --generate-only` inside the maintenance write transaction, and pushes the maintenance-owned commit to `origin/main` instead of using the legacy direct publisher path.
 
-The timer runs daily at `00:10` Asia/Hong_Kong with `RandomizedDelaySec=300`, `Persistent=true`, and `AccuracySec=60s`.
+The daily timer runs at `00:10` Asia/Hong_Kong with `RandomizedDelaySec=300`, `Persistent=true`, and `AccuracySec=60s`. A dedicated session-brief refresh timer runs at `01:05` Asia/Hong_Kong, and the self-update timer runs every four hours at minute 20.
 
 ## Install on sg02
 
@@ -160,7 +164,7 @@ sudo bash packages/agent-memory-trends/scripts/install-sg02.sh
 
 The installer creates the `agent-memory` user when missing, prepares directories, writes `/home/agent-memory/.config/agent-memory-trends/env.example`, creates `/home/agent-memory/.config/agent-memory-trends/env` if absent, installs the wrapper, copies the service and timer units, and runs `systemctl daemon-reload`.
 
-By default it stops before manual auth gates and does not enable the timer. Use `--enable` only after the manual gates and a manual live run pass:
+By default it stops before manual auth gates and does not enable the timers. Use `--enable` only after the manual gates and a manual live run pass:
 
 ```bash
 sudo bash packages/agent-memory-trends/scripts/install-sg02.sh --enable
@@ -253,10 +257,12 @@ sudo systemctl start agent-memory-trends.service
 journalctl -u agent-memory-trends.service --no-pager -n 200
 ```
 
-After the manual live run verifies the guarded maintenance result, digest, evidence, TypeScript-rendered task/bug/idea captures if any, run JSON, suppression fields if any, and a clean or intentionally ahead vault state, enable the timer.
+After the manual live run verifies the guarded maintenance result, digest, evidence, TypeScript-rendered task/bug/idea captures if any, run JSON, suppression fields if any, and a clean or intentionally ahead vault state, enable the timers.
 
 ```bash
 sudo systemctl enable --now agent-memory-trends.timer
+sudo systemctl enable --now agent-memory-session-brief-refresh.timer
+sudo systemctl enable --now agent-memory-self-update.timer
 ```
 
 ## Safety Contract

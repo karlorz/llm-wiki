@@ -7,6 +7,7 @@ internal profiles while preserving the existing CLI surface:
 - `daily` -> `unattended-daily`
 - `self-update` -> `self-update-check`
 - `self-update-apply` -> `self-update-apply`
+- `session-brief-refresh` -> `session-brief-refresh`
 
 ## Current Profile Rules
 
@@ -16,12 +17,14 @@ internal profiles while preserving the existing CLI surface:
 | `daily` | `unattended-daily` | no | yes | `agent-memory-trends-daily`, `health-summary` | yes, one vault writer max |
 | `self-update` | `self-update-check` | yes | no | none | no |
 | `self-update-apply` | `self-update-apply` | no | yes | none | yes, but no vault-writer jobs |
+| `session-brief-refresh` | `session-brief-refresh` | no | yes | `session-brief-refresh` | yes, one vault writer |
 
 Safety invariants:
 
 - Fleet `maintenance.skillwiki_satellite.jobs` must stay in the approved Stage 1 order.
 - `health-summary` is always read-only.
 - Only the declared writer jobs may mutate the vault, and later writers are skipped once one commit succeeds or fails.
+- Dedicated single-writer profiles such as `session-brief-refresh` may push their committed writer output immediately.
 - Protected hosts must reject mutating profiles.
 
 ## Add A Satellite Job Safely

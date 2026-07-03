@@ -36,7 +36,7 @@ export type CommandRunner = (
   options: CommandRunOptions
 ) => Promise<CommandRunResult>;
 
-export type MaintenanceMode = "full" | "daily" | "self-update" | "self-update-apply";
+export type MaintenanceMode = "full" | "daily" | "self-update" | "self-update-apply" | "session-brief-refresh";
 
 export type MaintenanceJobId =
   | "self-update-check"

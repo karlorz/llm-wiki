@@ -1,0 +1,12 @@
+[Unit]
+Description=Run SkillWiki agent memory self-update every four hours
+
+[Timer]
+OnCalendar=*-*-* 00/4:20:00 Asia/Hong_Kong
+RandomizedDelaySec=900
+Persistent=true
+AccuracySec=60s
+Unit=agent-memory-self-update.service
+
+[Install]
+WantedBy=timers.target

@@ -5,7 +5,8 @@ export type WorkflowProfileId =
   | "attended-full"
   | "unattended-daily"
   | "self-update-check"
-  | "self-update-apply";
+  | "self-update-apply"
+  | "session-brief-refresh";
 
 export interface ResolvedWorkflowProfile {
   id: WorkflowProfileId;
@@ -70,6 +71,16 @@ const PROFILE_DEFINITIONS: Record<MaintenanceMode, WorkflowProfileDefinition> = 
     runsPreflight: true,
     runsSelfUpdateApply: true,
     pushAfterCommittedWriter: false,
+  },
+  "session-brief-refresh": {
+    id: "session-brief-refresh",
+    selectedJobs: ["session-brief-refresh"],
+    readOnlyJobs: [],
+    writerJobs: ["session-brief-refresh"],
+    runsSelfUpdateCheck: false,
+    runsPreflight: true,
+    runsSelfUpdateApply: false,
+    pushAfterCommittedWriter: true,
   },
 };
 

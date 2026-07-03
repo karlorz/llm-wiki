@@ -27,7 +27,9 @@ Usage: sudo bash packages/agent-memory-trends/scripts/install-sg02.sh [--enable]
 Prepares sg02 for the private agent-memory-trends nightly writer.
 
 Options:
-  --enable   Enable and start agent-memory-trends.timer after installing files.
+  --enable   Enable and start agent-memory-trends.timer,
+             agent-memory-session-brief-refresh.timer, and
+             agent-memory-self-update.timer after installing files.
              Use only after the manual auth gates and a manual live run pass.
   --help     Show this help.
 
@@ -198,10 +200,16 @@ EOF
 chown "$SERVICE_USER:$SERVICE_USER" "$BIN_DIR/agent-memory-trends-daily"
 chmod 0750 "$BIN_DIR/agent-memory-trends-daily"
 
-install -m 0644 "$PACKAGE_ROOT/service-units/systemd/agent-memory-trends.service" \
-  "$UNIT_DIR/agent-memory-trends.service"
-install -m 0644 "$PACKAGE_ROOT/service-units/systemd/agent-memory-trends.timer" \
-  "$UNIT_DIR/agent-memory-trends.timer"
+for unit in \
+  agent-memory-trends.service \
+  agent-memory-trends.timer \
+  agent-memory-session-brief-refresh.service \
+  agent-memory-session-brief-refresh.timer \
+  agent-memory-self-update.service \
+  agent-memory-self-update.timer
+do
+  install -m 0644 "$PACKAGE_ROOT/service-units/systemd/$unit" "$UNIT_DIR/$unit"
+done
 
 systemctl daemon-reload
 
@@ -221,14 +229,18 @@ Manual auth gates to complete as $SERVICE_USER:
   9. sudo systemctl start agent-memory-trends.service
  10. journalctl -u agent-memory-trends.service --no-pager -n 200
 
-Enable the timer only after a successful manual live run:
+Enable the timers only after a successful manual live run:
   sudo systemctl enable --now agent-memory-trends.timer
+  sudo systemctl enable --now agent-memory-session-brief-refresh.timer
+  sudo systemctl enable --now agent-memory-self-update.timer
 
 GATES
 
 if [ "$ENABLE_TIMER" -eq 1 ]; then
-  log "--enable supplied; enabling timer"
+  log "--enable supplied; enabling timers"
   systemctl enable --now agent-memory-trends.timer
+  systemctl enable --now agent-memory-session-brief-refresh.timer
+  systemctl enable --now agent-memory-self-update.timer
 else
-  log "timer not enabled; rerun with --enable only after manual auth gates pass"
+  log "timers not enabled; rerun with --enable only after manual auth gates pass"
 fi

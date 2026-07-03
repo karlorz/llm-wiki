@@ -160,6 +160,11 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
         writeFailed = sessionBrief.status === "fail";
         writeCommitted = sessionBrief.details.committed;
         emit({ ts: ts(), event: "job", host_id: input.hostId, job: sessionBrief.job, status: sessionBrief.status, reason: sessionBrief.reason, details: sessionBrief.details });
+        if (profile.data.pushAfterCommittedWriter && sessionBrief.status === "pass" && sessionBrief.details.committed) {
+          const pushed = await pushVaultChanges(parsed.data.vaultPath, runCommand);
+          emit({ ts: ts(), event: "job", host_id: input.hostId, job: "vault-push", status: pushed.ok ? "pass" : "fail", reason: pushed.ok ? "pushed maintenance commit to origin/main" : pushed.detail, details: pushed.ok ? {} : pushed });
+          if (!pushed.ok) return err("MAINTENANCE_PUSH_FAILED", pushed);
+        }
         continue;
       }
       if (job === "health-summary") {
@@ -170,27 +175,6 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
         });
         checks.push(healthSummary);
         emit({ ts: ts(), event: "job", host_id: input.hostId, job: healthSummary.job, status: healthSummary.status, reason: healthSummary.reason, details: healthSummary.details });
-        if (healthSummary.status === "fail") {
-          const recorded = await recordLatestRunFailure({
-            vaultPath: parsed.data.vaultPath,
-            runCommand,
-            now: input.now,
-            failedJob: healthSummary.job,
-          });
-          emit({
-            ts: ts(),
-            event: "job",
-            host_id: input.hostId,
-            job: "satellite-run-state",
-            status: recorded.ok ? "pass" : "fail",
-            reason: recorded.ok ? "recorded failed satellite run state" : recorded.error,
-            details: recorded.ok ? recorded.data : recorded,
-          });
-          if (!recorded.ok) {
-            emit({ ts: ts(), event: "finish", host_id: input.hostId, status: "fail" });
-            return err("MAINTENANCE_RUN_STATE_FAILED", recorded);
-          }
-        }
         continue;
       }
       emit({ ts: ts(), event: "skip", host_id: input.hostId, job, status: "skip", reason: "writing job deferred until dedicated transaction wiring" });
@@ -225,46 +209,6 @@ async function pushVaultChanges(vaultPath: string, runCommand: CommandRunner): P
   return { ok: false, detail: `git push retry failed: ${commandSummary(retry)}` };
 }
 
-async function recordLatestRunFailure(input: {
-  vaultPath: string;
-  runCommand: CommandRunner;
-  now: Date;
-  failedJob: string;
-}): Promise<Result<{ latestRunPath: string; committed: boolean; pushed: boolean }>> {
-  const written = writeLatestRunStateOnly(
-    input.vaultPath,
-    latestRunFailEntry({
-      now: input.now,
-      failureClassCode: maintenanceJobFailureClass(input.failedJob),
-      heartbeatReason: `maintenance job failed: ${input.failedJob}`,
-    })
-  );
-  if (!written.ok) return written;
-
-  const relPath = ".skillwiki/agent-memory-trends/latest-run.json";
-  const add = await input.runCommand("git", ["-C", input.vaultPath, "add", "--", relPath], { cwd: input.vaultPath });
-  if (add.exitCode !== 0) return err("RUN_STATE_COMMIT_FAILED", commandSummary(add));
-
-  const diff = await input.runCommand("git", ["-C", input.vaultPath, "diff", "--cached", "--quiet", "--", relPath], {
-    cwd: input.vaultPath,
-  });
-  if (diff.exitCode === 0) {
-    return ok({ latestRunPath: written.data.latestRunPath, committed: false, pushed: false });
-  }
-  if (diff.exitCode !== 1) return err("RUN_STATE_COMMIT_FAILED", commandSummary(diff));
-
-  const commit = await input.runCommand(
-    "git",
-    ["-C", input.vaultPath, "commit", "-m", "maintenance(agent-memory): record failed satellite run"],
-    { cwd: input.vaultPath }
-  );
-  if (commit.exitCode !== 0) return err("RUN_STATE_COMMIT_FAILED", commandSummary(commit));
-
-  const pushed = await pushVaultChanges(input.vaultPath, input.runCommand);
-  if (!pushed.ok) return err("RUN_STATE_PUSH_FAILED", pushed.detail);
-  return ok({ latestRunPath: written.data.latestRunPath, committed: true, pushed: true });
-}
-
 export function defaultFleetPath(vaultPath: string): string {
   return join(vaultPath, "projects", "llm-wiki", "architecture", "fleet.yaml");
 }
@@ -294,10 +238,6 @@ interface LatestRunFailureEntry {
   startedAt: string;
   finishedAt: string;
   heartbeat: { status: "skipped"; reason: string };
-}
-
-function maintenanceJobFailureClass(job: string): string {
-  return `${job.toUpperCase().replace(/-/g, "_")}_FAILED`;
 }
 
 function latestRunFailEntry(input: {

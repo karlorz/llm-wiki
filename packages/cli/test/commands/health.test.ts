@@ -72,8 +72,11 @@ describe("runHealth", () => {
       expect(data.vault.path).toBe(vault);
       expect(data.components.doctor).toBeDefined();
       expect(data.components.lint.status).toBe("error");
-      expect(data.components.vault_sync.status).toBe("error");
+      expect(data.components.vault_sync.status).toBe("pass");
       expect(data.components.vault_sync.blocking).toBe(false);
+      expect(data.components.vault_sync.installed).toBe(false);
+      expect(data.components.vault_sync.summary.skipped).toBeGreaterThan(0);
+      expect(data.components.vault_sync.checks[0]?.detail).toContain("optional");
       expect(data.components.query_readiness.status).toBe("error");
       expect(data.details_included).toBe(false);
       expect(data.truncated).toBe(false);
@@ -81,7 +84,7 @@ describe("runHealth", () => {
       expect(data.report_complete).toBe(true);
       expect(data.self_check.status).toBe("pass");
       expect(data.coverage.lint.state).toBe("checked");
-      expect(data.coverage.vault_sync.state).toBe("checked");
+      expect(data.coverage.vault_sync.state).toBe("skipped");
       const errorKinds = data.components.lint.buckets.filter(b => b.severity === "error").map(b => b.kind);
       expect(errorKinds).toContain("tag_not_in_taxonomy");
       expect(errorKinds).toContain("broken_sources");
