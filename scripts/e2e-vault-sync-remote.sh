@@ -36,8 +36,20 @@ assert_exit 0 "$RUN_RC" "ssh connectivity to $SSH_TARGET"
 if [ "$READONLY_VERIFY" = "true" ]; then
   printf "\n--- Read-only status (sg01-safe path) ---\n"
 
-  # Read-only discovery: find existing status.sh without writing remote state.
-  run_cli ssh "$SSH_TARGET" "find \"$HOME\" \"$VAULT_PATH\" -type f -path '*/vault-sync-status/status.sh' 2>/dev/null | head -n 1"
+  # Read-only discovery: probe bounded install/cache locations without walking
+  # the FUSE-backed vault mount on production snapshotters.
+  run_cli ssh "$SSH_TARGET" "
+for p in \
+  \"\$HOME/.claude/plugins/cache/llm-wiki/vault-sync\"/*/skills/vault-sync-status/status.sh \
+  \"\$HOME/.local/share/vault-sync/skills/vault-sync-status/status.sh\"
+do
+  if [ -f \"\$p\" ]; then
+    printf '%s\n' \"\$p\"
+    exit 0
+  fi
+done
+find \"\$HOME/.claude/plugins/cache/llm-wiki\" \"\$HOME/.local/share/vault-sync\" -maxdepth 6 -type f -path '*/vault-sync-status/status.sh' 2>/dev/null | head -n 1
+"
   assert_exit 0 "$RUN_RC" "discover vault-sync status.sh path"
   STATUS_REMOTE_PATH="$RUN_OUTPUT"
 

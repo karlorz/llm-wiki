@@ -92,48 +92,103 @@ else
     exit 0
 fi
 
-# rclone copy (NOT sync) → never deletes on remote.
-# --update : only newer source files overwrite remote (mod-time + size based)
-# --filter-from : reuse the bisync filter list
-# --transfers 4 : modest parallelism for small files
-# --checkers 8 : default-ish
-# --low-level-retries 10 --retries 3 : tolerate transient network blips
-OUTPUT=$(rclone copy "$WIKI_DIR" "$REMOTE" \
-    --filter-from "$FILTERS" \
-    --update \
-    --transfers 4 \
-    --checkers 8 \
-    --low-level-retries 10 \
-    --retries 3 \
-    --stats-one-line \
-    --stats 60s 2>&1)
-RC=$?
-
-DURATION=$(( $(date +%s) - START ))
-
 GIT_OK=true
-if [ "$RC" -eq 0 ]; then
-    # rclone with --stats-one-line emits a "Transferred: N / N, 100%, ..." line on completion.
-    STATS_LINE=$(printf '%s\n' "$OUTPUT" | grep -E '^Transferred:.*[0-9]+ B' | tail -1)
-    if [ -n "$STATS_LINE" ]; then
-        log "OK push duration=${DURATION}s | $STATS_LINE"
-    else
-        log "OK push (no changes) duration=${DURATION}s"
+GIT_PUSHED=false
+REMOTE_PRUNE_BASE=""
+REMOTE_PRUNE_HEAD=""
+
+remote_prune_archived_source_paths() {
+    local base="$1"
+    local head="$2"
+
+    if [ -z "$base" ] || [ -z "$head" ] || [ "$base" = "$head" ]; then
+        return 0
     fi
-else
-    log "FAIL rclone exit=$RC duration=${DURATION}s"
-    printf '%s\n' "$OUTPUT" >>"$LOG_FILE"
-    GIT_OK=false
-fi
+
+    local max_remote_deletes="${WIKI_PUSH_MAX_REMOTE_DELETES:-10}"
+    case "$max_remote_deletes" in
+        ''|*[!0-9]*)
+            log "FAIL remote prune invalid WIKI_PUSH_MAX_REMOTE_DELETES=$max_remote_deletes"
+            return 1
+            ;;
+    esac
+    if [ "$max_remote_deletes" -lt 1 ]; then
+        log "FAIL remote prune invalid WIKI_PUSH_MAX_REMOTE_DELETES=$max_remote_deletes"
+        return 1
+    fi
+
+    local plan_file
+    plan_file="$(mktemp)"
+    git diff --name-status --diff-filter=DR "$base..$head" | while IFS="$(printf '\t')" read -r status old_path new_path; do
+        local source_path=""
+        local archive_path=""
+
+        case "$status" in
+            D)
+                source_path="$old_path"
+                archive_path="_archive/$source_path"
+                ;;
+            R*)
+                source_path="$old_path"
+                archive_path="$new_path"
+                ;;
+            *)
+                continue
+                ;;
+        esac
+
+        if [ -z "$source_path" ] || [ -z "$archive_path" ]; then
+            continue
+        fi
+        if [ "${source_path#_archive/}" != "$source_path" ]; then
+            continue
+        fi
+        if [ "$archive_path" != "_archive/$source_path" ]; then
+            continue
+        fi
+        if git cat-file -e "HEAD:$archive_path" 2>/dev/null; then
+            printf '%s\n' "$source_path"
+        fi
+    done | LC_ALL=C sort -u > "$plan_file"
+
+    local planned_count
+    planned_count="$(wc -l < "$plan_file" | tr -d ' ')"
+    if [ "$planned_count" = "0" ]; then
+        rm -f "$plan_file"
+        return 0
+    fi
+    if [ "$planned_count" -gt "$max_remote_deletes" ]; then
+        log "FAIL remote prune cap exceeded: $planned_count > $max_remote_deletes"
+        sed 's/^/remote prune skipped: /' "$plan_file" >>"$LOG_FILE"
+        rm -f "$plan_file"
+        return 1
+    fi
+
+    local rel_path
+    while IFS= read -r rel_path; do
+        [ -z "$rel_path" ] && continue
+        local remote_path="${REMOTE%/}/$rel_path"
+        if rclone deletefile "$remote_path" >>"$LOG_FILE" 2>&1; then
+            log "OK remote pruned archived source $remote_path"
+        else
+            log "FAIL remote prune deletefile failed for $remote_path"
+            rm -f "$plan_file"
+            return 1
+        fi
+    done < "$plan_file"
+
+    rm -f "$plan_file"
+    return 0
+}
 
 # --- git auto-push to GitHub ---
-# Keep GitHub in sync so manual git pull doesn't hit divergence/conflicts.
-# This is non-blocking — failure does not affect the rclone result.
+# Keep GitHub in sync before publishing macOS-authored files to S3. Publishing
+# to S3 first creates direct-S3-not-Git paths when a later git push fails.
 if [ "$GIT_OK" = true ] && [ -d "$WIKI_DIR/.git" ]; then
     cd "$WIKI_DIR" || { log "GIT cd failed"; exit 0; }
 
     if ! CASE_CONFLICTS=$(git_case_conflicts); then
-        log "FAIL git case-only path collision detected (non-blocking)"
+        log "FAIL git case-only path collision detected — skipping rclone publish"
         printf '%s\n' "$CASE_CONFLICTS" >>"$LOG_FILE"
         GIT_OK=false
     fi
@@ -155,38 +210,102 @@ if [ "$GIT_OK" = true ] && [ -d "$WIKI_DIR/.git" ]; then
             # reach here after the porcelain check, but just in case)
             log "GIT nothing to commit"
         else
-            log "FAIL git commit exit=$GIT_COMMIT_RC (non-blocking)"
+            log "FAIL git commit exit=$GIT_COMMIT_RC — skipping rclone publish to avoid direct-S3-not-Git drift"
+            GIT_OK=false
         fi
     fi
 
     # Pre-push pull with auto-resolve for conflict storms. If sg01 pushed
     # snapshot commits since last cycle, rebase committed local work first so
     # the subsequent push is fast-forwardable.
-    if git fetch --quiet origin main 2>>"$LOG_FILE"; then
-        BEHIND=$(git rev-list --count "HEAD..origin/main" 2>/dev/null || echo 0)
-        if [ "$BEHIND" -gt 0 ]; then
-            AUTO_RESOLVE="$SCRIPT_DIR/wiki-pull-with-auto-resolve.sh"
-            if [ -x "$AUTO_RESOLVE" ]; then
-                "$AUTO_RESOLVE" origin main 2>>"$LOG_FILE" && log "GIT pre-push pull ok" || log "GIT pre-push pull failed (non-blocking)"
-            else
-                git pull --rebase origin main 2>>"$LOG_FILE" && log "GIT pre-push pull ok" || log "GIT pre-push pull failed (non-blocking)"
+    if [ "$GIT_OK" = true ]; then
+        if git fetch --quiet origin main 2>>"$LOG_FILE"; then
+            BEHIND=$(git rev-list --count "HEAD..origin/main" 2>/dev/null || echo 0)
+            if [ "$BEHIND" -gt 0 ]; then
+                AUTO_RESOLVE="$SCRIPT_DIR/wiki-pull-with-auto-resolve.sh"
+                if [ -x "$AUTO_RESOLVE" ]; then
+                    if "$AUTO_RESOLVE" origin main 2>>"$LOG_FILE"; then
+                        log "GIT pre-push pull ok"
+                    else
+                        log "FAIL GIT pre-push pull failed — skipping rclone publish to avoid direct-S3-not-Git drift"
+                        GIT_OK=false
+                    fi
+                else
+                    if git pull --rebase origin main 2>>"$LOG_FILE"; then
+                        log "GIT pre-push pull ok"
+                    else
+                        log "FAIL GIT pre-push pull failed — skipping rclone publish to avoid direct-S3-not-Git drift"
+                        GIT_OK=false
+                    fi
+                fi
             fi
+        else
+            log "GIT fetch failed (non-blocking)"
         fi
-    else
-        log "GIT fetch failed (non-blocking)"
     fi
 
-    AHEAD=$(git rev-list --count "origin/main..HEAD" 2>/dev/null || echo 0)
+    AHEAD=0
+    if [ "$GIT_OK" = true ]; then
+        AHEAD=$(git rev-list --count "origin/main..HEAD" 2>/dev/null || echo 0)
+    fi
     if [ "$AHEAD" -gt 0 ]; then
+        REMOTE_PRUNE_BASE="$(git rev-parse origin/main 2>/dev/null || true)"
+        REMOTE_PRUNE_HEAD="$(git rev-parse HEAD 2>/dev/null || true)"
         git push origin main 2>>"$LOG_FILE"
         GIT_PUSH_RC=$?
         if [ "$GIT_PUSH_RC" -eq 0 ]; then
             log "OK git push succeeded"
+            GIT_PUSHED=true
         else
-            log "FAIL git push exit=$GIT_PUSH_RC (non-blocking)"
+            log "FAIL git push exit=$GIT_PUSH_RC — skipping rclone publish to avoid direct-S3-not-Git drift"
+            GIT_OK=false
         fi
     else
         log "GIT no commits to push"
+    fi
+fi
+
+if [ "$GIT_OK" != true ]; then
+    exit 0
+fi
+
+# rclone copy (NOT sync) → never bulk-deletes on remote.
+# Archive source-path deletes are pruned after this copy succeeds, so the
+# archived object is present on S3 before the stale active path is removed.
+# --update : only newer source files overwrite remote (mod-time + size based)
+# --filter-from : reuse the bisync filter list
+# --transfers 4 : modest parallelism for small files
+# --checkers 8 : default-ish
+# --low-level-retries 10 --retries 3 : tolerate transient network blips
+OUTPUT=$(rclone copy "$WIKI_DIR" "$REMOTE" \
+    --filter-from "$FILTERS" \
+    --update \
+    --transfers 4 \
+    --checkers 8 \
+    --low-level-retries 10 \
+    --retries 3 \
+    --stats-one-line \
+    --stats 60s 2>&1)
+RC=$?
+
+DURATION=$(( $(date +%s) - START ))
+
+if [ "$RC" -eq 0 ]; then
+    # rclone with --stats-one-line emits a "Transferred: N / N, 100%, ..." line on completion.
+    STATS_LINE=$(printf '%s\n' "$OUTPUT" | grep -E '^Transferred:.*[0-9]+ B' | tail -1)
+    if [ -n "$STATS_LINE" ]; then
+        log "OK push duration=${DURATION}s | $STATS_LINE"
+    else
+        log "OK push (no changes) duration=${DURATION}s"
+    fi
+else
+    log "FAIL rclone exit=$RC duration=${DURATION}s"
+    printf '%s\n' "$OUTPUT" >>"$LOG_FILE"
+fi
+
+if [ "$RC" -eq 0 ] && [ "$GIT_PUSHED" = true ]; then
+    if ! remote_prune_archived_source_paths "$REMOTE_PRUNE_BASE" "$REMOTE_PRUNE_HEAD"; then
+        log "FAIL remote prune failed after rclone copy"
     fi
 fi
 

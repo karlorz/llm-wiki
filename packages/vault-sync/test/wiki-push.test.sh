@@ -4,6 +4,7 @@
 set -u
 
 SCRIPT_UNDER_TEST="$(cd "$(dirname "$0")/.." && pwd)/scripts/wiki-push.sh"
+PULL_HELPER_UNDER_TEST="$(cd "$(dirname "$0")/.." && pwd)/scripts/wiki-pull-with-auto-resolve.sh"
 FILTER_UNDER_TEST="$(cd "$(dirname "$0")/.." && pwd)/filters/wiki-push-filters.txt"
 PASS=0
 FAIL=0
@@ -58,10 +59,11 @@ make_script_dir() {
   local script_dir="$root/scripts"
   mkdir -p "$script_dir/lib"
   cp "$SCRIPT_UNDER_TEST" "$script_dir/wiki-push.sh"
+  cp "$PULL_HELPER_UNDER_TEST" "$script_dir/wiki-pull-with-auto-resolve.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/platform.sh" "$script_dir/lib/platform.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/lockfile.sh" "$script_dir/lib/lockfile.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/git-case.sh" "$script_dir/lib/git-case.sh"
-  chmod +x "$script_dir/wiki-push.sh"
+  chmod +x "$script_dir/wiki-push.sh" "$script_dir/wiki-pull-with-auto-resolve.sh"
   printf '%s\n' "$script_dir"
 }
 
@@ -72,6 +74,9 @@ write_stub_rclone() {
 #!/bin/bash
 if [ -n "${RCLONE_CALLED_FILE:-}" ]; then
   echo called > "$RCLONE_CALLED_FILE"
+fi
+if [ -n "${RCLONE_CALLS_FILE:-}" ]; then
+  printf '%s\n' "$*" >> "$RCLONE_CALLS_FILE"
 fi
 echo "Transferred:   	    1 B / 1 B, 100%, 1 B/s, ETA 0s"
 exit 0
@@ -152,6 +157,72 @@ test_clean_ahead_commit_is_pushed() {
   rm -rf "$root"
 }
 
+test_git_push_failure_blocks_rclone_publish() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  cat > "$root/origin.git/hooks/pre-receive" <<'STUB'
+#!/bin/bash
+echo rejected >&2
+exit 1
+STUB
+  chmod +x "$root/origin.git/hooks/pre-receive"
+
+  printf 'local\n' > "$vault/local.md"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_eq "git push failure blocks rclone publish" "$(test -f "$root/rclone-called" && echo called || echo skipped)" "skipped"
+  assert_eq "rejected local edit is absent from origin" "$(git --git-dir="$root/origin.git" show main:local.md 2>/dev/null || true)" ""
+  rm -rf "$root"
+}
+
+test_pull_failure_blocks_rclone_publish() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  local remote_work="$root/remote-work-conflict"
+  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
+  printf 'remote\n' > "$remote_work/note.md"
+  git_commit "$remote_work" remote-conflict
+  git -C "$remote_work" push origin main >/dev/null
+
+  printf 'local\n' > "$vault/note.md"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_eq "pre-push pull failure blocks rclone publish" "$(test -f "$root/rclone-called" && echo called || echo skipped)" "skipped"
+  rm -rf "$root"
+}
+
 test_sync_lock_is_not_committed() {
   local root
   root="$(mktemp -d)"
@@ -182,6 +253,43 @@ test_sync_lock_is_not_committed() {
     lock_state="absent"
   fi
   assert_eq "sync lock is absent from remote" "$lock_state" "absent"
+  rm -rf "$root"
+}
+
+test_archive_move_prunes_stale_remote_source_path() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone" "$vault/raw/transcripts" "$vault/_archive/raw/transcripts"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  printf 'old\n' > "$vault/raw/transcripts/old.md"
+  git_commit "$vault" "add old transcript"
+  git -C "$vault" push origin main >/dev/null
+
+  mv "$vault/raw/transcripts/old.md" "$vault/_archive/raw/transcripts/old.md"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLS_FILE="$root/rclone.calls" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_file_contains "archive move prunes stale remote source path" "$root/rclone.calls" "deletefile stub:wiki/raw/transcripts/old.md"
+  assert_eq "archived transcript is promoted to origin" "$(git --git-dir="$root/origin.git" show main:_archive/raw/transcripts/old.md 2>/dev/null || true)" "old"
+  if git --git-dir="$root/origin.git" cat-file -e main:raw/transcripts/old.md 2>/dev/null; then
+    live_state="present"
+  else
+    live_state="absent"
+  fi
+  assert_eq "live transcript is absent from origin after archive" "$live_state" "absent"
   rm -rf "$root"
 }
 
@@ -339,7 +447,10 @@ STUB
 
 test_pull_helper_sees_clean_tree
 test_clean_ahead_commit_is_pushed
+test_git_push_failure_blocks_rclone_publish
+test_pull_failure_blocks_rclone_publish
 test_sync_lock_is_not_committed
+test_archive_move_prunes_stale_remote_source_path
 test_memory_cache_is_not_committed
 test_case_only_collision_blocks_publish
 test_long_path_fix_runs_before_rclone
