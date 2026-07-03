@@ -48,7 +48,13 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("health").option("--wiki <name>").option("--sync <mode>").option("--no-fail").option("--out <path>").option("--examples <n>");
   program.command("doctor");
   program.command("status").option("--wiki <name>");
-  program.command("archive").option("--wiki <name>").option("--cascade").option("--apply");
+  program.command("archive")
+    .option("--wiki <name>")
+    .option("--cascade")
+    .option("--apply")
+    .option("--remote <remote>")
+    .option("--remote-delete")
+    .option("--max-remote-deletes <n>");
   program.command("drift").option("--apply").option("--new <date>").option("--wiki <name>");
   program.command("dedup")
     .option("--apply")

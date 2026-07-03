@@ -4,12 +4,24 @@ import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
+import {
+  normalizeRemoteRoot,
+  buildRemoteObjectPath,
+  isValidRemoteDeleteCap,
+  planAndMaybePruneRemoteObjects,
+  type RcloneRunner,
+  type RemotePruneResult,
+} from "../utils/rclone.js";
 
 export interface ArchiveInput {
   vault: string;
   page: string;
   cascade?: boolean;
   apply?: boolean;
+  remote?: string;
+  remoteDelete?: boolean;
+  maxRemoteDeletes?: number;
+  rcloneRunner?: RcloneRunner;
 }
 
 export interface CascadeWikilinkRef { page: string; count: number }
@@ -32,6 +44,7 @@ export interface ArchiveOutput {
   index_updated: boolean;
   applied?: boolean;
   cascade?: CascadePreview;
+  remote?: RemotePruneResult;
   humanHint: string;
 }
 
@@ -50,6 +63,13 @@ function arraysEqual(a: string[], b: string[]): boolean {
 }
 
 export async function runArchive(input: ArchiveInput): Promise<{ exitCode: number; result: Result<ArchiveOutput> }> {
+  if (input.remoteDelete && !input.remote) {
+    return { exitCode: ExitCode.USAGE, result: err("USAGE", { message: "--remote-delete requires --remote" }) };
+  }
+  if (input.remoteDelete && !isValidRemoteDeleteCap(input.maxRemoteDeletes)) {
+    return { exitCode: ExitCode.USAGE, result: err("USAGE", { message: "--max-remote-deletes must be a positive integer" }) };
+  }
+
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
@@ -71,6 +91,8 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
 
   const slug = relPath.replace(/\.md$/, "").split("/").pop()!;
   const archivePath = join("_archive", relPath).replace(/\\/g, "/");
+  const remoteRoot = normalizeRemoteRoot(input.remote);
+  const remoteObjectPath = buildRemoteObjectPath(remoteRoot, relPath);
 
   // ----- Cascade scan (read-only) -----
   let cascade: CascadePreview | undefined;
@@ -122,7 +144,8 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
         index_updated: false,
         applied: false,
         cascade,
-        humanHint: summary,
+        ...(remoteObjectPath ? { remote: { plannedDeletes: [remoteObjectPath], deleted: [] } } : {}),
+        humanHint: summary + (remoteObjectPath ? ` (remote planned ${input.remoteDelete ? "delete" : "preview"}: ${remoteObjectPath})` : ""),
       }),
     };
   }
@@ -180,8 +203,21 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
     timestamp: new Date().toISOString(),
   });
 
+  let remote: RemotePruneResult | undefined;
+  if (remoteObjectPath) {
+    const plannedDeletes = [remoteObjectPath];
+    const pruned = await planAndMaybePruneRemoteObjects(plannedDeletes, input);
+    if (!pruned.ok) {
+      return { exitCode: ExitCode.SYNC_PUSH_FAILED, result: pruned };
+    }
+    remote = pruned.data;
+  }
+
   const applied = input.cascade ? true : undefined;
   const cascadeNote = input.cascade ? ` (cascade: ${cascade!.source_array_refs.length} src arrays updated, ${cascade!.wikilink_refs.length} wikilinks reported)` : "";
+  const remoteNote = remote
+    ? ` (remote ${input.remoteDelete ? `deleted ${remote.deleted.length}` : `planned ${remote.plannedDeletes.length}`})`
+    : "";
   return {
     exitCode: ExitCode.OK,
     result: ok({
@@ -190,7 +226,8 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
       index_updated: indexUpdated,
       ...(applied !== undefined ? { applied } : {}),
       ...(cascade ? { cascade } : {}),
-      humanHint: `${relPath} -> ${archivePath}${indexUpdated ? " (index updated)" : ""}${cascadeNote}`,
+      ...(remote ? { remote } : {}),
+      humanHint: `${relPath} -> ${archivePath}${indexUpdated ? " (index updated)" : ""}${cascadeNote}${remoteNote}`,
     }),
   };
 }

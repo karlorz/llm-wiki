@@ -474,10 +474,21 @@ program
   .option("--wiki <name>", "wiki profile name")
   .option("--cascade", "scan vault for references (wikilinks + sources arrays); preview by default", false)
   .option("--apply", "with --cascade: mutate sources arrays and archive (without --apply, --cascade is preview-only)", false)
+  .option("--remote <remote>", "rclone remote root to prune the archived source path, for example seaweed-wiki:cloud/wiki")
+  .option("--remote-delete", "delete the archived source path from the remote after local archive", false)
+  .option("--max-remote-deletes <n>", "maximum remote object deletes allowed", "1")
   .action(async (page, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runArchive({ vault: v.vault, page, cascade: !!opts.cascade, apply: !!opts.apply }), v.vault);
+    else emit(await runArchive({
+      vault: v.vault,
+      page,
+      cascade: !!opts.cascade,
+      apply: !!opts.apply,
+      remote: opts.remote,
+      remoteDelete: !!opts.remoteDelete,
+      maxRemoteDeletes: Number.parseInt(opts.maxRemoteDeletes, 10),
+    }), v.vault);
   });
 
 // drift

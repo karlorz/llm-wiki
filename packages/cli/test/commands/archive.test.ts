@@ -109,6 +109,125 @@ describe("runArchive", () => {
     expect(existsSync(join(dir, "_archive", "raw", "articles", "bar.md"))).toBe(true);
   });
 
+  it("plans a bounded remote delete for the archived source path", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "raw", "articles", "remote-plan.md"), RAW_FM);
+    const calls: string[][] = [];
+
+    const r = await runArchive({
+      vault: dir,
+      page: "raw/articles/remote-plan.md",
+      remote: "seaweed-wiki:cloud/wiki/",
+      rcloneRunner: async args => {
+        calls.push(args);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(r.exitCode).toBe(0);
+    expect(calls).toEqual([]);
+    if (r.result.ok) {
+      expect(r.result.data.remote?.plannedDeletes).toEqual([
+        "seaweed-wiki:cloud/wiki/raw/articles/remote-plan.md",
+      ]);
+      expect(r.result.data.remote?.deleted).toEqual([]);
+    }
+    expect(existsSync(join(dir, "raw", "articles", "remote-plan.md"))).toBe(false);
+    expect(existsSync(join(dir, "_archive", "raw", "articles", "remote-plan.md"))).toBe(true);
+  });
+
+  it("remoteDelete executes rclone deletefile for the archived source path", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "raw", "articles", "remote-delete.md"), RAW_FM);
+    const calls: string[][] = [];
+
+    const r = await runArchive({
+      vault: dir,
+      page: "raw/articles/remote-delete.md",
+      remote: "seaweed-wiki:cloud/wiki/",
+      remoteDelete: true,
+      maxRemoteDeletes: 1,
+      rcloneRunner: async args => {
+        calls.push(args);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(r.exitCode).toBe(0);
+    expect(calls).toEqual([["deletefile", "seaweed-wiki:cloud/wiki/raw/articles/remote-delete.md"]]);
+    if (r.result.ok) {
+      expect(r.result.data.remote?.deleted).toEqual([
+        "seaweed-wiki:cloud/wiki/raw/articles/remote-delete.md",
+      ]);
+    }
+    expect(existsSync(join(dir, "raw", "articles", "remote-delete.md"))).toBe(false);
+    expect(existsSync(join(dir, "_archive", "raw", "articles", "remote-delete.md"))).toBe(true);
+  });
+
+  it("remoteDelete requires a remote before archiving", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "raw", "articles", "remote-required.md"), RAW_FM);
+
+    const r = await runArchive({
+      vault: dir,
+      page: "raw/articles/remote-required.md",
+      remoteDelete: true,
+    });
+
+    expect(r.exitCode).toBe(ExitCode.USAGE);
+    expect(r.result.ok).toBe(false);
+    expect(existsSync(join(dir, "raw", "articles", "remote-required.md"))).toBe(true);
+    expect(existsSync(join(dir, "_archive", "raw", "articles", "remote-required.md"))).toBe(false);
+  });
+
+  it("remoteDelete refuses an invalid cap before archiving", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "raw", "articles", "bad-cap.md"), RAW_FM);
+
+    const r = await runArchive({
+      vault: dir,
+      page: "raw/articles/bad-cap.md",
+      remote: "seaweed-wiki:cloud/wiki",
+      remoteDelete: true,
+      maxRemoteDeletes: 0,
+    });
+
+    expect(r.exitCode).toBe(ExitCode.USAGE);
+    expect(r.result.ok).toBe(false);
+    expect(existsSync(join(dir, "raw", "articles", "bad-cap.md"))).toBe(true);
+    expect(existsSync(join(dir, "_archive", "raw", "articles", "bad-cap.md"))).toBe(false);
+  });
+
+  it("remoteDelete reports sync failure when rclone deletefile fails", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "raw", "articles", "remote-fail.md"), RAW_FM);
+
+    const r = await runArchive({
+      vault: dir,
+      page: "raw/articles/remote-fail.md",
+      remote: "seaweed-wiki:cloud/wiki",
+      remoteDelete: true,
+      rcloneRunner: async () => ({ exitCode: 1, stdout: "", stderr: "network down" }),
+    });
+
+    expect(r.exitCode).toBe(ExitCode.SYNC_PUSH_FAILED);
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) {
+      expect(r.result.error).toBe("SYNC_PUSH_FAILED");
+      expect(r.result.detail).toMatchObject({
+        path: "seaweed-wiki:cloud/wiki/raw/articles/remote-fail.md",
+        stderr: "network down",
+      });
+    }
+    expect(existsSync(join(dir, "raw", "articles", "remote-fail.md"))).toBe(false);
+    expect(existsSync(join(dir, "_archive", "raw", "articles", "remote-fail.md"))).toBe(true);
+  });
+
   it("returns 30 for raw file not found", async () => {
     const dir = makeVault(false);
     mkdirSync(join(dir, "raw"), { recursive: true });

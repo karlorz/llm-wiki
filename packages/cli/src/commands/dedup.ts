@@ -3,22 +3,16 @@ import { scanVault, readPage } from "../utils/vault.js";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import {
+  normalizeRemoteRoot,
+  planAndMaybePruneRemoteObjects,
+  type RcloneRunner,
+  type RemotePruneResult,
+} from "../utils/rclone.js";
 
 export type DedupCanonicalPolicy = "scan-order" | "stable-path";
-
-export interface RcloneResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
-
-export type RcloneRunner = (args: string[]) => Promise<RcloneResult>;
 
 export interface DedupInput {
   vault: string;
@@ -57,18 +51,12 @@ export interface UnsafeDedupGroup {
   reason: "body_hash_mismatch" | "canonical_missing";
 }
 
-export interface DedupRemoteOutput {
-  plannedDeletes: string[];
-  deleted: string[];
-  failed?: { path: string; stderr: string };
-}
-
 export interface DedupOutput {
   scanned: number;
   duplicates: DedupPair[];
   manifest?: DedupManifest;
   unsafe?: UnsafeDedupGroup[];
-  remote?: DedupRemoteOutput;
+  remote?: RemotePruneResult;
   rewired: string[];
   removed: string[];
   humanHint: string;
@@ -313,45 +301,10 @@ function readManifest(path: string): Result<DedupManifest> {
   }
 }
 
-async function planAndMaybePruneRemote(input: DedupInput, entries: DedupManifestEntry[]): Promise<Result<DedupRemoteOutput>> {
-  const remoteRoot = input.remote?.replace(/\/+$/, "");
+async function planAndMaybePruneRemote(input: DedupInput, entries: DedupManifestEntry[]): Promise<Result<RemotePruneResult>> {
+  const remoteRoot = normalizeRemoteRoot(input.remote);
   const plannedDeletes = remoteRoot
     ? entries.flatMap(entry => entry.duplicates.map(path => `${remoteRoot}/${path}`))
     : [];
-  const output: DedupRemoteOutput = { plannedDeletes, deleted: [] };
-
-  if (!input.remoteDelete) return ok(output);
-
-  const maxDeletes = input.maxRemoteDeletes ?? 50;
-  if (!Number.isInteger(maxDeletes) || maxDeletes < 1) {
-    return err("USAGE", { message: "--max-remote-deletes must be a positive integer" });
-  }
-  if (plannedDeletes.length > maxDeletes) {
-    return err("USAGE", { message: `remote delete cap exceeded: ${plannedDeletes.length} > ${maxDeletes}` });
-  }
-
-  const runner = input.rcloneRunner ?? defaultRcloneRunner;
-  for (const path of plannedDeletes) {
-    const result = await runner(["deletefile", path]);
-    if (result.exitCode !== 0) {
-      output.failed = { path, stderr: result.stderr };
-      return err("SYNC_PUSH_FAILED", { path, stderr: result.stderr });
-    }
-    output.deleted.push(path);
-  }
-
-  return ok(output);
-}
-
-async function defaultRcloneRunner(args: string[]): Promise<RcloneResult> {
-  try {
-    const result = await execFileAsync("rclone", args, { encoding: "utf-8" });
-    return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
-  } catch (e: any) {
-    return {
-      exitCode: typeof e?.code === "number" ? e.code : 1,
-      stdout: typeof e?.stdout === "string" ? e.stdout : "",
-      stderr: typeof e?.stderr === "string" ? e.stderr : String(e),
-    };
-  }
+  return planAndMaybePruneRemoteObjects(plannedDeletes, { ...input, defaultMaxDeletes: 50 });
 }

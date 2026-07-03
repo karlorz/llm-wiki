@@ -5,6 +5,7 @@ dist/
 .claude/worktrees/
 .claude/dev-loop-work/
 .claude/dev-loop-debug/
+.claude/dev-loop/status/
 .claude/settings.local.json
 *.tsbuildinfo
 coverage/
