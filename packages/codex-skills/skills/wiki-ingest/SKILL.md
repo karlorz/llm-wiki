@@ -18,6 +18,7 @@ Run `skillwiki lang` at the start. Generate page-body prose, narrative sections,
 0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`. Use the resolved vault path for all writes; use the canonical language for all generated prose.
 1. **Guard.** For each URL: run `skillwiki fetch-guard <url>`. If exit ≠ 0, STOP and surface the error. Do not retry.
 2. **Fetch.** Use `web_fetch` (or read local file) under Layer 2 controls (the CLI Layer 2 fetcher applies in tests; in skill runtime use `web_fetch` directly and treat any error as STOP).
+   - **Portable local-source rule:** follow `using-skillwiki` → Portable Source References. Do not use `source_url: file:///...` as the canonical durable reference; prefer commit-pinned GitHub `blob/<commit>/<path>` when resolvable, else empty `source_url` plus portable repo-relative prose.
 3. **Identity guard.** Before writing raw files, ensure the target raw filename/title, `source_url`, fetched H1/title, and early body subject agree. If `skillwiki ingest` reports `INGEST_VALIDATION_FAILED` with `source identity conflict`, STOP. Do not fix by renaming after the fact; choose the correct title/source pair or ask the user.
 4. **Sensitive content guard.** Before writing or filing any vault page, scan the source and generated body for live credentials, access keys, tokens, passwords, cookies, bearer headers, or private keys. Redact generated prose before writing. If the source itself must remain raw and contains a live secret, STOP instead of preserving it.
 5. **Hash.** Write the raw file (frontmatter + body). Run `skillwiki hash <raw-file>` and embed the result in raw frontmatter `sha256:`.
@@ -56,6 +57,7 @@ Raw ephemeral data (market feeds, logs, transient JSON) must be written to the *
 - Updating `index.md` or `log.md` before all pages validate.
 - Modifying any existing file in `raw/`.
 - Writing raw ephemeral data directly to cloud-mounted wiki paths (`~/wiki/`).
+- Writing host-local absolute paths as canonical durable source references (see `using-skillwiki` → Portable Source References).
 - Writing `[[wikilinks]]` to pages that don't exist in the vault. Before linking, verify the target exists: check `index.md` or `ls` the target directory. If the target doesn't exist yet, use plain text instead of a wikilink.
 ## Batch Mode
 When the user provides multiple sources (a directory of files, a list of URLs, or a multi-document input):

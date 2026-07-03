@@ -32,6 +32,7 @@ When reading retros as source material:
    `provenance: project` and
    `provenance_projects: ["[[slug]]"]`. Validate with
    `skillwiki validate`.
+   - **Portable source references:** follow `using-skillwiki` → Portable Source References (commit-pinned GitHub URLs or repo-relative paths; not canonical `Source file:` / `Source inspected:` host paths).
    - **Tag hygiene:** `tags:` must only contain entries from
      `{vault}/SCHEMA.md` taxonomy. Never derive tags from prose text
      (lesson/evidence sections) — use only established taxonomy tags

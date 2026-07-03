@@ -53,6 +53,7 @@ Rules:
 - Resolve `<vault-root>` via `skillwiki path` (never hardcode).
 - proj-work does NOT invoke any PRD skill — it provides paths only.
 - If the PRD skill cannot accept custom save paths, fall back to manual `wiki-ingest`.
+- When `spec.md` or `plan.md` mentions repo files, follow `using-skillwiki` → Portable Source References.
 
 ## Pitfalls
 - **Wiki-as-truth fallacy**: tasks.md status markers are aspirational claims by previous sessions. They are often wrong. Always audit the actual file system before accepting a "DONE" label.

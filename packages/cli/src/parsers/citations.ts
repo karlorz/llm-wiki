@@ -9,9 +9,11 @@ function stripFences(body: string): string {
   return body.replace(FENCE, "").replace(INLINE_CODE, "");
 }
 
-/** Strip only fenced code blocks (```), preserving inline code. */
-function stripFencedBlocks(body: string): string {
-  return body.replace(FENCE, "");
+const TILDE_FENCE = /~~~[\s\S]*?~~~/g;
+
+/** Strip only fenced code blocks (``` and ~~~), preserving inline code. */
+export function stripFencedBlocks(body: string): string {
+  return body.replace(FENCE, "").replace(TILDE_FENCE, "");
 }
 
 export function extractCitationMarkers(body: string): CitationMarker[] {

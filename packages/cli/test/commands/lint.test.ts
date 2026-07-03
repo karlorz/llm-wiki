@@ -1399,6 +1399,15 @@ same body content here
     });
   });
 
+  function expectNoFileSourceUrlBucket(v: string) {
+    return runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "file_source_url" }).then(r => {
+      if (r.result.ok) {
+        const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
+        expect(warningKinds).not.toContain("file_source_url");
+      }
+    });
+  }
+
   describe("file_source_url bucket", () => {
     it("flags raw files with source_url: file://", async () => {
       const v = vault();
@@ -1466,6 +1475,93 @@ same body content here
         const warningKinds = r.result.data.by_severity.warning.map(b => b.kind);
         expect(warningKinds).toContain("file_source_url");
       }
+    });
+
+    it("flags canonical host-local source assertions in raw article bodies", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      writeFileSync(
+        join(v, "raw", "articles", "source-map.md"),
+        `---\nsource_url: https://example.com/article\ningested: "2026-05-24"\nsha256: abc123\n---\n\n# Source Map\n\nSource file: \`/Users/me/code/project/src/index.ts\`\n`
+      );
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "file_source_url" });
+      if (r.result.ok) {
+        const bucket = r.result.data.by_severity.warning.find(b => b.kind === "file_source_url");
+        expect(bucket?.items).toContain("raw/articles/source-map.md");
+      }
+    });
+
+    it("--fix does not claim body-only canonical source assertions as fixed", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "articles"), { recursive: true });
+      const path = join(v, "raw", "articles", "body-only-source-map.md");
+      const before = `---\nsource_url: https://example.com/article\ningested: "2026-05-24"\nsha256: abc123\n---\n\nsource: https://example.com/article\n\nSource file: /Users/me/code/project/src/index.ts\n`;
+      writeFileSync(path, before);
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true, only: "file_source_url" });
+      expect(r.result.ok).toBe(true);
+      if (r.result.ok) {
+        expect(r.result.data.fixed).not.toContain("raw/articles/body-only-source-map.md");
+        const bucket = r.result.data.by_severity.warning.find(b => b.kind === "file_source_url");
+        expect(bucket?.items).toContain("raw/articles/body-only-source-map.md");
+      }
+      expect(readFileSync(path, "utf8")).toBe(before);
+    });
+
+    it("flags canonical host-local source assertions in work item specs", async () => {
+      const v = vault();
+      mkdirSync(join(v, "projects", "demo", "work", "2026-07-03-portability"), { recursive: true });
+      writeFileSync(
+        join(v, "projects", "demo", "work", "2026-07-03-portability", "spec.md"),
+        `---\ntitle: portability\ncreated: 2026-07-03\nupdated: 2026-07-03\nstarted: 2026-07-03\nkind: issue\nstatus: in-progress\npriority: high\nproject: "[[demo]]"\n---\n\n# Portability\n\nSource inspected: file:///home/agent/project/src/main.ts\n`
+      );
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "file_source_url" });
+      if (r.result.ok) {
+        const bucket = r.result.data.by_severity.warning.find(b => b.kind === "file_source_url");
+        expect(bucket?.items).toContain("projects/demo/work/2026-07-03-portability/spec.md");
+      }
+    });
+
+    it("does not flag generic file:// markdown links in typed pages", async () => {
+      const v = vault();
+      writeFileSync(
+        join(v, "queries", "local-links.md"),
+        FM(["model"]) + "## Overview\n\nImplementation notes link to [spawn.rs](file:///Users/me/code/codex/spawn.rs).\n"
+      );
+      await expectNoFileSourceUrlBucket(v);
+    });
+
+    it("does not flag canonical source assertions inside code blocks", async () => {
+      const v = vault();
+      writeFileSync(
+        join(v, "queries", "example-snippet.md"),
+        FM(["model"]) + "## Overview\n\n```text\nSource file: /Users/me/code/project/src/index.ts\n```\n"
+      );
+      await expectNoFileSourceUrlBucket(v);
+    });
+
+    it("does not flag canonical source assertions inside tilde code blocks", async () => {
+      const v = vault();
+      writeFileSync(
+        join(v, "queries", "tilde-snippet.md"),
+        FM(["model"]) + "## Overview\n\n~~~text\nSource inspected: /home/me/code/project/src/index.ts\n~~~\n"
+      );
+      await expectNoFileSourceUrlBucket(v);
+    });
+
+    it("does not flag host-local paths in raw transcripts or work item logs", async () => {
+      const v = vault();
+      mkdirSync(join(v, "raw", "transcripts"), { recursive: true });
+      mkdirSync(join(v, "projects", "demo", "work", "2026-07-03-portability"), { recursive: true });
+      writeFileSync(
+        join(v, "raw", "transcripts", "2026-07-03-note-local-path.md"),
+        `---\nsource_url:\ningested: 2026-07-03\nkind: note\n---\n\n# note: local path\nSource file: /Users/me/code/project/src/index.ts\n`
+      );
+      writeFileSync(
+        join(v, "projects", "demo", "work", "2026-07-03-portability", "log.md"),
+        "# Work Log\n\nSource file: /home/agent/project/src/main.ts\n"
+      );
+      await expectNoFileSourceUrlBucket(v);
     });
   });
 

@@ -22,7 +22,7 @@ import { fixFrontmatter } from "./frontmatter-fix.js";
 import { fixPathTooLong, runPathTooLong } from "./path-too-long.js";
 import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
-import { extractCitationMarkers, isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations } from "../parsers/citations.js";
+import { extractCitationMarkers, isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations, stripFencedBlocks } from "../parsers/citations.js";
 import { buildSlugMap } from "../utils/slug.js";
 import { buildCliSurface, validateCliRefs } from "../utils/cli-surface.js";
 import { parseExpiryAnnotations } from "../parsers/expiry-annotations.js";
@@ -46,6 +46,26 @@ function hasDuplicateFrontmatter(body: string): boolean {
     if (/^\w[\w-]*:/.test(lines[i]!.trim())) seenYamlKey = true;
     if (seenYamlKey && lines[i]!.trim() === "---") return true;
   }
+  return false;
+}
+
+const CANONICAL_LOCAL_SOURCE_LABEL = /^\s*(?:>\s*)?(?:[-*+]\s*)?Source (?:file|inspected):/i;
+const LOCAL_ABSOLUTE_SOURCE_REF = /(?:file:\/\/(?:\/)?(?:Users|home)\/|\/(?:Users|home)\/)/;
+
+function hasCanonicalLocalSourceAssertion(body: string): boolean {
+  const visibleBody = stripFencedBlocks(body);
+  return visibleBody.split(/\r?\n/).some(line =>
+    CANONICAL_LOCAL_SOURCE_LABEL.test(line) && LOCAL_ABSOLUTE_SOURCE_REF.test(line)
+  );
+}
+
+function shouldCheckCanonicalLocalSourceAssertion(page: VaultPage): boolean {
+  if (page.relPath.startsWith("raw/transcripts/")) return false;
+  if (/^projects\/[^/]+\/work\/[^/]+\/log\.md$/.test(page.relPath)) return false;
+  if (page.relPath.startsWith("raw/")) return true;
+  if (/^(entities|concepts|comparisons|queries|meta)\//.test(page.relPath)) return true;
+  if (/^projects\/[^/]+\/compound\//.test(page.relPath)) return true;
+  if (/^projects\/[^/]+\/work\/[^/]+\/(spec|plan)\.md$/.test(page.relPath)) return true;
   return false;
 }
 
@@ -422,14 +442,18 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     }
 
     // file:// source_url check: raw files should have a real external source URL, not a local file path
-    const fileSourceUrlFlags: string[] = [];
+    const fileSourceUrlFlags = new Set<string>();
+    const fileSourceUrlFrontmatterFlags = new Set<string>();
     const rawIdentityConflicts: unknown[] = [];
+    const rawPageBodyByPath = new Map<string, string>();
     for (const raw of scan.data.raw) {
       const text = await readPage(raw);
       const split = splitFrontmatter(text);
       if (!split.ok) continue;
+      rawPageBodyByPath.set(raw.relPath, split.data.body);
       if (/^source_url:\s*file:\/\//m.test(split.data.rawFrontmatter)) {
-        fileSourceUrlFlags.push(raw.relPath);
+        fileSourceUrlFlags.add(raw.relPath);
+        fileSourceUrlFrontmatterFlags.add(raw.relPath);
       }
       const sourceUrl = split.data.rawFrontmatter.match(/^source_url:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
       const assessment = assessSourceIdentity({
@@ -448,7 +472,26 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
         });
       }
     }
-    if (fileSourceUrlFlags.length > 0) buckets.file_source_url = fileSourceUrlFlags;
+    const canonicalSourcePages = [
+      ...scan.data.raw,
+      ...scan.data.typedKnowledge,
+      ...scan.data.compound,
+      ...scan.data.workItems,
+    ];
+    for (const page of canonicalSourcePages) {
+      if (!shouldCheckCanonicalLocalSourceAssertion(page)) continue;
+      let body = rawPageBodyByPath.get(page.relPath);
+      if (body === undefined) {
+        const text = await readPage(page);
+        const split = splitFrontmatter(text);
+        if (!split.ok) continue;
+        body = split.data.body;
+      }
+      if (hasCanonicalLocalSourceAssertion(body)) {
+        fileSourceUrlFlags.add(page.relPath);
+      }
+    }
+    if (fileSourceUrlFlags.size > 0) buckets.file_source_url = [...fileSourceUrlFlags];
     if (rawIdentityConflicts.length > 0) buckets.raw_source_identity_conflict = rawIdentityConflicts;
 
     const legacyPages: string[] = [];
@@ -941,9 +984,9 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     }
 
     // --fix: auto-fix file_source_url by extracting web URL from body source: field
-    if (shouldFix("file_source_url") && fileSourceUrlFlags.length > 0) {
+    if (shouldFix("file_source_url") && fileSourceUrlFrontmatterFlags.size > 0) {
       const FILE_FIXED: string[] = [];
-      for (const relPath of fileSourceUrlFlags) {
+      for (const relPath of fileSourceUrlFrontmatterFlags) {
         try {
           const absPath = `${input.vault}/${relPath}`;
           const raw = await readFile(absPath, "utf8");
@@ -975,9 +1018,29 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
 
       // Re-scan: remove fixed pages from the bucket
       if (FILE_FIXED.length > 0) {
-        const fixedSet = new Set(FILE_FIXED);
-        const remaining = fileSourceUrlFlags.filter(p => !fixedSet.has(p));
-        if (remaining.length > 0) buckets.file_source_url = remaining;
+        const remaining = new Set(fileSourceUrlFlags);
+        for (const relPath of FILE_FIXED) {
+          try {
+            const page = scan.data.allMarkdown.find(p => p.relPath === relPath);
+            if (!page) {
+              remaining.delete(relPath);
+              continue;
+            }
+            const text = await readPage(page);
+            const split = splitFrontmatter(text);
+            if (!split.ok) continue;
+            const stillHasFileSourceUrl = /^source_url:\s*file:\/\//m.test(split.data.rawFrontmatter);
+            const stillHasCanonicalBodyAssertion =
+              shouldCheckCanonicalLocalSourceAssertion(page)
+              && hasCanonicalLocalSourceAssertion(split.data.body);
+            if (!stillHasFileSourceUrl && !stillHasCanonicalBodyAssertion) {
+              remaining.delete(relPath);
+            }
+          } catch {
+            // keep unresolved paths in the bucket rather than under-reporting
+          }
+        }
+        if (remaining.size > 0) buckets.file_source_url = [...remaining];
         else delete buckets.file_source_url;
       }
     }

@@ -59,6 +59,15 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 ## Sensitive Content Policy
 Vault content must not contain live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets. This includes development-only and local-only credentials. Redact values before filing using `[REDACTED:<kind>]` or `[REDACTED:<kind>:<fingerprint>]`. If a source contains live secrets, stop and ask for a redacted source or explicit rotation/remediation direction; do not preserve the secret in `raw/`.
 
+## Portable Source References
+The vault is shared across hosts, so host-local absolute paths are not durable source identity.
+
+- Prefer commit-pinned GitHub URLs when the source file is in a pushed repository and the commit is known.
+- Otherwise prefer repo-relative identity in prose, such as repo slug + relative path.
+- Use vault-relative references or `[[wikilinks]]` for pages already inside the wiki.
+- Keep host-local absolute paths (`/Users/...`, `/home/...`, `file:///...`) only as clearly labeled observations such as `Observed on host: ...`, not as canonical `Source file:` or `Source inspected:` lines.
+- Do not use markdown links to local vault files when a `[[wikilink]]` should be used instead.
+
 ### Ad-hoc capture: three entry points
 | Entry | When | What happens |
 |-------|------|-------------|
