@@ -35,7 +35,7 @@ import {
 } from "./types.js";
 
 const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "publish", "version"]);
-const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
+const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
 const SESSION_BRIEF_FILES = [
@@ -987,6 +987,8 @@ async function collectInput(options: ParsedCliOptions, context: AgentMemoryTrend
   const resolved = resolveRunOptions(options, context);
   const config = loadResearchConfig(resolved.configPath, context);
   if (!config.ok) return config;
+  const digestTtlDays = resolveDedupeDigestTtlDays(options.values, config.data.dedupe.digestTtlDays);
+  if (!digestTtlDays.ok) return digestTtlDays;
 
   const runner = context.runGh ?? createGhRunner(context.cwd);
   const collector = context.collectGithubCandidates ?? collectGithubCandidates;
@@ -1009,7 +1011,7 @@ async function collectInput(options: ParsedCliOptions, context: AgentMemoryTrend
     selectedCandidates: collection.data.selectedCandidates,
     duplicateEvaluation: {
       now: runDateToInstant(resolved.runDate),
-      digestTtlDays: config.data.dedupe.digestTtlDays,
+      digestTtlDays: digestTtlDays.data,
     },
     allowedOutputs: buildAllowedOutputs(resolved.runDate, resolved.runId),
     duplicateSignals: signals.data,
@@ -1509,6 +1511,16 @@ function buildAllowedOutputs(runDate: string, runId: string): AllowedOutputs {
 
 function runDateToInstant(runDate: string): Date {
   return new Date(`${runDate}T00:00:00Z`);
+}
+
+function resolveDedupeDigestTtlDays(values: Map<string, string>, fallback: number): Result<number> {
+  const raw = values.get("dedupe-digest-ttl-days");
+  if (raw === undefined) return ok(fallback);
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return err("USAGE", "--dedupe-digest-ttl-days must be a non-negative integer");
+  }
+  return ok(parsed);
 }
 
 function createGhRunner(cwd: string) {

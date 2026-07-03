@@ -407,7 +407,7 @@ describe("agent-memory-trends CLI", () => {
     if (result.result.ok) throw new Error("expected usage error");
     expect(result.result.error).toBe("USAGE");
     expect(result.result.detail).toEqual({
-      message: "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]",
+      message: "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]",
     });
   });
 
@@ -1384,6 +1384,84 @@ describe("agent-memory-trends CLI", () => {
         } };
       },
     });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    expect(calls).toEqual(["write-input", "synthesis", "write-state"]);
+  });
+
+  it("allows a CLI digest TTL override for controlled real-candidate runs", async () => {
+    const calls: string[] = [];
+    const result = await runAgentMemoryTrendsCli(
+      [
+        "daily",
+        "--dry-run",
+        "--dedupe-digest-ttl-days",
+        "7",
+        "--vault",
+        "/vault",
+        "--repo",
+        "/repo",
+        "--config",
+        "/config.yaml",
+      ],
+      {
+        cwd: "/repo",
+        env: {},
+        now: new Date("2026-07-04T00:10:00+08:00"),
+        readFile: () => CONFIG,
+        collectGithubCandidates: async () => ({ ok: true, data: {
+          rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+          apiCallsUsed: 12,
+          rawCandidateCount: 1,
+          selectedCandidates: [selectedCandidate()],
+          runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        } }),
+        collectDuplicateSignals: () => ({
+          ok: true,
+          data: {
+            existingTasks: [],
+            activeWork: [],
+            recentDigests: [
+              {
+                path: "queries/2026-06-26-agent-memory-trends-digest.md",
+                title: "Fresh under config, stale under override",
+                sourceUrls: ["https://github.com/acme/local-agent-memory"],
+                repoNames: ["acme/local-agent-memory"],
+                digestDate: "2026-06-26",
+              },
+            ],
+            parseErrors: [],
+          },
+        }),
+        writeAgentInput: (input) => {
+          calls.push("write-input");
+          expect(input.selectedCandidates).toHaveLength(1);
+          expect(input.duplicateSuppressions).toHaveLength(0);
+          return { ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-07-04-input.json" } };
+        },
+        runSynthesis: async () => {
+          calls.push("synthesis");
+          return {
+            ok: true,
+            data: {
+              manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-07-04-run.json",
+              outputLastMessagePath: "/tmp/last-message.md",
+              stdout: "",
+              stderr: "",
+              output: { proposals: [] },
+            },
+          };
+        },
+        writeRunState: () => {
+          calls.push("write-state");
+          return { ok: true, data: {
+            runStatePath: "/vault/.skillwiki/agent-memory-trends/2026-07-04-run.json",
+            latestRunPath: "/vault/.skillwiki/agent-memory-trends/latest-run.json",
+          } };
+        },
+      }
+    );
 
     expect(result.exitCode).toBe(0);
     expect(result.result.ok).toBe(true);

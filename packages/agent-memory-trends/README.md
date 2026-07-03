@@ -43,7 +43,9 @@ in `queries/*-agent-memory-trends-digest.md` are suppressed only while the
 matching digest is inside `dedupe.digest_ttl_days` from the owned research
 config; the default is 14 days. Raw task captures and active work items remain
 hard suppressions because they represent explicit ownership, not historical
-trend coverage.
+trend coverage. For controlled real-candidate debugging, use
+`--dedupe-digest-ttl-days <n>` to shorten or lengthen only the current CLI run;
+do not use synthetic provider prompts.
 
 Legacy configs with a flat `github.queries` list still parse through an explicit
 `legacy_flat` compatibility lane. New owned config should use `github.lanes`.
