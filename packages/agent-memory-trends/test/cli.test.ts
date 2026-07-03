@@ -112,7 +112,7 @@ describe("agent-memory-trends CLI", () => {
       ],
       [
         "/vault/.skillwiki/agent-memory-trends/latest-run.json",
-        options.latestRunJson ?? JSON.stringify({ finishedAt: "2026-06-10T22:00:00Z" }),
+        options.latestRunJson ?? latestRunJson("2026-06-10T22:00:00Z"),
       ],
     ]);
     if (options.sessionBriefJson === null) files.delete("/vault/.skillwiki/session-brief.json");
@@ -205,8 +205,31 @@ describe("agent-memory-trends CLI", () => {
     return `---\ngenerated_at: ${generatedAt}\n---\n# Latest Session Brief\n`;
   }
 
-  function latestRunJson(finishedAt: string): string {
-    return JSON.stringify({ finishedAt });
+  function latestRunJson(
+    finishedAt: string,
+    overrides: Record<string, unknown> = {}
+  ): string {
+    return JSON.stringify({
+      run_date: finishedAt.slice(0, 10),
+      status: "success",
+      finished_at: finishedAt,
+      selected_candidate_count: 1,
+      failure_class: null,
+      synthesis: {
+        invoked: true,
+        primary_backend: "codex",
+        primary_attempts: 1,
+        primary_failed: false,
+        fallback_backend: "claude",
+        fallback_available: true,
+        fallback_invoked: false,
+        result_backend: "codex",
+        failure_code: null,
+        primary_error_code: null,
+        fallback_error_code: null,
+      },
+      ...overrides,
+    });
   }
 
   function doctorChecks(result: Awaited<ReturnType<typeof runAgentMemoryTrendsCli>>) {
@@ -291,7 +314,7 @@ describe("agent-memory-trends CLI", () => {
       },
       collectDuplicateSignals: () => {
         calls.push("dedupe");
-        return { ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [] } };
+        return { ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } };
       },
       writeAgentInput: () => {
         calls.push("write-input");
@@ -418,6 +441,7 @@ describe("agent-memory-trends CLI", () => {
       ["runner_source", "pass"],
       ["runner_version", "pass"],
       ["session_brief_freshness", "pass"],
+      ["synthesis_last_real_run", "pass"],
       ["gh_auth", "pass"],
       ["gh_rate_limit", "pass"],
       ["codex_doctor", "pass"],
@@ -443,7 +467,93 @@ describe("agent-memory-trends CLI", () => {
       "git -C /vault status --short",
       "git -C /vault push --dry-run origin main",
     ]);
+    expect(fixture.toolCalls.some((call) => call.command === "codex" && call.args.includes("exec"))).toBe(false);
+    expect(fixture.toolCalls.some((call) => call.command === "claude")).toBe(false);
     expect(result.result.data.humanHint).toContain("doctor: ok");
+  });
+
+  it("warns doctor when the latest real run did not exercise synthesis", async () => {
+    const fixture = successfulDoctorContext({
+      latestRunJson: latestRunJson("2026-06-10T22:00:00Z", {
+        selected_candidate_count: 0,
+        synthesis: undefined,
+      }),
+    });
+    const result = await runAgentMemoryTrendsCli(["doctor", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], fixture.context);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    const check = doctorCheck(result, "synthesis_last_real_run");
+    expect(check).toMatchObject({
+      status: "warn",
+      message: "latest real run did not exercise synthesis: selected 0 candidate(s)",
+    });
+    expect(fixture.toolCalls.some((call) => call.command === "codex" && call.args.includes("exec"))).toBe(false);
+    expect(fixture.toolCalls.some((call) => call.command === "claude")).toBe(false);
+  });
+
+  it("passes doctor when latest real synthesis succeeded through fallback", async () => {
+    const fixture = successfulDoctorContext({
+      latestRunJson: latestRunJson("2026-06-10T22:00:00Z", {
+        synthesis: {
+          invoked: true,
+          primary_backend: "codex",
+          primary_attempts: 2,
+          primary_failed: true,
+          fallback_backend: "claude",
+          fallback_available: true,
+          fallback_invoked: true,
+          result_backend: "claude",
+          failure_code: null,
+          primary_error_code: "CODEX_RUN_FAILED",
+          fallback_error_code: null,
+        },
+      }),
+    });
+    const result = await runAgentMemoryTrendsCli(["doctor", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], fixture.context);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    const check = doctorCheck(result, "synthesis_last_real_run");
+    expect(check).toMatchObject({
+      status: "pass",
+      message: "latest real run exercised synthesis successfully via claude; primary codex failed with CODEX_RUN_FAILED; fallback claude succeeded",
+    });
+  });
+
+  it("fails doctor from the latest real synthesis failure telemetry", async () => {
+    const fixture = successfulDoctorContext({
+      latestRunJson: latestRunJson("2026-06-10T22:00:00Z", {
+        status: "failure",
+        failure_class: "agent",
+        synthesis: {
+          invoked: true,
+          primary_backend: "codex",
+          primary_attempts: 2,
+          primary_failed: true,
+          fallback_backend: "claude",
+          fallback_available: true,
+          fallback_invoked: true,
+          result_backend: null,
+          failure_code: "SYNTHESIS_FALLBACK_FAILED",
+          primary_error_code: "CODEX_RUN_FAILED",
+          fallback_error_code: "CLAUDE_RUN_FAILED",
+        },
+      }),
+    });
+    const result = await runAgentMemoryTrendsCli(["doctor", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], fixture.context);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    const check = doctorCheck(result, "synthesis_last_real_run");
+    expect(check).toMatchObject({
+      status: "fail",
+      message: "latest real run synthesis failed: SYNTHESIS_FALLBACK_FAILED; primary codex error CODEX_RUN_FAILED; fallback claude error CLAUDE_RUN_FAILED",
+    });
+    if (result.result.ok) throw new Error("expected doctor failure");
+    expect(result.result.detail).toMatchObject({
+      failedChecks: ["synthesis_last_real_run"],
+    });
   });
 
   it("fails doctor when the runner checkout is behind origin/main", async () => {
@@ -1118,6 +1228,7 @@ describe("agent-memory-trends CLI", () => {
               repoNames: ["acme/local-agent-memory"],
             },
           ],
+          parseErrors: [],
         },
       }),
       writeAgentInput: (input) => {

@@ -143,7 +143,7 @@ Before running the installer, verify these prerequisites on `sg02`:
 8. The `llm-wiki` repo checkout and wiki vault checkout are present at the paths in `/home/agent-memory/.config/agent-memory-trends/env`.
 9. Optional heartbeat configuration is ready; `AGENT_MEMORY_TRENDS_HEARTBEAT_URL` stays only in the untracked service env file.
 
-Quick tool smoke before installing:
+Quick tool availability check before installing:
 
 ```bash
 export PATH="$HOME/.local/npm/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -192,6 +192,14 @@ codex login
 codex doctor
 ```
 
+Do not run synthetic provider probes such as prompts that ask Codex or Claude
+to return a fixed `CODEX_OK` or `CLAUDE_OK` string. `codex doctor` is the setup
+and auth gate only. Provider execution health is read from real
+agent-memory-trends workload telemetry: `agent-memory-trends doctor` reports the
+`synthesis_last_real_run` check from `.skillwiki/agent-memory-trends/latest-run.json`.
+If the latest run was quiet and did not invoke synthesis, record it as "not
+exercised by the latest real run" instead of sending an artificial model prompt.
+
 The nightly runner uses a self-contained `codex exec` invocation with the prompt and input JSON supplied through stdin. It does not require Codex plugins to be installed. Plugin setup is only for manual interactive Codex sessions. Do not enable a production timer or release-path update for this package until an `sg02` dry-run and one controlled live run pass with the current runner build.
 
 Configure the heartbeat only in the untracked service env file. Do not put secrets in tracked files.
@@ -227,8 +235,11 @@ agent-memory-trends daily --dry-run
 ```
 
 `daily --dry-run` still writes generated input and run-state files to the
-configured vault so the synthesis path can be inspected. For smoke checks that
-must not touch the real wiki, point `--vault` at a temporary vault checkout or
+configured vault so the synthesis path can be inspected. It invokes the provider
+only when the real collector selected at least one research candidate. If no
+candidate is selected, the provider path was not exercised; do not replace that
+with a synthetic `codex exec` or `claude --print` prompt. For checks that must
+not touch the real wiki, point `--vault` at a temporary vault checkout or
 scratch directory.
 
 Run generation-only mode when another orchestrator owns the transaction
@@ -255,9 +266,14 @@ Run one manual live service start before enabling the timer.
 ```bash
 sudo systemctl start agent-memory-trends.service
 journalctl -u agent-memory-trends.service --no-pager -n 200
+agent-memory-trends doctor
 ```
 
-After the manual live run verifies the guarded maintenance result, digest, evidence, TypeScript-rendered task/bug/idea captures if any, run JSON, suppression fields if any, and a clean or intentionally ahead vault state, enable the timers.
+After the manual live run verifies the guarded maintenance result, digest,
+evidence, TypeScript-rendered task/bug/idea captures if any, run JSON,
+`synthesis_last_real_run` telemetry if synthesis was exercised, suppression
+fields if any, and a clean or intentionally ahead vault state, enable the
+timers.
 
 ```bash
 sudo systemctl enable --now agent-memory-trends.timer

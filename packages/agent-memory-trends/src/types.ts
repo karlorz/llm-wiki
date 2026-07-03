@@ -104,6 +104,7 @@ export interface DoctorCheck {
     | "runner_source"
     | "runner_version"
     | "session_brief_freshness"
+    | "synthesis_last_real_run"
     | "gh_auth"
     | "gh_rate_limit"
     | "codex_doctor"

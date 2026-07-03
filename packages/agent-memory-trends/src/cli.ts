@@ -202,6 +202,7 @@ async function runDoctor(options: ParsedCliOptions, context: AgentMemoryTrendsCo
   checks.push(await runnerSourceFreshnessCheck(resolved.repo, runCommand));
   checks.push(await runnerVersionFreshnessCheck(resolved.repo, runCommand));
   checks.push(sessionBriefFreshnessCheck(resolved.vault, context));
+  checks.push(synthesisLastRealRunCheck(resolved.vault, context));
 
   const ghAuth = await runGh(["auth", "status"]);
   const ghAuthCheck = commandCheck("gh_auth", ghAuth, "gh auth status passed", "gh auth status failed");
@@ -438,6 +439,92 @@ function sessionBriefFreshnessCheck(vault: string, context: AgentMemoryTrendsCon
     status: "pass",
     message: `session brief files are fresh: ${formatAgedBriefSources(ages)}`,
   };
+}
+
+function synthesisLastRealRunCheck(vault: string, context: AgentMemoryTrendsContext): DoctorCheck {
+  const source = ".skillwiki/agent-memory-trends/latest-run.json";
+  const latestRunPath = join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json");
+  const latestRun = readTextIfExists(latestRunPath, context);
+  if (!latestRun) {
+    return {
+      name: "synthesis_last_real_run",
+      status: "warn",
+      message: `latest real run telemetry missing at ${source}; provider execution not exercised by doctor`,
+    };
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    const value = JSON.parse(latestRun) as unknown;
+    if (!isRecord(value)) throw new Error("latest run state must be an object");
+    parsed = value;
+  } catch (error) {
+    return {
+      name: "synthesis_last_real_run",
+      status: "warn",
+      message: `latest real run telemetry is unreadable: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+
+  const status = stringValue(parsed.status);
+  const failureClass = nullableStringValue(parsed.failure_class ?? parsed.failureClass);
+  const selectedCandidateCount = numberValue(parsed.selected_candidate_count ?? parsed.selectedCandidateCount);
+  const synthesis = synthesisTelemetryFromWire(parsed.synthesis);
+
+  if (!synthesis?.invoked) {
+    const selected =
+      selectedCandidateCount === undefined
+        ? "selected candidate count unknown"
+        : `selected ${selectedCandidateCount} candidate(s)`;
+    if (status !== "success" && failureClass === "agent") {
+      return {
+        name: "synthesis_last_real_run",
+        status: "fail",
+        message: `latest real run failed in agent phase but did not include synthesis telemetry: ${selected}`,
+      };
+    }
+    return {
+      name: "synthesis_last_real_run",
+      status: "warn",
+      message: `latest real run did not exercise synthesis: ${selected}`,
+    };
+  }
+
+  if (synthesis.failureCode || !synthesis.resultBackend) {
+    return {
+      name: "synthesis_last_real_run",
+      status: "fail",
+      message: formatSynthesisFailureMessage(synthesis),
+    };
+  }
+
+  return {
+    name: "synthesis_last_real_run",
+    status: "pass",
+    message: formatSynthesisSuccessMessage(synthesis),
+  };
+}
+
+function formatSynthesisFailureMessage(synthesis: SynthesisTelemetry): string {
+  const parts = [`latest real run synthesis failed: ${synthesis.failureCode ?? "unknown failure"}`];
+  if (synthesis.primaryErrorCode) {
+    parts.push(`primary ${synthesis.primaryBackend} error ${synthesis.primaryErrorCode}`);
+  }
+  if (synthesis.fallbackInvoked && synthesis.fallbackBackend && synthesis.fallbackErrorCode) {
+    parts.push(`fallback ${synthesis.fallbackBackend} error ${synthesis.fallbackErrorCode}`);
+  }
+  return parts.join("; ");
+}
+
+function formatSynthesisSuccessMessage(synthesis: SynthesisTelemetry): string {
+  const parts = [`latest real run exercised synthesis successfully via ${synthesis.resultBackend}`];
+  if (synthesis.primaryFailed && synthesis.primaryErrorCode) {
+    parts.push(`primary ${synthesis.primaryBackend} failed with ${synthesis.primaryErrorCode}`);
+  }
+  if (synthesis.fallbackInvoked && synthesis.fallbackBackend === synthesis.resultBackend) {
+    parts.push(`fallback ${synthesis.fallbackBackend} succeeded`);
+  }
+  return parts.join("; ");
 }
 
 async function runSkillwikiDoctor(repo: string, runCommand: CommandRunner): Promise<{ exitCode: number; stdout: string; stderr: string }> {
@@ -808,6 +895,57 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+function nullableStringValue(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function synthesisBackendValue(value: unknown): SynthesisTelemetry["primaryBackend"] | undefined {
+  return value === "codex" || value === "claude" ? value : undefined;
+}
+
+function nullableSynthesisBackendValue(value: unknown): SynthesisTelemetry["resultBackend"] {
+  return value === "codex" || value === "claude" ? value : null;
+}
+
+function synthesisTelemetryFromWire(value: unknown): SynthesisTelemetry | undefined {
+  if (!isRecord(value)) return undefined;
+  const primaryBackend = synthesisBackendValue(value.primary_backend ?? value.primaryBackend);
+  const primaryAttempts = numberValue(value.primary_attempts ?? value.primaryAttempts);
+  const primaryFailed = booleanValue(value.primary_failed ?? value.primaryFailed);
+  const fallbackAvailable = booleanValue(value.fallback_available ?? value.fallbackAvailable);
+  const fallbackInvoked = booleanValue(value.fallback_invoked ?? value.fallbackInvoked);
+  if (
+    primaryBackend === undefined ||
+    primaryAttempts === undefined ||
+    primaryFailed === undefined ||
+    fallbackAvailable === undefined ||
+    fallbackInvoked === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    invoked: booleanValue(value.invoked) ?? false,
+    primaryBackend,
+    primaryAttempts,
+    primaryFailed,
+    fallbackBackend: nullableSynthesisBackendValue(value.fallback_backend ?? value.fallbackBackend),
+    fallbackAvailable,
+    fallbackInvoked,
+    resultBackend: nullableSynthesisBackendValue(value.result_backend ?? value.resultBackend),
+    failureCode: nullableStringValue(value.failure_code ?? value.failureCode),
+    primaryErrorCode: nullableStringValue(value.primary_error_code ?? value.primaryErrorCode),
+    fallbackErrorCode: nullableStringValue(value.fallback_error_code ?? value.fallbackErrorCode),
+  };
+}
+
 function runDateToHktStart(value: string | undefined): string | undefined {
   return value ? `${value}T00:00:00+08:00` : undefined;
 }
@@ -973,6 +1111,7 @@ async function runDaily(
         existingTasks: collected.data.input.existingTasks,
         activeWork: collected.data.input.activeWork,
         recentDigests: collected.data.input.recentDigests,
+        parseErrors: collected.data.dedupeParseErrors,
       },
     });
     if (!rendered.ok) {

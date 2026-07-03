@@ -46,6 +46,7 @@ function duplicateSignals(overrides: Partial<DuplicateSignals> = {}): DuplicateS
     existingTasks: [],
     activeWork: [],
     recentDigests: [],
+    parseErrors: [],
     ...overrides,
   };
 }

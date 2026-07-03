@@ -228,6 +228,11 @@ Manual auth gates to complete as $SERVICE_USER:
   8. agent-memory-trends daily --dry-run
   9. sudo systemctl start agent-memory-trends.service
  10. journalctl -u agent-memory-trends.service --no-pager -n 200
+ 11. agent-memory-trends doctor (read synthesis_last_real_run from latest-run.json)
+
+Do not run synthetic Codex/Claude prompts such as fixed CODEX_OK or CLAUDE_OK
+provider probes. If the latest real run selected zero candidates, report
+"provider not exercised" and wait for a real selected-candidate run.
 
 Enable the timers only after a successful manual live run:
   sudo systemctl enable --now agent-memory-trends.timer
