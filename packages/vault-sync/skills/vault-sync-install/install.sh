@@ -168,6 +168,7 @@ MODE="${VS_MODE:-full}"
 SERVICE_SCOPE="${VS_SERVICE_SCOPE:-auto}"
 VAULT_PATH="${VS_VAULT_PATH:-${WIKI_PATH:-$HOME/wiki}}"
 FUSE_MAX_DIR_CACHE="${VS_FUSE_MAX_DIR_CACHE:-15m}"
+SNAPSHOT_PROFILE_PATH=""
 DRY_RUN=0
 if is_true "${VS_DRY_RUN:-0}"; then
   DRY_RUN=1
@@ -329,8 +330,31 @@ else
       [ "$SCHEDULER" = "launchd" ] || fatal "launchctl is not available"
       ;;
     linux)
-      [ "$SCHEDULER" = "systemd" ] || fatal "systemd --user is not available"
-      command -v loginctl >/dev/null 2>&1 || fatal "loginctl is required on Linux installs"
+      if [ "$ROLE" = "snapshotter" ]; then
+        if [ "$SERVICE_SCOPE" = "auto" ]; then
+          if [ "$(id -u)" = "0" ]; then
+            SERVICE_SCOPE="system"
+          else
+            SERVICE_SCOPE="user"
+          fi
+        fi
+        case "$SERVICE_SCOPE" in
+          user)
+            [ "$SCHEDULER" = "systemd" ] || fatal "systemd --user is not available"
+            command -v loginctl >/dev/null 2>&1 || fatal "loginctl is required on Linux user installs"
+            ;;
+          system)
+            command -v systemctl >/dev/null 2>&1 || fatal "systemctl is required for Linux system installs"
+            if [ "$DRY_RUN" -eq 0 ] && [ "$(id -u)" != "0" ]; then
+              fatal "system service scope requires root"
+            fi
+            ;;
+        esac
+      else
+        SERVICE_SCOPE="user"
+        [ "$SCHEDULER" = "systemd" ] || fatal "systemd --user is not available"
+        command -v loginctl >/dev/null 2>&1 || fatal "loginctl is required on Linux installs"
+      fi
       ;;
   esac
 fi
@@ -343,6 +367,7 @@ if ! command -v rclone >/dev/null 2>&1; then
 fi
 
 CURRENT_HOST="${VS_HOSTNAME:-$(hostname -s 2>/dev/null || hostname)}"
+SNAPSHOT_PROFILE_PATH="/etc/vault-sync/profiles/${CURRENT_HOST}-snapshotter.env"
 
 if [ "$MODE" = "full" ]; then
   fleet_load || true
@@ -513,9 +538,20 @@ log "Plan: deploy filter to $FILTER_DST"
 if [ "$VS_OS" = "macos" ]; then
   log "Plan: render launchd units in $HOME/Library/LaunchAgents"
 else
-  log "Plan: render systemd user units in $HOME/.config/systemd/user"
-  log "Plan: install wiki-fuse-refresh.timer (5min)"
-  log "Plan: run loginctl enable-linger $USER"
+  if [ "$ROLE" = "snapshotter" ]; then
+    if [ "$SERVICE_SCOPE" = "system" ]; then
+      log "Plan: render systemd system units in /etc/systemd/system"
+    else
+      log "Plan: render systemd user units in $HOME/.config/systemd/user"
+      log "Plan: run loginctl enable-linger $USER"
+    fi
+    log "Plan: install wiki-snapshot.timer (30min)"
+    log "Plan: install wiki-fuse-refresh.timer (5min)"
+  else
+    log "Plan: render systemd user units in $HOME/.config/systemd/user"
+    log "Plan: install wiki-fuse-refresh.timer (5min)"
+    log "Plan: run loginctl enable-linger $USER"
+  fi
 fi
 
 run_cmd mkdir -p "$BIN_DIR" "$LOG_DIR" "$RCLONE_DIR"
@@ -548,33 +584,76 @@ if [ "$VS_OS" = "macos" ]; then
     launchctl bootstrap "gui/$UID" "$FETCH_PLIST"
   fi
 else
-  SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
-  run_cmd mkdir -p "$SYSTEMD_USER_DIR"
-
-  replace_template "$SYSTEMD_SRC_DIR/wiki-push.service" "$SYSTEMD_USER_DIR/wiki-push.service"
-  replace_template "$SYSTEMD_SRC_DIR/wiki-push.timer" "$SYSTEMD_USER_DIR/wiki-push.timer"
-  replace_template "$SYSTEMD_SRC_DIR/wiki-fetch.service" "$SYSTEMD_USER_DIR/wiki-fetch.service"
-  replace_template "$SYSTEMD_SRC_DIR/wiki-fetch.timer" "$SYSTEMD_USER_DIR/wiki-fetch.timer"
-  replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.service" "$SYSTEMD_USER_DIR/wiki-fuse-refresh.service"
-  replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.timer" "$SYSTEMD_USER_DIR/wiki-fuse-refresh.timer"
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    log "[dry-run] loginctl enable-linger $USER"
-    log "[dry-run] systemctl --user daemon-reload"
-    log "[dry-run] systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer"
-    log "[dry-run] $BIN_DIR/wiki-fuse-refresh.sh --check-only --max-dir-cache 15m"
-  else
-    loginctl enable-linger "$USER" || fatal "loginctl enable-linger $USER failed"
-    systemctl --user daemon-reload
-    systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer
-    if [ -x "$BIN_DIR/wiki-fuse-refresh.sh" ]; then
-      if "$BIN_DIR/wiki-fuse-refresh.sh" --check-only --max-dir-cache 15m >/dev/null 2>&1; then
-        log "Validated fuse freshness envelope (<=15m) via wiki-fuse-refresh --check-only"
-      else
-        warn "Fuse freshness validation reported drift (>15m or no rc visibility). Run: $BIN_DIR/wiki-fuse-refresh.sh --check-only"
-      fi
+  if [ "$ROLE" = "snapshotter" ]; then
+    if [ "$SERVICE_SCOPE" = "system" ]; then
+      SYSTEMD_DIR="/etc/systemd/system"
+      DAEMON_RELOAD_CMD=(systemctl daemon-reload)
+      ENABLE_TIMERS_CMD=(systemctl enable --now wiki-snapshot.timer wiki-fuse-refresh.timer)
     else
-      warn "Missing $BIN_DIR/wiki-fuse-refresh.sh; cannot validate fuse freshness envelope"
+      SYSTEMD_DIR="$HOME/.config/systemd/user"
+      DAEMON_RELOAD_CMD=(systemctl --user daemon-reload)
+      ENABLE_TIMERS_CMD=(systemctl --user enable --now wiki-snapshot.timer wiki-fuse-refresh.timer)
+    fi
+
+    run_cmd mkdir -p "$SYSTEMD_DIR"
+
+    replace_template "$SYSTEMD_SRC_DIR/wiki-snapshot.service" "$SYSTEMD_DIR/wiki-snapshot.service"
+    replace_template "$SYSTEMD_SRC_DIR/wiki-snapshot.timer" "$SYSTEMD_DIR/wiki-snapshot.timer"
+    replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.service" "$SYSTEMD_DIR/wiki-fuse-refresh.service"
+    replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.timer" "$SYSTEMD_DIR/wiki-fuse-refresh.timer"
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+      if [ "$SERVICE_SCOPE" = "user" ]; then
+        log "[dry-run] loginctl enable-linger $USER"
+      fi
+      log "[dry-run] $(print_cmd "${DAEMON_RELOAD_CMD[@]}")"
+      log "[dry-run] $(print_cmd "${ENABLE_TIMERS_CMD[@]}")"
+      log "[dry-run] $BIN_DIR/wiki-fuse-refresh.sh --check-only --max-dir-cache 15m"
+    else
+      if [ "$SERVICE_SCOPE" = "user" ]; then
+        loginctl enable-linger "$USER" || fatal "loginctl enable-linger $USER failed"
+      fi
+      "${DAEMON_RELOAD_CMD[@]}"
+      "${ENABLE_TIMERS_CMD[@]}"
+      if [ -x "$BIN_DIR/wiki-fuse-refresh.sh" ]; then
+        if "$BIN_DIR/wiki-fuse-refresh.sh" --check-only --max-dir-cache 15m >/dev/null 2>&1; then
+          log "Validated fuse freshness envelope (<=15m) via wiki-fuse-refresh --check-only"
+        else
+          warn "Fuse freshness validation reported drift (>15m or no rc visibility). Run: $BIN_DIR/wiki-fuse-refresh.sh --check-only"
+        fi
+      else
+        warn "Missing $BIN_DIR/wiki-fuse-refresh.sh; cannot validate fuse freshness envelope"
+      fi
+    fi
+  else
+    SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+    run_cmd mkdir -p "$SYSTEMD_USER_DIR"
+
+    replace_template "$SYSTEMD_SRC_DIR/wiki-push.service" "$SYSTEMD_USER_DIR/wiki-push.service"
+    replace_template "$SYSTEMD_SRC_DIR/wiki-push.timer" "$SYSTEMD_USER_DIR/wiki-push.timer"
+    replace_template "$SYSTEMD_SRC_DIR/wiki-fetch.service" "$SYSTEMD_USER_DIR/wiki-fetch.service"
+    replace_template "$SYSTEMD_SRC_DIR/wiki-fetch.timer" "$SYSTEMD_USER_DIR/wiki-fetch.timer"
+    replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.service" "$SYSTEMD_USER_DIR/wiki-fuse-refresh.service"
+    replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.timer" "$SYSTEMD_USER_DIR/wiki-fuse-refresh.timer"
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "[dry-run] loginctl enable-linger $USER"
+      log "[dry-run] systemctl --user daemon-reload"
+      log "[dry-run] systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer"
+      log "[dry-run] $BIN_DIR/wiki-fuse-refresh.sh --check-only --max-dir-cache 15m"
+    else
+      loginctl enable-linger "$USER" || fatal "loginctl enable-linger $USER failed"
+      systemctl --user daemon-reload
+      systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer
+      if [ -x "$BIN_DIR/wiki-fuse-refresh.sh" ]; then
+        if "$BIN_DIR/wiki-fuse-refresh.sh" --check-only --max-dir-cache 15m >/dev/null 2>&1; then
+          log "Validated fuse freshness envelope (<=15m) via wiki-fuse-refresh --check-only"
+        else
+          warn "Fuse freshness validation reported drift (>15m or no rc visibility). Run: $BIN_DIR/wiki-fuse-refresh.sh --check-only"
+        fi
+      else
+        warn "Missing $BIN_DIR/wiki-fuse-refresh.sh; cannot validate fuse freshness envelope"
+      fi
     fi
   fi
 fi
@@ -583,9 +662,15 @@ set_vault_config "vault_sync.installed" "true"
 set_vault_config "vault_sync.role" "$ROLE"
 set_vault_config "vault_sync.scheduler" "$SCHEDULER"
 if [ "$VS_OS" = "linux" ]; then
+  set_vault_config "vault_sync.service_scope" "$SERVICE_SCOPE"
   set_vault_config "vault_sync.fuse_refresh_enabled" "true"
   set_vault_config "vault_sync.fuse_refresh_interval" "300s"
   set_vault_config "vault_sync.fuse_max_dir_cache" "15m"
+  set_vault_config "vault_sync.fuse_service_scope" "$SERVICE_SCOPE"
+  if [ "$ROLE" = "snapshotter" ]; then
+    set_vault_config "vault_sync.snapshot_profile" "$SNAPSHOT_PROFILE_PATH"
+    set_vault_config "vault_sync.snapshot_script" "$BIN_DIR/wiki-snapshot.sh"
+  fi
 else
   set_vault_config "vault_sync.fuse_refresh_enabled" "false"
 fi

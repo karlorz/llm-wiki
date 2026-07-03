@@ -103,6 +103,15 @@ set_vault_config() {
   set_env_key_raw "$key" "$value"
 }
 
+vault_sync_env_value() {
+  local key="$1"
+  local env_file="$HOME/.skillwiki/.env"
+  if [ ! -f "$env_file" ]; then
+    return 1
+  fi
+  awk -F= -v k="$key" '$1 == k { print substr($0, index($0, "=") + 1); found=1; exit } END { exit(found ? 0 : 1) }' "$env_file"
+}
+
 is_installed() {
   local env_file="$HOME/.skillwiki/.env"
   local share_bin="$1"
@@ -111,6 +120,9 @@ is_installed() {
     return 0
   fi
   if [ -f "$share_bin/wiki-push.sh" ]; then
+    return 0
+  fi
+  if [ -f "$share_bin/wiki-snapshot.sh" ]; then
     return 0
   fi
   return 1
@@ -228,6 +240,14 @@ platform_detect_os
 SHARE_BIN="$(platform_share_dir)/bin"
 LOG_DIR="$(platform_log_dir)"
 CURRENT_HOST="${VS_HOSTNAME:-$(hostname -s 2>/dev/null || hostname)}"
+ROLE="${VS_ROLE:-leaf}"
+if role_val="$(vault_sync_env_value "vault_sync.role" 2>/dev/null || true)"; then
+  [ -n "$role_val" ] && ROLE="$role_val"
+fi
+SERVICE_SCOPE="${VS_SERVICE_SCOPE:-user}"
+if scope_val="$(vault_sync_env_value "vault_sync.service_scope" 2>/dev/null || true)"; then
+  [ -n "$scope_val" ] && SERVICE_SCOPE="$scope_val"
+fi
 
 fleet_load || true
 if fleet_is_protected "$CURRENT_HOST" && [ "$FORCE_PROTECTED" -ne 1 ]; then
@@ -241,12 +261,26 @@ if ! is_installed "$SHARE_BIN"; then
       log "[dry-run] remove $HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist"
       log "[dry-run] remove $HOME/Library/LaunchAgents/com.karlchow.wiki-fetch.plist"
     else
-      log "[dry-run] remove $HOME/.config/systemd/user/wiki-push.service"
-      log "[dry-run] remove $HOME/.config/systemd/user/wiki-push.timer"
-      log "[dry-run] remove $HOME/.config/systemd/user/wiki-fetch.service"
-      log "[dry-run] remove $HOME/.config/systemd/user/wiki-fetch.timer"
-      log "[dry-run] remove $HOME/.config/systemd/user/wiki-fuse-refresh.service"
-      log "[dry-run] remove $HOME/.config/systemd/user/wiki-fuse-refresh.timer"
+      if [ "$ROLE" = "snapshotter" ]; then
+        if [ "$SERVICE_SCOPE" = "system" ]; then
+          log "[dry-run] remove /etc/systemd/system/wiki-snapshot.service"
+          log "[dry-run] remove /etc/systemd/system/wiki-snapshot.timer"
+          log "[dry-run] remove /etc/systemd/system/wiki-fuse-refresh.service"
+          log "[dry-run] remove /etc/systemd/system/wiki-fuse-refresh.timer"
+        else
+          log "[dry-run] remove $HOME/.config/systemd/user/wiki-snapshot.service"
+          log "[dry-run] remove $HOME/.config/systemd/user/wiki-snapshot.timer"
+          log "[dry-run] remove $HOME/.config/systemd/user/wiki-fuse-refresh.service"
+          log "[dry-run] remove $HOME/.config/systemd/user/wiki-fuse-refresh.timer"
+        fi
+      else
+        log "[dry-run] remove $HOME/.config/systemd/user/wiki-push.service"
+        log "[dry-run] remove $HOME/.config/systemd/user/wiki-push.timer"
+        log "[dry-run] remove $HOME/.config/systemd/user/wiki-fetch.service"
+        log "[dry-run] remove $HOME/.config/systemd/user/wiki-fetch.timer"
+        log "[dry-run] remove $HOME/.config/systemd/user/wiki-fuse-refresh.service"
+        log "[dry-run] remove $HOME/.config/systemd/user/wiki-fuse-refresh.timer"
+      fi
     fi
     log "[dry-run] remove $SHARE_BIN"
   else
@@ -279,16 +313,33 @@ if [ "$VS_OS" = "macos" ]; then
     write_tombstone "$FETCH_PLIST" "com.karlchow.wiki-fetch"
   fi
 else
-  SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
-  if [ "$DRY_RUN" -eq 1 ]; then
-    log "[dry-run] systemctl --user disable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer"
-    log "[dry-run] systemctl --user daemon-reload"
+  if [ "$ROLE" = "snapshotter" ]; then
+    if [ "$SERVICE_SCOPE" = "system" ]; then
+      SYSTEMD_DIR="/etc/systemd/system"
+      DISABLE_CMD=(systemctl disable --now wiki-snapshot.timer wiki-fuse-refresh.timer)
+      DAEMON_CMD=(systemctl daemon-reload)
+    else
+      SYSTEMD_DIR="$HOME/.config/systemd/user"
+      DISABLE_CMD=(systemctl --user disable --now wiki-snapshot.timer wiki-fuse-refresh.timer)
+      DAEMON_CMD=(systemctl --user daemon-reload)
+    fi
+    UNIT_NAMES="wiki-snapshot.service wiki-snapshot.timer wiki-fuse-refresh.service wiki-fuse-refresh.timer"
   else
-    systemctl --user disable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer >/dev/null 2>&1 || true
+    SYSTEMD_DIR="$HOME/.config/systemd/user"
+    DISABLE_CMD=(systemctl --user disable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer)
+    DAEMON_CMD=(systemctl --user daemon-reload)
+    UNIT_NAMES="wiki-push.service wiki-push.timer wiki-fetch.service wiki-fetch.timer wiki-fuse-refresh.service wiki-fuse-refresh.timer"
   fi
 
-  for unit_name in wiki-push.service wiki-push.timer wiki-fetch.service wiki-fetch.timer wiki-fuse-refresh.service wiki-fuse-refresh.timer; do
-    unit_path="$SYSTEMD_USER_DIR/$unit_name"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[dry-run] $(print_cmd "${DISABLE_CMD[@]}")"
+    log "[dry-run] $(print_cmd "${DAEMON_CMD[@]}")"
+  else
+    "${DISABLE_CMD[@]}" >/dev/null 2>&1 || true
+  fi
+
+  for unit_name in $UNIT_NAMES; do
+    unit_path="$SYSTEMD_DIR/$unit_name"
     if [ -f "$unit_path" ]; then
       run_cmd rm -f "$unit_path"
       write_tombstone "$unit_path" "$unit_name"
@@ -296,7 +347,7 @@ else
   done
 
   if [ "$DRY_RUN" -ne 1 ]; then
-    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    "${DAEMON_CMD[@]}" >/dev/null 2>&1 || true
   fi
 fi
 
@@ -305,15 +356,19 @@ if [ -d "$SHARE_BIN" ]; then
 fi
 
 if [ "$PURGE_LOGS" -eq 1 ]; then
-  run_cmd rm -f "$LOG_DIR"/wiki-push.log* "$LOG_DIR"/wiki-fetch.log* "$LOG_DIR"/wiki-pull.log* "$LOG_DIR"/wiki-fuse-refresh.log* 2>/dev/null || true
+  run_cmd rm -f "$LOG_DIR"/wiki-push.log* "$LOG_DIR"/wiki-fetch.log* "$LOG_DIR"/wiki-pull.log* "$LOG_DIR"/wiki-fuse-refresh.log* "$LOG_DIR"/wiki-snapshot.log* 2>/dev/null || true
 fi
 
 set_vault_config "vault_sync.installed" "false"
 set_vault_config "vault_sync.role" "none"
 set_vault_config "vault_sync.scheduler" "none"
+set_vault_config "vault_sync.service_scope" "none"
+set_vault_config "vault_sync.snapshot_profile" "none"
+set_vault_config "vault_sync.snapshot_script" "none"
 set_vault_config "vault_sync.fuse_refresh_enabled" "false"
 set_vault_config "vault_sync.fuse_refresh_interval" "none"
 set_vault_config "vault_sync.fuse_max_dir_cache" "none"
+set_vault_config "vault_sync.fuse_service_scope" "none"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   log "Dry-run only: no files or services were removed."

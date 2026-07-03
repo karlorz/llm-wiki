@@ -14,7 +14,7 @@ Pre-sync helper that handles the full sync pipeline for the ~/wiki vault: lint g
 - When `git pull` fails with "The following untracked working tree files would be overwritten by merge"
 - When `git merge --ff-only` fails due to divergent histories (local + remote both have commits)
 - After a Claude Code session that modified vault files
-- Periodically to keep the local vault in sync with sg01 hourly snapshots
+- Periodically to keep the local vault in sync with sg01 30-minute snapshots
 
 ## What it does
 
@@ -88,7 +88,7 @@ The ~/wiki vault has three concurrent writers:
 
 | Writer | Mechanism | Frequency |
 |--------|-----------|-----------|
-| **sg01** (hermes-agent) | rclone mount → edit → git snapshot → rebase → push to GitHub | Hourly + on-demand |
+| **sg01** (hermes-agent) | rclone mount → edit → git snapshot → rebase → push to GitHub | Every 30 min + on-demand |
 | **macOS Claude Code** | Direct file edits (CLI writes, skillwiki commands) → git commit → push to GitHub | Per-session |
 | **Obsidian** | Opens vault read-only via rclone FUSE; Remotely Save plugin for S3 download | Ad-hoc |
 

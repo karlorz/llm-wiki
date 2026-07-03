@@ -24,7 +24,7 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
      - Read `fleet.yaml` from vault via `fleet_load`.
      - Call `fleet_validate_install $(hostname) snapshotter [--override-snapshotter]`.
      - On override: print warning, note that fleet.yaml update is deferred to user.
-   - `--service-scope=auto|user|system` for Linux FUSE-only installs. `auto` uses `system` when run as root and `user` otherwise.
+   - `--service-scope=auto|user|system` for Linux snapshotter or FUSE-only installs. `auto` uses `system` when run as root and `user` otherwise. Full leaf installs stay on user units.
    - `--vault-path=<path>` for the FUSE-only mount guard. Defaults to `~/wiki`.
    - `--max-dir-cache=<duration>` for the FUSE freshness envelope. Defaults to `15m`.
 3. **Check prerequisites**:
@@ -51,7 +51,8 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    ```
 6. **Install scheduler units**:
    - macOS: render `.plist.tmpl` files with `@SCRIPT_DIR@` → `$(platform_share_dir)/bin`, `@LOG_DIR@` → `$(platform_log_dir)`. Write to `~/Library/LaunchAgents/`. Run `launchctl bootstrap gui/$UID <plist>`.
-   - Linux: render `.service` + `.timer` with `@SCRIPT_DIR@` → `$(platform_share_dir)/bin`. Write to `~/.config/systemd/user/`. Run `systemctl --user daemon-reload && systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer`.
+   - Linux leaf: render `.service` + `.timer` with `@SCRIPT_DIR@` → `$(platform_share_dir)/bin`. Write to `~/.config/systemd/user/`. Run `systemctl --user daemon-reload && systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer`.
+   - Linux snapshotter: render `wiki-snapshot.service` + `wiki-snapshot.timer` plus `wiki-fuse-refresh.service` + `wiki-fuse-refresh.timer`. Write to `/etc/systemd/system/` for `--service-scope system` or `~/.config/systemd/user/` for `--service-scope user`. Enable `wiki-snapshot.timer` on a 30-minute cadence (`*:02` and `*:32`) plus the 5-minute FUSE refresh timer.
    - Linux post-check: run `wiki-fuse-refresh.sh --check-only --max-dir-cache 15m` and surface a warning if the active mount exceeds the freshness envelope.
    - Linux only: `loginctl enable-linger $USER`. If this fails, surface as a hard error — without it, headless LXC will silently not sync.
 7. **Register in skillwiki config** for full mode:
@@ -59,10 +60,12 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    skillwiki config set vault_sync.installed true
    skillwiki config set vault_sync.role <role>
    skillwiki config set vault_sync.scheduler <launchd|systemd>
+   skillwiki config set vault_sync.service_scope <user|system>   # Linux only
    skillwiki config set vault_sync.fuse_refresh_enabled <true|false>
    skillwiki config set vault_sync.fuse_refresh_interval 300s   # Linux only
    skillwiki config set vault_sync.fuse_max_dir_cache 15m       # Linux only
    ```
+   Snapshotter installs also record `vault_sync.snapshot_script` and the conventional profile path `vault_sync.snapshot_profile=/etc/vault-sync/profiles/<host>-snapshotter.env`.
 8. **`--dry-run` mode**: print the entire plan (paths, commands, fleet.yaml diff) but execute nothing.
 
 ## FUSE-Only Mode
@@ -98,9 +101,11 @@ Re-running the install upgrades scripts in-place. Existing scheduler units are r
 ```bash
 # Companion script (interactive)
 bash packages/vault-sync/skills/vault-sync-install/install.sh --role leaf --dry-run
+bash packages/vault-sync/skills/vault-sync-install/install.sh --role snapshotter --service-scope system --dry-run
 bash packages/vault-sync/skills/vault-sync-install/install.sh --mode fuse-only --vault-path /root/wiki --service-scope system --dry-run
 
 # Companion script (headless / CI)
 VS_ROLE=leaf VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
+VS_ROLE=snapshotter VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 VS_MODE=fuse-only VS_VAULT_PATH=/root/wiki VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 ```

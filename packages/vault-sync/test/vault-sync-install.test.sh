@@ -175,6 +175,24 @@ assert_exit "full dry-run exits 0" "$FULL_RC" 0
 assert_contains "full install deploys presync helper" "$FULL_OUT" "wiki-sync.sh"
 assert_contains "full install repairs convenience wiki-sync symlink" "$FULL_OUT" "ln -sfn"
 assert_contains "full install targets home bin wiki-sync" "$FULL_OUT" "$TEST_ROOT/home/bin/wiki-sync.sh"
+assert_contains "full leaf install enables push fetch and fuse timers" "$FULL_OUT" "systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer"
+
+SNAPSHOT_OUT="$TEST_ROOT/snapshotter.out"
+run_install "$SNAPSHOT_OUT" --role snapshotter --service-scope system --dry-run
+SNAPSHOT_RC=$?
+assert_exit "snapshotter dry-run exits 0" "$SNAPSHOT_RC" 0
+assert_contains "snapshotter plan targets system units" "$SNAPSHOT_OUT" "/etc/systemd/system"
+assert_contains "snapshotter renders snapshot service" "$SNAPSHOT_OUT" "wiki-snapshot.service"
+assert_contains "snapshotter renders snapshot timer" "$SNAPSHOT_OUT" "wiki-snapshot.timer"
+assert_contains "snapshotter enables snapshot and fuse timers" "$SNAPSHOT_OUT" "systemctl enable --now wiki-snapshot.timer wiki-fuse-refresh.timer"
+assert_contains "snapshotter records service scope" "$SNAPSHOT_OUT" "set config: vault_sync.service_scope=system"
+assert_contains "snapshotter records snapshot profile" "$SNAPSHOT_OUT" "set config: vault_sync.snapshot_profile=/etc/vault-sync/profiles/pvelxc-test-snapshotter.env"
+assert_contains "snapshotter records snapshot script" "$SNAPSHOT_OUT" "set config: vault_sync.snapshot_script=$TEST_ROOT/home/.local/share/vault-sync/bin/wiki-snapshot.sh"
+assert_not_contains "snapshotter does not install push unit" "$SNAPSHOT_OUT" "wiki-push.service"
+assert_not_contains "snapshotter does not install fetch unit" "$SNAPSHOT_OUT" "wiki-fetch.service"
+assert_contains "snapshot service exports HOME" "$SCRIPT_DIR/../service-units/systemd/wiki-snapshot.service" "Environment=HOME=@HOME@"
+assert_contains "snapshot service reads conventional profile path" "$SCRIPT_DIR/../service-units/systemd/wiki-snapshot.service" "EnvironmentFile=-/etc/vault-sync/profiles/%H-snapshotter.env"
+assert_contains "snapshot timer runs every 30 minutes" "$SCRIPT_DIR/../service-units/systemd/wiki-snapshot.timer" "OnCalendar=*-*-* *:02,32:00"
 
 NODE_DIR="$TEST_ROOT/node24/bin"
 mkdir -p "$NODE_DIR"

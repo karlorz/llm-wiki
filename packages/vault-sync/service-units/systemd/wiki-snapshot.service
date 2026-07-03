@@ -1,0 +1,15 @@
+[Unit]
+Description=vault-sync wiki snapshot (S3 to GitHub)
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=@HOME@/wiki-git/.git
+ConditionPathExists=@SCRIPT_DIR@/wiki-snapshot.sh
+
+[Service]
+Type=oneshot
+Environment=HOME=@HOME@
+EnvironmentFile=-/etc/vault-sync/profiles/%H-snapshotter.env
+WorkingDirectory=@HOME@/wiki-git
+ExecStart=@SCRIPT_DIR@/wiki-snapshot.sh
+TimeoutStartSec=900
+Nice=10

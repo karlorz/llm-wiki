@@ -52,4 +52,4 @@ When migrating from sg01's legacy `wiki-snapshot-v3.sh`:
 - [ ] Replace hardcoded paths with `platform_*` helpers.
 - [ ] Source `lib/platform.sh` at the top of the script.
 - [ ] Test on sg01: `sudo -u hermes bash wiki-snapshot.sh --dry-run`.
-- [ ] Enable the systemd timer: `systemctl --user enable --now wiki-snapshot.timer`.
+- [ ] Enable the systemd timer: `systemctl enable --now wiki-snapshot.timer` for system scope, or `systemctl --user enable --now wiki-snapshot.timer` for user scope. Default snapshotter cadence is every 30 minutes at `*:02` and `*:32`.

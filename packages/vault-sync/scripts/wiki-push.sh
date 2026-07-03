@@ -4,7 +4,7 @@
 # Push-only (rclone copy, NOT sync) — NEVER deletes files on the remote.
 # Pull side is handled separately by:
 #   - Obsidian Remotely Save (option 5: Incremental Pull And Delete), or
-#   - git pull from GitHub (sg01 hourly snapshot path).
+#   - git pull from GitHub (sg01 30-minute snapshot path).
 #
 # This script complements wiki-fetch-notify (which polls GitHub) by giving macOS-authored
 # notes a direct path to S3 → pvelxc agents in ~60 s instead of waiting for the next

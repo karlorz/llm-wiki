@@ -154,7 +154,8 @@ describe("fleet context", () => {
       expect(r.result.data.markdown).toContain("Fleet role: `snapshotter`; protected: `true`; writes_to: `github`");
       expect(r.result.data.markdown).toContain("Self SSH aliases known in fleet: `sg01`, `cloudsg01`");
       expect(r.result.data.markdown).toContain("Declared outbound SSH from this source: none");
-      expect(r.result.data.markdown).toContain("do not SSH to self aliases");
+      expect(r.result.data.markdown).toContain("protected snapshotter host");
+      expect(r.result.data.markdown).toContain("Do not mutate the vault or repo-local project workspaces");
     }
   });
 

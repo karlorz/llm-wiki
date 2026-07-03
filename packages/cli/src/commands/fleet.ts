@@ -454,9 +454,11 @@ function formatKnownContext(input: {
   const outbound = collectOutboundAccess(input.manifest, input.hostId);
   const maintenanceLines = formatMaintenanceLines(host);
 
-  const guidance = input.hostId === "macos-dev"
-    ? "use declared SSH aliases for remote work when needed; do not assume undeclared hosts have reciprocal SSH access."
-    : `this session is already on \`${input.hostId}\`; do not SSH to self aliases unless the user explicitly asks. Do not assume outbound SSH to other fleet hosts is configured.`;
+  const guidance = host.role === "snapshotter" && host.protected === true
+    ? `this session is already on \`${input.hostId}\`; this is a protected snapshotter host. Do not mutate the vault or repo-local project workspaces from this session except explicitly approved snapshot maintenance. Use read-only investigation here and route authoring to a leaf host.`
+    : input.hostId === "macos-dev"
+      ? "use declared SSH aliases for remote work when needed; do not assume undeclared hosts have reciprocal SSH access."
+      : `this session is already on \`${input.hostId}\`; do not SSH to self aliases unless the user explicitly asks. Do not assume outbound SSH to other fleet hosts is configured.`;
 
   return [
     "## Runtime Host Context",

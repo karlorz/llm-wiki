@@ -1,0 +1,11 @@
+[Unit]
+Description=Run vault-sync wiki snapshot every 30min
+
+[Timer]
+OnCalendar=*-*-* *:02,32:00
+Persistent=true
+AccuracySec=30s
+Unit=wiki-snapshot.service
+
+[Install]
+WantedBy=timers.target
