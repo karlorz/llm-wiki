@@ -58,7 +58,10 @@ esac
 
 touch "$share_bin/wiki-push.sh"
 chmod +x "$share_bin/wiki-push.sh"
-printf '2026-06-10T00:00:00Z OK push (no changes)\n' > "$log_dir/wiki-push.log"
+cat > "$log_dir/wiki-push.log" <<'EOF'
+2026-06-10T00:00:00Z OK push (no changes)
+{"ok":true,"data":{"summary":{"errors":0}}}
+EOF
 printf '2026-06-10T00:00:00Z OK behind=0 delta=0 (no notify)\n' > "$log_dir/wiki-fetch.log"
 printf '%s\n' \
   '- remotely-save/data.json' \
@@ -85,8 +88,16 @@ if ! grep -q '"status":"warn"' "$helper_out" || ! grep -q 'broken symlink' "$hel
   exit 1
 fi
 
+if ! grep -q '"id":"vault_sync_last_push_age".*"status":"pass".*OK push' "$helper_out"; then
+  cat "$helper_out" >&2
+  rm -f "$helper_out"
+  echo "FAIL: expected push recency check to use last meaningful OK push line" >&2
+  exit 1
+fi
+
 rm -f "$helper_out"
 echo "PASS: --read-only reports broken wiki-sync helper symlink"
+echo "PASS: --read-only push recency ignores trailing JSON log lines"
 
 snapshot_home="$(mktemp -d)"
 case "$(uname -s)" in

@@ -78,8 +78,14 @@ classify_log_tail() {
     return 0
   fi
 
-  local last
-  last=$(tail -n 20 "$file" | tail -n 1)
+  local tail_lines last
+  tail_lines=$(tail -n 20 "$file")
+  last=$(printf '%s
+' "$tail_lines" | grep -E "FAIL|ERROR|$ok_regex" | tail -n 1 || true)
+  if [ -z "$last" ]; then
+    last=$(printf '%s
+' "$tail_lines" | tail -n 1)
+  fi
   if [ -z "$last" ]; then
     add_check "$check_id" "$label" "warn" "log file empty: $file"
     return 0
