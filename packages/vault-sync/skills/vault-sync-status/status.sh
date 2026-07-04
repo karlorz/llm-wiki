@@ -401,12 +401,19 @@ if [ "$VS_OS" = "macos" ]; then
   add_check "vault_sync_fuse_refresh_job" "Vault sync fuse refresh job" "pass" "macOS host — check skipped"
 else
   if [ "$READ_ONLY" -eq 1 ]; then
-    fuse_timer="$HOME/.config/systemd/user/wiki-fuse-refresh.timer"
-    fuse_service="$HOME/.config/systemd/user/wiki-fuse-refresh.service"
-    if [ -f "$fuse_timer" ] && [ -f "$fuse_service" ]; then
-      add_check "vault_sync_fuse_refresh_job" "Vault sync fuse refresh job" "pass" "wiki-fuse-refresh unit files present (read-only mode)"
+    if [ "$SERVICE_SCOPE" = "system" ]; then
+      fuse_timer="/etc/systemd/system/wiki-fuse-refresh.timer"
+      fuse_service="/etc/systemd/system/wiki-fuse-refresh.service"
+      fuse_scope="system"
     else
-      add_check "vault_sync_fuse_refresh_job" "Vault sync fuse refresh job" "warn" "wiki-fuse-refresh unit files missing (read-only mode)"
+      fuse_timer="$HOME/.config/systemd/user/wiki-fuse-refresh.timer"
+      fuse_service="$HOME/.config/systemd/user/wiki-fuse-refresh.service"
+      fuse_scope="user"
+    fi
+    if [ -f "$fuse_timer" ] && [ -f "$fuse_service" ]; then
+      add_check "vault_sync_fuse_refresh_job" "Vault sync fuse refresh job" "pass" "wiki-fuse-refresh unit files present ($fuse_scope scope, read-only mode)"
+    else
+      add_check "vault_sync_fuse_refresh_job" "Vault sync fuse refresh job" "warn" "wiki-fuse-refresh unit files missing ($fuse_scope scope, read-only mode)"
     fi
   else
     fuse_job_json=$(platform_job_status "wiki-fuse-refresh")
