@@ -1,10 +1,11 @@
 [Unit]
-Description=vault-sync fetch (git fetch + notify)
+Description=vault-sync fetch (git fetch + notify + opt-in pull)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 ExecStart=@SCRIPT_DIR@/wiki-fetch-notify.sh
+Environment=WIKI_FETCH_PULL_ON_DELTA=1
 RuntimeMaxSec=120
 Nice=10

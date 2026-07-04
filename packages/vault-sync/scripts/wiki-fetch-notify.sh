@@ -1,17 +1,22 @@
 #!/bin/bash
-# wiki-fetch-notify.sh — read-only awareness of remote wiki changes.
+# wiki-fetch-notify.sh — polls origin for remote wiki changes and notifies.
 #
 # Runs `git fetch` against origin and emits a notification only when
 # NEW commits have arrived since the previous run. Replaces the old
 # seaweedfs-bisync writer with a non-destructive poller.
 #
-# Safe to run concurrently with skillwiki sync — fetch only touches refs/objects.
+# Opt-in WIKI_FETCH_PULL_ON_DELTA=1: on positive delta, also runs
+# `git pull --rebase` (via wiki-pull-with-auto-resolve.sh) so the local
+# working tree consumes sg01 Snapshot commits automatically. This is a
+# mutating action — when enabled, this script is no longer a pure reader.
+#
+# When pull is disabled (default), this script is read-only: fetch only
+# touches refs/objects and is safe to run concurrently with skillwiki sync.
 
 set -u
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/platform.sh"
-. "$SCRIPT_DIR/lib/lockfile.sh"
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
@@ -20,6 +25,13 @@ STATE_DIR="$(platform_cache_dir)/wiki-fetch"
 STATE_FILE="$STATE_DIR/last-behind"
 STALE_STATE_FILE="$STATE_DIR/last-stale-notify"
 STALE_NOTIFY_AFTER_SECONDS="${WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS:-1800}"
+# Opt-in: when enabled, a positive delta triggers `git pull --rebase` so the
+# local working tree consumes sg01 Snapshot commits automatically. This
+# replaces the git pull that was previously bundled inside wiki-push.sh's
+# removed git-push block. Default off — set WIKI_FETCH_PULL_ON_DELTA=1 to
+# enable on leaf hosts that want automated pull.
+PULL_ON_DELTA="${WIKI_FETCH_PULL_ON_DELTA:-0}"
+PULL_HELPER="$SCRIPT_DIR/wiki-pull-with-auto-resolve.sh"
 LOG_FILE="$(platform_log_dir)/wiki-fetch.log"
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")"
@@ -86,6 +98,23 @@ if [ "$DELTA" -gt 0 ]; then
   platform_notify "$TITLE" "$MSG — run skillwiki sync"
   printf '%s' "$NOW" >"$STALE_STATE_FILE"
   log "NOTIFY behind=$BEHIND delta=$DELTA"
+
+  # Opt-in auto-pull: consume sg01 Snapshot commits into the working tree.
+  # Uses wiki-pull-with-auto-resolve.sh for conflict-storm handling. On
+  # failure, leaves the working tree behind and logs — does NOT block.
+  if [ "$PULL_ON_DELTA" = "1" ]; then
+    if [ -x "$PULL_HELPER" ]; then
+      if "$PULL_HELPER" origin "$BRANCH" 2>>"$LOG_FILE"; then
+        log "PULL ok via wiki-pull-with-auto-resolve"
+      else
+        log "FAIL PULL via wiki-pull-with-auto-resolve — run skillwiki sync manually"
+      fi
+    elif git pull --rebase origin "$BRANCH" 2>>"$LOG_FILE"; then
+      log "PULL ok via git pull --rebase"
+    else
+      log "FAIL PULL via git pull --rebase — run skillwiki sync manually"
+    fi
+  fi
 elif [ "$BEHIND" -gt 0 ] && [ $(( NOW - LAST_STALE_NOTIFY )) -ge "$STALE_NOTIFY_AFTER_SECONDS" ]; then
   TITLE="wiki"
   MSG="still $BEHIND commit(s) behind origin/$BRANCH"
