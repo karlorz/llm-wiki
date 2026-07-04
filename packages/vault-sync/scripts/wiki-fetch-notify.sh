@@ -1,17 +1,22 @@
 #!/bin/bash
-# wiki-fetch-notify.sh — read-only awareness of remote wiki changes.
+# wiki-fetch-notify.sh — polls origin for remote wiki changes and notifies.
 #
 # Runs `git fetch` against origin and emits a notification only when
 # NEW commits have arrived since the previous run. Replaces the old
 # seaweedfs-bisync writer with a non-destructive poller.
 #
-# Safe to run concurrently with skillwiki sync — fetch only touches refs/objects.
+# Opt-in WIKI_FETCH_PULL_ON_DELTA=1: on positive delta, also runs
+# `git pull --rebase` (via wiki-pull-with-auto-resolve.sh) so the local
+# working tree consumes sg01 Snapshot commits automatically. This is a
+# mutating action — when enabled, this script is no longer a pure reader.
+#
+# When pull is disabled (default), this script is read-only: fetch only
+# touches refs/objects and is safe to run concurrently with skillwiki sync.
 
 set -u
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/platform.sh"
-. "$SCRIPT_DIR/lib/lockfile.sh"
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"

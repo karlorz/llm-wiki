@@ -91,8 +91,12 @@ else
 fi
 
 # rclone copy (NOT sync) → never bulk-deletes on remote.
-# Stale archived source paths on S3 are pruned by the sg01 snapshot path
-# (wiki-snapshot.sh rclone sync with --max-delete guard), not by this script.
+# NOTE: stale archived source paths on S3 (e.g. raw/foo.md after a move to
+# _archive/raw/foo.md) are no longer pruned by this script — the old
+# remote_prune_archived_source_paths helper was removed with the git block.
+# sg01's wiki-snapshot.sh rclone-syncs S3→worktree (deleting worktree files
+# absent on S3), but does not delete stale S3 keys. Stale S3 objects linger
+# until a separate prune step removes them; tracked as a follow-up.
 # --update : only newer source files overwrite remote (mod-time + size based)
 # --filter-from : reuse the bisync filter list
 # --transfers 4 : modest parallelism for small files

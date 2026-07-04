@@ -9,7 +9,6 @@
 set -u
 
 SCRIPT_UNDER_TEST="$(cd "$(dirname "$0")/.." && pwd)/scripts/wiki-push.sh"
-PULL_HELPER_UNDER_TEST="$(cd "$(dirname "$0")/.." && pwd)/scripts/wiki-pull-with-auto-resolve.sh"
 FILTER_UNDER_TEST="$(cd "$(dirname "$0")/.." && pwd)/filters/wiki-push-filters.txt"
 PASS=0
 FAIL=0
@@ -64,11 +63,10 @@ make_script_dir() {
   local script_dir="$root/scripts"
   mkdir -p "$script_dir/lib"
   cp "$SCRIPT_UNDER_TEST" "$script_dir/wiki-push.sh"
-  cp "$PULL_HELPER_UNDER_TEST" "$script_dir/wiki-pull-with-auto-resolve.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/platform.sh" "$script_dir/lib/platform.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/lockfile.sh" "$script_dir/lib/lockfile.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/git-case.sh" "$script_dir/lib/git-case.sh"
-  chmod +x "$script_dir/wiki-push.sh" "$script_dir/wiki-pull-with-auto-resolve.sh"
+  chmod +x "$script_dir/wiki-push.sh"
   printf '%s\n' "$script_dir"
 }
 
@@ -202,12 +200,13 @@ test_sync_lock_is_pushed_to_s3_not_git() {
   HOME="$home" \
     WIKI_DIR="$vault" \
     WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
     RCLONE_CALLS_FILE="$root/rclone.calls" \
     PATH="$bin_dir:$PATH" \
     "$script_dir/wiki-push.sh" >/dev/null 2>&1
 
   # rclone copy is invoked (S3 push happens regardless of git state).
-  assert_eq "rclone copy is invoked" "$(cat "$root/rclone-called" 2>/dev/null || test -f "$root/rclone.calls" && echo called || echo skipped)" "called"
+  assert_eq "rclone copy is invoked" "$(cat "$root/rclone-called" 2>/dev/null || true)" "called"
   # wiki-push no longer commits to git — sync.lock stays untracked.
   assert_eq "sync lock remains untracked" "$(git -C "$vault" ls-files .skillwiki/sync.lock)" ""
   rm -rf "$root"

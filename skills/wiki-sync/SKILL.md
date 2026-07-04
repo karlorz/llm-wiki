@@ -216,9 +216,10 @@ git fetch origin main
 git reset --hard origin/main
 bash ~/.hermes/scripts/wiki-snapshot.sh  # Re-sync fresh
 ```
-**Prevention**: Avoid editing the GitHub repo directly via web interface or uncoordinated clones. The canonical flow is:
-- Server: rclone mount → rsync → git commit → git push
-- macOS/desktop: git pull → edit → git commit → git push → server pulls on next cron
+**Prevention**: Avoid editing the GitHub repo directly via web interface or uncoordinated clones. The canonical flow is **single-writer-git** (see `concepts/vault-write-authority-model.md`):
+- Server (sg01): rclone mount → rsync → git commit "Snapshot ..." → git push — **sole git writer to `main`**
+- macOS/desktop: edit → `wiki-push` rclone copy to S3 (NO git push) → consume sg01 snapshots via `wiki-fetch-notify` (opt-in `WIKI_FETCH_PULL_ON_DELTA=1`) or manual `skillwiki sync`
+- `wiki-sync` skill push is for **explicit** agent/human edit commits only, not automated background pushes
 2. **Slow rsync on rclone mounts**: The rclone FUSE mount can be slow for large directory listings. Use `rsync -q` (quiet) to reduce output overhead, and consider `--delete-delay` instead of `--delete` if file churn is high. The rclone mount latency can cause `du` and `find` operations to timeout — this is normal, not an error.
 3. **Golden Rule violation**: Never mix sync methods on the same vault. If using rclone mount + git snapshotting, do NOT also enable Obsidian Sync, Syncthing, or iCloud on `~/wiki`. The rclone mount IS the sync mechanism.
 4. **Credential exposure**: The rclone mount and git remote use different credentials. Ensure git credentials are cached or use HTTPS with token, but never commit rclone config to git.
