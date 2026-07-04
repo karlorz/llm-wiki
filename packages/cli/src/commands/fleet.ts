@@ -455,7 +455,7 @@ function formatKnownContext(input: {
   const maintenanceLines = formatMaintenanceLines(host);
 
   const guidance = host.role === "snapshotter" && host.protected === true
-    ? `this session is already on \`${input.hostId}\`; this is a protected snapshotter host. Do not mutate the vault or repo-local project workspaces from this session except explicitly approved snapshot maintenance. Use read-only investigation here and route authoring to a leaf host.`
+    ? `this session is already on \`${input.hostId}\`; this is a protected snapshotter host. Live-vault authoring at the resolved \`skillwiki path\` is allowed here. Do not mutate snapshot worktrees or repo-local project workspaces from this session except explicitly approved snapshot maintenance. Keep release-validation workflows read-only when they are documented as such.`
     : input.hostId === "macos-dev"
       ? "use declared SSH aliases for remote work when needed; do not assume undeclared hosts have reciprocal SSH access."
       : `this session is already on \`${input.hostId}\`; do not SSH to self aliases unless the user explicitly asks. Do not assume outbound SSH to other fleet hosts is configured.`;

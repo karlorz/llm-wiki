@@ -128,6 +128,8 @@ Resolve the active project vault with `skillwiki path` first. Then pass that exa
 
 Do not substitute infrastructure mirrors such as `~/wiki-git` or other snapshot worktrees for the project vault just to inspect fleet status. Those paths are snapshot infrastructure unless `skillwiki path` itself resolves there.
 
+On snapshotter hosts, `protected: true` does not by itself mean the live vault is read-only for agent authoring. Treat the resolved `skillwiki path` as the live authoring vault when the host policy allows it, and treat snapshot worktrees such as `~/wiki-git` as protected infrastructure unless the user explicitly asks for snapshot maintenance.
+
 Use the local identity check for ordinary runtime context:
 ```bash
 VAULT="$(skillwiki --human path | sed 's/ (via.*//')"

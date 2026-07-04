@@ -155,7 +155,8 @@ describe("fleet context", () => {
       expect(r.result.data.markdown).toContain("Self SSH aliases known in fleet: `sg01`, `cloudsg01`");
       expect(r.result.data.markdown).toContain("Declared outbound SSH from this source: none");
       expect(r.result.data.markdown).toContain("protected snapshotter host");
-      expect(r.result.data.markdown).toContain("Do not mutate the vault or repo-local project workspaces");
+      expect(r.result.data.markdown).toContain("Live-vault authoring at the resolved `skillwiki path` is allowed here");
+      expect(r.result.data.markdown).toContain("Do not mutate snapshot worktrees or repo-local project workspaces");
     }
   });
 

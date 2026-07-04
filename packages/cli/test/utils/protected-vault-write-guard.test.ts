@@ -36,15 +36,38 @@ hosts:
 }
 
 describe("guardProtectedVaultWrite", () => {
-  it("blocks vault mutations on protected snapshotter hosts", async () => {
+  it("allows live-vault mutations on protected snapshotter hosts", async () => {
     const vault = writeVaultFleet();
+    const home = tempDir();
+    mkdirSync(join(home, ".skillwiki"), { recursive: true });
+    writeFileSync(join(home, ".skillwiki", ".env"), `WIKI_PATH=${vault}\nvault_sync.snapshot_worktree=/root/wiki-git\n`);
 
     const result = await guardProtectedVaultWrite({
       vault,
       command: "observe",
       hostId: "sg01",
       cwd: "/root/llm-wiki",
-      home: "/root",
+      home,
+      user: "root",
+      osHostname: "sg01",
+      env: {},
+    });
+
+    expect(result).toEqual({ blocked: false });
+  });
+
+  it("blocks snapshot-worktree mutations on protected snapshotter hosts", async () => {
+    const liveVault = writeVaultFleet();
+    const home = tempDir();
+    mkdirSync(join(home, ".skillwiki"), { recursive: true });
+    writeFileSync(join(home, ".skillwiki", ".env"), `WIKI_PATH=${liveVault}\nvault_sync.snapshot_worktree=/root/wiki-git\n`);
+
+    const result = await guardProtectedVaultWrite({
+      vault: "/root/wiki-git",
+      command: "observe",
+      hostId: "sg01",
+      cwd: "/root/llm-wiki",
+      home,
       user: "root",
       osHostname: "sg01",
       env: {},
@@ -58,6 +81,31 @@ describe("guardProtectedVaultWrite", () => {
         host_id: "sg01",
         command: "observe",
       });
+      expect(String(result.result.detail?.reason)).toContain("snapshot worktree");
+    }
+  });
+
+  it("blocks alternate vault roots on protected snapshotter hosts when live vault is known", async () => {
+    const liveVault = writeVaultFleet();
+    const home = tempDir();
+    mkdirSync(join(home, ".skillwiki"), { recursive: true });
+    writeFileSync(join(home, ".skillwiki", ".env"), `WIKI_PATH=${liveVault}\nvault_sync.snapshot_worktree=/root/wiki-git\n`);
+
+    const result = await guardProtectedVaultWrite({
+      vault: "/tmp/not-the-live-vault",
+      command: "observe",
+      hostId: "sg01",
+      cwd: "/root/llm-wiki",
+      home,
+      user: "root",
+      osHostname: "sg01",
+      env: {},
+    });
+
+    expect(result.blocked).toBe(true);
+    if (result.blocked) {
+      expect(result.exitCode).toBe(ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED);
+      expect(String(result.result.detail?.reason)).toContain("outside the live vault path");
     }
   });
 

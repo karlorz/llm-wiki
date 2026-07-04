@@ -182,7 +182,7 @@ Some deployments use a cloud-backed vault (`rclone mount`) with a separate git r
 ~/wiki-git       → git repository cloned from GitHub — snapshot target
 cron hourly      → rsync ~/wiki/ → ~/wiki-git/ → git commit → git push
 ```
-On snapshotter hosts, `~/wiki` remains the active SkillWiki vault for path resolution unless the operator explicitly configures otherwise. `~/wiki-git` is snapshot infrastructure, not the default authoring or dev-loop vault. Do not point project work or `fleet context` at `~/wiki-git` unless `skillwiki path` intentionally resolves there.
+On snapshotter hosts, `~/wiki` remains the active SkillWiki vault for path resolution unless the operator explicitly configures otherwise. `~/wiki-git` is snapshot infrastructure, not the default authoring or dev-loop vault. Agents may author the live vault path when the host policy allows it, but should not point project work or `fleet context` at `~/wiki-git` unless `skillwiki path` intentionally resolves there.
 
 ### Implementation (wiki-snapshot.sh)
 ```bash
@@ -219,7 +219,7 @@ git reset --hard origin/main
 bash ~/.hermes/scripts/wiki-snapshot.sh  # Re-sync fresh
 ```
 **Prevention**: Avoid editing the GitHub repo directly via web interface or uncoordinated clones. The canonical flow is **single-writer-git** (see `concepts/vault-write-authority-model.md`):
-- Server (sg01): rclone mount → rsync → git commit "Snapshot ..." → git push — **sole git writer to `main`**
+- Server (sg01): agents may author the live vault at `~/wiki`; the snapshot job promotes cloud-backed live-vault state into `~/wiki-git`, then commits and pushes — **sole git writer to `main`**
 - macOS/desktop: edit → `wiki-push` rclone copy to S3 (NO git push) → consume sg01 snapshots via `wiki-fetch-notify` (opt-in `WIKI_FETCH_PULL_ON_DELTA=1`) or manual `skillwiki sync`
 - `wiki-sync` skill push is for **explicit** agent/human edit commits only, not automated background pushes
 2. **Slow rsync on rclone mounts**: The rclone FUSE mount can be slow for large directory listings. Use `rsync -q` (quiet) to reduce output overhead, and consider `--delete-delay` instead of `--delete` if file churn is high. The rclone mount latency can cause `du` and `find` operations to timeout — this is normal, not an error.
