@@ -7,6 +7,17 @@ SOURCE_SCRIPT="$(cd "$(dirname "$0")/.." && pwd)/scripts/wiki-fetch-notify.sh"
 PASS=0
 FAIL=0
 
+assert_eq() {
+  local label="$1" actual="$2" expected="$3"
+  if [ "$actual" = "$expected" ]; then
+    printf "PASS: %s\n" "$label"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: %s — expected '%s', got '%s'\n" "$label" "$expected" "$actual"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 assert_contains() {
   local label="$1" haystack="$2" needle="$3"
   case "$haystack" in
@@ -150,6 +161,180 @@ assert_contains "pull-on-delta still notifies" "$actual" "new commit"
 
 actual="$(run_pull_on_delta_case "" "")"
 assert_contains "pull-on-delta defaults off (helper not invoked)" "$actual" ""
+
+test_failed_pull_is_retried_on_next_poll() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local remote="$root/origin.git"
+  local vault="$root/wiki"
+  local script_dir="$root/scripts"
+  local notify_log="$root/notify.log"
+  local pull_count="$root/pull-count"
+
+  git init --bare "$remote" >/dev/null
+  mkdir -p "$vault" "$script_dir/lib"
+  git -C "$vault" init >/dev/null
+  git -C "$vault" branch -M main
+  git -C "$vault" remote add origin "$remote"
+  printf 'base\n' > "$vault/note.md"
+  git_commit "$vault" init
+  git -C "$vault" push -u origin main >/dev/null
+
+  local remote_work="$root/remote-work"
+  git clone --branch main "$remote" "$remote_work" >/dev/null
+  printf 'remote\n' > "$remote_work/remote-snapshot.md"
+  git_commit "$remote_work" "Snapshot retry"
+  git -C "$remote_work" push origin main >/dev/null
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"; }
+STUB
+  cat > "$script_dir/wiki-pull-with-auto-resolve.sh" <<'STUB'
+#!/bin/bash
+count=0
+if [ -f "$PULL_COUNT_FILE" ]; then
+  count="$(cat "$PULL_COUNT_FILE")"
+fi
+count=$((count + 1))
+printf '%s' "$count" > "$PULL_COUNT_FILE"
+exit 1
+STUB
+  chmod +x "$script_dir/wiki-pull-with-auto-resolve.sh"
+
+  mkdir -p "$home/cache/wiki-fetch"
+  printf '0' > "$home/cache/wiki-fetch/last-behind"
+  printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
+
+  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
+    WIKI_FETCH_PULL_ON_DELTA=1 NOTIFY_LOG="$notify_log" PULL_COUNT_FILE="$pull_count" \
+    "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
+    WIKI_FETCH_PULL_ON_DELTA=1 NOTIFY_LOG="$notify_log" PULL_COUNT_FILE="$pull_count" \
+    "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+
+  assert_eq "failed pull is retried on next poll" "$(cat "$pull_count" 2>/dev/null || true)" "2"
+  assert_eq "failed pull still records observed behind count" "$(cat "$home/cache/wiki-fetch/last-behind")" "1"
+
+  rm -rf "$root"
+}
+
+test_non_executable_pull_helper_runs_via_bash() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local remote="$root/origin.git"
+  local vault="$root/wiki"
+  local script_dir="$root/scripts"
+  local notify_log="$root/notify.log"
+  local helper_state="$root/helper-state"
+
+  git init --bare "$remote" >/dev/null
+  mkdir -p "$vault" "$script_dir/lib"
+  git -C "$vault" init >/dev/null
+  git -C "$vault" branch -M main
+  git -C "$vault" remote add origin "$remote"
+  printf 'base\n' > "$vault/note.md"
+  git_commit "$vault" init
+  git -C "$vault" push -u origin main >/dev/null
+
+  local remote_work="$root/remote-work"
+  git clone --branch main "$remote" "$remote_work" >/dev/null
+  printf 'remote\n' > "$remote_work/remote-snapshot.md"
+  git_commit "$remote_work" "Snapshot dirty helper"
+  git -C "$remote_work" push origin main >/dev/null
+  printf 'local dirty\n' > "$vault/note.md"
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"; }
+STUB
+  cat > "$script_dir/wiki-pull-with-auto-resolve.sh" <<'STUB'
+#!/bin/bash
+printf 'pull-called' > "$HELPER_STATE_FILE"
+exit 0
+STUB
+  chmod 0644 "$script_dir/wiki-pull-with-auto-resolve.sh"
+
+  mkdir -p "$home/cache/wiki-fetch"
+  printf '0' > "$home/cache/wiki-fetch/last-behind"
+  printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
+
+  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
+    WIKI_FETCH_PULL_ON_DELTA=1 NOTIFY_LOG="$notify_log" HELPER_STATE_FILE="$helper_state" \
+    "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+
+  assert_eq "non-executable helper still runs via bash" "$(cat "$helper_state" 2>/dev/null || true)" "pull-called"
+
+  rm -rf "$root"
+}
+
+test_pull_on_delta_respects_existing_sync_lock() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local remote="$root/origin.git"
+  local vault="$root/wiki"
+  local script_dir="$root/scripts"
+  local notify_log="$root/notify.log"
+  local helper_state="$root/helper-state"
+
+  git init --bare "$remote" >/dev/null
+  mkdir -p "$vault" "$script_dir/lib" "$vault/.skillwiki"
+  git -C "$vault" init >/dev/null
+  git -C "$vault" branch -M main
+  git -C "$vault" remote add origin "$remote"
+  printf 'base\n' > "$vault/note.md"
+  git_commit "$vault" init
+  git -C "$vault" push -u origin main >/dev/null
+
+  local remote_work="$root/remote-work"
+  git clone --branch main "$remote" "$remote_work" >/dev/null
+  printf 'remote\n' > "$remote_work/remote-snapshot.md"
+  git_commit "$remote_work" "Snapshot sync-lock"
+  git -C "$remote_work" push origin main >/dev/null
+  printf '{"session_id":"test","pid":1,"summary":"sync"}\n' > "$vault/.skillwiki/sync.lock"
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"; }
+STUB
+  cat > "$script_dir/wiki-pull-with-auto-resolve.sh" <<'STUB'
+#!/bin/bash
+printf 'pull-called' > "$HELPER_STATE_FILE"
+exit 0
+STUB
+  chmod +x "$script_dir/wiki-pull-with-auto-resolve.sh"
+
+  mkdir -p "$home/cache/wiki-fetch"
+  printf '0' > "$home/cache/wiki-fetch/last-behind"
+  printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
+
+  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
+    WIKI_FETCH_PULL_ON_DELTA=1 NOTIFY_LOG="$notify_log" HELPER_STATE_FILE="$helper_state" \
+    "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+
+  assert_eq "pull-on-delta skips when sync lock is present" "$(cat "$helper_state" 2>/dev/null || true)" ""
+
+  rm -rf "$root"
+}
+
+test_failed_pull_is_retried_on_next_poll
+test_non_executable_pull_helper_runs_via_bash
+test_pull_on_delta_respects_existing_sync_lock
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

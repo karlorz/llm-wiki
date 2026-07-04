@@ -75,11 +75,17 @@ write_stub_rclone() {
   mkdir -p "$bin_dir"
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
+cmd="$1"
+shift || true
 if [ -n "${RCLONE_CALLED_FILE:-}" ]; then
   echo called > "$RCLONE_CALLED_FILE"
 fi
 if [ -n "${RCLONE_CALLS_FILE:-}" ]; then
-  printf '%s\n' "$*" >> "$RCLONE_CALLS_FILE"
+  printf '%s %s\n' "$cmd" "$*" >> "$RCLONE_CALLS_FILE"
+fi
+if [ "$cmd" = "lsf" ] && [ -n "${RCLONE_LSF_FILE:-}" ] && [ -f "$RCLONE_LSF_FILE" ]; then
+  cat "$RCLONE_LSF_FILE"
+  exit 0
 fi
 echo "Transferred:   	    1 B / 1 B, 100%, 1 B/s, ETA 0s"
 exit 0
@@ -212,7 +218,7 @@ test_sync_lock_is_pushed_to_s3_not_git() {
   rm -rf "$root"
 }
 
-test_archive_move_pushes_archive_to_s3_without_git_prune() {
+test_archive_move_prunes_stale_remote_source_path_after_copy() {
   local root
   root="$(mktemp -d)"
   local home="$root/home"
@@ -230,24 +236,19 @@ test_archive_move_pushes_archive_to_s3_without_git_prune() {
   git -C "$vault" push origin main >/dev/null
 
   mv "$vault/raw/transcripts/old.md" "$vault/_archive/raw/transcripts/old.md"
+  printf '%s\n%s\n' "raw/transcripts/old.md" "_archive/raw/transcripts/old.md" > "$root/remote-files.txt"
 
   HOME="$home" \
     WIKI_DIR="$vault" \
     WIKI_REMOTE="stub:wiki" \
+    RCLONE_LSF_FILE="$root/remote-files.txt" \
     RCLONE_CALLS_FILE="$root/rclone.calls" \
     PATH="$bin_dir:$PATH" \
     "$script_dir/wiki-push.sh" >/dev/null 2>&1
 
   # rclone copy is invoked (archived file is published to S3).
   assert_eq "rclone copy runs after archive move" "$(test -f "$root/rclone.calls" && echo called || echo skipped)" "called"
-  # wiki-push no longer prunes stale remote source paths via rclone deletefile.
-  # That pruning now belongs to the sg01 snapshot path (wiki-snapshot.sh).
-  if grep -q "deletefile" "$root/rclone.calls" 2>/dev/null; then
-    prune_state="present"
-  else
-    prune_state="absent"
-  fi
-  assert_eq "wiki-push does NOT deletefile stale source paths" "$prune_state" "absent"
+  assert_file_contains "wiki-push prunes stale archived source path" "$root/rclone.calls" "deletefile stub:wiki/raw/transcripts/old.md"
   rm -rf "$root"
 }
 
@@ -408,7 +409,7 @@ test_dirty_local_files_trigger_rclone_copy
 test_git_remote_failure_does_not_block_s3_publish
 test_pull_helper_not_invoked_by_push
 test_sync_lock_is_pushed_to_s3_not_git
-test_archive_move_pushes_archive_to_s3_without_git_prune
+test_archive_move_prunes_stale_remote_source_path_after_copy
 test_memory_cache_dirty_does_not_block_s3_push
 test_case_only_collision_blocks_publish
 test_long_path_fix_runs_before_rclone

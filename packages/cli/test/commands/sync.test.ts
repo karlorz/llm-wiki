@@ -104,6 +104,57 @@ describe("runSyncStatus", () => {
     }
   });
 
+  it("warns when new local note paths are absent from origin/HEAD", () => {
+    const remoteDir = makeTempDir();
+    git(remoteDir, "init --bare");
+    const dir = makeTempDir();
+    git(dir, `clone ${remoteDir} .`);
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    writeFileSync(join(dir, "README.md"), "hello");
+    git(dir, "add .");
+    git(dir, 'commit -m init');
+    git(dir, "branch -M main");
+    git(dir, "push -u origin main");
+    git(dir, "remote set-head origin main");
+
+    mkdirSync(join(dir, "queries"), { recursive: true });
+    writeFileSync(join(dir, "queries", "2026-07-04-test-note.md"), "note");
+
+    const { result } = runSyncStatus({ vault: dir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.unpromoted_note_paths).toBe(1);
+      expect(result.data.unpromoted_note_examples).toContain("queries/2026-07-04-test-note.md");
+      expect(result.data.humanHint).toContain("unpromoted_note_paths: 1");
+    }
+  });
+
+  it("does not flag modified tracked note paths as unpromoted", () => {
+    const remoteDir = makeTempDir();
+    git(remoteDir, "init --bare");
+    const dir = makeTempDir();
+    git(dir, `clone ${remoteDir} .`);
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    mkdirSync(join(dir, "queries"), { recursive: true });
+    writeFileSync(join(dir, "queries", "2026-07-04-existing-note.md"), "hello");
+    git(dir, "add .");
+    git(dir, 'commit -m init');
+    git(dir, "branch -M main");
+    git(dir, "push -u origin main");
+    git(dir, "remote set-head origin main");
+
+    writeFileSync(join(dir, "queries", "2026-07-04-existing-note.md"), "modified");
+
+    const { result } = runSyncStatus({ vault: dir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.unpromoted_note_paths).toBe(0);
+      expect(result.data.unpromoted_note_examples).toEqual([]);
+    }
+  });
+
   it("reports ahead when commits not pushed", () => {
     // Set up a bare remote, clone it, push initial commit, then add another locally
     const remoteDir = makeTempDir();

@@ -17,6 +17,7 @@ set -u
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/platform.sh"
+. "$SCRIPT_DIR/lib/lockfile.sh"
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
@@ -38,6 +39,52 @@ mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")"
 
 log() {
   printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"
+}
+
+attempt_pull_on_delta() {
+  # Retry on every poll while we remain behind. This avoids the failed-pull
+  # wedge where last-behind is advanced before the pull runs and DELTA stays 0
+  # forever until a fresh upstream commit arrives.
+  if [ "$PULL_ON_DELTA" != "1" ] || [ "$BEHIND" -le 0 ]; then
+    return 0
+  fi
+
+  if [ -f "$WIKI_DIR/.skillwiki/sync.lock" ]; then
+    log "SKIP PULL sync lock present — leave pull to skillwiki sync"
+    return 0
+  fi
+  if [ -f "$WIKI_DIR/.git/index.lock" ] || [ -d "$WIKI_DIR/.git/rebase-merge" ] || [ -d "$WIKI_DIR/.git/rebase-apply" ] || [ -f "$WIKI_DIR/.git/MERGE_HEAD" ]; then
+    log "SKIP PULL git operation already in progress"
+    return 0
+  fi
+
+  PULL_LOCK_FILE="$STATE_DIR/pull.lock"
+  PULL_LOCK_RC=0
+  lockfile_acquire "$PULL_LOCK_FILE" 600 || PULL_LOCK_RC=$?
+  if [ "$PULL_LOCK_RC" -eq 1 ]; then
+    log "SKIP PULL previous pull-on-delta still in flight"
+    return 0
+  elif [ "$PULL_LOCK_RC" -eq 2 ]; then
+    log "PULL stale lock reclaimed"
+  fi
+
+  if [ -x "$PULL_HELPER" ]; then
+    if "$PULL_HELPER" origin "$BRANCH" 2>>"$LOG_FILE"; then
+      log "PULL ok via wiki-pull-with-auto-resolve"
+    else
+      log "FAIL PULL via wiki-pull-with-auto-resolve — run skillwiki sync manually"
+    fi
+  elif [ -f "$PULL_HELPER" ]; then
+    if bash "$PULL_HELPER" origin "$BRANCH" 2>>"$LOG_FILE"; then
+      log "PULL ok via bash wiki-pull-with-auto-resolve"
+    else
+      log "FAIL PULL via bash wiki-pull-with-auto-resolve — run skillwiki sync manually"
+    fi
+  elif git pull --rebase origin "$BRANCH" 2>>"$LOG_FILE"; then
+    log "PULL ok via git pull --rebase"
+  else
+    log "FAIL PULL via git pull --rebase — run skillwiki sync manually"
+  fi
 }
 
 # Guard: working tree present.
@@ -99,22 +146,6 @@ if [ "$DELTA" -gt 0 ]; then
   printf '%s' "$NOW" >"$STALE_STATE_FILE"
   log "NOTIFY behind=$BEHIND delta=$DELTA"
 
-  # Opt-in auto-pull: consume sg01 Snapshot commits into the working tree.
-  # Uses wiki-pull-with-auto-resolve.sh for conflict-storm handling. On
-  # failure, leaves the working tree behind and logs — does NOT block.
-  if [ "$PULL_ON_DELTA" = "1" ]; then
-    if [ -x "$PULL_HELPER" ]; then
-      if "$PULL_HELPER" origin "$BRANCH" 2>>"$LOG_FILE"; then
-        log "PULL ok via wiki-pull-with-auto-resolve"
-      else
-        log "FAIL PULL via wiki-pull-with-auto-resolve — run skillwiki sync manually"
-      fi
-    elif git pull --rebase origin "$BRANCH" 2>>"$LOG_FILE"; then
-      log "PULL ok via git pull --rebase"
-    else
-      log "FAIL PULL via git pull --rebase — run skillwiki sync manually"
-    fi
-  fi
 elif [ "$BEHIND" -gt 0 ] && [ $(( NOW - LAST_STALE_NOTIFY )) -ge "$STALE_NOTIFY_AFTER_SECONDS" ]; then
   TITLE="wiki"
   MSG="still $BEHIND commit(s) behind origin/$BRANCH"
@@ -127,5 +158,12 @@ else
   fi
   log "OK behind=$BEHIND delta=$DELTA (no notify)"
 fi
+
+# Opt-in auto-pull: consume sg01 Snapshot commits into the working tree.
+# Uses wiki-pull-with-auto-resolve.sh for conflict-storm handling. On failure,
+# leaves the working tree behind and logs — does NOT block. When the helper is
+# present but not executable, invoke it via bash so we still get its dirty-tree
+# and conflict-storm handling instead of falling back to a bare git pull.
+attempt_pull_on_delta
 
 exit 0

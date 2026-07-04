@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { runLint } from "./lint.js";
 import { fixPathTooLong } from "./path-too-long.js";
@@ -24,10 +25,52 @@ export interface SyncStatusOutput {
   dirty: number;
   ahead: number;
   behind: number;
+  unpromoted_note_paths: number;
+  unpromoted_note_examples: string[];
   last_commit: string;
   status: "clean" | "dirty" | "ahead" | "behind" | "not_a_repo";
   humanHint: string;
   stashes?: StashEntry[];
+}
+
+function parseDirtyPaths(porcelain: string): string[] {
+  if (!porcelain) return [];
+  return porcelain
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length >= 4)
+    .map((line) => {
+      const payload = line.length >= 3 && line[2] === " "
+        ? line.slice(3)
+        : line.length >= 2 && line[1] === " "
+          ? line.slice(2)
+          : line;
+      const arrow = payload.lastIndexOf(" -> ");
+      return arrow >= 0 ? payload.slice(arrow + 4) : payload;
+    })
+    .filter((path) => path.length > 0);
+}
+
+function splitNonEmptyLines(text: string): string[] {
+  if (!text) return [];
+  return text.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+}
+
+function isTrackedNotePath(path: string): boolean {
+  if (!path.endsWith(".md")) return false;
+  return !/^\.(skillwiki|claude|obsidian|antigravitycli|playwright-cli)\//.test(path);
+}
+
+function refHasPath(vault: string, ref: string, path: string): boolean {
+  try {
+    execFileSync("git", ["cat-file", "-e", `${ref}:${path}`], {
+      cwd: vault,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function runSyncStatus(input: SyncStatusInput): { exitCode: number; result: Result<SyncStatusOutput> } {
@@ -43,6 +86,8 @@ export function runSyncStatus(input: SyncStatusInput): { exitCode: number; resul
         dirty: 0,
         ahead: 0,
         behind: 0,
+        unpromoted_note_paths: 0,
+        unpromoted_note_examples: [],
         last_commit: "never",
         status: "not_a_repo",
         humanHint: "not a git repository",
@@ -54,6 +99,8 @@ export function runSyncStatus(input: SyncStatusInput): { exitCode: number; resul
   // 2. git status --porcelain → count dirty files
   const porcelain = git(vault, ["status", "--porcelain"]);
   const dirty = porcelain ? porcelain.split("\n").filter((l) => l.trim().length > 0).length : 0;
+  const dirtyPaths = parseDirtyPaths(porcelain);
+  const untrackedPaths = splitNonEmptyLines(git(vault, ["ls-files", "--others", "--exclude-standard"]));
 
   // 3. git rev-list --left-right --count origin/HEAD...HEAD → ahead/behind
   const revOutput = git(vault, ["rev-list", "--left-right", "--count", "origin/HEAD...HEAD"]);
@@ -79,6 +126,18 @@ export function runSyncStatus(input: SyncStatusInput): { exitCode: number; resul
     last_commit = "never";
   }
 
+  // 4b. Detect brand-new local note paths that are absent from origin/HEAD.
+  const remoteRef = git(vault, ["rev-parse", "--verify", "origin/main"])
+    ? "origin/main"
+    : git(vault, ["rev-parse", "--verify", "origin/HEAD"])
+      ? "origin/HEAD"
+      : "HEAD";
+  const unpromotedNoteAll = Array.from(new Set([...dirtyPaths, ...untrackedPaths]))
+    .filter(isTrackedNotePath)
+    .filter((path) => !refHasPath(vault, remoteRef, path));
+  const unpromotedNoteExamples = unpromotedNoteAll.slice(0, 5);
+  const unpromotedNotePaths = unpromotedNoteAll.length;
+
   // 5. Determine composite status
   let status: SyncStatusOutput["status"];
   if (dirty > 0) {
@@ -97,6 +156,7 @@ export function runSyncStatus(input: SyncStatusInput): { exitCode: number; resul
     `dirty: ${dirty}`,
     `ahead: ${ahead}`,
     `behind: ${behind}`,
+    `unpromoted_note_paths: ${unpromotedNotePaths}`,
     `last_commit: ${last_commit}`,
   ];
 
@@ -115,6 +175,8 @@ export function runSyncStatus(input: SyncStatusInput): { exitCode: number; resul
     dirty,
     ahead,
     behind,
+    unpromoted_note_paths: unpromotedNotePaths,
+    unpromoted_note_examples: unpromotedNoteExamples,
     last_commit,
     status,
     humanHint: hintLines.join("\n"),

@@ -36,6 +36,92 @@ mkdir -p "$(dirname "$LOCK_FILE")" "$(dirname "$LOG_FILE")"
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"; }
 
+remote_prune_archived_source_paths() {
+    local max_remote_deletes="${WIKI_PUSH_MAX_REMOTE_DELETES:-10}"
+    case "$max_remote_deletes" in
+        ''|*[!0-9]*)
+            log "FAIL remote prune invalid WIKI_PUSH_MAX_REMOTE_DELETES=$max_remote_deletes"
+            return 1
+            ;;
+    esac
+    if [ "$max_remote_deletes" -lt 1 ]; then
+        log "FAIL remote prune invalid WIKI_PUSH_MAX_REMOTE_DELETES=$max_remote_deletes"
+        return 1
+    fi
+
+    local tmp_dir archive_pairs remote_paths plan_file
+    tmp_dir="$(mktemp -d)"
+    archive_pairs="$tmp_dir/archive-pairs.tsv"
+    remote_paths="$tmp_dir/remote-paths.txt"
+    plan_file="$tmp_dir/plan.txt"
+
+    if [ ! -d "$WIKI_DIR/_archive" ]; then
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    (
+        cd "$WIKI_DIR" || exit 1
+        find _archive -type f | while IFS= read -r archive_path; do
+            local source_path="${archive_path#_archive/}"
+            [ "$source_path" = "$archive_path" ] && continue
+            [ -e "$source_path" ] && continue
+            printf '%s\t%s\n' "$source_path" "$archive_path"
+        done | LC_ALL=C sort -u
+    ) > "$archive_pairs" || {
+        log "FAIL remote prune could not enumerate _archive pairs"
+        rm -rf "$tmp_dir"
+        return 1
+    }
+
+    if [ ! -s "$archive_pairs" ]; then
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    if ! rclone lsf "$REMOTE" --recursive --files-only 2>>"$LOG_FILE" | LC_ALL=C sort -u > "$remote_paths"; then
+        log "FAIL remote prune could not list remote paths"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    while IFS="$(printf '\t')" read -r source_path archive_path; do
+        [ -z "$source_path" ] && continue
+        if grep -Fxq -- "$source_path" "$remote_paths" && grep -Fxq -- "$archive_path" "$remote_paths"; then
+            printf '%s\n' "$source_path"
+        fi
+    done < "$archive_pairs" | LC_ALL=C sort -u > "$plan_file"
+
+    local planned_count
+    planned_count="$(wc -l < "$plan_file" | tr -d ' ')"
+    if [ "$planned_count" = "0" ]; then
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+    if [ "$planned_count" -gt "$max_remote_deletes" ]; then
+        log "FAIL remote prune cap exceeded: $planned_count > $max_remote_deletes"
+        sed 's/^/remote prune skipped: /' "$plan_file" >> "$LOG_FILE"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    local rel_path remote_path
+    while IFS= read -r rel_path; do
+        [ -z "$rel_path" ] && continue
+        remote_path="${REMOTE%/}/$rel_path"
+        if rclone deletefile "$remote_path" >>"$LOG_FILE" 2>&1; then
+            log "OK remote pruned archived source $remote_path"
+        else
+            log "FAIL remote prune deletefile failed for $remote_path"
+            rm -rf "$tmp_dir"
+            return 1
+        fi
+    done < "$plan_file"
+
+    rm -rf "$tmp_dir"
+    return 0
+}
+
 # Rotate log if oversized.
 if [ -f "$LOG_FILE" ] && [ "$(platform_stat_size "$LOG_FILE")" -gt "$LOG_MAX_SIZE" ]; then
     for i in $(seq $((LOG_KEEP - 1)) -1 1); do
@@ -91,12 +177,10 @@ else
 fi
 
 # rclone copy (NOT sync) → never bulk-deletes on remote.
-# NOTE: stale archived source paths on S3 (e.g. raw/foo.md after a move to
-# _archive/raw/foo.md) are no longer pruned by this script — the old
-# remote_prune_archived_source_paths helper was removed with the git block.
-# sg01's wiki-snapshot.sh rclone-syncs S3→worktree (deleting worktree files
-# absent on S3), but does not delete stale S3 keys. Stale S3 objects linger
-# until a separate prune step removes them; tracked as a follow-up.
+# After a successful copy, prune only those stale live paths whose matching
+# _archive/<path> object is now present on the remote and whose live path is
+# absent locally. This keeps archive moves from leaving stale live note paths
+# on S3 without reintroducing git pushes on macOS.
 # --update : only newer source files overwrite remote (mod-time + size based)
 # --filter-from : reuse the bisync filter list
 # --transfers 4 : modest parallelism for small files
@@ -126,6 +210,12 @@ if [ "$RC" -eq 0 ]; then
 else
     log "FAIL rclone exit=$RC duration=${DURATION}s"
     printf '%s\n' "$OUTPUT" >>"$LOG_FILE"
+fi
+
+if [ "$RC" -eq 0 ]; then
+    if ! remote_prune_archived_source_paths; then
+        log "FAIL remote prune failed after rclone copy"
+    fi
 fi
 
 exit 0
