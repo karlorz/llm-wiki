@@ -50,6 +50,35 @@ describe("runPath", () => {
       expect(Array.isArray(r.result.data.chain)).toBe(true);
     }
   });
+
+  it("runtime mode: honors project-local .skillwiki/.env when cwd is provided", async () => {
+    const h = home();
+    writeFileSync(join(h, ".skillwiki", ".env"), "WIKI_PATH=/global/vault\n");
+    const cwd = mkdtempSync(join(tmpdir(), "cwd-"));
+    mkdirSync(join(cwd, ".skillwiki"), { recursive: true });
+    writeFileSync(join(cwd, ".skillwiki", ".env"), "WIKI_PATH=/project/vault\n");
+    const r = await runPath({ flag: undefined, envValue: undefined, home: h, initTime: false, cwd });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.path).toBe("/project/vault");
+      expect(r.result.data.source).toBe("project-dotenv");
+    }
+  });
+
+  it("init-time mode: honors project-local .skillwiki/.env when cwd is provided", async () => {
+    const h = home();
+    const cwd = mkdtempSync(join(tmpdir(), "cwd-"));
+    mkdirSync(join(cwd, ".skillwiki"), { recursive: true });
+    writeFileSync(join(cwd, ".skillwiki", ".env"), "WIKI_PATH=/project/vault\n");
+    const r = await runPath({ flag: undefined, envValue: undefined, home: h, initTime: true, cwd });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.path).toBe("/project/vault");
+      expect(r.result.data.source).toBe("project-dotenv");
+    }
+  });
 });
 
 describe("runPath with --wiki", () => {

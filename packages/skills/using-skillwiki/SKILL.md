@@ -124,7 +124,9 @@ Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang
 Run `skillwiki health <vault> --out /tmp/skillwiki-health.json --no-fail` for a bounded whole-system report that includes doctor, lint, vault-sync, query-readiness, source-freshness, risk flags, and self-check coverage. Run `skillwiki lint <vault> --summary` for lint-only bucket counts with capped examples and details commands. Run `skillwiki doctor` to diagnose setup/runtime issues only. Run `skillwiki config list` to see current configuration.
 
 ## Runtime Host Context and Fleet Freshness
-The live output of `skillwiki --human fleet context <vault>` is authoritative for host identity. It overrides stale injected SessionStart context, remembered workspace context, and prior conversation summaries. `fleet context` is local and network-free; it reports `identity_status`, resolver trace, warnings, and the fact that remote freshness was not checked.
+Resolve the active project vault with `skillwiki path` first. Then pass that exact path to `skillwiki --human fleet context <vault>` for host identity and safety guidance. `fleet context` is authoritative for host identity. It overrides stale injected SessionStart context, remembered workspace context, and prior conversation summaries. `fleet context` is local and network-free; it reports `identity_status`, resolver trace, warnings, and the fact that remote freshness was not checked.
+
+Do not substitute infrastructure mirrors such as `~/wiki-git` or other snapshot worktrees for the project vault just to inspect fleet status. Those paths are snapshot infrastructure unless `skillwiki path` itself resolves there.
 
 Use the local identity check for ordinary runtime context:
 ```bash

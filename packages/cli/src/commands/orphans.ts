@@ -4,7 +4,7 @@ import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 
-export interface OrphansInput { vault: string | undefined; envValue?: string; home?: string; wiki?: string }
+export interface OrphansInput { vault: string | undefined; envValue?: string; home?: string; wiki?: string; cwd?: string }
 export interface OrphansOutput {
   orphans: string[];
   bridges: Array<{ path: string; connects: string[] }>;
@@ -16,7 +16,13 @@ export async function runOrphans(input: OrphansInput): Promise<{ exitCode: numbe
   if (input.vault) {
     vault = input.vault;
   } else {
-    const r = await resolveRuntimePath({ flag: undefined, envValue: input.envValue, home: input.home ?? "", wiki: input.wiki });
+    const r = await resolveRuntimePath({
+      flag: undefined,
+      envValue: input.envValue,
+      home: input.home ?? "",
+      wiki: input.wiki,
+      cwd: input.cwd,
+    });
     if (!r.ok) {
       const exitCode = r.error === "UNKNOWN_WIKI_PROFILE" ? ExitCode.UNKNOWN_WIKI_PROFILE : ExitCode.NO_VAULT_CONFIGURED;
       return { exitCode, result: r };

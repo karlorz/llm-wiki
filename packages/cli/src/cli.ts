@@ -171,7 +171,8 @@ program
     vault,
     envValue: process.env.WIKI_PATH,
     home: process.env.HOME ?? "",
-    wiki: opts.wiki
+    wiki: opts.wiki,
+    cwd: process.cwd(),
   })));
 
 program.command("audit <file>").description("audit citation markers and source provenance for a vault page").action(async (file) => emit(await runAudit({ file })));
@@ -206,6 +207,7 @@ program
       home: process.env.HOME ?? "",
       initTime,
       wiki: opts.wiki,
+      cwd: process.cwd(),
       explain: !!opts.explain
     }));
   });
@@ -260,7 +262,8 @@ async function resolveVaultArg(arg: string | undefined, wiki?: string): Promise<
     envValue: process.env.WIKI_PATH,
     wikiEnv: process.env.WIKI,
     home: process.env.HOME ?? "",
-    wiki
+    wiki,
+    cwd: process.cwd(),
   });
   if (!r.ok) {
     const exitCode = r.error === "UNKNOWN_WIKI_PROFILE" ? 35 : 25;

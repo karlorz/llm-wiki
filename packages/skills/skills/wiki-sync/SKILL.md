@@ -182,6 +182,8 @@ Some deployments use a cloud-backed vault (`rclone mount`) with a separate git r
 ~/wiki-git       → git repository cloned from GitHub — snapshot target
 cron hourly      → rsync ~/wiki/ → ~/wiki-git/ → git commit → git push
 ```
+On snapshotter hosts, `~/wiki` remains the active SkillWiki vault for path resolution unless the operator explicitly configures otherwise. `~/wiki-git` is snapshot infrastructure, not the default authoring or dev-loop vault. Do not point project work or `fleet context` at `~/wiki-git` unless `skillwiki path` intentionally resolves there.
+
 ### Implementation (wiki-snapshot.sh)
 ```bash
 #!/bin/bash

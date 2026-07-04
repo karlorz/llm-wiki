@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolveMcpVault } from "../../src/mcp/vault-resolve.js";
@@ -40,5 +40,28 @@ describe("resolveMcpVault", () => {
     const r = await resolveMcpVault({ vault: v });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toBe("VAULT_PATH_DENIED");
+  });
+
+  it("resolves project-local .skillwiki/.env when cwd is provided", async () => {
+    const home = mkdtempSync(join(tmpdir(), "home-"));
+    dirs.push(home);
+    mkdirSync(join(home, ".skillwiki"), { recursive: true });
+    writeFileSync(join(home, ".skillwiki", ".env"), "WIKI_PATH=/global/vault\n");
+
+    const vault = mkdtempSync(join(tmpdir(), "mcp-project-vault-"));
+    dirs.push(vault);
+    writeFileSync(join(vault, "SCHEMA.md"), "# schema\n");
+
+    const cwd = mkdtempSync(join(tmpdir(), "mcp-cwd-"));
+    dirs.push(cwd);
+    mkdirSync(join(cwd, ".skillwiki"), { recursive: true });
+    writeFileSync(join(cwd, ".skillwiki", ".env"), `WIKI_PATH=${vault}\n`);
+
+    const r = await resolveMcpVault({ home, cwd });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.data.vault).toBe(vault);
+      expect(r.data.source).toBe("project-dotenv");
+    }
   });
 });

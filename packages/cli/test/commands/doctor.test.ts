@@ -516,6 +516,23 @@ describe("runDoctor", () => {
     }
   });
 
+  it("uses project-local override for wiki_path_set resolution when cwd is provided", async () => {
+    const h = home();
+    const globalVault = fullVault();
+    const projectVault = fullVault();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${globalVault}\n`);
+    const cwd = mkdtempSync(join(tmpdir(), "cwd-"));
+    mkdirSync(join(cwd, ".skillwiki"), { recursive: true });
+    writeFileSync(join(cwd, ".skillwiki", ".env"), `WIKI_PATH=${projectVault}\n`);
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15", cwd });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const wp = r.result.data.checks.find(c => c.id === "wiki_path_set");
+      expect(wp?.status).toBe("pass");
+      expect(wp?.detail).toContain(`Resolved via project-dotenv: ${projectVault}`);
+    }
+  });
+
   it("reports no project-local override when absent", async () => {
     const h = home();
     const v = fullVault();

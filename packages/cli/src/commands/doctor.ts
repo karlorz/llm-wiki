@@ -1573,7 +1573,12 @@ export async function runDoctor(
   checks.push(await checkProfiles(input.home));
   checks.push(await checkProjectLocalOverride(input.cwd));
 
-  const resolved = await resolveRuntimePath({ flag: undefined, envValue: input.envValue, home: input.home });
+  const resolved = await resolveRuntimePath({
+    flag: undefined,
+    envValue: input.envValue,
+    home: input.home,
+    cwd: input.cwd,
+  });
   if (resolved.ok) {
     checks.push(check("pass", "wiki_path_set", "WIKI_PATH configured", `Resolved via ${resolved.data.source}: ${resolved.data.path}`));
   } else {

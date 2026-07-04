@@ -8,6 +8,7 @@ export interface ResolveVaultInput {
   vault?: string;
   wiki?: string;
   home?: string;
+  cwd?: string;
 }
 
 /** Resolve and validate a vault root (SCHEMA.md present). No shell, no arbitrary paths without validation. */
@@ -26,6 +27,7 @@ export async function resolveMcpVault(input: ResolveVaultInput): Promise<Result<
       wikiEnv: process.env.WIKI,
       home,
       wiki: input.wiki,
+      cwd: input.cwd ?? process.cwd(),
     });
     if (!r.ok) return r;
     vaultPath = resolve(r.data.path);
