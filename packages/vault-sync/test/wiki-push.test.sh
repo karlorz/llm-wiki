@@ -1,5 +1,10 @@
 #!/bin/bash
 # Regression tests for packages/vault-sync/scripts/wiki-push.sh.
+#
+# wiki-push.sh is an S3 transport only — it runs rclone copy and never touches
+# git (no commit, no push, no pull). Single-writer-git is enforced: only sg01's
+# wiki-snapshot.sh pushes to GitHub. These tests assert the S3-push behavior
+# and the guards (case-collision, path_too_long) that gate it.
 
 set -u
 
@@ -84,7 +89,7 @@ STUB
   chmod +x "$bin_dir/rclone"
 }
 
-test_pull_helper_sees_clean_tree() {
+test_dirty_local_files_trigger_rclone_copy() {
   local root
   root="$(mktemp -d)"
   local home="$root/home"
@@ -94,24 +99,75 @@ test_pull_helper_sees_clean_tree() {
   script_dir="$(make_script_dir "$root")"
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
-
-  local remote_work="$root/remote-work"
-  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
-  printf 'remote\n' > "$remote_work/remote.md"
-  git_commit "$remote_work" remote
-  git -C "$remote_work" push origin main >/dev/null
-
-  printf 'local dirty\n' > "$vault/note.md"
   mkdir -p "$home/.config/rclone"
   printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
 
+  printf 'local\n' > "$vault/local.md"
+  local local_head
+  local_head="$(git -C "$vault" rev-parse HEAD)"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_eq "dirty local files trigger rclone copy" "$(cat "$root/rclone-called" 2>/dev/null || true)" "called"
+  # wiki-push no longer pushes to git — local commit must not advance origin.
+  local remote_head
+  remote_head="$(git --git-dir="$root/origin.git" rev-parse refs/heads/main)"
+  assert_eq "wiki-push does not push to origin" "$remote_head" "$local_head"
+  rm -rf "$root"
+}
+
+test_git_remote_failure_does_not_block_s3_publish() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  # Break the git remote — wiki-push must not care (it no longer touches git).
+  rm -rf "$root/origin.git"
+
+  printf 'local\n' > "$vault/local.md"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_eq "git remote failure does not block S3 publish" "$(cat "$root/rclone-called" 2>/dev/null || true)" "called"
+  rm -rf "$root"
+}
+
+test_pull_helper_not_invoked_by_push() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  printf 'local dirty\n' > "$vault/note.md"
+
   cat > "$script_dir/wiki-pull-with-auto-resolve.sh" <<'STUB'
 #!/bin/bash
-if [ -z "$(git status --porcelain)" ]; then
-  echo clean > "$HELPER_STATE_FILE"
-else
-  echo dirty > "$HELPER_STATE_FILE"
-fi
+echo called > "$HELPER_STATE_FILE"
 exit 0
 STUB
   chmod +x "$script_dir/wiki-pull-with-auto-resolve.sh"
@@ -123,107 +179,11 @@ STUB
     PATH="$bin_dir:$PATH" \
     "$script_dir/wiki-push.sh" >/dev/null 2>&1
 
-  assert_eq "pull helper is called after dirty edits are committed" "$(cat "$root/helper-state" 2>/dev/null || true)" "clean"
+  assert_eq "pull helper is NOT invoked by wiki-push" "$(cat "$root/helper-state" 2>/dev/null || true)" ""
   rm -rf "$root"
 }
 
-test_clean_ahead_commit_is_pushed() {
-  local root
-  root="$(mktemp -d)"
-  local home="$root/home"
-  local vault
-  vault="$(make_repo "$root")"
-  local script_dir
-  script_dir="$(make_script_dir "$root")"
-  local bin_dir="$root/bin"
-  write_stub_rclone "$bin_dir"
-  mkdir -p "$home/.config/rclone"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
-
-  printf 'local\n' > "$vault/local.md"
-  git_commit "$vault" local
-  local local_head
-  local_head="$(git -C "$vault" rev-parse HEAD)"
-
-  HOME="$home" \
-    WIKI_DIR="$vault" \
-    WIKI_REMOTE="stub:wiki" \
-    PATH="$bin_dir:$PATH" \
-    "$script_dir/wiki-push.sh" >/dev/null 2>&1
-
-  local remote_head
-  remote_head="$(git --git-dir="$root/origin.git" rev-parse refs/heads/main)"
-  assert_eq "clean ahead commit is pushed" "$remote_head" "$local_head"
-  rm -rf "$root"
-}
-
-test_git_push_failure_blocks_rclone_publish() {
-  local root
-  root="$(mktemp -d)"
-  local home="$root/home"
-  local vault
-  vault="$(make_repo "$root")"
-  local script_dir
-  script_dir="$(make_script_dir "$root")"
-  local bin_dir="$root/bin"
-  write_stub_rclone "$bin_dir"
-  mkdir -p "$home/.config/rclone"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
-
-  cat > "$root/origin.git/hooks/pre-receive" <<'STUB'
-#!/bin/bash
-echo rejected >&2
-exit 1
-STUB
-  chmod +x "$root/origin.git/hooks/pre-receive"
-
-  printf 'local\n' > "$vault/local.md"
-
-  HOME="$home" \
-    WIKI_DIR="$vault" \
-    WIKI_REMOTE="stub:wiki" \
-    RCLONE_CALLED_FILE="$root/rclone-called" \
-    PATH="$bin_dir:$PATH" \
-    "$script_dir/wiki-push.sh" >/dev/null 2>&1
-
-  assert_eq "git push failure blocks rclone publish" "$(test -f "$root/rclone-called" && echo called || echo skipped)" "skipped"
-  assert_eq "rejected local edit is absent from origin" "$(git --git-dir="$root/origin.git" show main:local.md 2>/dev/null || true)" ""
-  rm -rf "$root"
-}
-
-test_pull_failure_blocks_rclone_publish() {
-  local root
-  root="$(mktemp -d)"
-  local home="$root/home"
-  local vault
-  vault="$(make_repo "$root")"
-  local script_dir
-  script_dir="$(make_script_dir "$root")"
-  local bin_dir="$root/bin"
-  write_stub_rclone "$bin_dir"
-  mkdir -p "$home/.config/rclone"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
-
-  local remote_work="$root/remote-work-conflict"
-  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
-  printf 'remote\n' > "$remote_work/note.md"
-  git_commit "$remote_work" remote-conflict
-  git -C "$remote_work" push origin main >/dev/null
-
-  printf 'local\n' > "$vault/note.md"
-
-  HOME="$home" \
-    WIKI_DIR="$vault" \
-    WIKI_REMOTE="stub:wiki" \
-    RCLONE_CALLED_FILE="$root/rclone-called" \
-    PATH="$bin_dir:$PATH" \
-    "$script_dir/wiki-push.sh" >/dev/null 2>&1
-
-  assert_eq "pre-push pull failure blocks rclone publish" "$(test -f "$root/rclone-called" && echo called || echo skipped)" "skipped"
-  rm -rf "$root"
-}
-
-test_sync_lock_is_not_committed() {
+test_sync_lock_is_pushed_to_s3_not_git() {
   local root
   root="$(mktemp -d)"
   local home="$root/home"
@@ -242,21 +202,18 @@ test_sync_lock_is_not_committed() {
   HOME="$home" \
     WIKI_DIR="$vault" \
     WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLS_FILE="$root/rclone.calls" \
     PATH="$bin_dir:$PATH" \
     "$script_dir/wiki-push.sh" >/dev/null 2>&1
 
+  # rclone copy is invoked (S3 push happens regardless of git state).
+  assert_eq "rclone copy is invoked" "$(cat "$root/rclone-called" 2>/dev/null || test -f "$root/rclone.calls" && echo called || echo skipped)" "called"
+  # wiki-push no longer commits to git — sync.lock stays untracked.
   assert_eq "sync lock remains untracked" "$(git -C "$vault" ls-files .skillwiki/sync.lock)" ""
-  assert_eq "real local edit is pushed" "$(git --git-dir="$root/origin.git" show main:local.md 2>/dev/null || true)" "local"
-  if git --git-dir="$root/origin.git" cat-file -e main:.skillwiki/sync.lock 2>/dev/null; then
-    lock_state="present"
-  else
-    lock_state="absent"
-  fi
-  assert_eq "sync lock is absent from remote" "$lock_state" "absent"
   rm -rf "$root"
 }
 
-test_archive_move_prunes_stale_remote_source_path() {
+test_archive_move_pushes_archive_to_s3_without_git_prune() {
   local root
   root="$(mktemp -d)"
   local home="$root/home"
@@ -282,18 +239,20 @@ test_archive_move_prunes_stale_remote_source_path() {
     PATH="$bin_dir:$PATH" \
     "$script_dir/wiki-push.sh" >/dev/null 2>&1
 
-  assert_file_contains "archive move prunes stale remote source path" "$root/rclone.calls" "deletefile stub:wiki/raw/transcripts/old.md"
-  assert_eq "archived transcript is promoted to origin" "$(git --git-dir="$root/origin.git" show main:_archive/raw/transcripts/old.md 2>/dev/null || true)" "old"
-  if git --git-dir="$root/origin.git" cat-file -e main:raw/transcripts/old.md 2>/dev/null; then
-    live_state="present"
+  # rclone copy is invoked (archived file is published to S3).
+  assert_eq "rclone copy runs after archive move" "$(test -f "$root/rclone.calls" && echo called || echo skipped)" "called"
+  # wiki-push no longer prunes stale remote source paths via rclone deletefile.
+  # That pruning now belongs to the sg01 snapshot path (wiki-snapshot.sh).
+  if grep -q "deletefile" "$root/rclone.calls" 2>/dev/null; then
+    prune_state="present"
   else
-    live_state="absent"
+    prune_state="absent"
   fi
-  assert_eq "live transcript is absent from origin after archive" "$live_state" "absent"
+  assert_eq "wiki-push does NOT deletefile stale source paths" "$prune_state" "absent"
   rm -rf "$root"
 }
 
-test_memory_cache_is_not_committed() {
+test_memory_cache_dirty_does_not_block_s3_push() {
   local root
   root="$(mktemp -d)"
   local home="$root/home"
@@ -316,11 +275,12 @@ test_memory_cache_is_not_committed() {
   HOME="$home" \
     WIKI_DIR="$vault" \
     WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
     PATH="$bin_dir:$PATH" \
     "$script_dir/wiki-push.sh" >/dev/null 2>&1
 
-  assert_eq "real local edit is pushed with memory cache dirty" "$(git --git-dir="$root/origin.git" show main:local.md 2>/dev/null || true)" "local"
-  assert_eq "memory cache remains unchanged on remote" "$(git --git-dir="$root/origin.git" show main:.skillwiki/memory/llm-wiki/topics.json 2>/dev/null || true)" "old-cache"
+  # S3 push proceeds regardless of memory-cache dirty state (no git commit gate).
+  assert_eq "memory cache dirty does not block S3 push" "$(cat "$root/rclone-called" 2>/dev/null || true)" "called"
   rm -rf "$root"
 }
 
@@ -445,13 +405,12 @@ STUB
   rm -rf "$root"
 }
 
-test_pull_helper_sees_clean_tree
-test_clean_ahead_commit_is_pushed
-test_git_push_failure_blocks_rclone_publish
-test_pull_failure_blocks_rclone_publish
-test_sync_lock_is_not_committed
-test_archive_move_prunes_stale_remote_source_path
-test_memory_cache_is_not_committed
+test_dirty_local_files_trigger_rclone_copy
+test_git_remote_failure_does_not_block_s3_publish
+test_pull_helper_not_invoked_by_push
+test_sync_lock_is_pushed_to_s3_not_git
+test_archive_move_pushes_archive_to_s3_without_git_prune
+test_memory_cache_dirty_does_not_block_s3_push
 test_case_only_collision_blocks_publish
 test_long_path_fix_runs_before_rclone
 test_long_path_fix_failure_blocks_publish
