@@ -46,6 +46,7 @@ add_remote_commit() {
   local msg="$4"
   local remote_work="$root/remote-work-$msg"
   git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
+  mkdir -p "$remote_work/$(dirname "$file")"
   printf '%s\n' "$content" > "$remote_work/$file"
   git_commit "$remote_work" "$msg"
   git -C "$remote_work" push origin main >/dev/null
@@ -93,8 +94,31 @@ test_stale_rebase_state_is_cleaned_before_pull() {
   rm -rf "$root"
 }
 
+test_untracked_remote_duplicate_is_removed_before_pull() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  mkdir -p "$vault/projects/demo"
+  printf 'promoted by s3\n' > "$vault/projects/demo/new-note.md"
+  add_remote_commit "$root" "projects/demo/new-note.md" "promoted by s3" "remote-s3-note"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  assert_eq "untracked duplicate pull exits successfully" "$rc" "0"
+  assert_eq "untracked duplicate branch is no longer behind" "$(git -C "$vault" rev-list --count HEAD..origin/main 2>/dev/null || echo unknown)" "0"
+  assert_eq "promoted note is present after pull" "$(cat "$vault/projects/demo/new-note.md" 2>/dev/null || true)" "promoted by s3"
+  assert_eq "worktree is clean after duplicate removal" "$(git -C "$vault" status --porcelain | wc -l | tr -d ' ')" "0"
+
+  rm -rf "$root"
+}
+
 test_dirty_tree_pull_restores_edit
 test_stale_rebase_state_is_cleaned_before_pull
+test_untracked_remote_duplicate_is_removed_before_pull
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

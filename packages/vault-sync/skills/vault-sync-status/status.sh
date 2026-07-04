@@ -100,6 +100,62 @@ classify_log_tail() {
   fi
 }
 
+script_drift_status="pass"
+script_drift_detail=""
+script_drift_compared=0
+
+record_script_drift() {
+  local detail="$1"
+  script_drift_status="warn"
+  if [ -n "$script_drift_detail" ]; then
+    script_drift_detail="$script_drift_detail; $detail"
+  else
+    script_drift_detail="$detail"
+  fi
+}
+
+compare_installed_file() {
+  local src="$1"
+  local dst="$2"
+  local label="$3"
+
+  [ -f "$src" ] || return 0
+  script_drift_compared=$((script_drift_compared + 1))
+
+  if [ ! -f "$dst" ]; then
+    record_script_drift "missing live copy for $label: $dst"
+  elif ! cmp -s "$src" "$dst"; then
+    record_script_drift "live copy differs for $label: $dst"
+  fi
+}
+
+check_installed_script_drift() {
+  local src
+
+  for src in "$VAULT_SYNC_ROOT/scripts/"*.sh; do
+    [ -f "$src" ] || continue
+    compare_installed_file "$src" "$SHARE_BIN/$(basename "$src")" "$(basename "$src")"
+  done
+
+  for src in "$VAULT_SYNC_ROOT/scripts/lib/"*.sh; do
+    [ -f "$src" ] || continue
+    compare_installed_file "$src" "$SHARE_BIN/lib/$(basename "$src")" "lib/$(basename "$src")"
+  done
+
+  compare_installed_file \
+    "$VAULT_SYNC_ROOT/skills/vault-presync/wiki-sync.sh" \
+    "$SHARE_BIN/wiki-sync.sh" \
+    "wiki-sync.sh"
+
+  if [ "$script_drift_compared" -eq 0 ]; then
+    add_check "vault_sync_script_drift" "Vault sync script drift" "warn" "No package script sources found under $VAULT_SYNC_ROOT"
+  elif [ "$script_drift_status" = "pass" ]; then
+    add_check "vault_sync_script_drift" "Vault sync script drift" "pass" "$script_drift_compared installed script files match package source"
+  else
+    add_check "vault_sync_script_drift" "Vault sync script drift" "$script_drift_status" "$script_drift_detail"
+  fi
+}
+
 restart_jobs() {
   assert_read_only_allows_no_state_changes "restart-jobs" || return $?
 
@@ -273,6 +329,11 @@ for detail in "${presync_details[@]}"; do
 done
 
 add_check "vault_sync_presync_helper" "Vault sync presync helper" "$presync_status" "$presync_detail"
+
+# Check 1c: deployed script drift. The installer copies package scripts into
+# the platform bin directory, so new package releases do not update running
+# jobs until vault-sync-install is rerun.
+check_installed_script_drift
 
 # Check 2: scheduler enabled
 if [ "$ROLE" = "snapshotter" ]; then

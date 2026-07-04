@@ -28,6 +28,38 @@ mkdir -p "$(dirname "$LOG_FILE")"
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"; }
 
+drop_identical_untracked_remote_overlaps() {
+    local removed=0
+    local path remote_blob
+
+    while IFS= read -r -d '' path; do
+        if ! git cat-file -e "$REMOTE/$BRANCH:$path" 2>/dev/null; then
+            continue
+        fi
+
+        remote_blob="$(mktemp)"
+        if git show "$REMOTE/$BRANCH:$path" >"$remote_blob" 2>/dev/null && cmp -s "$path" "$remote_blob"; then
+            if rm -f -- "$path"; then
+                removed=$((removed + 1))
+            else
+                rm -f "$remote_blob"
+                log "FAIL could not remove untracked remote duplicate before pull: $path"
+                return 1
+            fi
+        else
+            rm -f "$remote_blob"
+            log "FAIL untracked path would be overwritten by remote and differs: $path"
+            return 1
+        fi
+        rm -f "$remote_blob"
+    done < <(git ls-files --others --exclude-standard -z)
+
+    if [ "$removed" -gt 0 ]; then
+        log "DROP $removed identical untracked remote duplicate(s) before pull"
+    fi
+    return 0
+}
+
 cd "$WIKI_DIR" || { log "ERROR: cd $WIKI_DIR failed"; exit 1; }
 
 # Clean up leftover rebase state from a previous failed unattended run. An
@@ -58,6 +90,10 @@ if [ "$BEHIND" -eq 0 ]; then
 fi
 
 log "PULL --rebase ($BEHIND commits behind)"
+
+if ! drop_identical_untracked_remote_overlaps; then
+    exit 1
+fi
 
 STASHED=false
 if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then

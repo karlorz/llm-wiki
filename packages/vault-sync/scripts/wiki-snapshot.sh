@@ -56,8 +56,10 @@ DEFAULT_LOG_DIR="$(platform_log_dir)"
 LOG_FILE="${WIKI_SNAPSHOT_LOG:-$DEFAULT_LOG_DIR/wiki-snapshot.log}"
 CLOUD_REMOTE="${CLOUD_REMOTE:-cloud:cloud/wiki}"
 REPAIR_SCRIPT="${WIKI_GIT_REPAIR_SCRIPT:-$SCRIPT_DIR/wiki-git-repair-v3.sh}"
+MAX_S3_ONLY_NOTES="${WIKI_SNAPSHOT_MAX_S3_ONLY_NOTES:-200}"
 DATE=$(date +%Y%m%d_%H%M%S)
 RCLONE_LOG="/tmp/rclone-${DATE}.log"
+SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT=0
 
 fetch_origin_main_ref() {
     # The snapshot guards read origin/main directly. Use an explicit destination
@@ -95,15 +97,43 @@ snapshot_direct_s3_preflight() {
     }
 
     LC_ALL=C comm -23 "$direct_notes" "$git_paths" > "$direct_not_git"
-    local count
-    count="$(wc -l < "$direct_not_git" | tr -d ' ')"
-    if [ "$count" != "0" ]; then
-        echo "[wiki-snapshot] WARN: direct-S3-not-git warning: $count note path(s) exist in direct S3 but not in $SNAPSHOT_WORKTREE"
+    SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT="$(wc -l < "$direct_not_git" | tr -d ' ')"
+    if [ "$SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT" != "0" ]; then
+        echo "[wiki-snapshot] WARN: direct-S3-not-git warning: $SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT note path(s) exist in direct S3 but not in $SNAPSHOT_WORKTREE"
         sed -n '1,20p' "$direct_not_git" | sed 's/^/[wiki-snapshot] WARN: direct-S3-not-git: /'
         return 2
     fi
 
     return 0
+}
+
+handle_direct_s3_preflight_before_sync() {
+    snapshot_direct_s3_preflight
+    local rc=$?
+    if [ "$rc" -eq 0 ]; then
+        return 0
+    fi
+
+    if [ "${WIKI_SNAPSHOT_ALLOW_S3_ONLY_NOTES:-0}" = "1" ]; then
+        log "WARNING: direct-S3 preflight found note paths missing from Git; WIKI_SNAPSHOT_ALLOW_S3_ONLY_NOTES=1 allows this live snapshot"
+        return 0
+    fi
+
+    case "$MAX_S3_ONLY_NOTES" in
+        ''|*[!0-9]*)
+            log "ERROR: invalid WIKI_SNAPSHOT_MAX_S3_ONLY_NOTES=$MAX_S3_ONLY_NOTES; refusing live snapshot"
+            return 1
+            ;;
+    esac
+
+    if [ "$SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT" -le "$MAX_S3_ONLY_NOTES" ]; then
+        log "WARNING: direct-S3 preflight found $SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT note path(s) missing from Git; within limit $MAX_S3_ONLY_NOTES, allowing live snapshot"
+        return 0
+    fi
+
+    log "ERROR: direct-S3-not-git count exceeds limit: $SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT > $MAX_S3_ONLY_NOTES"
+    log "ERROR: Review and promote/delete the S3-only note paths first, raise WIKI_SNAPSHOT_MAX_S3_ONLY_NOTES, or set WIKI_SNAPSHOT_ALLOW_S3_ONLY_NOTES=1 for an explicitly approved promotion run"
+    return 1
 }
 
 # ── Guard: --max-delete verification ───────────────────────
@@ -260,14 +290,8 @@ RCLONE_OPTS=(
     --max-delete 10
 )
 
-if ! snapshot_direct_s3_preflight; then
-    if [ "${WIKI_SNAPSHOT_ALLOW_S3_ONLY_NOTES:-0}" = "1" ]; then
-        log "WARNING: direct-S3 preflight found note paths missing from Git; WIKI_SNAPSHOT_ALLOW_S3_ONLY_NOTES=1 allows this live snapshot"
-    else
-        log "ERROR: direct-S3 preflight found note paths missing from Git; refusing live snapshot before rclone sync"
-        log "ERROR: Review and promote/delete the S3-only note paths first, or set WIKI_SNAPSHOT_ALLOW_S3_ONLY_NOTES=1 for an explicitly approved promotion run"
-        exit 1
-    fi
+if ! handle_direct_s3_preflight_before_sync; then
+    exit 1
 fi
 
 # Sync from cloud directly to git dir using rclone

@@ -14,7 +14,7 @@ phase: 3
 
 ```yaml
 slug: llm-wiki
-vault: ~/wiki
+vault: auto
 release_branch: main
 knowledge_layer: skillwiki
 
@@ -22,7 +22,7 @@ knowledge_layer: skillwiki
 # When absent, dev-loop derives BACKEND_CAPS from knowledge_layer + vault (backward-compatible)
 knowledge_backends:
   skillwiki:
-    vault: ~/wiki
+    vault: auto
     cli_entry: npx tsx packages/cli/src/cli.ts  # local dev override
   none:
     work_dir: .claude/dev-loop-work/
@@ -289,8 +289,8 @@ bump_script: ./scripts/bump-version.sh
 release_script: ./scripts/release.sh
 publish_via: ci-tag-trigger
 manifests_count: 14       # bump-version.sh updates 14 manifests across CLI, plugin, package, marketplace, vault-sync, agent-memory-trends, skillwiki-maintenance, and root agy channels
-deploy_script: ""         # sg01 is a plugin-test host, not a deploy target — DEPLOY step is a no-op
-remote_hosts: [sg01]      # kept for context (e2e-remote/e2e-plugin targets), not used by DEPLOY step
+deploy_script: ""         # generic plugin/CLI DEPLOY is a no-op; vault-sync installed-script redeploy is an attended host operation, see notes.vault_sync_deploy_workflow
+remote_hosts: [sg01]      # verification/protected snapshotter context only; never an unattended DEPLOY target
 
 # Release-trigger policy (consumed by step 10 PUSH)
 release_policy:
@@ -331,11 +331,15 @@ release_policy:
 ## CI Configuration
 
 ```yaml
-ci_configured: true                        # .github/workflows/ci.yml present; main is the release branch
-ci_discovery: runtime                       # GitHub branch protection is the source of truth for required checks
+ci_configured: true
+ci_discovery: runtime
 ci_workflow: .github/workflows/ci.yml
-release_workflow: .github/workflows/publish.yml   # fires on v* tag push via OIDC (no NPM_TOKEN needed)
+release_workflow: .github/workflows/publish.yml
 ```
+
+`.github/workflows/ci.yml` is present and `main` is the release branch.
+GitHub branch protection is the source of truth for required checks. The
+publish workflow fires on `v*` tag push via OIDC, with no `NPM_TOKEN` needed.
 
 ## Notes
 
@@ -373,6 +377,27 @@ notes:
     commits + pushes/PRs the code change. PUSH bumps + tags + lets CI publish.
     A cycle that only edits vault/, docs, or CLAUDE.md should commit (MERGE)
     but skip PUSH. The trigger_globs / skip_globs lists encode this decision.
+  vault_sync_deploy_workflow: |
+    Changes under packages/vault-sync/** are shipped through the normal release
+    path, but the live launchd/systemd jobs execute copied scripts from the
+    platform vault-sync bin directory. A new stable version, plugin update, or
+    npm publish does not rewrite those installed copies by itself.
+
+    Before releasing vault-sync script changes, run the shell regression suite:
+    for t in packages/vault-sync/test/*.test.sh; do bash "$t" || exit $?; done
+
+    Before and after any live repair/redeploy, run read-only status and inspect
+    the vault_sync_script_drift check:
+    bash packages/vault-sync/skills/vault-sync-status/status.sh --read-only --json
+
+    Redeploy leaf hosts by rerunning the installer from the intended source:
+    bash packages/vault-sync/skills/vault-sync-install/install.sh --execute --role leaf
+
+    sg01 is protected and is the single snapshotter. It may run read-only status
+    verification automatically, but executing vault-sync-install on sg01 is an
+    attended production repair/redeploy only, with the snapshotter role and
+    service scope confirmed first. Do not make sg01 part of a generic DEPLOY
+    step or CI lifecycle.
   distribution: |
     Distribution channels:
     1. Claude Code plugin via marketplace.json + plugin.json.
