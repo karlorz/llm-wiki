@@ -527,6 +527,15 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   }
   const scan = scanResult.data;
   const pageTextCache: PageTextCache = new Map();
+  if (!input.fix) {
+    await mapWithConcurrency(scan.allMarkdown, vaultIoConcurrency(), async (page) => {
+      try {
+        await readPageCached(page, pageTextCache);
+      } catch {
+        // Individual lint buckets keep their existing unreadable-page behavior.
+      }
+    });
+  }
 
   const links = await runLinks({ vault: input.vault, scan, pageTextCache });
   if (links.result.ok && links.result.data.broken.length > 0) buckets.broken_wikilinks = links.result.data.broken;
