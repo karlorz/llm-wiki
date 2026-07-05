@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,7 +36,47 @@ function vault(): string {
   return v;
 }
 
+afterEach(() => {
+  delete process.env.SKILLWIKI_VAULT_READ_MIRROR;
+  delete process.env.SKILLWIKI_DISABLE_VAULT_READ_MIRROR;
+});
+
 describe("runLint", () => {
+  it("uses a read mirror for non-fix lint while reporting the requested vault", async () => {
+    const requested = vault();
+    const mirror = vault();
+    writeFileSync(join(requested, "concepts", "alpha.md"), FM(["model"]) + "> **TL;DR:** Summary about alpha.\n\n## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");
+    writeFileSync(join(requested, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+    writeFileSync(join(mirror, "concepts", "bad-tag.md"), FM(["rogue"]) + "## Overview\n\nBad tag page [[bad-tag]].\n\n## Related\n\n- [[bad-tag]]\n");
+    writeFileSync(join(mirror, "index.md"), "# Index\n\n## Concepts\n- [[bad-tag]]\n");
+    process.env.SKILLWIKI_VAULT_READ_MIRROR = mirror;
+
+    const r = await runLint({ vault: requested, days: 90, lines: 200, logThreshold: 500, summary: true });
+
+    expect(r.exitCode).toBe(23);
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) throw new Error("expected ok");
+    expect(r.result.data.vault.path).toBe(requested);
+    expect(r.result.data.buckets.map((b) => b.kind)).toContain("tag_not_in_taxonomy");
+  });
+
+  it("does not use a read mirror for lint --fix", async () => {
+    const requested = vault();
+    const mirror = vault();
+    writeFileSync(join(requested, "concepts", "alpha.md"), FM(["model"]) + "> **TL;DR:** Summary about alpha.\n\n## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");
+    writeFileSync(join(requested, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+    writeFileSync(join(mirror, "concepts", "bad-tag.md"), FM(["rogue"]) + "## Overview\n\nBad tag page [[bad-tag]].\n\n## Related\n\n- [[bad-tag]]\n");
+    writeFileSync(join(mirror, "index.md"), "# Index\n\n## Concepts\n- [[bad-tag]]\n");
+    process.env.SKILLWIKI_VAULT_READ_MIRROR = mirror;
+
+    const r = await runLint({ vault: requested, days: 90, lines: 200, logThreshold: 500, fix: true });
+
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) throw new Error("expected ok");
+    expect(r.result.data.vault.path).toBe(requested);
+    expect(r.result.data.by_severity.error.map((b) => b.kind)).not.toContain("tag_not_in_taxonomy");
+  });
+
   it("summary mode returns bounded bucket counts without item arrays", async () => {
     const v = vault();
     mkdirSync(join(v, "raw", "articles"), { recursive: true });

@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { ok, err, type Result } from "@skillwiki/shared";
@@ -21,6 +22,44 @@ const DEFAULT_IO_CONCURRENCY = 1;
 export function vaultIoConcurrency(): number {
   const raw = Number.parseInt(process.env.SKILLWIKI_VAULT_IO_CONCURRENCY ?? "", 10);
   return Number.isFinite(raw) && raw > 0 ? Math.min(raw, 64) : DEFAULT_IO_CONCURRENCY;
+}
+
+function decodeProcMountPath(value: string): string {
+  return value.replace(/\\040/g, " ");
+}
+
+function isRcloneFuseVault(root: string): boolean {
+  let mounts: string;
+  try {
+    mounts = readFileSync("/proc/mounts", "utf8");
+  } catch {
+    return false;
+  }
+  return mounts.split(/\r?\n/).some((line) => {
+    const parts = line.split(" ");
+    if (parts.length < 3) return false;
+    const mountPoint = decodeProcMountPath(parts[1]!);
+    const fsType = parts[2]!;
+    return fsType === "fuse.rclone" && (root === mountPoint || root.startsWith(`${mountPoint}/`));
+  });
+}
+
+export function resolveReadOnlyVaultRoot(root: string): { root: string; mirrored: boolean } {
+  if (/^(1|true|yes)$/i.test(process.env.SKILLWIKI_DISABLE_VAULT_READ_MIRROR ?? "")) {
+    return { root, mirrored: false };
+  }
+
+  const explicitMirror = process.env.SKILLWIKI_VAULT_READ_MIRROR;
+  if (explicitMirror && existsSync(join(explicitMirror, "SCHEMA.md"))) {
+    return { root: explicitMirror, mirrored: explicitMirror !== root };
+  }
+
+  const siblingMirror = `${root}-git`;
+  if (isRcloneFuseVault(root) && existsSync(join(siblingMirror, "SCHEMA.md"))) {
+    return { root: siblingMirror, mirrored: true };
+  }
+
+  return { root, mirrored: false };
 }
 
 export async function mapWithConcurrency<T, R>(

@@ -20,7 +20,7 @@ import { runRawBodyDedup } from "./raw-body-dedup.js";
 import { validateCompoundReferences } from "./audit.js";
 import { fixFrontmatter } from "./frontmatter-fix.js";
 import { fixPathTooLong, runPathTooLong } from "./path-too-long.js";
-import { mapWithConcurrency, readPage, readPageCached, scanVault, vaultIoConcurrency, type PageTextCache, type VaultPage, type VaultScan } from "../utils/vault.js";
+import { mapWithConcurrency, readPage, readPageCached, resolveReadOnlyVaultRoot, scanVault, vaultIoConcurrency, type PageTextCache, type VaultPage, type VaultScan } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
 import { extractCitationMarkers, isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations, stripFencedBlocks } from "../parsers/citations.js";
 import { buildSlugMap } from "../utils/slug.js";
@@ -222,6 +222,10 @@ function outputForOnlyBucket(
   };
 }
 
+function lintReadVault(input: LintInput | LintSummaryInput): string {
+  return input.fix ? input.vault : resolveReadOnlyVaultRoot(input.vault).root;
+}
+
 function recomputeRawSha256IfPresent(content: string): string {
   const split = splitFrontmatter(content);
   if (!split.ok) return content;
@@ -299,7 +303,8 @@ async function collectCliRefsPages(vault: string): Promise<Result<VaultPage[]>> 
 }
 
 async function runCliRefsOnly(input: LintInput | LintSummaryInput): Promise<{ exitCode: number; result: Result<LintOutput | LintSummaryOutput> }> {
-  const pages = await collectCliRefsPages(input.vault);
+  const lintVault = lintReadVault(input);
+  const pages = await collectCliRefsPages(lintVault);
   if (!pages.ok) {
     return { exitCode: ExitCode.VAULT_PATH_INVALID, result: pages };
   }
@@ -481,7 +486,8 @@ async function applyFileSourceUrlFix(
 }
 
 async function runFileSourceUrlOnly(input: LintInput | LintSummaryInput): Promise<{ exitCode: number; result: Result<LintOutput | LintSummaryOutput> }> {
-  const scanResult = await scanVault(input.vault);
+  const lintVault = lintReadVault(input);
+  const scanResult = await scanVault(lintVault);
   if (!scanResult.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scanResult };
 
   const pageTextCache: PageTextCache = new Map();
@@ -517,11 +523,12 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   }
 
   const shouldFix = (bucket: string): boolean => !!input.fix && (!input.only || input.only === bucket);
+  const lintVault = lintReadVault(input);
 
   const buckets: Record<string, unknown[]> = {};
   const fixed: string[] = [];
   const unresolved: string[] = [];
-  const scanResult = await scanVault(input.vault);
+  const scanResult = await scanVault(lintVault);
   if (!scanResult.ok) {
     return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scanResult };
   }
@@ -537,19 +544,19 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     });
   }
 
-  const links = await runLinks({ vault: input.vault, scan, pageTextCache });
+  const links = await runLinks({ vault: lintVault, scan, pageTextCache });
   if (links.result.ok && links.result.data.broken.length > 0) buckets.broken_wikilinks = links.result.data.broken;
   if (!links.result.ok && links.result.error === "INVALID_FRONTMATTER") {
     buckets.invalid_frontmatter = [links.result.detail ?? {}];
   }
 
-  const tags = await runTagAudit({ vault: input.vault, scan, pageTextCache });
+  const tags = await runTagAudit({ vault: lintVault, scan, pageTextCache });
   if (tags.result.ok && tags.result.data.violations.length > 0) buckets.tag_not_in_taxonomy = tags.result.data.violations;
   if (!tags.result.ok && tags.result.error === "INVALID_FRONTMATTER") {
     buckets.invalid_frontmatter = [...(buckets.invalid_frontmatter ?? []), tags.result.detail ?? {}];
   }
 
-  const idx = await runIndexCheck({ vault: input.vault, scan });
+  const idx = await runIndexCheck({ vault: lintVault, scan });
   if (idx.result.ok && (idx.result.data.missing_from_index.length > 0 || idx.result.data.ghost_entries.length > 0)) {
     buckets.index_incomplete = [{
       missing_from_index: idx.result.data.missing_from_index,
@@ -557,46 +564,46 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     }];
   }
 
-  const linkFmt = await runIndexLinkFormat({ vault: input.vault });
+  const linkFmt = await runIndexLinkFormat({ vault: lintVault });
   if (linkFmt.result.ok && linkFmt.result.data.markdown_links.length > 0) {
     buckets.index_link_format = linkFmt.result.data.markdown_links;
   }
 
-  const staleResult = await runStale({ vault: input.vault, days: input.days, scan, pageTextCache });
+  const staleResult = await runStale({ vault: lintVault, days: input.days, scan, pageTextCache });
   if (staleResult.result.ok) {
     const st = staleResult.result.data;
     const staleList = [...st.stale_transcripts.map(t => t.path), ...(st.unclaimed_transcripts ?? []).map(t => t.path), ...st.incomplete_work_items.map(w => w.path), ...(st.done_work_items ?? []).map(w => w.path)];
     if (staleList.length > 0) buckets.stale_page = staleList;
   }
 
-  const pagesize = await runPagesize({ vault: input.vault, lines: input.lines, scan, pageTextCache });
+  const pagesize = await runPagesize({ vault: lintVault, lines: input.lines, scan, pageTextCache });
   if (pagesize.result.ok && pagesize.result.data.oversized.length > 0) buckets.page_too_large = pagesize.result.data.oversized;
 
-  const rotate = await runLogRotate({ vault: input.vault, threshold: input.logThreshold, apply: false });
+  const rotate = await runLogRotate({ vault: lintVault, threshold: input.logThreshold, apply: false });
   if (rotate.result.ok && rotate.exitCode === ExitCode.LOG_ROTATE_NEEDED) {
     buckets.log_rotate_needed = [{ entries: rotate.result.data.entries, threshold: rotate.result.data.threshold }];
   }
 
-  const orphans = await runOrphans({ vault: input.vault, scan, pageTextCache });
+  const orphans = await runOrphans({ vault: lintVault, scan, pageTextCache });
   if (orphans.result.ok) {
     if (orphans.result.data.orphans.length > 0) buckets.orphans = orphans.result.data.orphans;
     if (orphans.result.data.bridges.length > 0) buckets.bridges = orphans.result.data.bridges;
   }
 
-  const sparse = await runSparseCommunity({ vault: input.vault, scan, pageTextCache });
+  const sparse = await runSparseCommunity({ vault: lintVault, scan, pageTextCache });
   if (sparse.result.ok && sparse.result.data.communities.length > 0) {
     buckets.sparse_community = sparse.result.data.communities;
   }
 
-  const topicMap = await runTopicMapCheck({ vault: input.vault, scan });
+  const topicMap = await runTopicMapCheck({ vault: lintVault, scan });
   if (topicMap.result.ok && topicMap.result.data.recommended) {
     buckets.topic_map_recommended = [{ page_count: topicMap.result.data.page_count, threshold: topicMap.result.data.threshold }];
   }
 
-  const dedup = await runDedup({ vault: input.vault, scan, pageTextCache });
+  const dedup = await runDedup({ vault: lintVault, scan, pageTextCache });
   if (dedup.result.ok && dedup.result.data.duplicates.length > 0) buckets.raw_dedup = dedup.result.data.duplicates;
 
-  const bodyDedup = await runRawBodyDedup(input.vault, scan, pageTextCache);
+  const bodyDedup = await runRawBodyDedup(lintVault, scan, pageTextCache);
   if (bodyDedup.result.ok && bodyDedup.result.data.duplicates.length > 0) {
     buckets.raw_body_duplicate = bodyDedup.result.data.duplicates.map(d => ({
       body_hash: d.bodyHash.slice(0, 12),
@@ -604,10 +611,10 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     }));
   }
 
-  const compoundRefs = await validateCompoundReferences(input.vault, scan, pageTextCache);
+  const compoundRefs = await validateCompoundReferences(lintVault, scan, pageTextCache);
   if (compoundRefs.ok && compoundRefs.data.length > 0) buckets.compound_refs = compoundRefs.data;
 
-  const pathCheck = await runPathTooLong({ vault: input.vault, scan });
+  const pathCheck = await runPathTooLong({ vault: lintVault, scan });
   if (pathCheck.result.ok && pathCheck.result.data.violations.length > 0) buckets.path_too_long = pathCheck.result.data.violations;
 
   // Citation style + page structure check
@@ -714,12 +721,12 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
         for (const entry of sourcesEntries) {
           const rawPath = normalizeRawSourceTarget(entry);
           if (!rawPath) continue;
-          if (!rawSourceTargetExistsSync(input.vault, rawPath)) {
+          if (!rawSourceTargetExistsSync(lintVault, rawPath)) {
             result.brokenSourceFlags.push(`${page.relPath}: ${rawPath}`);
           }
         }
         for (const marker of extractCitationMarkers(body)) {
-          if (!rawSourceTargetExistsSync(input.vault, marker.target)) {
+          if (!rawSourceTargetExistsSync(lintVault, marker.target)) {
             result.brokenSourceFlags.push(`${page.relPath}: ${marker.target}`);
           }
         }
@@ -832,7 +839,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     const readKnowledgeContent = (slug: string): Promise<string | null> => {
       const existing = knowledgeContentCache.get(slug);
       if (existing) return existing;
-      const knowledgePath = join(input.vault, "projects", slug, "knowledge.md");
+      const knowledgePath = join(lintVault, "projects", slug, "knowledge.md");
       const pending = existsSync(knowledgePath)
         ? readFile(knowledgePath, "utf8").catch(() => null)
         : Promise.resolve(null);

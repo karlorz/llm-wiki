@@ -2,12 +2,14 @@ import { afterEach, describe, it, expect } from "vitest";
 import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { scanVault, readPage, vaultIoConcurrency } from "../../src/utils/vault.js";
+import { resolveReadOnlyVaultRoot, scanVault, readPage, vaultIoConcurrency } from "../../src/utils/vault.js";
 
 const VAULT = join(__dirname, "..", "fixtures", "sample-vault");
 
 afterEach(() => {
   delete process.env.SKILLWIKI_VAULT_IO_CONCURRENCY;
+  delete process.env.SKILLWIKI_VAULT_READ_MIRROR;
+  delete process.env.SKILLWIKI_DISABLE_VAULT_READ_MIRROR;
 });
 
 describe("scanVault", () => {
@@ -63,5 +65,18 @@ describe("scanVault", () => {
 
     process.env.SKILLWIKI_VAULT_IO_CONCURRENCY = "8";
     expect(vaultIoConcurrency()).toBe(8);
+  });
+
+  it("uses an explicit read mirror for read-only vault operations", () => {
+    const requested = mkdtempSync(join(tmpdir(), "vault-requested-"));
+    const mirror = mkdtempSync(join(tmpdir(), "vault-mirror-"));
+    writeFileSync(join(requested, "SCHEMA.md"), "# requested\n");
+    writeFileSync(join(mirror, "SCHEMA.md"), "# mirror\n");
+
+    process.env.SKILLWIKI_VAULT_READ_MIRROR = mirror;
+    expect(resolveReadOnlyVaultRoot(requested)).toEqual({ root: mirror, mirrored: true });
+
+    process.env.SKILLWIKI_DISABLE_VAULT_READ_MIRROR = "true";
+    expect(resolveReadOnlyVaultRoot(requested)).toEqual({ root: requested, mirrored: false });
   });
 });
