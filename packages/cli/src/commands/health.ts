@@ -411,8 +411,106 @@ function writeReport(out: string, report: HealthReport): void {
   renameSync(tmp, out);
 }
 
+function buildIncompleteReport(input: HealthInput, syncMode: SyncMode): HealthReport {
+  const vaultSource = input.vaultSource ?? "resolved";
+  const vaultSyncCoverage: CoverageEntry = syncMode === "off"
+    ? { state: "skipped", status: "pass", reason: "--sync off" }
+    : { state: "unknown", status: "unknown", reason: "health run not complete" };
+  const vaultSyncComponent: VaultSyncComponent = syncMode === "off"
+    ? {
+        status: "pass",
+        blocking: false,
+        installed: false,
+        summary: { pass: 0, info: 0, warn: 0, error: 0, skipped: 1 },
+        checks: [{ id: "vault_sync_skipped", status: "pass", detail: "vault-sync checks skipped by --sync off" }],
+      }
+    : {
+        status: "unknown",
+        blocking: syncMode === "required",
+        installed: false,
+        summary: { pass: 0, info: 0, warn: 0, error: 0, skipped: 0 },
+        checks: [],
+      };
+
+  const warnings: Array<{ id: string; message: string }> = [{
+    id: "health_report_incomplete",
+    message: "health report is incomplete; lint summary is still running or the command exited early",
+  }];
+  if (input.out && resolve(input.out).startsWith(resolve(input.vault) + "/")) {
+    warnings.push({
+      id: "report_inside_vault",
+      message: "health report was written inside the vault; this may create sync churn",
+    });
+  }
+
+  const reportWithoutHint: Omit<HealthReport, "humanHint"> = {
+    schema_version: 1,
+    policy_version: 1,
+    tool: { name: "skillwiki", version: input.currentVersion },
+    generated_at: new Date().toISOString(),
+    command_kind: "diagnostic",
+    vault: { path: input.vault, source: vaultSource },
+    overall_status: "unknown",
+    blocking_status: "unknown",
+    advisory_status: "unknown",
+    coverage: {
+      doctor: { state: "unknown", status: "unknown", reason: "health run not complete" },
+      lint: { state: "unknown", status: "unknown", reason: "lint summary still running" },
+      vault_sync: vaultSyncCoverage,
+      query_readiness: { state: "unknown", status: "unknown", reason: "health run not complete" },
+      source_freshness: { state: "unknown", status: "unknown", reason: "health run not complete" },
+    },
+    components: {
+      doctor: {
+        status: "unknown",
+        blocking: false,
+        summary: { pass: 0, info: 0, warn: 0, error: 0 },
+        checks: [],
+      },
+      lint: {
+        status: "unknown",
+        blocking: true,
+        summary: { errors: 0, warnings: 0, info: 0 },
+        buckets: [],
+        details_included: false,
+        truncated: false,
+      },
+      vault_sync: vaultSyncComponent,
+      query_readiness: {
+        status: "unknown",
+        blocking: false,
+        summary: { score: 0 },
+        signals: [],
+      },
+      source_freshness: {
+        status: "unknown",
+        blocking: false,
+        summary: { stale_pages: 0, file_source_url: 0, stale_sections: 0 },
+      },
+    },
+    risk_flags: [],
+    details_included: false,
+    truncated: false,
+    mutated: false,
+    post_commit_ran: false,
+    report_complete: false,
+    report_written: !!input.out,
+    report_path: input.out,
+    warnings,
+    self_check: { status: "pass", errors: [] },
+  };
+
+  return {
+    ...reportWithoutHint,
+    humanHint: buildHumanHint(reportWithoutHint),
+  };
+}
+
 export async function runHealth(input: HealthInput): Promise<{ exitCode: number; result: Result<HealthReport> }> {
   const syncMode = input.sync ?? "optional";
+  if (input.out) {
+    writeReport(input.out, buildIncompleteReport(input, syncMode));
+  }
   const doctor = await runDoctor({
     home: input.home,
     envValue: input.envValue,
