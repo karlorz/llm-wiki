@@ -1,7 +1,7 @@
 {
   "name": "skillwiki-monorepo",
   "private": true,
-  "version": "0.9.44",
+  "version": "0.9.45",
   "workspaces": [
     "packages/shared",
     "packages/cli",
