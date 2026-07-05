@@ -116,9 +116,75 @@ test_untracked_remote_duplicate_is_removed_before_pull() {
   rm -rf "$root"
 }
 
+test_non_archive_log_append_conflict_is_union_resolved() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  printf 'base log\n' > "$vault/log.md"
+  git_commit "$vault" "add log"
+  git -C "$vault" push origin main >/dev/null
+
+  printf 'base log\nremote log entry\n' > "$root/remote-log-content"
+  add_remote_commit "$root" "log.md" "$(cat "$root/remote-log-content")" "remote-log-append"
+
+  printf 'base log\nlocal log entry\n' > "$vault/log.md"
+  git_commit "$vault" "dev-loop: local log append"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  assert_eq "non-archive log append pull exits successfully" "$rc" "0"
+  assert_eq "non-archive log append branch is no longer behind" "$(git -C "$vault" rev-list --count HEAD..origin/main 2>/dev/null || echo unknown)" "0"
+  assert_eq "remote log entry is preserved" "$(grep -c 'remote log entry' "$vault/log.md" | tr -d ' ')" "1"
+  assert_eq "local log entry is preserved" "$(grep -c 'local log entry' "$vault/log.md" | tr -d ' ')" "1"
+  assert_eq "log conflict markers absent" "$(grep -Ec '^(<<<<<<<|=======|>>>>>>>)' "$vault/log.md" | tr -d ' ')" "0"
+
+  rm -rf "$root"
+}
+
+test_mixed_log_and_non_log_conflict_falls_through_safely() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  printf 'base log\n' > "$vault/log.md"
+  printf 'base note\n' > "$vault/note.md"
+  git_commit "$vault" "add log and note"
+  git -C "$vault" push origin main >/dev/null
+
+  add_remote_commit "$root" "log.md" "base log
+remote log entry" "remote-log-append"
+  add_remote_commit "$root" "note.md" "base note
+remote note change" "remote-note-edit"
+
+  printf 'base log\nlocal log entry\n' > "$vault/log.md"
+  printf 'base note\nlocal note change\n' > "$vault/note.md"
+  git_commit "$vault" "dev-loop: local appends"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  # Non-archive commit with mixed log+non-log conflict must surface as
+  # MANUAL-RESOLVE-NEEDED (exit 1), not silently union-merge log.md while
+  # leaving note.md conflicted. The union resolver must decline the whole
+  # set when any path is not a log.md.
+  assert_eq "mixed log+non-log conflict surfaces as manual" "$rc" "1"
+  assert_eq "log.md left conflicted (not partially union-merged)" "$(git -C "$vault" status --short log.md | cut -c1-2)" "UU"
+  assert_eq "note.md left conflicted" "$(git -C "$vault" status --short note.md | cut -c1-2)" "UU"
+
+  rm -rf "$root"
+}
+
 test_dirty_tree_pull_restores_edit
 test_stale_rebase_state_is_cleaned_before_pull
 test_untracked_remote_duplicate_is_removed_before_pull
+test_non_archive_log_append_conflict_is_union_resolved
+test_mixed_log_and_non_log_conflict_falls_through_safely
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

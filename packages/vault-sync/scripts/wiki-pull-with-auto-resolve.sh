@@ -7,6 +7,15 @@
 # --ours (keep HEAD) and continue. Non-archive conflicts are left for
 # manual resolution.
 #
+# Append-only log.md conflicts (root log.md or any */log.md) are union-merged
+# via `git merge-file --union` so concurrent appends on both sides are
+# preserved without wedging the unattended pull. This runs before the
+# archive-commit check, so log.md conflicts on archive/snapshot commits are
+# also union-merged (append-only logs benefit from union, not --ours). If any
+# conflicted path is not a log.md, the union resolver declines and the
+# archive/manual branch handles the full set. A rebase iteration cap
+# (MAX_REBASE_ITERS) prevents a silent resolver failure from spinning forever.
+#
 # Usage:
 #   wiki-pull-with-auto-resolve.sh [--remote <name>] [--branch <name>]
 #   Defaults: origin, main
@@ -57,6 +66,84 @@ drop_identical_untracked_remote_overlaps() {
     if [ "$removed" -gt 0 ]; then
         log "DROP $removed identical untracked remote duplicate(s) before pull"
     fi
+    return 0
+}
+
+is_log_conflict_path() {
+    case "$1" in
+        log.md|*/log.md) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Roll back paths already staged by an in-progress union resolve so a later
+# archive/manual resolve branch starts from a clean, fully-conflicted state.
+# `git checkout --conflict=merge` re-creates the UU state (all 3 index stages)
+# in both index and worktree, undoing a prior `git add`. Best-effort — errors
+# are logged, not fatal.
+rollback_resolved() {
+    local arr_name="$1[@]"
+    local p
+    for p in "${!arr_name}"; do
+        if ! git checkout --conflict=merge -- "$p" 2>/dev/null; then
+            git restore --staged -- "$p" 2>/dev/null || log "WARN rollback could not restore conflict state: $p"
+        fi
+    done
+}
+
+try_auto_resolve_log_union_conflicts() {
+    local conflicts="$1"
+    local f tmpdir base ours theirs merged
+    local resolved=()
+
+    for f in $conflicts; do
+        if ! is_log_conflict_path "$f"; then
+            return 1
+        fi
+    done
+
+    for f in $conflicts; do
+        tmpdir="$(mktemp -d)" || { log "WARN mktemp failed for log union conflict: $f"; rollback_resolved resolved; return 1; }
+        base="$tmpdir/base"
+        ours="$tmpdir/ours"
+        theirs="$tmpdir/theirs"
+        merged="$tmpdir/merged"
+
+        if ! git show ":1:$f" >"$base" 2>/dev/null ||
+           ! git show ":2:$f" >"$ours" 2>/dev/null ||
+           ! git show ":3:$f" >"$theirs" 2>/dev/null; then
+            rm -rf "$tmpdir"
+            log "WARN cannot read all index stages for log union conflict: $f"
+            rollback_resolved resolved
+            return 1
+        fi
+
+        if ! git merge-file --union -p "$ours" "$base" "$theirs" >"$merged"; then
+            rm -rf "$tmpdir"
+            log "WARN log union merge failed: $f"
+            rollback_resolved resolved
+            return 1
+        fi
+
+        if ! cp "$merged" "$f"; then
+            rm -rf "$tmpdir"
+            log "WARN cannot write union merge to worktree: $f"
+            rollback_resolved resolved
+            return 1
+        fi
+
+        if ! git add "$f"; then
+            rm -rf "$tmpdir"
+            log "WARN git add failed for union merge: $f"
+            rollback_resolved resolved
+            return 1
+        fi
+
+        resolved+=("$f")
+        rm -rf "$tmpdir"
+    done
+
+    log "AUTO-RESOLVE log union: $conflicts"
     return 0
 }
 
@@ -114,7 +201,20 @@ export GIT_SEQUENCE_EDITOR=:
 git -c rebase.reapplyCherryPicks=true pull --rebase "$REMOTE" "$BRANCH" 2>>"$LOG_FILE"
 REBASE_RC=$?
 
+# Defense-in-depth: cap rebase iterations so a silent resolver failure cannot
+# spin the unattended pull forever. A healthy conflict storm is bounded by the
+# number of commits being replayed; 200 is well above any realistic rebase.
+MAX_REBASE_ITERS=200
+REBASE_ITERS=0
+
 while [ $REBASE_RC -ne 0 ]; do
+    REBASE_ITERS=$((REBASE_ITERS + 1))
+    if [ $REBASE_ITERS -gt $MAX_REBASE_ITERS ]; then
+        log "FAIL rebase iteration cap ($MAX_REBASE_ITERS) exceeded — aborting to avoid spin"
+        git rebase --abort 2>/dev/null || true
+        exit 1
+    fi
+
     # Check if we're in a rebase conflict state
     if [ ! -d "$WIKI_DIR/.git/rebase-merge" ]; then
         # Rebase failed before starting. Fall back to a normal merge so the
@@ -141,6 +241,15 @@ while [ $REBASE_RC -ne 0 ]; do
             exit 1
         fi
         REBASE_RC=$?
+        continue
+    fi
+
+    if try_auto_resolve_log_union_conflicts "$CONFLICTS"; then
+        if ! GIT_EDITOR=true git rebase --continue 2>>"$LOG_FILE"; then
+            REBASE_RC=$?
+        else
+            REBASE_RC=0
+        fi
         continue
     fi
 
