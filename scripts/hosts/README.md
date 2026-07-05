@@ -32,6 +32,13 @@ HOST_ENV=scripts/hosts/sg02.env bash scripts/e2e-plugin.sh   # full branch only 
 
 1. `READONLY_VERIFY=true` ⇒ `INSTALL_ALLOWED=false` AND `DESTRUCTIVE_ALLOWED=false`
 2. `HOST_ROLE=snapshotter` requires the host to be the only one with that role in `fleet.yaml`
+3. Hosts with `maintenance.skillwiki_satellite.enabled=true` in `fleet.yaml` must keep `VAULT_PATH` equal to `maintenance.skillwiki_satellite.vault_path`
+
+Run `bash scripts/verify-manifests.sh` before remote E2E work. It includes
+`scripts/verify-host-env-fleet.js`, which checks these committed host profiles
+against the fleet manifest. When the private vault checkout is not present,
+the verifier uses CI-safe fallback expectations for the committed sg01, sg02,
+and macOS dev profiles.
 
 ## LXC hosts
 
@@ -73,3 +80,4 @@ EOF
 2. Update all keys for the new host.
 3. Add the host to `fleet.yaml` in the vault.
 4. Update `e2e-vault-sync.yml` workflow if the host should run in CI.
+5. Run `bash scripts/verify-manifests.sh` and fix any host/fleet drift.

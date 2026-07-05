@@ -12,6 +12,7 @@ set -euo pipefail
 #   6. Codex marketplace wiring points to ./packages/codex-skills for skillwiki
 #   7. Codex plugin layout mirrors top-level skills under ./skills/ and uses native Codex hooks
 #   8. Root agy plugin layout materializes skills/, agents/, and hooks/ for direct GitHub URL install
+#   9. Per-host e2e env files match fleet maintenance metadata
 #
 # Exit 0 if all pass, non-zero with descriptive errors if any fail.
 #
@@ -535,6 +536,15 @@ else
   fi
 fi
 
+fi
+
+# ---- 7. Host env files match fleet maintenance metadata ----
+
+if ! node "$REPO_ROOT/scripts/verify-host-env-fleet.js"; then
+  echo "✗ Host env/fleet consistency check failed" >&2
+  ERRORS=$((ERRORS + 1))
+else
+  echo "✓ Host env/fleet consistency check passed"
 fi
 
 # ---- Summary ----
