@@ -15,7 +15,7 @@ export interface VaultScan {
 
 const TYPED_DIRS = ["entities", "concepts", "comparisons", "queries", "meta"];
 const SKIP_DIRS = new Set([".git", "node_modules"]);
-const DEFAULT_IO_CONCURRENCY = 12;
+const DEFAULT_IO_CONCURRENCY = 32;
 
 export function vaultIoConcurrency(): number {
   const raw = Number.parseInt(process.env.SKILLWIKI_VAULT_IO_CONCURRENCY ?? "", 10);
