@@ -1,5 +1,5 @@
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault, readPage } from "../utils/vault.js";
+import { mapWithConcurrency, readPageCached, scanVault, vaultIoConcurrency, type PageTextCache, type VaultScan } from "../utils/vault.js";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
 import { createHash } from "node:crypto";
@@ -24,6 +24,8 @@ export interface DedupInput {
   remoteDelete?: boolean;
   maxRemoteDeletes?: number;
   rcloneRunner?: RcloneRunner;
+  scan?: VaultScan;
+  pageTextCache?: PageTextCache;
 }
 
 export interface DedupPair {
@@ -73,8 +75,9 @@ export async function runDedup(input: DedupInput): Promise<{ exitCode: number; r
     return { exitCode: ExitCode.USAGE, result: err("USAGE", { message: "--remote-delete requires --apply or --manifest-in" }) };
   }
 
-  const scan = await scanVault(input.vault);
-  if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
+  const scanResult = input.scan ? ok(input.scan) : await scanVault(input.vault);
+  if (!scanResult.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scanResult };
+  const scan = scanResult.data;
 
   const manifestFromFile = input.manifestIn ? readManifest(input.manifestIn) : null;
   if (manifestFromFile && !manifestFromFile.ok) {
@@ -84,16 +87,20 @@ export async function runDedup(input: DedupInput): Promise<{ exitCode: number; r
   const hashMap = new Map<string, string[]>();
   let totalFiles = 0;
 
-  for (const raw of scan.data.raw) {
-    const fm = extractFrontmatter(await readPage(raw));
-    if (!fm.ok) continue;
+  const rawEntries = await mapWithConcurrency(scan.raw, vaultIoConcurrency(), async (raw) => {
+    const fm = extractFrontmatter(await readPageCached(raw, input.pageTextCache));
+    if (!fm.ok) return null;
     const sha = typeof fm.data.sha256 === "string" ? fm.data.sha256 : null;
-    if (!sha || sha.length !== 64) continue;
+    if (!sha || sha.length !== 64) return null;
+    return { sha, relPath: raw.relPath };
+  });
 
+  for (const entry of rawEntries) {
+    if (!entry) continue;
     totalFiles++;
-    const existing = hashMap.get(sha);
-    if (existing) existing.push(raw.relPath);
-    else hashMap.set(sha, [raw.relPath]);
+    const existing = hashMap.get(entry.sha);
+    if (existing) existing.push(entry.relPath);
+    else hashMap.set(entry.sha, [entry.relPath]);
   }
 
   const canonicalPolicy = input.canonicalPolicy ?? "stable-path";
@@ -146,7 +153,7 @@ export async function runDedup(input: DedupInput): Promise<{ exitCode: number; r
     }
 
     // Rewire citations in all non-raw markdown pages. Raw files stay immutable.
-    for (const page of scan.data.allMarkdown.filter(p => !p.relPath.startsWith("raw/"))) {
+    for (const page of scan.allMarkdown.filter(p => !p.relPath.startsWith("raw/"))) {
       const text = readFileSync(join(input.vault, page.relPath), "utf-8");
       let updated = text;
       let changed = false;

@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault, readPage } from "../utils/vault.js";
+import { mapWithConcurrency, readPageCached, scanVault, vaultIoConcurrency, type PageTextCache, type VaultScan } from "../utils/vault.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { extractTaxonomy } from "../parsers/taxonomy.js";
 
-export interface TagAuditInput { vault: string }
+export interface TagAuditInput { vault: string; scan?: VaultScan; pageTextCache?: PageTextCache }
 export interface TagAuditOutput {
   violations: Array<{ page: string; tag: string }>;
   taxonomy: string[];
@@ -13,8 +13,9 @@ export interface TagAuditOutput {
 }
 
 export async function runTagAudit(input: TagAuditInput): Promise<{ exitCode: number; result: Result<TagAuditOutput> }> {
-  const scan = await scanVault(input.vault);
-  if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
+  const scanResult = input.scan ? ok(input.scan) : await scanVault(input.vault);
+  if (!scanResult.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scanResult };
+  const scan = scanResult.data;
 
   const schemaText = await readFile(join(input.vault, "SCHEMA.md"), "utf8");
   const tax = extractTaxonomy(schemaText);
@@ -23,17 +24,26 @@ export async function runTagAudit(input: TagAuditInput): Promise<{ exitCode: num
   const allowed = new Set(tax.data);
   const violations: TagAuditOutput["violations"] = [];
 
-  for (const p of scan.data.typedKnowledge) {
-    const text = await readPage(p);
+  const perPage = await mapWithConcurrency(scan.typedKnowledge, vaultIoConcurrency(), async (p) => {
+    const text = await readPageCached(p, input.pageTextCache);
     const fm = extractFrontmatter(text);
-    if (!fm.ok) return { exitCode: ExitCode.INVALID_FRONTMATTER, result: fm };
+    if (!fm.ok) return fm;
+    const pageViolations: TagAuditOutput["violations"] = [];
     const tags = fm.data.tags;
-    if (!Array.isArray(tags)) continue;
+    if (!Array.isArray(tags)) return pageViolations;
     for (const t of tags) {
       if (typeof t === "string" && !allowed.has(t)) {
-        violations.push({ page: p.relPath, tag: t });
+        pageViolations.push({ page: p.relPath, tag: t });
       }
     }
+    return pageViolations;
+  });
+
+  for (const result of perPage) {
+    if (!Array.isArray(result)) {
+      return { exitCode: ExitCode.INVALID_FRONTMATTER, result };
+    }
+    violations.push(...result);
   }
 
   if (violations.length > 0) {

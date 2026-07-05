@@ -1,4 +1,4 @@
-import { readPage, type VaultPage } from "./vault.js";
+import { mapWithConcurrency, readPageCached, vaultIoConcurrency, type PageTextCache, type VaultPage } from "./vault.js";
 import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 
@@ -21,22 +21,22 @@ export interface SparseCommunity {
  * lint check share one pass (no duplication). Takes the already-scanned page
  * list so callers keep their own vault-validity guard.
  */
-export async function buildWikilinkAdjacency(typedKnowledge: VaultPage[]): Promise<Adjacency> {
+export async function buildWikilinkAdjacency(typedKnowledge: VaultPage[], pageTextCache?: PageTextCache): Promise<Adjacency> {
   const adjacency: Adjacency = {};
   const slugToPath: Record<string, string> = {};
   for (const p of typedKnowledge) {
     const slug = p.relPath.replace(/\.md$/, "").split("/").pop()!;
     slugToPath[slug] = p.relPath;
   }
-  for (const p of typedKnowledge) {
-    const text = await readPage(p);
+  await mapWithConcurrency(typedKnowledge, vaultIoConcurrency(), async (p) => {
+    const text = await readPageCached(p, pageTextCache);
     const split = splitFrontmatter(text);
     const body = split.ok ? split.data.body : text;
     const links = extractBodyWikilinks(body);
     adjacency[p.relPath] = links
       .map(slug => slugToPath[slug.split("/").pop()!])
       .filter((x): x is string => Boolean(x));
-  }
+  });
   return adjacency;
 }
 

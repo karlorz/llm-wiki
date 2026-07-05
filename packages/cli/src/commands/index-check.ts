@@ -1,10 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault } from "../utils/vault.js";
+import { scanVault, type VaultScan } from "../utils/vault.js";
 import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 
-export interface IndexCheckInput { vault: string }
+export interface IndexCheckInput { vault: string; scan?: VaultScan }
 export interface IndexCheckOutput {
   missing_from_index: string[];
   ghost_entries: string[];
@@ -12,7 +12,7 @@ export interface IndexCheckOutput {
 }
 
 export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode: number; result: Result<IndexCheckOutput> }> {
-  const scan = await scanVault(input.vault);
+  const scan = input.scan ? ok(input.scan) : await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
   let indexText = "";

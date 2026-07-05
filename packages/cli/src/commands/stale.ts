@@ -1,12 +1,12 @@
 import { readdir, rename, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault } from "../utils/vault.js";
+import { mapWithConcurrency, readPageCached, scanVault, vaultIoConcurrency, type PageTextCache, type VaultScan } from "../utils/vault.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { parseExpiryAnnotations, type ExpiryAnnotation } from "../parsers/expiry-annotations.js";
 import { appendLastOp } from "../utils/last-op.js";
 
-export interface StaleInput { vault: string; days: number; archive?: boolean; forceScan?: boolean; project?: string }
+export interface StaleInput { vault: string; days: number; archive?: boolean; forceScan?: boolean; project?: string; scan?: VaultScan; pageTextCache?: PageTextCache }
 export interface StaleTranscript { path: string; reason: string; hint?: string }
 export interface IncompleteWorkItem { path: string; reason: string }
 export interface StaleSection {
@@ -35,8 +35,9 @@ function daysSince(isoDate: string): number {
 }
 
 export async function runStale(input: StaleInput): Promise<{ exitCode: number; result: Result<StaleOutput> }> {
-  const scan = await scanVault(input.vault);
-  if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
+  const scanResult = input.scan ? ok(input.scan) : await scanVault(input.vault);
+  if (!scanResult.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scanResult };
+  const scan = scanResult.data;
 
   const staleTranscripts: StaleTranscript[] = [];
   const incompleteWorkItems: IncompleteWorkItem[] = [];
@@ -95,20 +96,20 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   const LOOP_CYCLE_PATTERN = /loop-cycle-/;
 
   // 1. Stale transcripts: raw/transcripts/*.md where matching work item is done/invalid
-  let transcripts = scan.data.raw.filter(p => p.relPath.startsWith("raw/transcripts/") && p.relPath.endsWith(".md"));
+  let transcripts = scan.raw.filter(p => p.relPath.startsWith("raw/transcripts/") && p.relPath.endsWith(".md"));
   const claimedPaths = new Set<string>();
 
   // Pre-parse transcript frontmatter for project/kind fields
   const transcriptMeta = new Map<string, { kind: string; project: string; slug: string; inferred: boolean }>();
-  for (const t of transcripts) {
+  const transcriptEntries = await mapWithConcurrency(transcripts, vaultIoConcurrency(), async (t) => {
     try {
-      const content = await readFile(join(input.vault, t.relPath), "utf8");
+      const content = await readPageCached(t, input.pageTextCache);
       const fm = extractFrontmatter(content);
       let kind = fm.ok && typeof fm.data.kind === "string" ? fm.data.kind : "";
       let project = fm.ok && typeof fm.data.project === "string" ? fm.data.project : "";
 
       // --project: skip transcripts not linked to this project
-      if (input.project && !project.includes(input.project)) continue;
+      if (input.project && !project.includes(input.project)) return null;
       let inferred = false;
 
       // Force-scan: infer kind from filename if missing (skip loop-cycle session logs)
@@ -138,8 +139,13 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
         }
       }
 
-      transcriptMeta.set(t.relPath, { kind, project, slug: extractSlug(project), inferred });
-    } catch { /* skip */ }
+      return [t.relPath, { kind, project, slug: extractSlug(project), inferred }] as const;
+    } catch {
+      return null;
+    }
+  });
+  for (const entry of transcriptEntries) {
+    if (entry) transcriptMeta.set(entry[0], entry[1]);
   }
 
   for (const t of transcripts) {
@@ -181,7 +187,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   }
 
   // 1b. Also claim transcripts referenced by work item spec.md `source:` frontmatter
-  for (const [relDir] of workDirs) {
+  await mapWithConcurrency([...workDirs.keys()], vaultIoConcurrency(), async (relDir) => {
     const specPath = join(input.vault, relDir, "spec.md");
     try {
       const specContent = await readFile(specPath, "utf8");
@@ -191,7 +197,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
         if (sourcePath.startsWith("raw/transcripts/")) claimedPaths.add(sourcePath);
       }
     } catch { /* no spec or unreadable */ }
-  }
+  });
 
   // 1c. Unclaimed transcripts: kind=task|bug with project field but no matching work item
   const unclaimedTranscripts: StaleTranscript[] = [];
@@ -228,32 +234,35 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
 
   // 3. Stale typed-knowledge pages: pages with `updated` older than --days
   const stale: Array<{ page: string; reason: string }> = [];
-  for (const page of scan.data.typedKnowledge) {
+  const stalePageResults = await mapWithConcurrency(scan.typedKnowledge, vaultIoConcurrency(), async (page) => {
     try {
-      const text = await readFile(join(input.vault, page.relPath), "utf8");
+      const text = await readPageCached(page, input.pageTextCache);
       const fm = extractFrontmatter(text);
       if (fm.ok && typeof fm.data.updated === "string") {
         // --project: only include pages linked to this project
         if (input.project) {
           const pp = fm.data.provenance_projects;
           const linked = Array.isArray(pp) && pp.some((p: string) => String(p).includes(input.project!));
-          if (!linked) continue;
+          if (!linked) return null;
         }
         const age = daysSince(fm.data.updated);
         // Use stale_ttl from frontmatter if present, otherwise global --days
         const threshold = (typeof fm.data.stale_ttl === "number" && fm.data.stale_ttl > 0) ? fm.data.stale_ttl : input.days;
         if (age >= threshold) {
-          stale.push({ page: page.relPath, reason: `updated ${age} days ago (threshold: ${threshold})` });
+          return { page: page.relPath, reason: `updated ${age} days ago (threshold: ${threshold})` };
         }
       }
     } catch { /* skip unreadable pages */ }
-  }
+    return null;
+  });
+  stale.push(...stalePageResults.filter((item): item is { page: string; reason: string } => item !== null));
 
   // 3b. Stale sections: typed-knowledge pages with expired <!-- expires: YYYY-MM-DD --> annotations
   const staleSections: StaleSection[] = [];
-  for (const page of scan.data.typedKnowledge) {
+  const staleSectionResults = await mapWithConcurrency(scan.typedKnowledge, vaultIoConcurrency(), async (page) => {
+    const pageSections: StaleSection[] = [];
     try {
-      const text = await readFile(join(input.vault, page.relPath), "utf8");
+      const text = await readPageCached(page, input.pageTextCache);
       // --project: only include pages linked to this project
       const projectFilter = input.project;
       if (projectFilter) {
@@ -261,13 +270,13 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
         if (fm.ok) {
           const pp = fm.data.provenance_projects;
           const linked = Array.isArray(pp) && pp.some((p: string) => String(p).includes(projectFilter));
-          if (!linked) continue;
+          if (!linked) return pageSections;
         }
       }
       const annotations = parseExpiryAnnotations(text, page.relPath);
       for (const ann of annotations) {
         if (daysSince(ann.expires) >= 0) {
-          staleSections.push({
+          pageSections.push({
             page: ann.page,
             heading: ann.heading,
             line: ann.line,
@@ -279,7 +288,9 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
         }
       }
     } catch { /* skip unreadable pages */ }
-  }
+    return pageSections;
+  });
+  staleSections.push(...staleSectionResults.flat());
 
   // 4. Archive if requested
   const today = new Date().toISOString().slice(0, 10);
@@ -288,8 +299,8 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     await mkdir(archiveDir, { recursive: true });
     // Build set of raw paths cited as sources by typed-knowledge pages (protect from archival)
     const citedRawPaths = new Set<string>();
-    for (const page of scan.data.typedKnowledge) {
-      const text = await readFile(join(input.vault, page.relPath), "utf8").catch(() => "");
+    for (const page of scan.typedKnowledge) {
+      const text = await readPageCached(page, input.pageTextCache).catch(() => "");
       for (const line of text.split("\n")) {
         for (const m of line.matchAll(/\^\[(raw\/[^\]]+)\]/g)) {
           citedRawPaths.add(m[1]!);

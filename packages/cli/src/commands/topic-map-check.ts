@@ -1,11 +1,12 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault } from "../utils/vault.js";
+import { scanVault, type VaultScan } from "../utils/vault.js";
 
 const DEFAULT_THRESHOLD = 200;
 
 export interface TopicMapCheckInput {
   vault: string;
   threshold?: number;
+  scan?: VaultScan;
 }
 
 export interface TopicMapCheckOutput {
@@ -19,7 +20,7 @@ export async function runTopicMapCheck(
   input: TopicMapCheckInput
 ): Promise<{ exitCode: number; result: Result<TopicMapCheckOutput> }> {
   const threshold = input.threshold ?? DEFAULT_THRESHOLD;
-  const scan = await scanVault(input.vault);
+  const scan = input.scan ? ok(input.scan) : await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
   const page_count = scan.data.typedKnowledge.length;

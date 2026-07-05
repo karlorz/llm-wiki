@@ -1,8 +1,8 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault } from "../utils/vault.js";
+import { scanVault, type PageTextCache, type VaultScan } from "../utils/vault.js";
 import { buildWikilinkAdjacency, findSparseCommunities, type SparseCommunity } from "../utils/community.js";
 
-export interface SparseCommunityInput { vault: string; minSize?: number; maxCohesion?: number }
+export interface SparseCommunityInput { vault: string; minSize?: number; maxCohesion?: number; scan?: VaultScan; pageTextCache?: PageTextCache }
 export interface SparseCommunityOutput { communities: SparseCommunity[]; humanHint: string }
 
 /**
@@ -14,10 +14,10 @@ export interface SparseCommunityOutput { communities: SparseCommunity[]; humanHi
 export async function runSparseCommunity(
   input: SparseCommunityInput,
 ): Promise<{ exitCode: number; result: Result<SparseCommunityOutput> }> {
-  const scan = await scanVault(input.vault);
+  const scan = input.scan ? ok(input.scan) : await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  const adjacency = await buildWikilinkAdjacency(scan.data.typedKnowledge);
+  const adjacency = await buildWikilinkAdjacency(scan.data.typedKnowledge, input.pageTextCache);
   const communities = findSparseCommunities(adjacency, {
     minSize: input.minSize,
     maxCohesion: input.maxCohesion,

@@ -20,7 +20,7 @@ import { runRawBodyDedup } from "./raw-body-dedup.js";
 import { validateCompoundReferences } from "./audit.js";
 import { fixFrontmatter } from "./frontmatter-fix.js";
 import { fixPathTooLong, runPathTooLong } from "./path-too-long.js";
-import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
+import { mapWithConcurrency, readPage, readPageCached, scanVault, vaultIoConcurrency, type PageTextCache, type VaultPage, type VaultScan } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
 import { extractCitationMarkers, isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations, stripFencedBlocks } from "../parsers/citations.js";
 import { buildSlugMap } from "../utils/slug.js";
@@ -149,6 +149,12 @@ const INFO_ORDER = ["bridges", "sparse_community", "page_structure", "topic_map_
 const KNOWN_BUCKETS = [...ERROR_ORDER, ...WARNING_ORDER, ...INFO_ORDER] as const;
 const CLI_REFS_TYPED_DIRS = ["entities", "concepts", "comparisons", "queries", "meta"] as const;
 
+interface FileSourceUrlFindings {
+  fileSourceUrlFlags: Set<string>;
+  fileSourceUrlFrontmatterFlags: Set<string>;
+  rawIdentityConflicts: unknown[];
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
@@ -174,6 +180,45 @@ function summarizeBucket(bucket: Bucket, severity: LintSeverity, vaultPath: stri
     examples_limit: safeLimit,
     sample_truncated: bucket.items.length > examples.length,
     details_command: `skillwiki lint ${shellQuote(vaultPath)} --only ${bucket.kind}`,
+  };
+}
+
+function severityForBucket(kind: string): LintSeverity {
+  if ((ERROR_ORDER as readonly string[]).includes(kind)) return "error";
+  if ((WARNING_ORDER as readonly string[]).includes(kind)) return "warning";
+  return "info";
+}
+
+function outputForOnlyBucket(
+  input: LintInput | LintSummaryInput,
+  match: Bucket[],
+  fixed: string[],
+  unresolved: string[],
+): { exitCode: number; result: Result<LintOutput | LintSummaryOutput> } {
+  const severity = severityForBucket(input.only!);
+  const filtered = severity === "error" ? { error: match, warning: [], info: [] }
+    : severity === "warning" ? { error: [], warning: match, info: [] }
+    : { error: [], warning: [], info: match };
+  const summary = {
+    errors: filtered.error.reduce((n, b) => n + b.items.length, 0),
+    warnings: filtered.warning.reduce((n, b) => n + b.items.length, 0),
+    info: filtered.info.reduce((n, b) => n + b.items.length, 0),
+  };
+  let exitCode: ExitCodeValue = ExitCode.OK;
+  if (summary.errors > 0) exitCode = ExitCode.LINT_HAS_ERRORS;
+  else if (summary.warnings > 0 || summary.info > 0) exitCode = ExitCode.LINT_HAS_WARNINGS;
+  const output: LintOutput = {
+    vault: { path: input.vault, source: input.source ?? "resolved" },
+    summary,
+    by_severity: filtered,
+    fixed,
+    unresolved,
+    humanHint: `--only ${input.only}\n${match.length === 0 ? "0 violations" : match.map(b => `  ${b.kind}: ${b.items.length}`).join("\n")}`,
+  };
+  if (input.fix) appendLintFixLastOp(input.vault, fixed);
+  return {
+    exitCode,
+    result: ok(input.summary ? summarizeLintOutput(output, input.examplesLimit) : output),
   };
 }
 
@@ -262,7 +307,7 @@ async function runCliRefsOnly(input: LintInput | LintSummaryInput): Promise<{ ex
   const cliRefFlags: string[] = [];
   const cliSurface = buildCliSurface();
   for (const page of pages.data) {
-    const text = await readPage(page);
+    const text = await readPageCached(page);
     const violations = validateCliRefs(text, page.relPath, cliSurface);
     for (const v of violations) {
       cliRefFlags.push(`${v.page}: ${v.ref} (${v.reason})`);
@@ -287,6 +332,174 @@ async function runCliRefsOnly(input: LintInput | LintSummaryInput): Promise<{ ex
   };
 }
 
+async function collectFileSourceUrlFindings(
+  scan: VaultScan,
+  pageTextCache: PageTextCache,
+  options: { includeRawIdentityConflicts: boolean },
+): Promise<FileSourceUrlFindings> {
+  const fileSourceUrlFlags = new Set<string>();
+  const fileSourceUrlFrontmatterFlags = new Set<string>();
+  const rawIdentityConflicts: unknown[] = [];
+  const rawPageBodyByPath = new Map<string, string>();
+
+  const rawResults = await mapWithConcurrency(scan.raw, vaultIoConcurrency(), async (raw) => {
+    const flags: string[] = [];
+    const frontmatterFlags: string[] = [];
+    const conflicts: unknown[] = [];
+    let body: string | undefined;
+    try {
+      const text = await readPageCached(raw, pageTextCache);
+      const split = splitFrontmatter(text);
+      if (!split.ok) return { relPath: raw.relPath, body, flags, frontmatterFlags, conflicts };
+      body = split.data.body;
+      if (/^source_url:\s*file:\/\//m.test(split.data.rawFrontmatter)) {
+        flags.push(raw.relPath);
+        frontmatterFlags.push(raw.relPath);
+      }
+      if (options.includeRawIdentityConflicts) {
+        const sourceUrl = split.data.rawFrontmatter.match(/^source_url:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
+        const assessment = assessSourceIdentity({
+          rawPath: raw.relPath,
+          sourceUrl,
+          body: split.data.body,
+        });
+        if (assessment.status === "conflict") {
+          conflicts.push({
+            file: raw.relPath,
+            status: assessment.status,
+            reasons: assessment.reasons,
+            pathSignals: assessment.pathSignals,
+            sourceSignals: assessment.sourceSignals,
+            bodySignals: assessment.bodySignals,
+          });
+        }
+      }
+    } catch {
+      // Other filesystem checks surface unreadable paths.
+    }
+    return { relPath: raw.relPath, body, flags, frontmatterFlags, conflicts };
+  });
+
+  for (const result of rawResults) {
+    if (result.body !== undefined) rawPageBodyByPath.set(result.relPath, result.body);
+    for (const flag of result.flags) fileSourceUrlFlags.add(flag);
+    for (const flag of result.frontmatterFlags) fileSourceUrlFrontmatterFlags.add(flag);
+    rawIdentityConflicts.push(...result.conflicts);
+  }
+
+  const canonicalSourcePages = [
+    ...scan.raw,
+    ...scan.typedKnowledge,
+    ...scan.compound,
+    ...scan.workItems,
+  ].filter(shouldCheckCanonicalLocalSourceAssertion);
+  const canonicalFlags = await mapWithConcurrency(canonicalSourcePages, vaultIoConcurrency(), async (page) => {
+    try {
+      let body = rawPageBodyByPath.get(page.relPath);
+      if (body === undefined) {
+        const text = await readPageCached(page, pageTextCache);
+        const split = splitFrontmatter(text);
+        if (!split.ok) return null;
+        body = split.data.body;
+      }
+      return hasCanonicalLocalSourceAssertion(body) ? page.relPath : null;
+    } catch {
+      return null;
+    }
+  });
+  for (const flag of canonicalFlags) {
+    if (flag) fileSourceUrlFlags.add(flag);
+  }
+
+  return { fileSourceUrlFlags, fileSourceUrlFrontmatterFlags, rawIdentityConflicts };
+}
+
+async function applyFileSourceUrlFix(
+  input: LintInput | LintSummaryInput,
+  scan: VaultScan,
+  fileSourceUrlFlags: Set<string>,
+  fileSourceUrlFrontmatterFlags: Set<string>,
+  fixed: string[],
+  unresolved: string[],
+): Promise<Set<string>> {
+  if (!input.fix || fileSourceUrlFrontmatterFlags.size === 0) return fileSourceUrlFlags;
+
+  const fileFixed: string[] = [];
+  for (const relPath of fileSourceUrlFrontmatterFlags) {
+    try {
+      const absPath = `${input.vault}/${relPath}`;
+      const raw = await readFile(absPath, "utf8");
+      const parts = raw.split("---", 3);
+      if (parts.length < 3) { unresolved.push(relPath); continue; }
+      const rawFm = parts[1]!;
+      const rest = parts[2]!;
+
+      const sourceMatch = rest.match(/^source:\s*"?(https?:\/\/[^\s\n"]+)"?\s*$/m);
+      if (!sourceMatch) {
+        unresolved.push(relPath);
+        continue;
+      }
+      const realUrl = sourceMatch[1]!;
+
+      const newRawFm = rawFm.replace(/^source_url:\s*file:\/\/[^\n]+/m, `source_url: ${realUrl}`);
+      const newContent = `---${newRawFm}---${rest}`;
+      const w = await safeWritePage(absPath, newContent);
+      if (!w.ok) { unresolved.push(relPath); continue; }
+      fileFixed.push(relPath);
+    } catch {
+      unresolved.push(relPath);
+    }
+  }
+
+  fixed.push(...fileFixed);
+
+  if (fileFixed.length === 0) return fileSourceUrlFlags;
+
+  const remaining = new Set(fileSourceUrlFlags);
+  for (const relPath of fileFixed) {
+    try {
+      const page = scan.allMarkdown.find(p => p.relPath === relPath);
+      if (!page) {
+        remaining.delete(relPath);
+        continue;
+      }
+      const text = await readPage(page);
+      const split = splitFrontmatter(text);
+      if (!split.ok) continue;
+      const stillHasFileSourceUrl = /^source_url:\s*file:\/\//m.test(split.data.rawFrontmatter);
+      const stillHasCanonicalBodyAssertion =
+        shouldCheckCanonicalLocalSourceAssertion(page)
+        && hasCanonicalLocalSourceAssertion(split.data.body);
+      if (!stillHasFileSourceUrl && !stillHasCanonicalBodyAssertion) {
+        remaining.delete(relPath);
+      }
+    } catch {
+      // Keep unreadable paths in the bucket rather than under-reporting.
+    }
+  }
+  return remaining;
+}
+
+async function runFileSourceUrlOnly(input: LintInput | LintSummaryInput): Promise<{ exitCode: number; result: Result<LintOutput | LintSummaryOutput> }> {
+  const scanResult = await scanVault(input.vault);
+  if (!scanResult.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scanResult };
+
+  const pageTextCache: PageTextCache = new Map();
+  const fixed: string[] = [];
+  const unresolved: string[] = [];
+  const findings = await collectFileSourceUrlFindings(scanResult.data, pageTextCache, { includeRawIdentityConflicts: false });
+  const remaining = await applyFileSourceUrlFix(
+    input,
+    scanResult.data,
+    findings.fileSourceUrlFlags,
+    findings.fileSourceUrlFrontmatterFlags,
+    fixed,
+    unresolved,
+  );
+  const match: Bucket[] = remaining.size > 0 ? [{ kind: "file_source_url", items: [...remaining] }] : [];
+  return outputForOnlyBucket(input, match, fixed, unresolved);
+}
+
 export function runLint(input: LintSummaryInput): Promise<{ exitCode: number; result: Result<LintSummaryOutput> }>;
 export function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }>;
 export async function runLint(input: LintInput | LintSummaryInput): Promise<{ exitCode: number; result: Result<LintOutput | LintSummaryOutput> }> {
@@ -299,26 +512,35 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   if (input.only === "cli_refs") {
     return runCliRefsOnly(input);
   }
+  if (input.only === "file_source_url") {
+    return runFileSourceUrlOnly(input);
+  }
 
   const shouldFix = (bucket: string): boolean => !!input.fix && (!input.only || input.only === bucket);
 
   const buckets: Record<string, unknown[]> = {};
   const fixed: string[] = [];
   const unresolved: string[] = [];
+  const scanResult = await scanVault(input.vault);
+  if (!scanResult.ok) {
+    return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scanResult };
+  }
+  const scan = scanResult.data;
+  const pageTextCache: PageTextCache = new Map();
 
-  const links = await runLinks({ vault: input.vault });
+  const links = await runLinks({ vault: input.vault, scan, pageTextCache });
   if (links.result.ok && links.result.data.broken.length > 0) buckets.broken_wikilinks = links.result.data.broken;
   if (!links.result.ok && links.result.error === "INVALID_FRONTMATTER") {
     buckets.invalid_frontmatter = [links.result.detail ?? {}];
   }
 
-  const tags = await runTagAudit({ vault: input.vault });
+  const tags = await runTagAudit({ vault: input.vault, scan, pageTextCache });
   if (tags.result.ok && tags.result.data.violations.length > 0) buckets.tag_not_in_taxonomy = tags.result.data.violations;
   if (!tags.result.ok && tags.result.error === "INVALID_FRONTMATTER") {
     buckets.invalid_frontmatter = [...(buckets.invalid_frontmatter ?? []), tags.result.detail ?? {}];
   }
 
-  const idx = await runIndexCheck({ vault: input.vault });
+  const idx = await runIndexCheck({ vault: input.vault, scan });
   if (idx.result.ok && (idx.result.data.missing_from_index.length > 0 || idx.result.data.ghost_entries.length > 0)) {
     buckets.index_incomplete = [{
       missing_from_index: idx.result.data.missing_from_index,
@@ -331,14 +553,14 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     buckets.index_link_format = linkFmt.result.data.markdown_links;
   }
 
-  const staleResult = await runStale({ vault: input.vault, days: input.days });
+  const staleResult = await runStale({ vault: input.vault, days: input.days, scan, pageTextCache });
   if (staleResult.result.ok) {
     const st = staleResult.result.data;
     const staleList = [...st.stale_transcripts.map(t => t.path), ...(st.unclaimed_transcripts ?? []).map(t => t.path), ...st.incomplete_work_items.map(w => w.path), ...(st.done_work_items ?? []).map(w => w.path)];
     if (staleList.length > 0) buckets.stale_page = staleList;
   }
 
-  const pagesize = await runPagesize({ vault: input.vault, lines: input.lines });
+  const pagesize = await runPagesize({ vault: input.vault, lines: input.lines, scan, pageTextCache });
   if (pagesize.result.ok && pagesize.result.data.oversized.length > 0) buckets.page_too_large = pagesize.result.data.oversized;
 
   const rotate = await runLogRotate({ vault: input.vault, threshold: input.logThreshold, apply: false });
@@ -346,26 +568,26 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     buckets.log_rotate_needed = [{ entries: rotate.result.data.entries, threshold: rotate.result.data.threshold }];
   }
 
-  const orphans = await runOrphans({ vault: input.vault });
+  const orphans = await runOrphans({ vault: input.vault, scan, pageTextCache });
   if (orphans.result.ok) {
     if (orphans.result.data.orphans.length > 0) buckets.orphans = orphans.result.data.orphans;
     if (orphans.result.data.bridges.length > 0) buckets.bridges = orphans.result.data.bridges;
   }
 
-  const sparse = await runSparseCommunity({ vault: input.vault });
+  const sparse = await runSparseCommunity({ vault: input.vault, scan, pageTextCache });
   if (sparse.result.ok && sparse.result.data.communities.length > 0) {
     buckets.sparse_community = sparse.result.data.communities;
   }
 
-  const topicMap = await runTopicMapCheck({ vault: input.vault });
+  const topicMap = await runTopicMapCheck({ vault: input.vault, scan });
   if (topicMap.result.ok && topicMap.result.data.recommended) {
     buckets.topic_map_recommended = [{ page_count: topicMap.result.data.page_count, threshold: topicMap.result.data.threshold }];
   }
 
-  const dedup = await runDedup({ vault: input.vault });
+  const dedup = await runDedup({ vault: input.vault, scan, pageTextCache });
   if (dedup.result.ok && dedup.result.data.duplicates.length > 0) buckets.raw_dedup = dedup.result.data.duplicates;
 
-  const bodyDedup = await runRawBodyDedup(input.vault);
+  const bodyDedup = await runRawBodyDedup(input.vault, scan, pageTextCache);
   if (bodyDedup.result.ok && bodyDedup.result.data.duplicates.length > 0) {
     buckets.raw_body_duplicate = bodyDedup.result.data.duplicates.map(d => ({
       body_hash: d.bodyHash.slice(0, 12),
@@ -376,40 +598,36 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   const compoundRefs = await validateCompoundReferences(input.vault);
   if (compoundRefs.ok && compoundRefs.data.length > 0) buckets.compound_refs = compoundRefs.data;
 
-  const pathCheck = await runPathTooLong({ vault: input.vault });
+  const pathCheck = await runPathTooLong({ vault: input.vault, scan });
   if (pathCheck.result.ok && pathCheck.result.data.violations.length > 0) buckets.path_too_long = pathCheck.result.data.violations;
 
   // Citation style + page structure check
-  const scan = await scanVault(input.vault);
-  const allPages = scan.ok ? [...scan.data.typedKnowledge, ...scan.data.raw, ...scan.data.workItems, ...scan.data.compound] : [];
-  const slugs = scan.ok ? buildSlugMap(allPages) : new Map<string, string>();
-  if (scan.ok) {
-    const sensitiveFlags: unknown[] = [];
-    for (const page of scan.data.allMarkdown) {
+  const allPages = [...scan.typedKnowledge, ...scan.raw, ...scan.workItems, ...scan.compound];
+  const slugs = buildSlugMap(allPages);
+  {
+    const allPageResults = await mapWithConcurrency(scan.allMarkdown, vaultIoConcurrency(), async (page) => {
+      const sensitiveFlags: unknown[] = [];
+      let fmYamlInvalid: { path: string; message: string } | null = null;
       try {
-        const text = await readPage(page);
-        const findings = scanSensitiveContent(text, { file: page.relPath });
-        sensitiveFlags.push(...findings);
-      } catch {
-        // Skip unreadable pages; other filesystem checks surface path issues.
-      }
-    }
-    if (sensitiveFlags.length > 0) buckets.sensitive_content = sensitiveFlags;
-
-    const fmYamlInvalid: { path: string; message: string }[] = [];
-    for (const page of scan.data.allMarkdown) {
-      try {
-        const text = await readPage(page);
+        const text = await readPageCached(page, pageTextCache);
+        sensitiveFlags.push(...scanSensitiveContent(text, { file: page.relPath }));
         const fm = extractFrontmatter(text);
         if (!fm.ok && fm.error === "INVALID_FRONTMATTER") {
           const detail = fm.detail as { message?: string } | undefined;
           const message = detail?.message ?? "invalid YAML";
-          fmYamlInvalid.push({ path: page.relPath, message });
+          fmYamlInvalid = { path: page.relPath, message };
         }
       } catch {
-        // Skip unreadable pages.
+        // Skip unreadable pages; other filesystem checks surface path issues.
       }
-    }
+      return { sensitiveFlags, fmYamlInvalid };
+    });
+    const sensitiveFlags = allPageResults.flatMap(result => result.sensitiveFlags);
+    if (sensitiveFlags.length > 0) buckets.sensitive_content = sensitiveFlags;
+
+    const fmYamlInvalid = allPageResults
+      .map(result => result.fmYamlInvalid)
+      .filter((item): item is { path: string; message: string } => item !== null);
     if (fmYamlInvalid.length > 0) buckets.frontmatter_yaml_invalid = fmYamlInvalid;
 
     // Raw subdirectory duplicate detection
@@ -419,7 +637,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     const flatStems = new Map<string, string>(); // parentType/stem → relPath for depth-2 raw files
     const deepFiles: { relPath: string; stem: string; parentType: string }[] = [];
 
-    for (const raw of scan.data.raw) {
+    for (const raw of scan.raw) {
       const parts = raw.relPath.split("/");
       if (parts.length === 3) {
         const stem = parts[2]!.replace(/\.md$/, "");
@@ -442,55 +660,10 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     }
 
     // file:// source_url check: raw files should have a real external source URL, not a local file path
-    const fileSourceUrlFlags = new Set<string>();
-    const fileSourceUrlFrontmatterFlags = new Set<string>();
-    const rawIdentityConflicts: unknown[] = [];
-    const rawPageBodyByPath = new Map<string, string>();
-    for (const raw of scan.data.raw) {
-      const text = await readPage(raw);
-      const split = splitFrontmatter(text);
-      if (!split.ok) continue;
-      rawPageBodyByPath.set(raw.relPath, split.data.body);
-      if (/^source_url:\s*file:\/\//m.test(split.data.rawFrontmatter)) {
-        fileSourceUrlFlags.add(raw.relPath);
-        fileSourceUrlFrontmatterFlags.add(raw.relPath);
-      }
-      const sourceUrl = split.data.rawFrontmatter.match(/^source_url:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "") ?? "";
-      const assessment = assessSourceIdentity({
-        rawPath: raw.relPath,
-        sourceUrl,
-        body: split.data.body,
-      });
-      if (assessment.status === "conflict") {
-        rawIdentityConflicts.push({
-          file: raw.relPath,
-          status: assessment.status,
-          reasons: assessment.reasons,
-          pathSignals: assessment.pathSignals,
-          sourceSignals: assessment.sourceSignals,
-          bodySignals: assessment.bodySignals,
-        });
-      }
-    }
-    const canonicalSourcePages = [
-      ...scan.data.raw,
-      ...scan.data.typedKnowledge,
-      ...scan.data.compound,
-      ...scan.data.workItems,
-    ];
-    for (const page of canonicalSourcePages) {
-      if (!shouldCheckCanonicalLocalSourceAssertion(page)) continue;
-      let body = rawPageBodyByPath.get(page.relPath);
-      if (body === undefined) {
-        const text = await readPage(page);
-        const split = splitFrontmatter(text);
-        if (!split.ok) continue;
-        body = split.data.body;
-      }
-      if (hasCanonicalLocalSourceAssertion(body)) {
-        fileSourceUrlFlags.add(page.relPath);
-      }
-    }
+    const fileSourceUrlFindings = await collectFileSourceUrlFindings(scan, pageTextCache, { includeRawIdentityConflicts: true });
+    let fileSourceUrlFlags = fileSourceUrlFindings.fileSourceUrlFlags;
+    const fileSourceUrlFrontmatterFlags = fileSourceUrlFindings.fileSourceUrlFrontmatterFlags;
+    const rawIdentityConflicts = fileSourceUrlFindings.rawIdentityConflicts;
     if (fileSourceUrlFlags.size > 0) buckets.file_source_url = [...fileSourceUrlFlags];
     if (rawIdentityConflicts.length > 0) buckets.raw_source_identity_conflict = rawIdentityConflicts;
 
@@ -504,62 +677,91 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     const brokenSourceFlags = new Set<string>();
     const missingTldrFlags: string[] = [];
     const missingDiagramFlags: string[] = [];
-    for (const page of scan.data.typedKnowledge) {
-      const text = await readPage(page);
-      const split = splitFrontmatter(text);
-      if (!split.ok) continue;
-      const body = split.data.body;
-      const rawFm = split.data.rawFrontmatter;
-      if (hasDuplicateFrontmatter(body)) dupFrontmatter.push(page.relPath);
-      if (isLegacyCitationStyle(body)) legacyPages.push(page.relPath);
-      if (hasOrphanedCitations(body)) orphanedPages.push(page.relPath);
-      if (hasWikilinkCitations(body)) wikilinkCitationFlags.push(page.relPath);
-      // broken_sources: check sources: frontmatter entries and body markers resolve to raw files.
-      const sourcesEntries = extractSourceEntries(rawFm);
-      for (const entry of sourcesEntries) {
-        const rawPath = normalizeRawSourceTarget(entry);
-        if (!rawPath) continue;
-        if (!rawSourceTargetExistsSync(input.vault, rawPath)) {
-          brokenSourceFlags.add(`${page.relPath}: ${rawPath}`);
+    const typedPageResults = await mapWithConcurrency(scan.typedKnowledge, vaultIoConcurrency(), async (page) => {
+      const result = {
+        legacyPages: [] as string[],
+        orphanedPages: [] as string[],
+        structFlags: [] as string[],
+        dupFrontmatter: [] as string[],
+        noOverview: [] as string[],
+        fmWikilinkFlags: [] as string[],
+        wikilinkCitationFlags: [] as string[],
+        brokenSourceFlags: [] as string[],
+        missingTldrFlags: [] as string[],
+        missingDiagramFlags: [] as string[],
+      };
+      try {
+        const text = await readPageCached(page, pageTextCache);
+        const split = splitFrontmatter(text);
+        if (!split.ok) return result;
+        const body = split.data.body;
+        const rawFm = split.data.rawFrontmatter;
+        if (hasDuplicateFrontmatter(body)) result.dupFrontmatter.push(page.relPath);
+        if (isLegacyCitationStyle(body)) result.legacyPages.push(page.relPath);
+        if (hasOrphanedCitations(body)) result.orphanedPages.push(page.relPath);
+        if (hasWikilinkCitations(body)) result.wikilinkCitationFlags.push(page.relPath);
+        // broken_sources: check sources: frontmatter entries and body markers resolve to raw files.
+        const sourcesEntries = extractSourceEntries(rawFm);
+        for (const entry of sourcesEntries) {
+          const rawPath = normalizeRawSourceTarget(entry);
+          if (!rawPath) continue;
+          if (!rawSourceTargetExistsSync(input.vault, rawPath)) {
+            result.brokenSourceFlags.push(`${page.relPath}: ${rawPath}`);
+          }
         }
-      }
-      for (const marker of extractCitationMarkers(body)) {
-        if (!rawSourceTargetExistsSync(input.vault, marker.target)) {
-          brokenSourceFlags.add(`${page.relPath}: ${marker.target}`);
+        for (const marker of extractCitationMarkers(body)) {
+          if (!rawSourceTargetExistsSync(input.vault, marker.target)) {
+            result.brokenSourceFlags.push(`${page.relPath}: ${marker.target}`);
+          }
         }
-      }
-      // Frontmatter wikilink resolution check
-      const fmLinks = rawFm.match(/\[\[([^\[\]|]+)(?:\|[^\[\]]*)?\]\]/g) ?? [];
-      for (const link of fmLinks) {
-        const target = link.replace(/^\[\[/, "").replace(/(?:\|[^\[\]]*)?\]\]$/, "").trim();
-        const tail = target.split("/").pop()!.replace(/\.md$/, "");
-        if (!slugs.has(tail.toLowerCase())) {
-          fmWikilinkFlags.push(`${page.relPath}: [[${target}]] does not resolve`);
+        // Frontmatter wikilink resolution check
+        const fmLinks = rawFm.match(/\[\[([^\[\]|]+)(?:\|[^\[\]]*)?\]\]/g) ?? [];
+        for (const link of fmLinks) {
+          const target = link.replace(/^\[\[/, "").replace(/(?:\|[^\[\]]*)?\]\]$/, "").trim();
+          const tail = target.split("/").pop()!.replace(/\.md$/, "");
+          if (!slugs.has(tail.toLowerCase())) {
+            result.fmWikilinkFlags.push(`${page.relPath}: [[${target}]] does not resolve`);
+          }
         }
-      }
 
-      const bodyLines = body.split("\n").filter(l => l.trim().length > 0).length;
-      const hasOverview = /^## Overview/m.test(body);
-      if (!hasOverview) noOverview.push(page.relPath);
-      // TL;DR check: look for > **TL;DR:** or ## TL;DR in first 15 lines of body
-      const bodyFirst15 = body.split("\n").slice(0, 15).join("\n");
-      if (!/^>\s*\*\*TL;DR:?\*\*/m.test(bodyFirst15) && !/^##\s+TL;\s*DR/m.test(bodyFirst15)) missingTldrFlags.push(page.relPath);
-      // Diagram check: architecture-tagged pages should have a mermaid block
-      const fmData = extractFrontmatter(text);
-      const pageTags: string[] = fmData.ok && Array.isArray(fmData.data.tags) ? fmData.data.tags : [];
-      if (pageTags.includes("architecture") && !body.includes("```mermaid")) {
-        missingDiagramFlags.push(page.relPath);
-      }
-      if (bodyLines < STRUCT_MIN_BODY_LINES) {
-        const hasRelated = /^## (Related|Relationships)/m.test(body);
-        const sectionCount = (body.match(/^## /gm) ?? []).length;
-        if (!hasRelated || sectionCount < STRUCT_MIN_SECTIONS) {
-          const reasons: string[] = [];
-          if (!hasRelated) reasons.push("no Related or Relationships");
-          if (sectionCount < STRUCT_MIN_SECTIONS) reasons.push(`only ${sectionCount} sections`);
-          structFlags.push(`${page.relPath}: ${bodyLines} lines, ${reasons.join(", ")}`);
+        const bodyLines = body.split("\n").filter(l => l.trim().length > 0).length;
+        const hasOverview = /^## Overview/m.test(body);
+        if (!hasOverview) result.noOverview.push(page.relPath);
+        // TL;DR check: look for > **TL;DR:** or ## TL;DR in first 15 lines of body
+        const bodyFirst15 = body.split("\n").slice(0, 15).join("\n");
+        if (!/^>\s*\*\*TL;DR:?\*\*/m.test(bodyFirst15) && !/^##\s+TL;\s*DR/m.test(bodyFirst15)) result.missingTldrFlags.push(page.relPath);
+        // Diagram check: architecture-tagged pages should have a mermaid block
+        const fmData = extractFrontmatter(text);
+        const pageTags: string[] = fmData.ok && Array.isArray(fmData.data.tags) ? fmData.data.tags : [];
+        if (pageTags.includes("architecture") && !body.includes("```mermaid")) {
+          result.missingDiagramFlags.push(page.relPath);
         }
+        if (bodyLines < STRUCT_MIN_BODY_LINES) {
+          const hasRelated = /^## (Related|Relationships)/m.test(body);
+          const sectionCount = (body.match(/^## /gm) ?? []).length;
+          if (!hasRelated || sectionCount < STRUCT_MIN_SECTIONS) {
+            const reasons: string[] = [];
+            if (!hasRelated) reasons.push("no Related or Relationships");
+            if (sectionCount < STRUCT_MIN_SECTIONS) reasons.push(`only ${sectionCount} sections`);
+            result.structFlags.push(`${page.relPath}: ${bodyLines} lines, ${reasons.join(", ")}`);
+          }
+        }
+      } catch {
+        // Skip unreadable pages.
       }
+      return result;
+    });
+    for (const result of typedPageResults) {
+      legacyPages.push(...result.legacyPages);
+      orphanedPages.push(...result.orphanedPages);
+      structFlags.push(...result.structFlags);
+      dupFrontmatter.push(...result.dupFrontmatter);
+      noOverview.push(...result.noOverview);
+      fmWikilinkFlags.push(...result.fmWikilinkFlags);
+      wikilinkCitationFlags.push(...result.wikilinkCitationFlags);
+      for (const flag of result.brokenSourceFlags) brokenSourceFlags.add(flag);
+      missingTldrFlags.push(...result.missingTldrFlags);
+      missingDiagramFlags.push(...result.missingDiagramFlags);
     }
     if (legacyPages.length > 0) buckets.legacy_citation_style = legacyPages;
     if (orphanedPages.length > 0) buckets.orphaned_citations = orphanedPages;
@@ -575,19 +777,20 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     // Work item health check
     const workItemHealth: string[] = [];
     const workItemDirs = new Map<string, VaultPage[]>();
-    for (const page of scan.data.workItems) {
+    for (const page of scan.workItems) {
       const dir = page.relPath.replace(/\/(spec|plan|log)\.md$/, "");
       const pages = workItemDirs.get(dir) ?? [];
       pages.push(page);
       workItemDirs.set(dir, pages);
     }
-    for (const [dir, pages] of workItemDirs) {
+    const workItemHealthResults = await mapWithConcurrency([...workItemDirs.entries()], vaultIoConcurrency(), async ([dir, pages]) => {
+      const flags: string[] = [];
       const specPage = pages.find(p => p.relPath.endsWith("/spec.md"));
       const hasPlan = pages.some(p => p.relPath.endsWith("/plan.md"));
       let specStatus: string | undefined;
       let specStarted: unknown;
       if (specPage) {
-        const text = await readPage(specPage);
+        const text = await readPageCached(specPage, pageTextCache);
         const fm = extractFrontmatter(text);
         if (fm.ok) {
           specStatus = typeof fm.data.status === "string" ? fm.data.status : undefined;
@@ -601,42 +804,57 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
         if (dateMatch) {
           const dirDate = Date.parse(dateMatch[1]!);
           if (!isNaN(dirDate) && Date.now() - dirDate > 24 * 60 * 60 * 1000) {
-            workItemHealth.push(`${dir}/spec.md: has spec but no plan after 24h`);
+            flags.push(`${dir}/spec.md: has spec but no plan after 24h`);
           }
         }
       }
       if (specPage && specStatus === "in-progress" && !specStarted) {
-        workItemHealth.push(`${specPage.relPath}: in-progress without started date`);
+        flags.push(`${specPage.relPath}: in-progress without started date`);
       }
-    }
+      return flags;
+    });
+    workItemHealth.push(...workItemHealthResults.flat());
     if (workItemHealth.length > 0) buckets.work_item_health = workItemHealth;
 
     // Orphaned project pages check: typed-knowledge page claims a project
     // via provenance_projects but the project's knowledge.md doesn't list it back
     const orphanedProjectPages: string[] = [];
-    for (const page of scan.data.typedKnowledge) {
-      const text = await readPage(page);
-      const fm = extractFrontmatter(text);
-      if (!fm.ok) continue;
-      const pp = fm.data.provenance_projects;
-      if (!Array.isArray(pp)) continue;
-      for (const entry of pp) {
-        const slugMatch = String(entry).match(/\[\[([^\]]+)\]\]/);
-        if (!slugMatch) continue;
-        const slug = slugMatch[1]!;
-        const knowledgePath = join(input.vault, "projects", slug, "knowledge.md");
-        if (!existsSync(knowledgePath)) continue;
-        const pageRef = page.relPath.replace(/\.md$/, "");
-        try {
-          const knowledgeContent = await readFile(knowledgePath, "utf8");
+    const knowledgeContentCache = new Map<string, Promise<string | null>>();
+    const readKnowledgeContent = (slug: string): Promise<string | null> => {
+      const existing = knowledgeContentCache.get(slug);
+      if (existing) return existing;
+      const knowledgePath = join(input.vault, "projects", slug, "knowledge.md");
+      const pending = existsSync(knowledgePath)
+        ? readFile(knowledgePath, "utf8").catch(() => null)
+        : Promise.resolve(null);
+      knowledgeContentCache.set(slug, pending);
+      return pending;
+    };
+    const orphanedProjectPageResults = await mapWithConcurrency(scan.typedKnowledge, vaultIoConcurrency(), async (page) => {
+      const flags: string[] = [];
+      try {
+        const text = await readPageCached(page, pageTextCache);
+        const fm = extractFrontmatter(text);
+        if (!fm.ok) return flags;
+        const pp = fm.data.provenance_projects;
+        if (!Array.isArray(pp)) return flags;
+        for (const entry of pp) {
+          const slugMatch = String(entry).match(/\[\[([^\]]+)\]\]/);
+          if (!slugMatch) continue;
+          const slug = slugMatch[1]!;
+          const knowledgeContent = await readKnowledgeContent(slug);
+          if (knowledgeContent === null) continue;
+          const pageRef = page.relPath.replace(/\.md$/, "");
           if (!knowledgeContent.includes(`[[${pageRef}]]`)) {
-            orphanedProjectPages.push(`${page.relPath}: not in projects/${slug}/knowledge.md`);
+            flags.push(`${page.relPath}: not in projects/${slug}/knowledge.md`);
           }
-        } catch {
-          // Can't read knowledge.md — skip
         }
+      } catch {
+        // Skip unreadable pages.
       }
-    }
+      return flags;
+    });
+    orphanedProjectPages.push(...orphanedProjectPageResults.flat());
     if (orphanedProjectPages.length > 0) buckets.orphaned_project_pages = orphanedProjectPages;
 
     // CLI reference validation (actionable scope):
@@ -645,42 +863,52 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     //   common in historical specs/plans and are not operationally actionable.
     const cliRefFlags: string[] = [];
     const cliSurface = buildCliSurface();
-    const allScanPages = [...scan.data.typedKnowledge];
-    for (const page of allScanPages) {
-      const text = await readPage(page);
-      const violations = validateCliRefs(text, page.relPath, cliSurface);
-      for (const v of violations) {
-        cliRefFlags.push(`${v.page}: ${v.ref} (${v.reason})`);
+    const allScanPages = [...scan.typedKnowledge];
+    const cliRefResults = await mapWithConcurrency(allScanPages, vaultIoConcurrency(), async (page) => {
+      const flags: string[] = [];
+      try {
+        const text = await readPageCached(page, pageTextCache);
+        const violations = validateCliRefs(text, page.relPath, cliSurface);
+        for (const v of violations) {
+          flags.push(`${v.page}: ${v.ref} (${v.reason})`);
+        }
+      } catch {
+        // Skip unreadable pages.
       }
-    }
+      return flags;
+    });
+    cliRefFlags.push(...cliRefResults.flat());
     if (cliRefFlags.length > 0) buckets.cli_refs = cliRefFlags;
 
     // stale_sections: typed-knowledge pages with expired <!-- expires: YYYY-MM-DD --> annotations
     const staleSectionFlags: string[] = [];
     const today = new Date().toISOString().slice(0, 10);
     const approachingThreshold = 7; // days before expiry to flag as approaching
-    for (const page of scan.data.typedKnowledge) {
+    const staleSectionResults = await mapWithConcurrency(scan.typedKnowledge, vaultIoConcurrency(), async (page) => {
+      const flags: string[] = [];
       try {
-        const text = await readPage(page);
+        const text = await readPageCached(page, pageTextCache);
         const annotations = parseExpiryAnnotations(text, page.relPath);
         for (const ann of annotations) {
           if (ann.expires < today) {
-            staleSectionFlags.push(`${page.relPath}: section "${ann.heading}" expired on ${ann.expires}`);
+            flags.push(`${page.relPath}: section "${ann.heading}" expired on ${ann.expires}`);
           } else {
             const daysUntilExpiry = Math.floor((Date.parse(ann.expires) - Date.now()) / 86400000);
             if (daysUntilExpiry <= approachingThreshold) {
-              staleSectionFlags.push(`${page.relPath}: section "${ann.heading}" expires in ${daysUntilExpiry} day(s) (${ann.expires})`);
+              flags.push(`${page.relPath}: section "${ann.heading}" expires in ${daysUntilExpiry} day(s) (${ann.expires})`);
             }
           }
         }
       } catch { /* skip unreadable pages */ }
-    }
+      return flags;
+    });
+    staleSectionFlags.push(...staleSectionResults.flat());
     if (staleSectionFlags.length > 0) buckets.stale_sections = staleSectionFlags;
 
     // --fix: redact sensitive content as a security exception to raw immutability.
     if (shouldFix("sensitive_content") && buckets.sensitive_content) {
       const sensitiveFixed: string[] = [];
-      for (const page of scan.data.allMarkdown) {
+      for (const page of scan.allMarkdown) {
         try {
           const raw = await readPage(page);
           const redacted = redactSensitiveContent(raw, { file: page.relPath });
@@ -695,7 +923,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
       }
       fixed.push(...sensitiveFixed);
       const remainingSensitiveFlags: unknown[] = [];
-      for (const page of scan.data.allMarkdown) {
+      for (const page of scan.allMarkdown) {
         try {
           const text = await readPage(page);
           remainingSensitiveFlags.push(...scanSensitiveContent(text, { file: page.relPath }));
@@ -985,64 +1213,9 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
 
     // --fix: auto-fix file_source_url by extracting web URL from body source: field
     if (shouldFix("file_source_url") && fileSourceUrlFrontmatterFlags.size > 0) {
-      const FILE_FIXED: string[] = [];
-      for (const relPath of fileSourceUrlFrontmatterFlags) {
-        try {
-          const absPath = `${input.vault}/${relPath}`;
-          const raw = await readFile(absPath, "utf8");
-          const parts = raw.split("---", 3);
-          if (parts.length < 3) { unresolved.push(relPath); continue; }
-          const rawFm = parts[1]!;
-          const rest = parts[2]!;
-
-          // Try to extract a real web URL from the body's source: field
-          const sourceMatch = rest.match(/^source:\s*"?(https?:\/\/[^\s\n"]+)"?\s*$/m);
-          if (!sourceMatch) {
-            // No web URL found in body — can't auto-fix
-            unresolved.push(relPath);
-            continue;
-          }
-          const realUrl = sourceMatch[1]!;
-
-          const newRawFm = rawFm.replace(/^source_url:\s*file:\/\/[^\n]+/m, `source_url: ${realUrl}`);
-          const newContent = `---${newRawFm}---${rest}`;
-          const w = await safeWritePage(absPath, newContent);
-          if (!w.ok) { unresolved.push(relPath); continue; }
-          FILE_FIXED.push(relPath);
-        } catch {
-          unresolved.push(relPath);
-        }
-      }
-
-      fixed.push(...FILE_FIXED);
-
-      // Re-scan: remove fixed pages from the bucket
-      if (FILE_FIXED.length > 0) {
-        const remaining = new Set(fileSourceUrlFlags);
-        for (const relPath of FILE_FIXED) {
-          try {
-            const page = scan.data.allMarkdown.find(p => p.relPath === relPath);
-            if (!page) {
-              remaining.delete(relPath);
-              continue;
-            }
-            const text = await readPage(page);
-            const split = splitFrontmatter(text);
-            if (!split.ok) continue;
-            const stillHasFileSourceUrl = /^source_url:\s*file:\/\//m.test(split.data.rawFrontmatter);
-            const stillHasCanonicalBodyAssertion =
-              shouldCheckCanonicalLocalSourceAssertion(page)
-              && hasCanonicalLocalSourceAssertion(split.data.body);
-            if (!stillHasFileSourceUrl && !stillHasCanonicalBodyAssertion) {
-              remaining.delete(relPath);
-            }
-          } catch {
-            // keep unresolved paths in the bucket rather than under-reporting
-          }
-        }
-        if (remaining.size > 0) buckets.file_source_url = [...remaining];
-        else delete buckets.file_source_url;
-      }
+      fileSourceUrlFlags = await applyFileSourceUrlFix(input, scan, fileSourceUrlFlags, fileSourceUrlFrontmatterFlags, fixed, unresolved);
+      if (fileSourceUrlFlags.size > 0) buckets.file_source_url = [...fileSourceUrlFlags];
+      else delete buckets.file_source_url;
     }
 
     // --fix: auto-fix path_too_long by truncating filename + rewiring references
@@ -1068,7 +1241,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
       const invalidItems = buckets.frontmatter_yaml_invalid as { path: string; message: string }[];
       const remaining: { path: string; message: string }[] = [];
       for (const item of invalidItems) {
-        const page = scan.data.allMarkdown.find(p => p.relPath === item.path);
+        const page = scan.allMarkdown.find(p => p.relPath === item.path);
         if (!page) {
           unresolved.push(item.path);
           remaining.push(item);
@@ -1114,32 +1287,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   // --only: filter to a single bucket
   if (input.only) {
     const match = [...errorOut, ...warningOut, ...infoOut].filter(b => b.kind === input.only);
-    const severity = (ERROR_ORDER as readonly string[]).includes(input.only) ? "error"
-      : (WARNING_ORDER as readonly string[]).includes(input.only) ? "warning" : "info";
-    const filtered = severity === "error" ? { error: match, warning: [], info: [] }
-      : severity === "warning" ? { error: [], warning: match, info: [] }
-      : { error: [], warning: [], info: match };
-    const fSummary = {
-      errors: filtered.error.reduce((n, b) => n + b.items.length, 0),
-      warnings: filtered.warning.reduce((n, b) => n + b.items.length, 0),
-      info: filtered.info.reduce((n, b) => n + b.items.length, 0)
-    };
-    let fExit: ExitCodeValue = ExitCode.OK;
-    if (fSummary.errors > 0) fExit = ExitCode.LINT_HAS_ERRORS;
-    else if (fSummary.warnings > 0 || fSummary.info > 0) fExit = ExitCode.LINT_HAS_WARNINGS;
-    const output: LintOutput = {
-      vault: { path: input.vault, source: input.source ?? "resolved" },
-      summary: fSummary,
-      by_severity: filtered,
-      fixed,
-      unresolved,
-      humanHint: `--only ${input.only}\n${match.length === 0 ? "0 violations" : match.map(b => `  ${b.kind}: ${b.items.length}`).join("\n")}`
-    };
-    if (input.fix) appendLintFixLastOp(input.vault, fixed);
-    return {
-      exitCode: fExit,
-      result: ok(input.summary ? summarizeLintOutput(output, input.examplesLimit) : output)
-    };
+    return outputForOnlyBucket(input, match, fixed, unresolved);
   }
 
   const summary = {

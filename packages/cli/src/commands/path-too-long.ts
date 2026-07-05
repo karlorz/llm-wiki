@@ -3,12 +3,12 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, join, posix, resolve } from "node:path";
 import { safeWritePage } from "../utils/safe-write.js";
-import { scanVault, type VaultPage } from "../utils/vault.js";
+import { scanVault, type VaultPage, type VaultScan } from "../utils/vault.js";
 
 export const MAX_PATH_LENGTH = 240;
 const WINDOWS_ABSOLUTE_PATH_LIMIT = 259;
 
-export interface PathTooLongInput { vault: string }
+export interface PathTooLongInput { vault: string; scan?: VaultScan }
 export interface PathTooLongViolation {
   relPath: string;
   length: number;
@@ -32,7 +32,7 @@ export interface PathTooLongFixOutput {
 }
 
 export async function runPathTooLong(input: PathTooLongInput): Promise<{ exitCode: number; result: Result<PathTooLongOutput> }> {
-  const scan = await scanVault(input.vault);
+  const scan = input.scan ? ok(input.scan) : await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
   const violations = findPathTooLongViolations(scan.data.allMarkdown, MAX_PATH_LENGTH);

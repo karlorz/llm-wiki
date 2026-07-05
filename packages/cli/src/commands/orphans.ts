@@ -1,10 +1,10 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault, readPage } from "../utils/vault.js";
+import { mapWithConcurrency, readPageCached, scanVault, vaultIoConcurrency, type PageTextCache, type VaultScan } from "../utils/vault.js";
 import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 
-export interface OrphansInput { vault: string | undefined; envValue?: string; home?: string; wiki?: string; cwd?: string }
+export interface OrphansInput { vault: string | undefined; envValue?: string; home?: string; wiki?: string; cwd?: string; scan?: VaultScan; pageTextCache?: PageTextCache }
 export interface OrphansOutput {
   orphans: string[];
   bridges: Array<{ path: string; connects: string[] }>;
@@ -30,7 +30,7 @@ export async function runOrphans(input: OrphansInput): Promise<{ exitCode: numbe
     vault = r.data.path;
   }
 
-  const scan = await scanVault(vault);
+  const scan = input.scan ? ok(input.scan) : await scanVault(vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
   const slugToPath: Record<string, string> = {};
@@ -43,8 +43,8 @@ export async function runOrphans(input: OrphansInput): Promise<{ exitCode: numbe
   const adj: Record<string, Set<string>> = {};
   for (const p of scan.data.typedKnowledge) adj[p.relPath] = new Set();
 
-  for (const p of scan.data.typedKnowledge) {
-    const text = await readPage(p);
+  await mapWithConcurrency(scan.data.typedKnowledge, vaultIoConcurrency(), async (p) => {
+    const text = await readPageCached(p, input.pageTextCache);
     const split = splitFrontmatter(text);
     const body = split.ok ? split.data.body : text;
     for (const slug of extractBodyWikilinks(body)) {
@@ -54,7 +54,7 @@ export async function runOrphans(input: OrphansInput): Promise<{ exitCode: numbe
         adj[tgt].add(p.relPath);
       }
     }
-  }
+  });
 
   const orphans = Object.keys(adj).filter(k => adj[k].size === 0);
 

@@ -1,6 +1,6 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { createHash } from "node:crypto";
-import { scanVault, readPage } from "../utils/vault.js";
+import { mapWithConcurrency, readPageCached, scanVault, vaultIoConcurrency, type PageTextCache, type VaultScan } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
 
 export interface BodyDupGroup {
@@ -13,19 +13,15 @@ export interface RawBodyDedupOutput {
   duplicates: BodyDupGroup[];
 }
 
-export async function runRawBodyDedup(vault: string): Promise<{ exitCode: number; result: Result<RawBodyDedupOutput> }> {
-  const scan = await scanVault(vault);
-  if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
+export async function runRawBodyDedup(vault: string, scan?: VaultScan, pageTextCache?: PageTextCache): Promise<{ exitCode: number; result: Result<RawBodyDedupOutput> }> {
+  const scanResult = scan ? ok(scan) : await scanVault(vault);
+  if (!scanResult.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scanResult };
 
   const bodyHashMap = new Map<string, { relPath: string; sha256: string | null }[]>();
-  let totalFiles = 0;
-
-  for (const raw of scan.data.raw) {
-    const text = await readPage(raw);
+  const rawEntries = await mapWithConcurrency(scanResult.data.raw, vaultIoConcurrency(), async (raw) => {
+    const text = await readPageCached(raw, pageTextCache);
     const split = splitFrontmatter(text);
-    if (!split.ok) continue;
-
-    totalFiles++;
+    if (!split.ok) return null;
 
     // Hash body content only (excluding frontmatter)
     const bodyHash = createHash("sha256").update(split.data.body).digest("hex");
@@ -37,12 +33,16 @@ export async function runRawBodyDedup(vault: string): Promise<{ exitCode: number
       fmSha256 = fm.data.sha256;
     }
 
-    const existing = bodyHashMap.get(bodyHash);
-    if (existing) {
-      existing.push({ relPath: raw.relPath, sha256: fmSha256 });
-    } else {
-      bodyHashMap.set(bodyHash, [{ relPath: raw.relPath, sha256: fmSha256 }]);
-    }
+    return { bodyHash, relPath: raw.relPath, sha256: fmSha256 };
+  });
+
+  let totalFiles = 0;
+  for (const entry of rawEntries) {
+    if (!entry) continue;
+    totalFiles++;
+    const existing = bodyHashMap.get(entry.bodyHash);
+    if (existing) existing.push({ relPath: entry.relPath, sha256: entry.sha256 });
+    else bodyHashMap.set(entry.bodyHash, [{ relPath: entry.relPath, sha256: entry.sha256 }]);
   }
 
   // Suppress only groups that the existing SHA256-based dedup already catches.
