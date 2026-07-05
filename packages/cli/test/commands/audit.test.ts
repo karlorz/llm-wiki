@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { runAudit, validateCompoundReferences } from "../../src/commands/audit.js";
+import { scanVault, readPageCached, type PageTextCache } from "../../src/utils/vault.js";
 
 const F = (n: string) => join(__dirname, "..", "fixtures", "audit-vault", n);
 
@@ -142,5 +143,32 @@ describe("validateCompoundReferences", () => {
       expect(r.data.length).toBe(1);
       expect(r.data[0]!.kind).toBe("cross_project");
     }
+  });
+
+  it("reuses an existing scan and page cache for compound references", async () => {
+    const v = compoundVault();
+    mkdirSync(join(v, "projects", "myproj", "work", "2026-05-09-fix"), { recursive: true });
+    mkdirSync(join(v, "projects", "myproj", "compound"), { recursive: true });
+    const specPath = join(v, "projects", "myproj", "work", "2026-05-09-fix", "spec.md");
+    const compoundPath = join(v, "projects", "myproj", "compound", "lesson.md");
+    writeFileSync(specPath,
+      "---\ntitle: fix\nkind: feature\nstatus: completed\npriority: high\nproject: \"[[myproj]]\"\ncreated: 2026-05-09\nupdated: 2026-05-09\nstarted: 2026-05-09\n---\nBody\n");
+    writeFileSync(compoundPath,
+      "---\ntitle: lesson\ntype: lesson\ntags: []\nconfidence: high\nproject: \"[[myproj]]\"\nwork_items: [\"[[projects/myproj/work/2026-05-09-fix/spec]]\"]\ncreated: 2026-05-09\nupdated: 2026-05-09\n---\nBody\n");
+
+    const scan = await scanVault(v);
+    expect(scan.ok).toBe(true);
+    if (!scan.ok) return;
+    const cache: PageTextCache = new Map();
+    for (const page of [...scan.data.compound, ...scan.data.workItems]) {
+      await readPageCached(page, cache);
+    }
+    rmSync(specPath);
+    rmSync(compoundPath);
+
+    const r = await validateCompoundReferences(join(v, "not-the-scan-root"), scan.data, cache);
+
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.data).toEqual([]);
   });
 });

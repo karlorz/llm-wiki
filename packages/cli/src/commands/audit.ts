@@ -3,8 +3,8 @@ import { dirname, resolve, join } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { extractCitationMarkers } from "../parsers/citations.js";
-import { scanVault, readPage } from "../utils/vault.js";
-import type { VaultPage } from "../utils/vault.js";
+import { scanVault, readPage, readPageCached } from "../utils/vault.js";
+import type { PageTextCache, VaultPage, VaultScan } from "../utils/vault.js";
 import { rawSourceTargetExists } from "../utils/raw-source.js";
 
 export interface AuditInput { file: string }
@@ -101,8 +101,12 @@ function stripWikilink(s: string): string {
   return s.replace(/^\[\[/, "").replace(/(?:\|[^\[\]]*)?\]\]$/, "").trim();
 }
 
-export async function validateCompoundReferences(vault: string): Promise<Result<CompoundRefFinding[]>> {
-  const scan = await scanVault(vault);
+export async function validateCompoundReferences(
+  vault: string,
+  existingScan?: VaultScan,
+  pageTextCache?: PageTextCache,
+): Promise<Result<CompoundRefFinding[]>> {
+  const scan = existingScan ? ok(existingScan) : await scanVault(vault);
   if (!scan.ok) return scan;
 
   const slugToPage = new Map<string, VaultPage>();
@@ -114,7 +118,7 @@ export async function validateCompoundReferences(vault: string): Promise<Result<
 
   const findings: CompoundRefFinding[] = [];
   for (const cp of scan.data.compound) {
-    const text = await readPage(cp);
+    const text = await readPageCached(cp, pageTextCache);
     const fm = extractFrontmatter(text);
     if (!fm.ok) continue;
     const projectRaw = fm.data.project as string | undefined;
@@ -132,7 +136,7 @@ export async function validateCompoundReferences(vault: string): Promise<Result<
         findings.push({ compound: cp.relPath, work_item: wi, kind: "missing", detail: `no work item found for [[${target}]]` });
         continue;
       }
-      const wiFm = extractFrontmatter(await readPage(resolved));
+      const wiFm = extractFrontmatter(await readPageCached(resolved, pageTextCache));
       if (wiFm.ok && wiFm.data.project) {
         const wiProj = stripWikilink(String(wiFm.data.project));
         if (wiProj !== projSlug) {

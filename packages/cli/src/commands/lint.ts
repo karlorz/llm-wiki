@@ -604,7 +604,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     }));
   }
 
-  const compoundRefs = await validateCompoundReferences(input.vault);
+  const compoundRefs = await validateCompoundReferences(input.vault, scan, pageTextCache);
   if (compoundRefs.ok && compoundRefs.data.length > 0) buckets.compound_refs = compoundRefs.data;
 
   const pathCheck = await runPathTooLong({ vault: input.vault, scan });

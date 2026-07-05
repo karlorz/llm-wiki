@@ -1,10 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { scanVault, readPage } from "../../src/utils/vault.js";
+import { scanVault, readPage, vaultIoConcurrency } from "../../src/utils/vault.js";
 
 const VAULT = join(__dirname, "..", "fixtures", "sample-vault");
+
+afterEach(() => {
+  delete process.env.SKILLWIKI_VAULT_IO_CONCURRENCY;
+});
 
 describe("scanVault", () => {
   it("rejects when SCHEMA.md missing", async () => {
@@ -51,5 +55,13 @@ describe("scanVault", () => {
     const content = await readPage(page);
     expect(typeof content).toBe("string");
     expect(content.length).toBeGreaterThan(0);
+  });
+
+  it("uses FUSE-safe IO concurrency by default while allowing explicit override", () => {
+    delete process.env.SKILLWIKI_VAULT_IO_CONCURRENCY;
+    expect(vaultIoConcurrency()).toBe(1);
+
+    process.env.SKILLWIKI_VAULT_IO_CONCURRENCY = "8";
+    expect(vaultIoConcurrency()).toBe(8);
   });
 });
