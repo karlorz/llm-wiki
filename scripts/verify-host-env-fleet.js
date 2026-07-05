@@ -4,7 +4,6 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const yaml = require("js-yaml");
 
 const repoRoot = path.resolve(__dirname, "..");
 const hostsDir = process.env.HOST_ENV_DIR || path.join(repoRoot, "scripts", "hosts");
@@ -63,6 +62,7 @@ const requiredKeys = [
 
 function loadFleet() {
   if (fs.existsSync(fleetPath)) {
+    const yaml = require("js-yaml");
     return {
       source: fleetPath,
       data: yaml.load(fs.readFileSync(fleetPath, "utf8")),
