@@ -2,7 +2,13 @@ import { afterEach, describe, it, expect } from "vitest";
 import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolveReadOnlyVaultRoot, scanVault, readPage, vaultIoConcurrency } from "../../src/utils/vault.js";
+import {
+  resolveReadOnlyVaultRoot,
+  resolveReadOnlyVaultRootWithMounts,
+  scanVault,
+  readPage,
+  vaultIoConcurrency,
+} from "../../src/utils/vault.js";
 
 const VAULT = join(__dirname, "..", "fixtures", "sample-vault");
 
@@ -78,5 +84,22 @@ describe("scanVault", () => {
 
     process.env.SKILLWIKI_DISABLE_VAULT_READ_MIRROR = "true";
     expect(resolveReadOnlyVaultRoot(requested)).toEqual({ root: requested, mirrored: false });
+  });
+
+  it("auto-detects sibling git mirror for rclone FUSE vaults", () => {
+    const parent = mkdtempSync(join(tmpdir(), "vault-parent-"));
+    const requested = join(parent, "wiki");
+    const mirror = join(parent, "wiki-git");
+    mkdirSync(requested);
+    mkdirSync(mirror);
+    writeFileSync(join(requested, "SCHEMA.md"), "# requested\n");
+    writeFileSync(join(mirror, "SCHEMA.md"), "# mirror\n");
+
+    const mounts = `cloud:cloud/wiki ${requested} fuse.rclone rw,nosuid,nodev,relatime 0 0\n`;
+
+    expect(resolveReadOnlyVaultRootWithMounts(requested, mounts)).toEqual({
+      root: mirror,
+      mirrored: true,
+    });
   });
 });

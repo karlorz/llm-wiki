@@ -28,13 +28,7 @@ function decodeProcMountPath(value: string): string {
   return value.replace(/\\040/g, " ");
 }
 
-function isRcloneFuseVault(root: string): boolean {
-  let mounts: string;
-  try {
-    mounts = readFileSync("/proc/mounts", "utf8");
-  } catch {
-    return false;
-  }
+function isRcloneFuseVaultFromMounts(root: string, mounts: string): boolean {
   return mounts.split(/\r?\n/).some((line) => {
     const parts = line.split(" ");
     if (parts.length < 3) return false;
@@ -44,7 +38,7 @@ function isRcloneFuseVault(root: string): boolean {
   });
 }
 
-export function resolveReadOnlyVaultRoot(root: string): { root: string; mirrored: boolean } {
+export function resolveReadOnlyVaultRootWithMounts(root: string, mounts: string): { root: string; mirrored: boolean } {
   if (/^(1|true|yes)$/i.test(process.env.SKILLWIKI_DISABLE_VAULT_READ_MIRROR ?? "")) {
     return { root, mirrored: false };
   }
@@ -55,11 +49,21 @@ export function resolveReadOnlyVaultRoot(root: string): { root: string; mirrored
   }
 
   const siblingMirror = `${root}-git`;
-  if (isRcloneFuseVault(root) && existsSync(join(siblingMirror, "SCHEMA.md"))) {
+  if (isRcloneFuseVaultFromMounts(root, mounts) && existsSync(join(siblingMirror, "SCHEMA.md"))) {
     return { root: siblingMirror, mirrored: true };
   }
 
   return { root, mirrored: false };
+}
+
+export function resolveReadOnlyVaultRoot(root: string): { root: string; mirrored: boolean } {
+  let mounts = "";
+  try {
+    mounts = readFileSync("/proc/mounts", "utf8");
+  } catch {
+    // Non-Linux or restricted /proc. Explicit mirror env handling still works.
+  }
+  return resolveReadOnlyVaultRootWithMounts(root, mounts);
 }
 
 export async function mapWithConcurrency<T, R>(
