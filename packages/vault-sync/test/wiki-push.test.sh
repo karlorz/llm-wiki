@@ -91,6 +91,17 @@ echo "Transferred:   	    1 B / 1 B, 100%, 1 B/s, ETA 0s"
 exit 0
 STUB
   chmod +x "$bin_dir/rclone"
+
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "path_too_long" ] && [ "$5" = "--fix" ]; then
+  echo "path_too_long: 0"
+  exit 0
+fi
+echo "unexpected skillwiki invocation: $*" >&2
+exit 1
+STUB
+  chmod +x "$bin_dir/skillwiki"
 }
 
 test_dirty_local_files_trigger_rclone_copy() {

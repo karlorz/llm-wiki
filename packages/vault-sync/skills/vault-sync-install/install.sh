@@ -163,6 +163,72 @@ set_vault_config() {
   set_env_key_raw "$key" "$value"
 }
 
+launchd_label_loaded() {
+  local label="$1"
+  launchctl print "gui/$UID/$label" >/dev/null 2>&1
+}
+
+launchd_wait_unloaded() {
+  local label="$1"
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if ! launchd_label_loaded "$label"; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  warn "launchd label $label still appears loaded after bootout; bootstrap may report an already-loaded or EIO error"
+  return 1
+}
+
+# Surface captured launchctl stderr with the install prefix so failures are attributable.
+launchd_emit_bootstrap_err() {
+  local capture="$1"
+  sed 's/^/[vault-sync-install] launchctl: /' "$capture" >&2
+}
+
+launchd_reload_unit() {
+  local label="$1"
+  local plist="$2"
+  local domain="gui/$UID"
+  local target="$domain/$label"
+  local attempt out rc
+  local unloaded=0
+
+  launchctl bootout "$target" >/dev/null 2>&1 || true
+  if launchd_wait_unloaded "$label"; then
+    unloaded=1
+  fi
+
+  out="$(mktemp)"
+  for attempt in 1 2 3; do
+    if launchctl bootstrap "$domain" "$plist" >"$out" 2>&1; then
+      rm -f "$out"
+      return 0
+    else
+      rc=$?
+    fi
+
+    if [ "$unloaded" -eq 1 ] && launchd_label_loaded "$label"; then
+      warn "launchctl bootstrap reported rc=$rc for $label, but the label is loaded; continuing"
+      rm -f "$out"
+      return 0
+    fi
+
+    if [ "$attempt" -lt 3 ]; then
+      warn "launchctl bootstrap failed for $label on attempt $attempt; retrying"
+      launchd_emit_bootstrap_err "$out"
+      sleep 0.5
+      continue
+    fi
+
+    warn "launchctl bootstrap failed for $label after $attempt attempts"
+    launchd_emit_bootstrap_err "$out"
+    rm -f "$out"
+    return "$rc"
+  done
+}
+
 ROLE="${VS_ROLE:-leaf}"
 MODE="${VS_MODE:-full}"
 SERVICE_SCOPE="${VS_SERVICE_SCOPE:-auto}"
@@ -578,10 +644,8 @@ if [ "$VS_OS" = "macos" ]; then
     log "[dry-run] launchctl bootstrap gui/$UID $PUSH_PLIST"
     log "[dry-run] launchctl bootstrap gui/$UID $FETCH_PLIST"
   else
-    launchctl bootout "gui/$UID/com.karlchow.wiki-push" >/dev/null 2>&1 || true
-    launchctl bootout "gui/$UID/com.karlchow.wiki-fetch" >/dev/null 2>&1 || true
-    launchctl bootstrap "gui/$UID" "$PUSH_PLIST"
-    launchctl bootstrap "gui/$UID" "$FETCH_PLIST"
+    launchd_reload_unit "com.karlchow.wiki-push" "$PUSH_PLIST" || fatal "failed to load launchd unit com.karlchow.wiki-push"
+    launchd_reload_unit "com.karlchow.wiki-fetch" "$FETCH_PLIST" || fatal "failed to load launchd unit com.karlchow.wiki-fetch"
   fi
 else
   if [ "$ROLE" = "snapshotter" ]; then

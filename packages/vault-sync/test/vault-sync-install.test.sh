@@ -29,6 +29,31 @@ EOF
 
   cat > "$bin_dir/launchctl" <<'EOF'
 #!/bin/sh
+if [ "${TEST_LAUNCHCTL_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$TEST_LAUNCHCTL_LOG"
+fi
+
+if [ "$1" = "print" ]; then
+  exit "${TEST_LAUNCHCTL_PRINT_RC:-1}"
+fi
+
+if [ "${TEST_LAUNCHCTL_FAIL_ALL_BOOTSTRAP:-0}" = "1" ] && [ "$1" = "bootstrap" ]; then
+  echo "Bootstrap failed: 5: Input/output error" >&2
+  exit 5
+fi
+
+if [ "${TEST_LAUNCHCTL_FAIL_FIRST_BOOTSTRAP:-0}" = "1" ] && [ "$1" = "bootstrap" ]; then
+  state="${TEST_LAUNCHCTL_STATE:-/tmp/vault-sync-launchctl-state}"
+  count=0
+  [ -f "$state" ] && count="$(cat "$state")"
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$state"
+  if [ "$count" -eq 1 ]; then
+    echo "Bootstrap failed: 5: Input/output error" >&2
+    exit 5
+  fi
+fi
+
 exit 0
 EOF
 
@@ -210,6 +235,35 @@ assert_exit "macOS full install exits 0" "$MAC_RC" 0
 assert_contains "macOS push plist includes discovered node dir" "$PUSH_PLIST" "$NODE_DIR"
 assert_contains "macOS push plist keeps Homebrew fallback" "$PUSH_PLIST" "/opt/homebrew/bin"
 assert_contains "macOS push plist keeps system fallback" "$PUSH_PLIST" "/usr/bin:/bin"
+
+MAC_RETRY_OUT="$TEST_ROOT/macos-retry.out"
+MAC_RETRY_LOG="$TEST_ROOT/macos-retry.launchctl.log"
+MAC_RETRY_STATE="$TEST_ROOT/macos-retry.state"
+TEST_UNAME_S=Darwin \
+TEST_EXTRA_PATH="$NODE_DIR" \
+TEST_LAUNCHCTL_FAIL_FIRST_BOOTSTRAP=1 \
+TEST_LAUNCHCTL_LOG="$MAC_RETRY_LOG" \
+TEST_LAUNCHCTL_STATE="$MAC_RETRY_STATE" \
+run_install "$MAC_RETRY_OUT" --role leaf --execute
+MAC_RETRY_RC=$?
+assert_exit "macOS install retries transient bootstrap EIO" "$MAC_RETRY_RC" 0
+assert_contains "macOS retry surfaces bootstrap warning" "$MAC_RETRY_OUT" "launchctl bootstrap failed for com.karlchow.wiki-push on attempt 1; retrying"
+assert_contains "macOS retry captures launchctl stderr" "$MAC_RETRY_OUT" "Bootstrap failed: 5: Input/output error"
+assert_contains "macOS retry eventually bootstraps push unit" "$MAC_RETRY_LOG" "bootstrap gui/$UID $TEST_ROOT/home/Library/LaunchAgents/com.karlchow.wiki-push.plist"
+assert_contains "macOS retry bootstraps fetch unit" "$MAC_RETRY_LOG" "bootstrap gui/$UID $TEST_ROOT/home/Library/LaunchAgents/com.karlchow.wiki-fetch.plist"
+
+MAC_STALE_OUT="$TEST_ROOT/macos-stale-label.out"
+MAC_STALE_LOG="$TEST_ROOT/macos-stale-label.launchctl.log"
+TEST_UNAME_S=Darwin \
+TEST_EXTRA_PATH="$NODE_DIR" \
+TEST_LAUNCHCTL_FAIL_ALL_BOOTSTRAP=1 \
+TEST_LAUNCHCTL_PRINT_RC=0 \
+TEST_LAUNCHCTL_LOG="$MAC_STALE_LOG" \
+run_install "$MAC_STALE_OUT" --role leaf --execute
+MAC_STALE_RC=$?
+assert_exit "macOS install fails when stale loaded label never reloads" "$MAC_STALE_RC" 1
+assert_contains "macOS stale label warning is explicit" "$MAC_STALE_OUT" "launchd label com.karlchow.wiki-push still appears loaded after bootout"
+assert_contains "macOS stale bootstrap failure is reported" "$MAC_STALE_OUT" "failed to load launchd unit com.karlchow.wiki-push"
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

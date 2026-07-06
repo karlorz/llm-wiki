@@ -204,6 +204,8 @@ describe("install", () => {
       expect(r.result.data.deferred_to_plugin).toBe(true);
       expect(r.result.data.installed).toHaveLength(0);
       expect(r.result.data.humanHint).toContain("deferred to plugin");
+      expect(r.result.data.humanHint).toContain("Plugin-managed skills are not refreshed with `skillwiki install`");
+      expect(r.result.data.humanHint).toContain("Do not run `skillwiki install` just to refresh plugin-managed skills");
       // No SKILL.md copies written, no manifest created
       expect(existsSync(join(target, "wiki-init", "SKILL.md"))).toBe(false);
       expect(existsSync(join(target, "wiki-manifest.json"))).toBe(false);

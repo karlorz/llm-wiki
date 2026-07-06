@@ -172,11 +172,13 @@ skillwiki has multiple distribution channels that can drift:
 | Channel | Location | Update Command |
 |---------|----------|----------------|
 | npm CLI | `/usr/local/bin/skillwiki` | `npm install -g skillwiki@latest` |
-| npm skills | `/usr/local/lib/node_modules/skillwiki/skills/` | `skillwiki install` (copies to `~/.claude/skills/`) |
+| npm skills | `/usr/local/lib/node_modules/skillwiki/skills/` | `skillwiki install` only for standalone CLI skill copies; defers when the plugin channel is active |
 | Claude plugin | `~/.claude/plugins/cache/llm-wiki/` | `claude plugin update skillwiki@llm-wiki` |
 | Codex plugin | `~/.codex/plugins/cache/llm-wiki/` | `codex plugin marketplace upgrade llm-wiki`, then reinstall or restart Codex as needed |
 | Local git dev | source repo checkout | `npm link ./packages/cli` (from repo root) |
 **Check versions:** `skillwiki doctor` reports Plugin/CLI version mismatch warnings when installed channels disagree.
+**Plugin channel rule:** Plugin-managed skills are not refreshed with `skillwiki install`. When Claude or Codex plugin is installed and enabled, the plugin cache is the skill provider; `skillwiki install` is only a legacy/standalone copier for `~/.claude/skills/`.
+**Agent update rule:** Do not run `skillwiki install` just to refresh plugin-managed skills. If `skillwiki install` reports `deferred_to_plugin: true`, stop there and update the active plugin channel instead: Claude uses `claude plugin update skillwiki@llm-wiki`; Codex uses `codex plugin marketplace upgrade llm-wiki`, then reinstall or restart Codex as needed. Only use `skillwiki install --force` when the user explicitly wants duplicate CLI-managed copies under `~/.claude/skills/` and accepts that `skillwiki doctor` may report overlap.
 **Authoring rule:** `SKILL.md` frontmatter follows the Agent Skills schema: top-level `name` and `description` plus optional schema fields such as `metadata`. Do not put release version fields at the top level of `SKILL.md`; plugin and package release versions live in `plugin.json` and `package.json`.
 **Fix:** If developing locally, use the repo source plus `npm link`. If using released versions, update the relevant plugin or npm channel; do not infer release freshness from `SKILL.md` frontmatter.
 

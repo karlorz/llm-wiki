@@ -80,6 +80,8 @@ export async function runInstall(input: InstallInput): Promise<{ exitCode: numbe
     const hintLines = [
       `deferred to plugin: skillwiki@llm-wiki v${plugin.version}`,
       `plugin provides skills at ${plugin.installPath}`,
+      "Plugin-managed skills are not refreshed with `skillwiki install`.",
+      "Do not run `skillwiki install` just to refresh plugin-managed skills; update the active plugin channel instead.",
       `use --force to install CLI copies into ${input.target} anyway`,
     ];
     return {

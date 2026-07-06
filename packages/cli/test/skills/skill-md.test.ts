@@ -97,6 +97,14 @@ describe("SKILL.md structure", () => {
     expect(readFileSync(CODEX_PLUGIN_MANIFEST, "utf8")).toBe(readFileSync(CANONICAL_CODEX_PLUGIN_MANIFEST, "utf8"));
   });
 
+  it("using-skillwiki keeps plugin-managed skill refresh guidance explicit", () => {
+    const text = readFileSync(join(SKILLS_DIR, "using-skillwiki", "SKILL.md"), "utf8");
+
+    expect(text).toContain("Plugin-managed skills are not refreshed with `skillwiki install`");
+    expect(text).toContain("Do not run `skillwiki install` just to refresh plugin-managed skills");
+    expect(text).toContain("Only use `skillwiki install --force`");
+  });
+
   it("root Antigravity plugin layout exposes Claude hooks under hooks/", () => {
     const rootHooksDir = join(REPO_ROOT, "hooks");
 
