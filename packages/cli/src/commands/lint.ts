@@ -123,8 +123,15 @@ export interface LintBucketSummary {
   details_command: string;
 }
 
+export interface LintVaultOutput {
+  path: string;
+  source: string;
+  read_path: string;
+  read_mirror: boolean;
+}
+
 export interface LintOutput {
-  vault: { path: string; source: string };
+  vault: LintVaultOutput;
   summary: { errors: number; warnings: number; info: number };
   by_severity: { error: Bucket[]; warning: Bucket[]; info: Bucket[] };
   fixed: string[];
@@ -133,7 +140,7 @@ export interface LintOutput {
 }
 
 export interface LintSummaryOutput {
-  vault: { path: string; source: string };
+  vault: LintVaultOutput;
   summary: { errors: number; warnings: number; info: number };
   buckets: LintBucketSummary[];
   details_included: false;
@@ -148,6 +155,11 @@ const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file
 const INFO_ORDER = ["bridges", "sparse_community", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
 const KNOWN_BUCKETS = [...ERROR_ORDER, ...WARNING_ORDER, ...INFO_ORDER] as const;
 const CLI_REFS_TYPED_DIRS = ["entities", "concepts", "comparisons", "queries", "meta"] as const;
+
+interface LintReadVault {
+  readPath: string;
+  readMirror: boolean;
+}
 
 interface FileSourceUrlFindings {
   fileSourceUrlFlags: Set<string>;
@@ -194,6 +206,7 @@ function outputForOnlyBucket(
   match: Bucket[],
   fixed: string[],
   unresolved: string[],
+  readVault = lintReadVault(input),
 ): { exitCode: number; result: Result<LintOutput | LintSummaryOutput> } {
   const severity = severityForBucket(input.only!);
   const filtered = severity === "error" ? { error: match, warning: [], info: [] }
@@ -207,13 +220,19 @@ function outputForOnlyBucket(
   let exitCode: ExitCodeValue = ExitCode.OK;
   if (summary.errors > 0) exitCode = ExitCode.LINT_HAS_ERRORS;
   else if (summary.warnings > 0 || summary.info > 0) exitCode = ExitCode.LINT_HAS_WARNINGS;
+  const vault = lintVaultOutput(input, readVault);
+  const hintLines = [
+    ...readMirrorHintLines(vault),
+    `--only ${input.only}`,
+    match.length === 0 ? "0 violations" : match.map(b => `  ${b.kind}: ${b.items.length}`).join("\n"),
+  ];
   const output: LintOutput = {
-    vault: { path: input.vault, source: input.source ?? "resolved" },
+    vault,
     summary,
     by_severity: filtered,
     fixed,
     unresolved,
-    humanHint: `--only ${input.only}\n${match.length === 0 ? "0 violations" : match.map(b => `  ${b.kind}: ${b.items.length}`).join("\n")}`,
+    humanHint: hintLines.join("\n"),
   };
   if (input.fix) appendLintFixLastOp(input.vault, fixed);
   return {
@@ -222,8 +241,30 @@ function outputForOnlyBucket(
   };
 }
 
-function lintReadVault(input: LintInput | LintSummaryInput): string {
-  return input.fix ? input.vault : resolveReadOnlyVaultRoot(input.vault).root;
+function lintReadVault(input: LintInput | LintSummaryInput): LintReadVault {
+  if (input.fix) {
+    return { readPath: input.vault, readMirror: false };
+  }
+  const resolved = resolveReadOnlyVaultRoot(input.vault);
+  return { readPath: resolved.root, readMirror: resolved.mirrored };
+}
+
+function lintVaultOutput(input: LintInput | LintSummaryInput, readVault: LintReadVault): LintVaultOutput {
+  return {
+    path: input.vault,
+    source: input.source ?? "resolved",
+    read_path: readVault.readPath,
+    read_mirror: readVault.readMirror,
+  };
+}
+
+function readMirrorHintLines(vault: LintVaultOutput): string[] {
+  if (!vault.read_mirror) return [];
+  return [
+    `read mirror: ${vault.read_path}`,
+    `requested vault: ${vault.path}`,
+    "if results look stale, refresh the read mirror or rerun with SKILLWIKI_DISABLE_VAULT_READ_MIRROR=1 for a live scan; live scans may be slower",
+  ];
 }
 
 function recomputeRawSha256IfPresent(content: string): string {
@@ -252,6 +293,7 @@ export function summarizeLintOutput(output: LintOutput, examplesLimit = 3): Lint
     ...output.by_severity.info.map(bucket => summarizeBucket(bucket, "info", output.vault.path, examplesLimit)),
   ];
   const lines: string[] = [];
+  lines.push(...readMirrorHintLines(output.vault));
   lines.push(`errors: ${output.summary.errors}`);
   lines.push(`warnings: ${output.summary.warnings}`);
   lines.push(`info: ${output.summary.info}`);
@@ -303,7 +345,8 @@ async function collectCliRefsPages(vault: string): Promise<Result<VaultPage[]>> 
 }
 
 async function runCliRefsOnly(input: LintInput | LintSummaryInput): Promise<{ exitCode: number; result: Result<LintOutput | LintSummaryOutput> }> {
-  const lintVault = lintReadVault(input);
+  const readVault = lintReadVault(input);
+  const lintVault = readVault.readPath;
   const pages = await collectCliRefsPages(lintVault);
   if (!pages.ok) {
     return { exitCode: ExitCode.VAULT_PATH_INVALID, result: pages };
@@ -322,13 +365,19 @@ async function runCliRefsOnly(input: LintInput | LintSummaryInput): Promise<{ ex
   const infoOut: Bucket[] = cliRefFlags.length > 0 ? [{ kind: "cli_refs", items: cliRefFlags }] : [];
   const summary = { errors: 0, warnings: 0, info: cliRefFlags.length };
   const exitCode = cliRefFlags.length > 0 ? ExitCode.LINT_HAS_WARNINGS : ExitCode.OK;
+  const vault = lintVaultOutput(input, readVault);
+  const hintLines = [
+    ...readMirrorHintLines(vault),
+    `--only cli_refs`,
+    cliRefFlags.length === 0 ? "0 violations" : `  cli_refs: ${cliRefFlags.length}`,
+  ];
   const output: LintOutput = {
-    vault: { path: input.vault, source: input.source ?? "resolved" },
+    vault,
     summary,
     by_severity: { error: [], warning: [], info: infoOut },
     fixed: [],
     unresolved: [],
-    humanHint: `--only cli_refs\n${cliRefFlags.length === 0 ? "0 violations" : `  cli_refs: ${cliRefFlags.length}`}`
+    humanHint: hintLines.join("\n")
   };
 
   return {
@@ -486,7 +535,8 @@ async function applyFileSourceUrlFix(
 }
 
 async function runFileSourceUrlOnly(input: LintInput | LintSummaryInput): Promise<{ exitCode: number; result: Result<LintOutput | LintSummaryOutput> }> {
-  const lintVault = lintReadVault(input);
+  const readVault = lintReadVault(input);
+  const lintVault = readVault.readPath;
   const scanResult = await scanVault(lintVault);
   if (!scanResult.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scanResult };
 
@@ -503,7 +553,7 @@ async function runFileSourceUrlOnly(input: LintInput | LintSummaryInput): Promis
     unresolved,
   );
   const match: Bucket[] = remaining.size > 0 ? [{ kind: "file_source_url", items: [...remaining] }] : [];
-  return outputForOnlyBucket(input, match, fixed, unresolved);
+  return outputForOnlyBucket(input, match, fixed, unresolved, readVault);
 }
 
 export function runLint(input: LintSummaryInput): Promise<{ exitCode: number; result: Result<LintSummaryOutput> }>;
@@ -523,7 +573,8 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   }
 
   const shouldFix = (bucket: string): boolean => !!input.fix && (!input.only || input.only === bucket);
-  const lintVault = lintReadVault(input);
+  const readVault = lintReadVault(input);
+  const lintVault = readVault.readPath;
 
   const buckets: Record<string, unknown[]> = {};
   const fixed: string[] = [];
@@ -1303,7 +1354,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   // --only: filter to a single bucket
   if (input.only) {
     const match = [...errorOut, ...warningOut, ...infoOut].filter(b => b.kind === input.only);
-    return outputForOnlyBucket(input, match, fixed, unresolved);
+    return outputForOnlyBucket(input, match, fixed, unresolved, readVault);
   }
 
   const summary = {
@@ -1316,7 +1367,9 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   if (summary.errors > 0) exitCode = ExitCode.LINT_HAS_ERRORS;
   else if (summary.warnings > 0 || summary.info > 0) exitCode = ExitCode.LINT_HAS_WARNINGS;
 
+  const vault = lintVaultOutput(input, readVault);
   const hintLines: string[] = [];
+  hintLines.push(...readMirrorHintLines(vault));
   if (summary.errors > 0) hintLines.push(`errors: ${summary.errors}`);
   if (summary.warnings > 0) hintLines.push(`warnings: ${summary.warnings}`);
   if (summary.info > 0) hintLines.push(`info: ${summary.info}`);
@@ -1329,7 +1382,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   if (input.fix) appendLintFixLastOp(input.vault, fixed);
 
   const output: LintOutput = {
-    vault: { path: input.vault, source: input.source ?? "resolved" },
+    vault,
     summary,
     by_severity: { error: errorOut, warning: warningOut, info: infoOut },
     fixed: fixed,

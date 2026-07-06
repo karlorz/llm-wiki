@@ -42,7 +42,7 @@ afterEach(() => {
 });
 
 describe("runLint", () => {
-  it("uses a read mirror for non-fix lint while reporting the requested vault", async () => {
+  it("uses a read mirror for non-fix lint while reporting requested and scanned vaults", async () => {
     const requested = vault();
     const mirror = vault();
     writeFileSync(join(requested, "concepts", "alpha.md"), FM(["model"]) + "> **TL;DR:** Summary about alpha.\n\n## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");
@@ -57,6 +57,10 @@ describe("runLint", () => {
     expect(r.result.ok).toBe(true);
     if (!r.result.ok) throw new Error("expected ok");
     expect(r.result.data.vault.path).toBe(requested);
+    expect(r.result.data.vault.read_path).toBe(mirror);
+    expect(r.result.data.vault.read_mirror).toBe(true);
+    expect(r.result.data.humanHint).toContain(`read mirror: ${mirror}`);
+    expect(r.result.data.humanHint).toContain(`requested vault: ${requested}`);
     expect(r.result.data.buckets.map((b) => b.kind)).toContain("tag_not_in_taxonomy");
   });
 
@@ -74,6 +78,8 @@ describe("runLint", () => {
     expect(r.result.ok).toBe(true);
     if (!r.result.ok) throw new Error("expected ok");
     expect(r.result.data.vault.path).toBe(requested);
+    expect(r.result.data.vault.read_path).toBe(requested);
+    expect(r.result.data.vault.read_mirror).toBe(false);
     expect(r.result.data.by_severity.error.map((b) => b.kind)).not.toContain("tag_not_in_taxonomy");
   });
 
@@ -1300,6 +1306,35 @@ same body content here
       }
     });
 
+    it("reports read mirror metadata for bucket-specific summary output", async () => {
+      const requested = vault();
+      const mirror = vault();
+      writeFileSync(join(requested, "concepts", "alpha.md"), FM(["model"]) + "> **TL;DR:** Summary about alpha.\n\n## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");
+      writeFileSync(join(requested, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+      writeFileSync(join(mirror, "concepts", "bad-tag.md"), FM(["rogue"]) + "## Overview\n\nBad tag page [[bad-tag]].\n\n## Related\n\n- [[bad-tag]]\n");
+      writeFileSync(join(mirror, "index.md"), "# Index\n\n## Concepts\n- [[bad-tag]]\n");
+      process.env.SKILLWIKI_VAULT_READ_MIRROR = mirror;
+
+      const r = await runLint({
+        vault: requested,
+        days: 90,
+        lines: 200,
+        logThreshold: 500,
+        only: "tag_not_in_taxonomy",
+        summary: true,
+      });
+
+      expect(r.exitCode).toBe(23);
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) throw new Error("expected ok");
+      expect(r.result.data.vault.path).toBe(requested);
+      expect(r.result.data.vault.read_path).toBe(mirror);
+      expect(r.result.data.vault.read_mirror).toBe(true);
+      expect(r.result.data.humanHint).toContain(`read mirror: ${mirror}`);
+      expect(r.result.data.humanHint).toContain(`requested vault: ${requested}`);
+      expect(r.result.data.buckets.map(b => b.kind)).toEqual(["tag_not_in_taxonomy"]);
+    });
+
     it("returns empty results for bucket with no violations", async () => {
       const v = vault();
       writeFileSync(join(v, "concepts", "test.md"), FM(["model"]) + "# Test\n\n> **TL;DR:** test\n");
@@ -1308,6 +1343,29 @@ same body content here
       if (r.result.ok) {
         expect(r.result.data.summary.info).toBe(0);
       }
+    });
+
+    it("reports read mirror metadata for cli_refs fast-path output", async () => {
+      const requested = vault();
+      const mirror = vault();
+      process.env.SKILLWIKI_VAULT_READ_MIRROR = mirror;
+
+      const r = await runLint({
+        vault: requested,
+        days: 90,
+        lines: 200,
+        logThreshold: 500,
+        only: "cli_refs",
+        summary: true,
+      });
+
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) throw new Error("expected ok");
+      expect(r.result.data.vault.path).toBe(requested);
+      expect(r.result.data.vault.read_path).toBe(mirror);
+      expect(r.result.data.vault.read_mirror).toBe(true);
+      expect(r.result.data.humanHint).toContain(`read mirror: ${mirror}`);
+      expect(r.result.data.humanHint).toContain(`requested vault: ${requested}`);
     });
 
     it("ignores cli_refs violations in raw pages (immutable historical scope)", async () => {
