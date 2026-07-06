@@ -37,9 +37,11 @@ mkdir -p "$(dirname "$LOG_FILE")"
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"; }
 
-drop_identical_untracked_remote_overlaps() {
+drop_or_preserve_untracked_remote_overlaps() {
     local removed=0
+    local preserved=0
     local path remote_blob
+    local collision_root backup_path backup_dir
 
     while IFS= read -r -d '' path; do
         if ! git cat-file -e "$REMOTE/$BRANCH:$path" 2>/dev/null; then
@@ -57,14 +59,31 @@ drop_identical_untracked_remote_overlaps() {
             fi
         else
             rm -f "$remote_blob"
-            log "FAIL untracked path would be overwritten by remote and differs: $path"
-            return 1
+            if [ -z "${collision_root:-}" ]; then
+                collision_root="$(platform_cache_dir)/untracked-collisions/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+            fi
+            backup_path="$collision_root/$path"
+            backup_dir="$(dirname "$backup_path")"
+            if ! mkdir -p "$backup_dir" || ! cp -p "$path" "$backup_path"; then
+                log "FAIL could not preserve divergent untracked remote overlap before pull: $path"
+                return 1
+            fi
+            if rm -f -- "$path"; then
+                preserved=$((preserved + 1))
+                log "PRESERVE divergent untracked remote overlap before pull: $path -> $backup_path"
+            else
+                log "FAIL could not remove preserved divergent untracked remote overlap before pull: $path"
+                return 1
+            fi
         fi
         rm -f "$remote_blob"
     done < <(git ls-files --others --exclude-standard -z)
 
     if [ "$removed" -gt 0 ]; then
         log "DROP $removed identical untracked remote duplicate(s) before pull"
+    fi
+    if [ "$preserved" -gt 0 ]; then
+        log "PRESERVE $preserved divergent untracked remote overlap(s) before pull"
     fi
     return 0
 }
@@ -89,6 +108,20 @@ rollback_resolved() {
             git restore --staged -- "$p" 2>/dev/null || log "WARN rollback could not restore conflict state: $p"
         fi
     done
+}
+
+verify_no_tracked_conflict_markers() {
+    local matches
+    matches="$(mktemp)" || { log "FAIL could not create conflict-marker scan temp file"; return 1; }
+    if git grep -n -E '^(<<<<<<< .+|=======$|>>>>>>> .+)' -- '*.md' >"$matches" 2>/dev/null; then
+        log "FAIL unresolved conflict markers remain after pull"
+        cat "$matches" >>"$LOG_FILE"
+        rm -f "$matches"
+        return 1
+    fi
+
+    rm -f "$matches"
+    return 0
 }
 
 try_auto_resolve_log_union_conflicts() {
@@ -172,13 +205,16 @@ log "FETCH $REMOTE/$BRANCH"
 # Check if we're behind
 BEHIND=$(git rev-list --count "HEAD..$REMOTE/$BRANCH" 2>/dev/null || echo 0)
 if [ "$BEHIND" -eq 0 ]; then
+    if ! verify_no_tracked_conflict_markers; then
+        exit 1
+    fi
     log "UP-TO-DATE (0 behind)"
     exit 0
 fi
 
 log "PULL --rebase ($BEHIND commits behind)"
 
-if ! drop_identical_untracked_remote_overlaps; then
+if ! drop_or_preserve_untracked_remote_overlaps; then
     exit 1
 fi
 
@@ -294,6 +330,10 @@ if [ "$STASHED" = true ]; then
         log "FAIL stash pop after rebase"
         exit 1
     fi
+fi
+
+if ! verify_no_tracked_conflict_markers; then
+    exit 1
 fi
 
 log "OK pull completed"

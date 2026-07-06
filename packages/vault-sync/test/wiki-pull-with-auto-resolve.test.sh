@@ -116,6 +116,34 @@ test_untracked_remote_duplicate_is_removed_before_pull() {
   rm -rf "$root"
 }
 
+test_divergent_untracked_remote_overlap_is_preserved_before_pull() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  mkdir -p "$vault/projects/demo"
+  printf 'local draft\n' > "$vault/projects/demo/new-note.md"
+  add_remote_commit "$root" "projects/demo/new-note.md" "remote snapshot" "remote-s3-divergent-note"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  local preserved_count preserved_content
+  preserved_count="$(find "$home" -type f -path '*/vault-sync/untracked-collisions/*/projects/demo/new-note.md' 2>/dev/null | wc -l | tr -d ' ')"
+  preserved_content="$(find "$home" -type f -path '*/vault-sync/untracked-collisions/*/projects/demo/new-note.md' -exec cat {} \; 2>/dev/null)"
+
+  assert_eq "divergent untracked overlap pull exits successfully" "$rc" "0"
+  assert_eq "divergent overlap branch is no longer behind" "$(git -C "$vault" rev-list --count HEAD..origin/main 2>/dev/null || echo unknown)" "0"
+  assert_eq "remote snapshot wins in active worktree" "$(cat "$vault/projects/demo/new-note.md" 2>/dev/null || true)" "remote snapshot"
+  assert_eq "local divergent draft is preserved once" "$preserved_count" "1"
+  assert_eq "preserved divergent draft keeps local content" "$preserved_content" "local draft"
+  assert_eq "worktree is clean after preserving divergent overlap" "$(git -C "$vault" status --porcelain | wc -l | tr -d ' ')" "0"
+
+  rm -rf "$root"
+}
+
 test_non_archive_log_append_conflict_is_union_resolved() {
   local root
   root="$(mktemp -d)"
@@ -180,11 +208,35 @@ remote note change" "remote-note-edit"
   rm -rf "$root"
 }
 
+test_pull_fails_if_tracked_markdown_contains_conflict_markers() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  add_remote_commit "$root" "bad.md" "<<<<<<< HEAD
+remote side
+=======
+local side
+>>>>>>> branch" "remote-conflict-marker-content"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  assert_eq "pull with tracked conflict markers fails" "$rc" "1"
+  assert_eq "conflict marker file is present for inspection" "$(test -f "$vault/bad.md" && echo present || echo absent)" "present"
+
+  rm -rf "$root"
+}
+
 test_dirty_tree_pull_restores_edit
 test_stale_rebase_state_is_cleaned_before_pull
 test_untracked_remote_duplicate_is_removed_before_pull
+test_divergent_untracked_remote_overlap_is_preserved_before_pull
 test_non_archive_log_append_conflict_is_union_resolved
 test_mixed_log_and_non_log_conflict_falls_through_safely
+test_pull_fails_if_tracked_markdown_contains_conflict_markers
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
