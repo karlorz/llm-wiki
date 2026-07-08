@@ -143,6 +143,56 @@ Use hub pages.
     expect(knowledge).toContain("[[projects/cmux/compound/routing-pattern]]");
   });
 
+  it("includes project-local requirement pages in knowledge.md", async () => {
+    const dir = makeVault("cmux");
+    mkdirSync(join(dir, "projects", "cmux", "requirements"), { recursive: true });
+    writeFileSync(join(dir, "projects", "cmux", "requirements", "routing-implementation.md"), `---
+title: Routing Implementation Report
+type: reference
+created: 2026-05-10
+updated: 2026-05-10
+provenance: project
+provenance_projects: ["[[cmux]]"]
+---
+
+# Routing Implementation Report
+
+Done.
+`);
+
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: true });
+    expect(r.exitCode).toBe(0);
+
+    const knowledge = readFileSync(join(dir, "projects", "cmux", "knowledge.md"), "utf8");
+    expect(knowledge).toContain("## requirement");
+    expect(knowledge).toContain("[[projects/cmux/requirements/routing-implementation]] — Routing Implementation Report");
+  });
+
+  it("includes project work spec pages in knowledge.md", async () => {
+    const dir = makeVault("cmux");
+    mkdirSync(join(dir, "projects", "cmux", "work", "2026-05-10-routing"), { recursive: true });
+    writeFileSync(join(dir, "projects", "cmux", "work", "2026-05-10-routing", "spec.md"), `---
+title: Routing Work Spec
+kind: spec
+status: done
+project: "[[cmux]]"
+created: 2026-05-10
+provenance: project
+---
+
+# Routing Work Spec
+
+Build it.
+`);
+
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: true });
+    expect(r.exitCode).toBe(0);
+
+    const knowledge = readFileSync(join(dir, "projects", "cmux", "knowledge.md"), "utf8");
+    expect(knowledge).toContain("## spec");
+    expect(knowledge).toContain("[[projects/cmux/work/2026-05-10-routing/spec]] — Routing Work Spec");
+  });
+
   it("finds entity pages referencing the project", async () => {
     const dir = makeVault("cmux");
     writeFileSync(join(dir, "entities", "cmux-router.md"), `---

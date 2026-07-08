@@ -15,6 +15,6 @@
 
 ## Knowledge Pages
 
-> Auto-populated: concept and entity pages with `provenance_projects: [[{{slug}}]]` are listed here.
+> Auto-populated: Layer 2 pages with `provenance_projects: [[{{slug}}]]` plus project-local lifecycle pages are listed here.
 
-Run `skillwiki project-index {{slug}} --apply` to generate `knowledge.md` listing all Layer 2 pages that reference `[[{{slug}}]]` in their provenance_projects.
+Run `skillwiki project-index {{slug}} --apply` to regenerate `knowledge.md`. Do not hand-edit `knowledge.md`; update source page frontmatter or project-local lifecycle pages, then regenerate.

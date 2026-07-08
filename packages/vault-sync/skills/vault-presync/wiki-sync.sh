@@ -64,6 +64,49 @@ warn()  { echo -e "[wiki-sync] ${YELLOW}WARN:${NC} $*" >&2; }
 error() { echo -e "[wiki-sync] ${RED}ERROR:${NC} $*" >&2; }
 ok()    { echo -e "[wiki-sync] ${GREEN}OK:${NC} $*"; }
 
+is_project_knowledge_conflict_path() {
+    [[ "$1" =~ ^projects/[^/]+/knowledge\.md$ ]]
+}
+
+project_slug_from_knowledge_path() {
+    local path="$1"
+    path="${path#projects/}"
+    printf '%s\n' "${path%%/*}"
+}
+
+try_auto_resolve_project_knowledge_conflicts() {
+    local conflicts="$1"
+    local f slug slugs rc
+
+    command -v skillwiki >/dev/null 2>&1 || return 1
+
+    for f in $conflicts; do
+        is_project_knowledge_conflict_path "$f" || return 1
+    done
+
+    slugs="$(mktemp)" || return 1
+    for f in $conflicts; do
+        project_slug_from_knowledge_path "$f" >>"$slugs"
+    done
+
+    rc=0
+    while read -r slug; do
+        [[ -n "$slug" ]] || continue
+        if ! skillwiki project-index "$slug" "$WIKI_DIR" --apply >/dev/null; then
+            rc=1
+        fi
+    done < <(sort -u "$slugs")
+    rm -f "$slugs"
+    [[ "$rc" -eq 0 ]] || return 1
+
+    for f in $conflicts; do
+        git add "$f" || return 1
+    done
+
+    ok "Auto-resolved generated project knowledge index conflict(s): $conflicts"
+    return 0
+}
+
 need_confirm() {
     if [[ "$DRY_RUN" == true ]]; then
         warn "[DRY RUN] Would require confirmation: $*"
@@ -208,11 +251,21 @@ if [[ "$BEHIND" -gt 0 ]]; then
         if git stash pop; then
             ok "Stash reapplied cleanly."
         else
-            error "Stash pop had conflicts."
-            error "  - Your edits are in the stash (git stash list)"
-            error "  - Resolve conflicts in the working tree"
-            error "  - Then: git stash drop  (to remove the applied stash)"
-            exit 1
+            CONFLICTS=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
+            if [[ -n "$CONFLICTS" ]] && try_auto_resolve_project_knowledge_conflicts "$CONFLICTS"; then
+                if [[ -n "$(git diff --name-only --diff-filter=U 2>/dev/null || true)" ]]; then
+                    error "Generated project knowledge auto-resolve left conflicts."
+                    exit 1
+                fi
+                git stash drop >/dev/null 2>&1 || warn "Could not drop auto-resolved stash."
+                ok "Stash project knowledge conflicts auto-resolved."
+            else
+                error "Stash pop had conflicts."
+                error "  - Your edits are in the stash (git stash list)"
+                error "  - Resolve conflicts in the working tree"
+                error "  - Then: git stash drop  (to remove the applied stash)"
+                exit 1
+            fi
         fi
     fi
 elif [[ "$AHEAD" -gt 0 ]]; then

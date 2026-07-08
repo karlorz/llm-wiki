@@ -180,6 +180,59 @@ try_auto_resolve_log_union_conflicts() {
     return 0
 }
 
+is_project_knowledge_conflict_path() {
+    [[ "$1" =~ ^projects/[^/]+/knowledge\.md$ ]]
+}
+
+project_slug_from_knowledge_path() {
+    local path="$1"
+    path="${path#projects/}"
+    printf '%s\n' "${path%%/*}"
+}
+
+try_auto_resolve_project_knowledge_conflicts() {
+    local conflicts="$1"
+    local f slug slugs rc
+
+    if ! command -v skillwiki >/dev/null 2>&1; then
+        return 1
+    fi
+
+    for f in $conflicts; do
+        if ! is_project_knowledge_conflict_path "$f"; then
+            return 1
+        fi
+    done
+
+    slugs="$(mktemp)" || { log "WARN mktemp failed for project knowledge conflict"; return 1; }
+    for f in $conflicts; do
+        project_slug_from_knowledge_path "$f" >>"$slugs"
+    done
+
+    rc=0
+    while read -r slug; do
+        [ -n "$slug" ] || continue
+        if ! skillwiki project-index "$slug" "$WIKI_DIR" --apply >>"$LOG_FILE" 2>&1; then
+            rc=1
+        fi
+    done < <(sort -u "$slugs")
+    rm -f "$slugs"
+    if [ "$rc" -ne 0 ]; then
+        log "WARN project knowledge regeneration failed: $conflicts"
+        return 1
+    fi
+
+    for f in $conflicts; do
+        if ! git add "$f"; then
+            log "WARN git add failed for regenerated project knowledge: $f"
+            return 1
+        fi
+    done
+
+    log "AUTO-RESOLVE project knowledge regeneration: $conflicts"
+    return 0
+}
+
 cd "$WIKI_DIR" || { log "ERROR: cd $WIKI_DIR failed"; exit 1; }
 
 # Clean up leftover rebase state from a previous failed unattended run. An
@@ -280,6 +333,15 @@ while [ $REBASE_RC -ne 0 ]; do
         continue
     fi
 
+    if try_auto_resolve_project_knowledge_conflicts "$CONFLICTS"; then
+        if ! GIT_EDITOR=true git rebase --continue 2>>"$LOG_FILE"; then
+            REBASE_RC=$?
+        else
+            REBASE_RC=0
+        fi
+        continue
+    fi
+
     if try_auto_resolve_log_union_conflicts "$CONFLICTS"; then
         if ! GIT_EDITOR=true git rebase --continue 2>>"$LOG_FILE"; then
             REBASE_RC=$?
@@ -327,8 +389,18 @@ if [ "$STASHED" = true ]; then
     if git stash pop 2>>"$LOG_FILE" >/dev/null; then
         log "STASH pop ok"
     else
-        log "FAIL stash pop after rebase"
-        exit 1
+        CONFLICTS=$(git diff --name-only --diff-filter=U 2>/dev/null)
+        if [ -n "$CONFLICTS" ] && try_auto_resolve_project_knowledge_conflicts "$CONFLICTS"; then
+            if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+                log "FAIL stash pop project knowledge auto-resolve left conflicts"
+                exit 1
+            fi
+            git stash drop 2>>"$LOG_FILE" >/dev/null || log "WARN could not drop auto-resolved stash"
+            log "STASH pop project knowledge conflicts auto-resolved"
+        else
+            log "FAIL stash pop after rebase"
+            exit 1
+        fi
     fi
 fi
 

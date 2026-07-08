@@ -1,5 +1,5 @@
 import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 
@@ -25,6 +25,48 @@ export interface ProjectIndexOutput {
 }
 
 const LAYER2_DIRS = ["entities", "concepts", "comparisons", "queries", "meta"];
+const PROJECT_LOCAL_DIRS = ["requirements", "work", "architecture", "history"];
+
+async function scanMarkdownTree(rootAbs: string, rootRel: string): Promise<string[]> {
+  const found: string[] = [];
+  let entries;
+  try {
+    entries = await readdir(rootAbs, { withFileTypes: true });
+  } catch {
+    return found;
+  }
+
+  for (const entry of entries) {
+    const abs = join(rootAbs, entry.name);
+    const rel = `${rootRel}/${entry.name}`;
+    if (entry.isDirectory()) {
+      found.push(...await scanMarkdownTree(abs, rel));
+    } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      found.push(rel);
+    }
+  }
+
+  return found;
+}
+
+function projectLocalType(slug: string, page: string, data: Record<string, unknown>): string {
+  if (page.startsWith(`projects/${slug}/requirements/`)) return "requirement";
+  if (page.startsWith(`projects/${slug}/work/`)) {
+    if (typeof data.kind === "string") return data.kind;
+    const name = basename(page, ".md");
+    if (name === "spec" || name === "plan" || name === "retro") return name;
+    return "work";
+  }
+  if (page.startsWith(`projects/${slug}/architecture/`)) {
+    return typeof data.type === "string" ? data.type : "architecture";
+  }
+  if (page.startsWith(`projects/${slug}/history/`)) {
+    if (typeof data.kind === "string") return data.kind;
+    if (typeof data.type === "string") return data.type;
+    return "history";
+  }
+  return typeof data.type === "string" ? data.type : "project";
+}
 
 export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitCode: number; result: Result<ProjectIndexOutput> }> {
   const slug = input.slug;
@@ -92,8 +134,31 @@ export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitC
     }
   }
 
+  // Scan project-local lifecycle pages. These live below the project workspace
+  // rather than Layer 2, but knowledge.md is the project entry point agents use.
+  for (const dir of PROJECT_LOCAL_DIRS) {
+    const rootAbs = join(projectDir, dir);
+    const rootRel = `projects/${slug}/${dir}`;
+    const pages = await scanMarkdownTree(rootAbs, rootRel);
+
+    for (const page of pages) {
+      const filePath = join(input.vault, page);
+      let text: string;
+      try { text = await readFile(filePath, "utf8"); } catch { continue; }
+
+      const fm = extractFrontmatter(text);
+      if (!fm.ok) continue;
+
+      entries.push({
+        page,
+        type: projectLocalType(slug, page, fm.data),
+        title: typeof fm.data.title === "string" ? fm.data.title : basename(page, ".md")
+      });
+    }
+  }
+
   // Sort: entities first, then concepts, then rest; within group by title
-  const typeOrder: Record<string, number> = { entity: 0, concept: 1, comparison: 2, query: 3, summary: 4, meta: 5, pattern: 6, gotcha: 7, lesson: 8, antipattern: 9, compound: 10 };
+  const typeOrder: Record<string, number> = { entity: 0, concept: 1, comparison: 2, query: 3, summary: 4, meta: 5, requirement: 6, spec: 7, plan: 8, retro: 9, architecture: 10, pattern: 11, gotcha: 12, lesson: 13, antipattern: 14, compound: 15, work: 16, history: 17 };
   entries.sort((a, b) => {
     const ta = typeOrder[a.type] ?? 99;
     const tb = typeOrder[b.type] ?? 99;
