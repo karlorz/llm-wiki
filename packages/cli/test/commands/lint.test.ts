@@ -2029,4 +2029,96 @@ Body
       expect(bucket).toBeUndefined();
     });
   });
+
+  describe("conflict_markers bucket", () => {
+    const conflictBody = [
+      "## Overview",
+      "",
+      "<<<<<<< HEAD",
+      "ours",
+      "=======",
+      "theirs",
+      ">>>>>>> branch",
+      "",
+      "## Related",
+      "",
+      "- [[x]]",
+    ].join("\n");
+
+    it("full conflict block produces an error bucket", async () => {
+      const v = vault();
+      writeFileSync(join(v, "concepts", "conflicted.md"), FM(["model"]) + conflictBody);
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
+
+      expect(r.exitCode).toBe(23);
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) throw new Error("expected ok");
+      const bucket = r.result.data.by_severity.error.find((b) => b.kind === "conflict_markers");
+      expect(bucket?.items).toHaveLength(1);
+      const item = bucket?.items[0] as { path: string; line: number; message: string };
+      expect(item.path).toBe("concepts/conflicted.md");
+      expect(item.message).toBe("complete Git conflict-marker block");
+    });
+
+    it("--only conflict_markers returns that bucket", async () => {
+      const v = vault();
+      writeFileSync(join(v, "concepts", "conflicted.md"), FM(["model"]) + conflictBody);
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "conflict_markers" });
+
+      expect(r.exitCode).toBe(23);
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) throw new Error("expected ok");
+      const errorKinds = r.result.data.by_severity.error.map((b) => b.kind);
+      expect(errorKinds).toEqual(["conflict_markers"]);
+      expect(r.result.data.by_severity.warning).toHaveLength(0);
+      expect(r.result.data.by_severity.info).toHaveLength(0);
+    });
+
+    it("standalone ======= separator does not produce a bucket", async () => {
+      const v = vault();
+      writeFileSync(
+        join(v, "concepts", "separator.md"),
+        FM(["model"]) + "## Overview\n\n=======\n\nNot a conflict.\n\n## Related\n\n- [[separator]]\n"
+      );
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "conflict_markers" });
+
+      expect(r.exitCode).toBe(0);
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) throw new Error("expected ok");
+      const bucket = r.result.data.by_severity.error.find((b) => b.kind === "conflict_markers");
+      expect(bucket).toBeUndefined();
+    });
+
+    it("fenced code block containing conflict example does not produce a bucket", async () => {
+      const v = vault();
+      const fenced = [
+        FM(["model"]),
+        "## Overview",
+        "",
+        "```",
+        "<<<<<<< HEAD",
+        "ours",
+        "=======",
+        "theirs",
+        ">>>>>>> branch",
+        "```",
+        "",
+        "## Related",
+        "",
+        "- [[fenced]]",
+      ].join("\n");
+      writeFileSync(join(v, "concepts", "fenced.md"), fenced);
+
+      const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, only: "conflict_markers" });
+
+      expect(r.exitCode).toBe(0);
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) throw new Error("expected ok");
+      const bucket = r.result.data.by_severity.error.find((b) => b.kind === "conflict_markers");
+      expect(bucket).toBeUndefined();
+    });
+  });
 });
