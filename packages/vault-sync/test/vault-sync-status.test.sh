@@ -191,11 +191,42 @@ test_conflict_markers_pass_on_standalone_separator() {
   assert_eq "conflict markers pass on standalone separator" "$status" "pass"
 }
 
+test_reachability_local_vault_on_clean_git_vault() {
+  local home="$TEST_ROOT/home-reach-local"
+  prepare_home "$home"
+  prepare_vault_clean "$home"
+  git -C "$home/wiki" init -q
+  git -C "$home/wiki" config user.email "t@t"
+  git -C "$home/wiki" config user.name "t"
+  git -C "$home/wiki" add -A
+  git -C "$home/wiki" commit -q -m init
+
+  local json status
+  json="$(HOME="$home" WIKI_PATH="$home/wiki" bash "$STATUS_SH" --read-only --json)"
+  status="$(check_status "$json" "reachability_local_vault")"
+
+  assert_eq "reachability local vault on clean git vault" "$status" "pass"
+}
+
+test_reachability_snapshotter_not_checked_by_default() {
+  local home="$TEST_ROOT/home-reach-snap"
+  prepare_home "$home"
+
+  local json status
+  json="$(status_json_for_home "$home")"
+  status="$(check_status "$json" "reachability_snapshotter")"
+
+  assert_eq "snapshotter reachability not_checked by default" "$status" "pass"
+}
+
 test_status_reports_installed_scripts_in_sync
 test_status_warns_when_installed_script_differs_from_source
 test_conflict_markers_pass_on_clean_vault
 test_conflict_markers_error_on_conflict_block
 test_conflict_markers_pass_on_standalone_separator
+
+test_reachability_local_vault_on_clean_git_vault
+test_reachability_snapshotter_not_checked_by_default
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

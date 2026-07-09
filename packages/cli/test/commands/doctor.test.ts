@@ -287,12 +287,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 41 checks", async () => {
+  it("always returns exactly 46 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(41);
+      expect(r.result.data.checks).toHaveLength(46);
       const freshness = r.result.data.checks.find(c => c.id === "s3_mount_freshness");
       expect(freshness).toBeDefined();
       expect(freshness?.status).toBe("pass");
@@ -633,6 +633,94 @@ describe("runDoctor", () => {
       expect(ahead).toBeDefined();
       expect(ahead!.status).toBe("warn");
       expect(ahead!.detail).toContain("1 commit");
+    }
+  });
+
+  it("vault_github_remote warns when ls-remote fails but local git is healthy", async () => {
+    const h = home();
+    const v = fullVault();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const execProbe = (file: string, args: string[]) => {
+      if (file === "git" && args[0] === "remote") return "https://example.com/v.git";
+      if (file === "git" && args[0] === "ls-remote") throw new Error("offline");
+      if (file === "rclone") return "ok\n";
+      return "";
+    };
+    const r = await runDoctor({
+      home: h,
+      envValue: v,
+      argv: ["node", "skillwiki", "doctor"],
+      currentVersion: "0.2.0-beta.15",
+      execProbe,
+    });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const gh = r.result.data.checks.find(c => c.id === "vault_github_remote");
+      expect(gh?.status).toBe("warn");
+      expect(gh?.detail).toContain("unreachable");
+      const local = r.result.data.checks.find(c => c.id === "vault_local_git");
+      expect(local?.status).toBe("pass");
+    }
+  });
+
+  it("vault_s3_remote warns when rclone fails", async () => {
+    const h = home();
+    const v = fullVault();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const execProbe = (file: string, args: string[]) => {
+      if (file === "git" && args[0] === "remote") return "https://example.com/v.git";
+      if (file === "git" && args[0] === "ls-remote") return "abc refs/heads/main\n";
+      if (file === "rclone") throw new Error("s3 down");
+      return "";
+    };
+    const r = await runDoctor({
+      home: h,
+      envValue: v,
+      argv: ["node", "skillwiki", "doctor"],
+      currentVersion: "0.2.0-beta.15",
+      execProbe,
+    });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const s3 = r.result.data.checks.find(c => c.id === "vault_s3_remote");
+      expect(s3?.status).toBe("warn");
+      expect(s3?.detail).toContain("unreachable");
+    }
+  });
+
+  it("vault_snapshotter_reachable warns when SSH probe fails", async () => {
+    const h = home();
+    const v = fullVault();
+    addFleet(v);
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\nSKILLWIKI_HOST_ID=macos-dev\n`);
+    const prior = process.env.SKILLWIKI_HOST_ID;
+    process.env.SKILLWIKI_HOST_ID = "macos-dev";
+    let r!: Awaited<ReturnType<typeof runDoctor>>;
+    try {
+      r = await runDoctor({
+        home: h,
+        envValue: v,
+        argv: ["node", "skillwiki", "doctor"],
+        currentVersion: "0.2.0-beta.15",
+        checkSnapshotter: true,
+        execProbe: (file, args) => {
+          if (file === "git" && args[0] === "remote") return "https://example.com/v.git";
+          if (file === "git" && args[0] === "ls-remote") return "deadbeef refs/heads/main\n";
+          if (file === "rclone") return "a\n";
+          if (file === "ssh") throw new Error("unreachable");
+          return "";
+        },
+      });
+    } finally {
+      if (prior === undefined) delete process.env.SKILLWIKI_HOST_ID;
+      else process.env.SKILLWIKI_HOST_ID = prior;
+    }
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const snap = r.result.data.checks.find(c => c.id === "vault_snapshotter_reachable");
+      expect(snap?.status).toBe("warn");
+      expect(snap?.detail).toContain("unreachable");
+      expect(snap?.detail).toContain("not a local vault corruption signal");
     }
   });
 

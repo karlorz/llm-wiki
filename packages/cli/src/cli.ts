@@ -505,12 +505,14 @@ configCmd
 program
   .command("doctor")
   .description("diagnose skillwiki setup issues")
-  .action(async () => emit(await runDoctor({
+  .option("--check-snapshotter", "SSH-probe fleet snapshotter (short timeout)", false)
+  .action(async (opts) => emit(await runDoctor({
     home: process.env.HOME ?? "",
     envValue: process.env.WIKI_PATH,
     argv: process.argv,
     currentVersion: pkg.version,
     cwd: process.cwd(),
+    checkSnapshotter: !!opts.checkSnapshotter,
   })));
 
 // status
@@ -780,10 +782,21 @@ syncCmd
   .description("check vault git sync status")
   .option("--wiki <name>", "wiki profile name")
   .option("--include-stashes", "enumerate all stashes in output", false)
+  .option("--include-remote-health", "probe GitHub/S3 reachability (opt-in; adds network latency)", false)
+  .option("--check-snapshotter", "with --include-remote-health, also SSH-probe fleet snapshotter alias", false)
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(runSyncStatus({ vault: v.vault, includeStashes: !!opts.includeStashes }));
+    else {
+      const home = process.env.HOME ?? "";
+      emit(runSyncStatus({
+        vault: v.vault,
+        includeStashes: !!opts.includeStashes,
+        includeRemoteHealth: !!opts.includeRemoteHealth,
+        home,
+        checkSnapshotter: !!opts.checkSnapshotter,
+      }));
+    }
   });
 
 syncCmd

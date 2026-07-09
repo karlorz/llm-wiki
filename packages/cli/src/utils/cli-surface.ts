@@ -46,7 +46,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("lint").option("--days <n>").option("--lines <n>").option("--log-threshold <n>").option("--fix").option("--only <bucket>").option("--summary").option("--examples <n>").option("--wiki <name>");
   program.command("config"); // has subcommands
   program.command("health").option("--wiki <name>").option("--sync <mode>").option("--no-fail").option("--out <path>").option("--examples <n>");
-  program.command("doctor");
+  program.command("doctor").option("--check-snapshotter");
   program.command("status").option("--wiki <name>");
   program.command("archive")
     .option("--wiki <name>")
@@ -101,7 +101,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   compoundCmd.command("delete").requiredOption("--project <slug>").option("--wiki <name>");
 
   const syncCmd = program.commands.find(c => c.name() === "sync")!;
-  syncCmd.command("status").option("--wiki <name>").option("--include-stashes");
+  syncCmd.command("status").option("--wiki <name>").option("--include-stashes").option("--include-remote-health").option("--check-snapshotter");
   syncCmd.command("push").option("--wiki <name>");
   syncCmd.command("pull").option("--wiki <name>");
   syncCmd.command("lock").option("--summary <text>").option("--ttl-minutes <n>").option("--force").option("--wiki <name>");
