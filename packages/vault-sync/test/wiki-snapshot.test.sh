@@ -39,7 +39,10 @@ fi
 
 assert_contains "snapshot preserves max-delete guard" "--max-delete 10"
 assert_contains "snapshot has raw dedup guard function" "raw_dedup_guard()"
-assert_contains "snapshot calls raw dedup guard before commit" "raw_dedup_guard; then"
+assert_contains "snapshot calls raw dedup guard before commit" "if ! raw_dedup_guard; then"
+assert_contains "snapshot has conflict marker guard function" "conflict_marker_guard()"
+assert_contains "snapshot calls conflict marker guard before commit" "if ! conflict_marker_guard; then"
+assert_contains "snapshot gates post-repair path with conflict marker guard" "if ! raw_dedup_guard || ! conflict_marker_guard; then"
 
 test_snapshot_dry_run_warns_on_direct_s3_note_not_in_git() {
   local root
@@ -489,6 +492,169 @@ STUB
 }
 
 test_raw_dedup_guard_blocks_commit
+
+test_conflict_marker_guard_blocks_commit() {
+  local root
+  root="$(mktemp -d)"
+  local git_dir="$root/wiki-git"
+  local cloud_dir="$root/cloud/wiki"
+  local bin_dir="$root/bin"
+  local log_file="$root/wiki-snapshot.log"
+  local lock_file="$root/wiki-snapshot.lock"
+  mkdir -p "$git_dir" "$cloud_dir" "$bin_dir"
+
+  git -C "$root" init --bare origin.git >/dev/null
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" remote add origin "$root/origin.git"
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  printf '# Index\n' > "$git_dir/index.md"
+  git_commit "$git_dir" init
+  git -C "$git_dir" push -u origin main >/dev/null
+  local before_head
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  printf '# Vault Schema\n' > "$cloud_dir/SCHEMA.md"
+  printf '# Index\n' > "$cloud_dir/index.md"
+  {
+    printf '<<<<<<< HEAD\n'
+    printf 'ours\n'
+    printf '=======\n'
+    printf 'theirs\n'
+    printf '>>>>>>> branch\n'
+  } > "$cloud_dir/bad.md"
+
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+if [ "$1" = "sync" ]; then
+  src="$2"
+  dst="$3"
+  if [ "$src" = "stub:cloud/wiki" ]; then
+    cp -R "$CLOUD_FIXTURE/." "$dst/"
+    echo "Transferred: 1 / 1, 100%"
+    exit 0
+  fi
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/rclone"
+
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "raw_dedup" ] && [ "$5" = "--summary" ]; then
+  echo "errors: 0"
+  exit 0
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/skillwiki"
+
+  CLOUD_FIXTURE="$cloud_dir" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    WIKI_GIT_REPAIR_SCRIPT="$root/repair.sh" \
+    WIKI_SNAPSHOT_SKILLWIKI_BIN="$bin_dir/skillwiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+  local rc=$?
+
+  local after_head
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+  assert_eq "snapshot conflict marker guard exits nonzero" "$rc" "1"
+  assert_eq "snapshot conflict marker guard prevents commit" "$after_head" "$before_head"
+  if grep -q "conflict marker blocks found after cloud sync" "$log_file" \
+      && grep -q "bad.md:" "$log_file"; then
+    printf "PASS: conflict marker guard logs failure\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: conflict marker guard did not log expected failure\n"
+    FAIL=$((FAIL + 1))
+  fi
+
+  rm -rf "$root"
+}
+
+test_conflict_marker_guard_blocks_commit
+
+test_conflict_marker_guard_allows_standalone_equals() {
+  local root
+  root="$(mktemp -d)"
+  local git_dir="$root/wiki-git"
+  local cloud_dir="$root/cloud/wiki"
+  local bin_dir="$root/bin"
+  local log_file="$root/wiki-snapshot.log"
+  local lock_file="$root/wiki-snapshot.lock"
+  mkdir -p "$git_dir" "$cloud_dir" "$bin_dir"
+
+  git -C "$root" init --bare origin.git >/dev/null
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" remote add origin "$root/origin.git"
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  printf '# Index\n' > "$git_dir/index.md"
+  git_commit "$git_dir" init
+  git -C "$git_dir" push -u origin main >/dev/null
+
+  printf '# Vault Schema\n' > "$cloud_dir/SCHEMA.md"
+  printf '# Index\n' > "$cloud_dir/index.md"
+  printf 'section one\n=======\nsection two\n' > "$cloud_dir/ok.md"
+
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+if [ "$1" = "sync" ]; then
+  src="$2"
+  dst="$3"
+  if [ "$src" = "stub:cloud/wiki" ]; then
+    cp -R "$CLOUD_FIXTURE/." "$dst/"
+    echo "Transferred: 1 / 1, 100%"
+    exit 0
+  fi
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/rclone"
+
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "raw_dedup" ] && [ "$5" = "--summary" ]; then
+  echo "errors: 0"
+  exit 0
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/skillwiki"
+
+  CLOUD_FIXTURE="$cloud_dir" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    WIKI_GIT_REPAIR_SCRIPT="$root/repair.sh" \
+    WIKI_SNAPSHOT_SKILLWIKI_BIN="$bin_dir/skillwiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+  local rc=$?
+
+  if grep -q "conflict marker blocks found after cloud sync" "$log_file"; then
+    printf "FAIL: conflict marker guard blocked standalone equals separator\n"
+    FAIL=$((FAIL + 1))
+  elif grep -q "conflict-marker guard passed" "$log_file"; then
+    printf "PASS: conflict marker guard passes on standalone equals separator\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: conflict marker guard did not log pass (rc=%s log=%s)\n" \
+      "$rc" "$(tr '\n' ' ' < "$log_file" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  rm -rf "$root"
+}
+
+test_conflict_marker_guard_allows_standalone_equals
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

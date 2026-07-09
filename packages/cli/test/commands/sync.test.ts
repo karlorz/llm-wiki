@@ -183,6 +183,83 @@ describe("runSyncStatus", () => {
     }
   });
 
+  it("omits remote_health by default (local-first)", () => {
+    const dir = makeTempDir();
+    git(dir, "init");
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    writeFileSync(join(dir, "README.md"), "hello");
+    git(dir, "add .");
+    git(dir, 'commit -m init');
+    const { result } = runSyncStatus({ vault: dir });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.remote_health).toBeUndefined();
+      expect(result.data.degraded_reasons).toBeUndefined();
+    }
+  });
+
+  it("probes snapshotter when includeRemoteHealth, checkSnapshotter, and alias provided", () => {
+    const dir = makeTempDir();
+    git(dir, "init");
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    git(dir, "remote add origin https://example.com/v.git");
+    writeFileSync(join(dir, "README.md"), "hello");
+    git(dir, "add .");
+    git(dir, 'commit -m init');
+    const execProbe = (file: string, args: string[]) => {
+      if (file === "git" && args[0] === "remote") return "https://example.com/v.git";
+      if (file === "git" && args[0] === "ls-remote") return "abc refs/heads/main\n";
+      if (file === "rclone") return "note.md\n";
+      if (file === "ssh") return "";
+      return "";
+    };
+    const { result } = runSyncStatus({
+      vault: dir,
+      includeRemoteHealth: true,
+      checkSnapshotter: true,
+      snapshotterAlias: "sg01",
+      home: tmpdir(),
+      execProbe,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.remote_health?.snapshotter).toBe("ok");
+    }
+  });
+
+  it("reports degraded_reasons when includeRemoteHealth and remotes fail", () => {
+    const dir = makeTempDir();
+    git(dir, "init");
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    git(dir, "remote add origin https://example.com/v.git");
+    writeFileSync(join(dir, "README.md"), "hello");
+    git(dir, "add .");
+    git(dir, 'commit -m init');
+    const execProbe = (file: string, args: string[]) => {
+      if (file === "git" && args[0] === "remote") return "https://example.com/v.git";
+      if (file === "git" && args[0] === "ls-remote") throw new Error("down");
+      if (file === "rclone") throw new Error("down");
+      return "";
+    };
+    const { result } = runSyncStatus({
+      vault: dir,
+      includeRemoteHealth: true,
+      home: tmpdir(),
+      execProbe,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.remote_health?.github).toBe("unreachable");
+      expect(result.data.remote_health?.s3).toBe("unreachable");
+      expect(result.data.degraded_reasons).toContain("github_remote_unreachable");
+      expect(result.data.degraded_reasons).toContain("s3_remote_unreachable");
+      expect(result.data.status).toBe("clean");
+    }
+  });
+
   it("includes last_commit timestamp", () => {
     const dir = makeTempDir();
     git(dir, "init");

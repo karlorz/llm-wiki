@@ -230,6 +230,24 @@ local side
   rm -rf "$root"
 }
 
+test_pull_allows_markdown_equals_separator() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  add_remote_commit "$root" "separator.md" "$(printf 'Heading\n\n%s\n\nnot a conflict block\n' '=======')" "remote-separator-content"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  assert_eq "pull with standalone separator exits successfully" "$rc" "0"
+  assert_eq "separator file is present" "$(test -f "$vault/separator.md" && echo present || echo absent)" "present"
+
+  rm -rf "$root"
+}
+
 test_stash_pop_regenerates_project_knowledge_conflict() {
   local root
   root="$(mktemp -d)"
@@ -351,6 +369,7 @@ test_divergent_untracked_remote_overlap_is_preserved_before_pull
 test_non_archive_log_append_conflict_is_union_resolved
 test_mixed_log_and_non_log_conflict_falls_through_safely
 test_pull_fails_if_tracked_markdown_contains_conflict_markers
+test_pull_allows_markdown_equals_separator
 test_stash_pop_regenerates_project_knowledge_conflict
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"

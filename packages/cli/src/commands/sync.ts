@@ -8,10 +8,22 @@ import { appendLastOp, readLastOp, clearLastOp } from "../utils/last-op.js";
 import { git, gitStrict } from "../utils/git.js";
 import { acquireLock, releaseLock, readLock, getSessionId, getCwdHash, type LockFile } from "../utils/sync-lock.js";
 import { stageVaultContentChanges } from "../utils/vault-git-pathspec.js";
+import {
+  buildDegradedReasons,
+  probeRemoteHealth,
+  type RemoteHealthSnapshot,
+} from "../utils/remote-health.js";
 
 export interface SyncStatusInput {
   vault: string;
   includeStashes?: boolean;
+  /** Opt-in: probe GitHub/S3 (and optional snapshotter) with short timeouts. Default is local-only. */
+  includeRemoteHealth?: boolean;
+  home?: string;
+  s3Remote?: string;
+  snapshotterAlias?: string;
+  checkSnapshotter?: boolean;
+  execProbe?: import("../utils/remote-health.js").ExecProbe;
 }
 
 export interface StashEntry {
@@ -31,6 +43,8 @@ export interface SyncStatusOutput {
   status: "clean" | "dirty" | "ahead" | "behind" | "not_a_repo";
   humanHint: string;
   stashes?: StashEntry[];
+  remote_health?: RemoteHealthSnapshot;
+  degraded_reasons?: string[];
 }
 
 function parseDirtyPaths(porcelain: string): string[] {
@@ -184,6 +198,25 @@ export function runSyncStatus(input: SyncStatusInput): { exitCode: number; resul
 
   if (stashes !== undefined) {
     output.stashes = stashes;
+  }
+
+  if (input.includeRemoteHealth) {
+    const home = input.home ?? process.env.HOME ?? "";
+    const remote_health = probeRemoteHealth({
+      vaultPath: vault,
+      home,
+      s3Remote: input.s3Remote,
+      snapshotterAlias: input.snapshotterAlias,
+      checkSnapshotter: input.checkSnapshotter,
+      exec: input.execProbe,
+    });
+    output.remote_health = remote_health;
+    const degraded = buildDegradedReasons(remote_health);
+    if (degraded.length > 0) {
+      output.degraded_reasons = degraded;
+      hintLines.push(`degraded_reasons: ${degraded.join(", ")}`);
+      output.humanHint = hintLines.join("\n");
+    }
   }
 
   return {

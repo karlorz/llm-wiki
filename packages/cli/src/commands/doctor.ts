@@ -10,8 +10,21 @@ import { latestFromCache } from "../utils/auto-update.js";
 import { semverGt } from "../utils/semver.js";
 import { findPlugin, findPluginInstallations, type PluginChannelInstall } from "../utils/plugin-registry.js";
 import { scanVault } from "../utils/vault.js";
+import { scanVaultConflictMarkers } from "../utils/conflict-markers.js";
 import { buildWikilinkAdjacency, toUndirectedWeighted, louvain, communityCohesion } from "../utils/community.js";
-import { loadFleetManifestAndHost, satelliteGateFromFleetLoad, type FleetManifestAndHost } from "./fleet.js";
+import {
+  probeGithubReachability,
+  probeS3Reachability,
+  probeSnapshotterSsh,
+  readWikiS3RemoteConfigured,
+  type ExecProbe,
+} from "../utils/remote-health.js";
+import {
+  loadFleetManifestAndHost,
+  satelliteGateFromFleetLoad,
+  snapshotterAliasForLocalHost,
+  type FleetManifestAndHost,
+} from "./fleet.js";
 import {
   evaluateSatelliteRunHealth,
   satelliteLatestRunPath,
@@ -51,6 +64,10 @@ export interface DoctorInput {
   argv: string[];
   currentVersion: string;
   cwd?: string;
+  /** When true, SSH-probe fleet snapshotter (short timeout). Default false. */
+  checkSnapshotter?: boolean;
+  /** Injectable exec for reachability probes (tests). */
+  execProbe?: ExecProbe;
 }
 
 function check(status: CheckStatus, id: string, label: string, detail: string): CheckResult {
@@ -446,6 +463,25 @@ function checkDotStoreClean(resolvedPath: string | undefined): CheckResult {
   return check("info", "dsstore_clean", "No .DS_Store in raw/", `${found.length} .DS_Store file(s) found — remove with: find ${rawDir} -name .DS_Store -delete`);
 }
 
+function checkVaultConflictMarkers(resolvedPath: string | undefined): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("pass", "vault_conflict_markers", "Vault conflict markers", "No vault path — check skipped");
+  }
+  const findings = scanVaultConflictMarkers(resolvedPath);
+  if (findings.length === 0) {
+    return check("pass", "vault_conflict_markers", "Vault conflict markers", "No complete conflict-marker blocks");
+  }
+  const first = findings[0];
+  const n = findings.length;
+  const fileWord = n === 1 ? "file" : "files";
+  return check(
+    "error",
+    "vault_conflict_markers",
+    "Vault conflict markers",
+    `${n} ${fileWord}, first: ${first.path}:${first.line}`,
+  );
+}
+
 function checkSyncLastPush(resolvedPath: string | undefined): CheckResult {
   if (resolvedPath === undefined) {
     return check("error", "sync_last_push", "Vault sync recency", "Cannot check — WIKI_PATH not resolved");
@@ -579,6 +615,108 @@ function checkStaleRemoteMain(resolvedPath: string | undefined): CheckResult | u
   if (!remoteMain || remoteMain === localOrigin) return undefined;
   return check("warn", "vault_git_behind", "Vault commits behind",
     `Remote main differs from local origin/main (${remoteMain.slice(0, 8)} != ${localOrigin.slice(0, 8)}) — run git fetch before trusting behind count`);
+}
+
+function checkVaultLocalGit(resolvedPath: string | undefined): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("warn", "vault_local_git", "Vault local git", "Cannot check — WIKI_PATH not resolved");
+  }
+  if (!existsSync(join(resolvedPath, ".git"))) {
+    return check("warn", "vault_local_git", "Vault local git", "Not a git repository - sync features unavailable");
+  }
+  try {
+    execSync("git rev-parse --git-dir", {
+      cwd: resolvedPath,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 2000,
+    });
+    return check("pass", "vault_local_git", "Vault local git", "Git metadata readable");
+  } catch {
+    return check("error", "vault_local_git", "Vault local git", "Git metadata unreadable — local vault may be corrupt");
+  }
+}
+
+function checkVaultGithubRemote(
+  resolvedPath: string | undefined,
+  exec?: ExecProbe,
+): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("pass", "vault_github_remote", "Vault GitHub remote", "No vault path — check skipped");
+  }
+  if (!existsSync(join(resolvedPath, ".git"))) {
+    return check("pass", "vault_github_remote", "Vault GitHub remote", "No git repo — check skipped");
+  }
+  const state = probeGithubReachability(resolvedPath, exec);
+  if (state === "ok") {
+    return check("pass", "vault_github_remote", "Vault GitHub remote", "git ls-remote origin main succeeded");
+  }
+  if (state === "unreachable") {
+    return check("warn", "vault_github_remote", "Vault GitHub remote", "GitHub unreachable (ls-remote failed) — local vault still usable");
+  }
+  return check("pass", "vault_github_remote", "Vault GitHub remote", "No origin remote — network probe skipped");
+}
+
+function checkVaultS3Remote(home: string, exec?: ExecProbe): CheckResult {
+  const remote = readWikiS3RemoteConfigured(home);
+  if (!remote) {
+    return check("pass", "vault_s3_remote", "Vault S3 remote", "S3 remote not configured — check skipped");
+  }
+  const state = probeS3Reachability(remote, exec);
+  if (state === "ok") {
+    return check("pass", "vault_s3_remote", "Vault S3 remote", `rclone lsf ${remote} succeeded`);
+  }
+  if (state === "unreachable") {
+    return check("warn", "vault_s3_remote", "Vault S3 remote", `S3 remote unreachable (${remote}) — local/GitHub work may continue`);
+  }
+  return check("pass", "vault_s3_remote", "Vault S3 remote", "S3 remote not configured — check skipped");
+}
+
+function checkVaultSnapshotterReachable(
+  fleetLoad: FleetManifestAndHost | null,
+  checkSnapshotter: boolean | undefined,
+  exec?: ExecProbe,
+): CheckResult {
+  if (!checkSnapshotter) {
+    return check("pass", "vault_snapshotter_reachable", "Vault snapshotter host", "Snapshotter SSH probe not requested — check skipped");
+  }
+  const alias = snapshotterAliasForLocalHost(fleetLoad);
+  if (!alias) {
+    return check("pass", "vault_snapshotter_reachable", "Vault snapshotter host", "No declared SSH alias from this host — check skipped");
+  }
+  const state = probeSnapshotterSsh(alias, exec);
+  if (state === "ok") {
+    return check("pass", "vault_snapshotter_reachable", "Vault snapshotter host", `SSH reachable via ${alias}`);
+  }
+  return check("warn", "vault_snapshotter_reachable", "Vault snapshotter host", `Snapshotter unreachable via ${alias} — not a local vault corruption signal`);
+}
+
+function checkVaultPromotionLag(resolvedPath: string | undefined): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("pass", "vault_promotion_lag", "Vault promotion lag", "No vault path — check skipped");
+  }
+  if (!existsSync(join(resolvedPath, ".git"))) {
+    return check("pass", "vault_promotion_lag", "Vault promotion lag", "No git repo — check skipped");
+  }
+  try {
+    const out = execSync("git log -1 --format=%ct origin/main", {
+      cwd: resolvedPath,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: 2000,
+    }).trim();
+    const ts = parseInt(out, 10);
+    if (!Number.isFinite(ts) || ts <= 0) {
+      return check("pass", "vault_promotion_lag", "Vault promotion lag", "origin/main timestamp unavailable — check skipped");
+    }
+    const ageHours = Math.floor((Date.now() / 1000 - ts) / 3600);
+    if (ageHours > 48) {
+      return check("warn", "vault_promotion_lag", "Vault promotion lag", `Local origin/main snapshot is ${ageHours}h old — verify snapshotter/GitHub when online`);
+    }
+    return check("pass", "vault_promotion_lag", "Vault promotion lag", `origin/main age ${ageHours}h`);
+  } catch {
+    return check("pass", "vault_promotion_lag", "Vault promotion lag", "Could not read origin/main — check skipped");
+  }
 }
 
 function checkVaultGitComparison(
@@ -1616,7 +1754,13 @@ export async function runDoctor(
   checks.push(checkVaultGitAhead(gitCheckPath));
   checks.push(checkVaultGitBehind(gitCheckPath));
   checks.push(checkVaultGitPullFailures(input.home));
+  checks.push(checkVaultLocalGit(gitCheckPath));
+  checks.push(checkVaultGithubRemote(gitCheckPath, input.execProbe));
+  checks.push(checkVaultS3Remote(input.home, input.execProbe));
+  checks.push(checkVaultSnapshotterReachable(fleetLoad, input.checkSnapshotter, input.execProbe));
+  checks.push(checkVaultPromotionLag(gitCheckPath));
   checks.push(checkDotStoreClean(resolvedPath));
+  checks.push(checkVaultConflictMarkers(resolvedPath));
   checks.push(checkS3MountPerf(resolvedPath));
   checks.push(checkS3MountFreshness(resolvedPath));
   checks.push(checkRcloneFlagAudit(resolvedPath));

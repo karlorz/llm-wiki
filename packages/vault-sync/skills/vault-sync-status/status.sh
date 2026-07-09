@@ -13,6 +13,13 @@ fi
 # shellcheck source=/dev/null
 source "$PLATFORM_LIB"
 
+CONFLICT_MARKERS_LIB="$VAULT_SYNC_ROOT/scripts/lib/conflict-markers.sh"
+if [ ! -f "$CONFLICT_MARKERS_LIB" ]; then
+  fatal "missing conflict-markers helper: $CONFLICT_MARKERS_LIB"
+fi
+# shellcheck source=/dev/null
+source "$CONFLICT_MARKERS_LIB"
+
 lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
@@ -464,6 +471,118 @@ else
     add_check "vault_sync_snapshot_guard" "Snapshot script guard" "pass" "--max-delete guard present in $SNAPSHOT_SCRIPT"
   else
     add_check "vault_sync_snapshot_guard" "Snapshot script guard" "error" "--max-delete guard missing"
+  fi
+fi
+
+# Check: store/host reachability (read-only; short timeouts)
+REACH_VAULT="${WIKI_PATH:-$HOME/wiki}"
+github_reach="unknown"
+github_detail="WIKI_PATH not set or vault missing"
+if [ -d "$REACH_VAULT/.git" ]; then
+  if timeout 3 git -C "$REACH_VAULT" ls-remote origin refs/heads/main >/dev/null 2>&1; then
+    github_reach="ok"
+    github_detail="git ls-remote origin main succeeded"
+  elif timeout 3 git -C "$REACH_VAULT" remote get-url origin >/dev/null 2>&1; then
+    github_reach="unreachable"
+    github_detail="GitHub ls-remote failed — local vault may still be usable"
+  else
+    github_reach="unknown"
+    github_detail="No origin remote configured"
+  fi
+fi
+add_check "reachability_github" "GitHub reachability" \
+  "$( [ "$github_reach" = ok ] && printf pass || { [ "$github_reach" = unreachable ] && printf warn || printf pass; } )" \
+  "$github_detail"
+
+S3_REMOTE="${WIKI_REMOTE:-seaweed-wiki:cloud/wiki}"
+if env_val=$(config_value "WIKI_REMOTE"); then
+  [ -n "$env_val" ] && S3_REMOTE="$env_val"
+fi
+s3_reach="unknown"
+s3_detail="rclone not probed"
+if command -v rclone >/dev/null 2>&1; then
+  if timeout 3 rclone lsf "$S3_REMOTE" --max-depth 1 --files-only >/dev/null 2>&1; then
+    s3_reach="ok"
+    s3_detail="rclone lsf $S3_REMOTE succeeded"
+  else
+    s3_reach="unreachable"
+    s3_detail="S3 remote unreachable ($S3_REMOTE)"
+  fi
+else
+  s3_detail="rclone not on PATH — S3 state unknown"
+fi
+add_check "reachability_s3" "S3 reachability" \
+  "$( [ "$s3_reach" = ok ] && printf pass || { [ "$s3_reach" = unreachable ] && printf warn || printf pass; } )" \
+  "$s3_detail"
+
+snapshotter_reach="not_checked"
+snapshotter_detail="Snapshotter SSH check skipped (set VS_CHECK_SNAPSHOTTER=1 to probe)"
+if is_true "${VS_CHECK_SNAPSHOTTER:-0}"; then
+  SNAP_ALIAS="${VS_SNAPSHOTTER_SSH_ALIAS:-sg01}"
+  if timeout 3 ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new "$SNAP_ALIAS" true >/dev/null 2>&1; then
+    snapshotter_reach="ok"
+    snapshotter_detail="SSH reachable via $SNAP_ALIAS"
+  else
+    snapshotter_reach="unreachable"
+    snapshotter_detail="Snapshotter unreachable via $SNAP_ALIAS — not vault corruption"
+  fi
+fi
+add_check "reachability_snapshotter" "Snapshotter reachability" \
+  "$( [ "$snapshotter_reach" = ok ] && printf pass || { [ "$snapshotter_reach" = unreachable ] && printf warn || printf pass; } )" \
+  "$snapshotter_detail"
+
+local_git_status="pass"
+local_git_detail="local vault state unknown"
+if [ ! -d "$REACH_VAULT" ]; then
+  local_git_status="warn"
+  local_git_detail="Vault directory missing: $REACH_VAULT"
+elif [ ! -d "$REACH_VAULT/.git" ]; then
+  local_git_status="warn"
+  local_git_detail="Not a git repository"
+else
+  dirty_n=0
+  ahead_n=0
+  behind_n=0
+  dirty_n=$(git -C "$REACH_VAULT" status --porcelain 2>/dev/null | grep -c . || true)
+  if ab=$(git -C "$REACH_VAULT" rev-list --left-right --count origin/HEAD...HEAD 2>/dev/null); then
+    behind_n=$(printf '%s' "$ab" | awk '{print $1}')
+    ahead_n=$(printf '%s' "$ab" | awk '{print $2}')
+  fi
+  if [ "$dirty_n" -gt 0 ]; then
+    local_git_status="warn"
+    local_git_detail="dirty=$dirty_n ahead=$ahead_n behind=$behind_n"
+  elif [ "${ahead_n:-0}" -gt 0 ] || [ "${behind_n:-0}" -gt 0 ]; then
+    local_git_status="warn"
+    local_git_detail="clean worktree; ahead=$ahead_n behind=$behind_n"
+  else
+    local_git_detail="clean; ahead=0 behind=0"
+  fi
+fi
+add_check "reachability_local_vault" "Local vault git state" "$local_git_status" "$local_git_detail"
+
+# Check: vault conflict markers (all roles)
+CONFLICT_VAULT="${WIKI_PATH:-$HOME/wiki}"
+if [ ! -d "$CONFLICT_VAULT" ]; then
+  add_check "vault_sync_conflict_markers" "Vault conflict markers" "warn" "Vault directory missing: $CONFLICT_VAULT"
+else
+  conflict_tmp="$(mktemp)"
+  if vault_sync_scan_conflict_markers "$CONFLICT_VAULT" "$conflict_tmp"; then
+    add_check "vault_sync_conflict_markers" "Vault conflict markers" "pass" "No complete conflict-marker blocks"
+    rm -f "$conflict_tmp"
+  else
+    scan_rc=$?
+    if [ "$scan_rc" -eq 2 ]; then
+      add_check "vault_sync_conflict_markers" "Vault conflict markers" "warn" "Scanner could not access vault: $CONFLICT_VAULT"
+      rm -f "$conflict_tmp"
+    elif [ -s "$conflict_tmp" ]; then
+      conflict_count="$(wc -l <"$conflict_tmp" | tr -d ' ')"
+      first_line="$(head -n 1 "$conflict_tmp")"
+      add_check "vault_sync_conflict_markers" "Vault conflict markers" "error" "${conflict_count} finding(s), first: ${first_line}"
+      rm -f "$conflict_tmp"
+    else
+      add_check "vault_sync_conflict_markers" "Vault conflict markers" "warn" "Conflict marker scan failed (exit $scan_rc)"
+      rm -f "$conflict_tmp"
+    fi
   fi
 fi
 

@@ -22,6 +22,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/platform.sh"
 . "$SCRIPT_DIR/lib/lockfile.sh"
 . "$SCRIPT_DIR/lib/git-case.sh"
+. "$SCRIPT_DIR/lib/conflict-markers.sh"
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
@@ -35,6 +36,19 @@ LOG_KEEP=5
 mkdir -p "$(dirname "$LOCK_FILE")" "$(dirname "$LOG_FILE")"
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"; }
+
+conflict_marker_guard() {
+    local findings
+    findings="$(mktemp)" || { log "FAIL could not create conflict-marker scan temp file"; return 1; }
+    if ! vault_sync_scan_conflict_markers "$WIKI_DIR" "$findings"; then
+        log "FAIL conflict marker blocks present; refusing S3 push"
+        vault_sync_log_conflict_marker_findings "$findings" "$LOG_FILE"
+        rm -f "$findings"
+        return 1
+    fi
+    rm -f "$findings"
+    return 0
+}
 
 remote_prune_archived_source_paths() {
     local max_remote_deletes="${WIKI_PUSH_MAX_REMOTE_DELETES:-10}"
@@ -174,6 +188,10 @@ if command -v skillwiki >/dev/null 2>&1; then
 else
     log "ERROR: skillwiki CLI not found — refusing push because path_too_long guard cannot run"
     exit 0
+fi
+
+if ! conflict_marker_guard; then
+    exit 1
 fi
 
 # rclone copy (NOT sync) → never bulk-deletes on remote.

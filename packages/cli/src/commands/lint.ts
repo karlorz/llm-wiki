@@ -150,7 +150,7 @@ export interface LintSummaryOutput {
   humanHint: string;
 }
 
-const ERROR_ORDER = ["sensitive_content", "broken_wikilinks", "invalid_frontmatter", "raw_source_identity_conflict", "raw_dedup", "broken_sources", "tag_not_in_taxonomy", "path_too_long"] as const;
+const ERROR_ORDER = ["sensitive_content", "conflict_markers", "broken_wikilinks", "invalid_frontmatter", "raw_source_identity_conflict", "raw_dedup", "broken_sources", "tag_not_in_taxonomy", "path_too_long"] as const;
 const WARNING_ORDER = ["raw_body_duplicate", "raw_subdirectory_duplicate", "file_source_url", "index_incomplete", "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans", "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter", "frontmatter_yaml_invalid", "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram"] as const;
 const INFO_ORDER = ["bridges", "sparse_community", "page_structure", "topic_map_recommended", "frontmatter_wikilink", "wikilink_citation", "missing_tldr", "stale_sections", "cli_refs"] as const;
 const KNOWN_BUCKETS = [...ERROR_ORDER, ...WARNING_ORDER, ...INFO_ORDER] as const;
@@ -556,6 +556,41 @@ async function runFileSourceUrlOnly(input: LintInput | LintSummaryInput): Promis
   return outputForOnlyBucket(input, match, fixed, unresolved, readVault);
 }
 
+function scanConflictMarkerBlocks(path: string, text: string): Array<{ path: string; line: number; message: string }> {
+  const findings: Array<{ path: string; line: number; message: string }> = [];
+  const lines = text.split(/\r?\n/);
+  let inFence = false;
+  let openLine = 0;
+  let sawSeparator = false;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.startsWith("```") || line.startsWith("~~~")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (line.startsWith("<<<<<<< ")) {
+      openLine = i + 1;
+      sawSeparator = false;
+      continue;
+    }
+    if (line === "=======" && openLine > 0) {
+      sawSeparator = true;
+      continue;
+    }
+    if (line.startsWith(">>>>>>> ")) {
+      if (openLine > 0 && sawSeparator) {
+        findings.push({ path, line: openLine, message: "complete Git conflict-marker block" });
+      }
+      openLine = 0;
+      sawSeparator = false;
+    }
+  }
+
+  return findings;
+}
+
 export function runLint(input: LintSummaryInput): Promise<{ exitCode: number; result: Result<LintSummaryOutput> }>;
 export function runLint(input: LintInput): Promise<{ exitCode: number; result: Result<LintOutput> }>;
 export async function runLint(input: LintInput | LintSummaryInput): Promise<{ exitCode: number; result: Result<LintOutput | LintSummaryOutput> }> {
@@ -674,10 +709,12 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   {
     const allPageResults = await mapWithConcurrency(scan.allMarkdown, vaultIoConcurrency(), async (page) => {
       const sensitiveFlags: unknown[] = [];
+      const conflictMarkers: Array<{ path: string; line: number; message: string }> = [];
       let fmYamlInvalid: { path: string; message: string } | null = null;
       try {
         const text = await readPageCached(page, pageTextCache);
         sensitiveFlags.push(...scanSensitiveContent(text, { file: page.relPath }));
+        conflictMarkers.push(...scanConflictMarkerBlocks(page.relPath, text));
         const fm = extractFrontmatter(text);
         if (!fm.ok && fm.error === "INVALID_FRONTMATTER") {
           const detail = fm.detail as { message?: string } | undefined;
@@ -687,10 +724,13 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
       } catch {
         // Skip unreadable pages; other filesystem checks surface path issues.
       }
-      return { sensitiveFlags, fmYamlInvalid };
+      return { sensitiveFlags, conflictMarkers, fmYamlInvalid };
     });
     const sensitiveFlags = allPageResults.flatMap(result => result.sensitiveFlags);
     if (sensitiveFlags.length > 0) buckets.sensitive_content = sensitiveFlags;
+
+    const conflictMarkers = allPageResults.flatMap(result => result.conflictMarkers);
+    if (conflictMarkers.length > 0) buckets.conflict_markers = conflictMarkers;
 
     const fmYamlInvalid = allPageResults
       .map(result => result.fmYamlInvalid)

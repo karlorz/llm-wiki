@@ -45,6 +45,19 @@ elif [ -f "$SCRIPT_DIR/../../scripts/lib/git-case.sh" ]; then
     source "$SCRIPT_DIR/../../scripts/lib/git-case.sh"
 fi
 
+if [ -f "$SCRIPT_DIR/lib/conflict-markers.sh" ]; then
+    source "$SCRIPT_DIR/lib/conflict-markers.sh"
+elif [ -f "$SCRIPT_DIR/scripts/lib/conflict-markers.sh" ]; then
+    source "$SCRIPT_DIR/scripts/lib/conflict-markers.sh"
+elif [ -f "$SCRIPT_DIR/../../scripts/lib/conflict-markers.sh" ]; then
+    source "$SCRIPT_DIR/../../scripts/lib/conflict-markers.sh"
+fi
+
+if ! command -v vault_sync_scan_conflict_markers >/dev/null 2>&1; then
+    echo "[wiki-snapshot] ERROR: conflict-marker helper unavailable; refusing to run." >&2
+    exit 1
+fi
+
 # ── Guard: Linux-only operation ────────────────────────────
 platform_require linux
 
@@ -221,6 +234,25 @@ raw_dedup_guard() {
     return 0
 }
 
+conflict_marker_guard() {
+    if [ "${WIKI_SNAPSHOT_CONFLICT_MARKER_GUARD:-1}" = "0" ]; then
+        log "conflict-marker guard skipped by WIKI_SNAPSHOT_CONFLICT_MARKER_GUARD=0"
+        return 0
+    fi
+
+    local findings
+    findings="$(mktemp)" || { log "ERROR: could not create conflict-marker scan temp file"; return 1; }
+    if ! vault_sync_scan_conflict_markers "$SNAPSHOT_WORKTREE" "$findings"; then
+        log "ERROR: conflict marker blocks found after cloud sync; refusing to commit snapshot"
+        vault_sync_log_conflict_marker_findings "$findings" "$LOG_FILE"
+        rm -f "$findings"
+        return 1
+    fi
+    rm -f "$findings"
+    log "conflict-marker guard passed"
+    return 0
+}
+
 refresh_git_baseline() {
     (
         cd "$SNAPSHOT_WORKTREE" || exit 1
@@ -388,6 +420,10 @@ if ! raw_dedup_guard; then
     exit 1
 fi
 
+if ! conflict_marker_guard; then
+    exit 1
+fi
+
 # Check for changes
 if [ -z "$(git status --porcelain)" ]; then
     log "No changes to commit"
@@ -439,6 +475,9 @@ if [ "$PULL_SUCCESS" = false ]; then
 
         # Re-sync after repair
         rclone sync "$CLOUD_REMOTE" "$SNAPSHOT_WORKTREE" "${RCLONE_OPTS[@]}" 2>&1 | tee -a "$LOG_FILE" || true
+        if ! raw_dedup_guard || ! conflict_marker_guard; then
+            exit 1
+        fi
         git add -A || true
         git commit -m "Snapshot $DATE (post-repair)" || true
     else

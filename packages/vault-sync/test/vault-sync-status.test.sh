@@ -108,8 +108,125 @@ test_status_warns_when_installed_script_differs_from_source() {
   assert_eq "status warns when installed script differs from source" "$status" "warn"
 }
 
+conflict_block_md() {
+  cat <<'EOF'
+## Overview
+
+<<<<<<< HEAD
+ours
+=======
+theirs
+>>>>>>> branch
+
+## Related
+EOF
+}
+
+prepare_vault_clean() {
+  local home="$1"
+  mkdir -p "$home/wiki/concepts"
+  printf '# Clean\n\nNo conflicts here.\n' > "$home/wiki/concepts/clean.md"
+}
+
+prepare_vault_conflict() {
+  local home="$1"
+  mkdir -p "$home/wiki/concepts"
+  conflict_block_md > "$home/wiki/concepts/conflicted.md"
+}
+
+prepare_vault_separator_only() {
+  local home="$1"
+  mkdir -p "$home/wiki/concepts"
+  printf '## Overview\n\n=======\n\nNot a conflict.\n' > "$home/wiki/concepts/separator.md"
+}
+
+test_conflict_markers_pass_on_clean_vault() {
+  local home="$TEST_ROOT/home-conflict-clean"
+  prepare_home "$home"
+  prepare_vault_clean "$home"
+
+  local json status
+  json="$(status_json_for_home "$home")"
+  status="$(check_status "$json" "vault_sync_conflict_markers")"
+
+  assert_eq "conflict markers pass on clean vault" "$status" "pass"
+}
+
+test_conflict_markers_error_on_conflict_block() {
+  local home="$TEST_ROOT/home-conflict-block"
+  prepare_home "$home"
+  prepare_vault_conflict "$home"
+
+  local json status detail
+  json="$(status_json_for_home "$home")"
+  status="$(check_status "$json" "vault_sync_conflict_markers")"
+  detail="$(JSON_INPUT="$json" python3 - <<'PY'
+import json, os
+data = json.loads(os.environ["JSON_INPUT"])
+for check in data.get("checks", []):
+    if check.get("id") == "vault_sync_conflict_markers":
+        print(check.get("detail", ""))
+        break
+PY
+)"
+
+  if [ "$status" = "error" ] && printf '%s' "$detail" | grep -q 'concepts/conflicted.md'; then
+    printf "PASS: conflict markers error on conflict block with path detail\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: conflict markers error on conflict block — status='%s' detail='%s'\n" "$status" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+test_conflict_markers_pass_on_standalone_separator() {
+  local home="$TEST_ROOT/home-conflict-sep"
+  prepare_home "$home"
+  prepare_vault_separator_only "$home"
+
+  local json status
+  json="$(status_json_for_home "$home")"
+  status="$(check_status "$json" "vault_sync_conflict_markers")"
+
+  assert_eq "conflict markers pass on standalone separator" "$status" "pass"
+}
+
+test_reachability_local_vault_on_clean_git_vault() {
+  local home="$TEST_ROOT/home-reach-local"
+  prepare_home "$home"
+  prepare_vault_clean "$home"
+  git -C "$home/wiki" init -q
+  git -C "$home/wiki" config user.email "t@t"
+  git -C "$home/wiki" config user.name "t"
+  git -C "$home/wiki" add -A
+  git -C "$home/wiki" commit -q -m init
+
+  local json status
+  json="$(HOME="$home" WIKI_PATH="$home/wiki" bash "$STATUS_SH" --read-only --json)"
+  status="$(check_status "$json" "reachability_local_vault")"
+
+  assert_eq "reachability local vault on clean git vault" "$status" "pass"
+}
+
+test_reachability_snapshotter_not_checked_by_default() {
+  local home="$TEST_ROOT/home-reach-snap"
+  prepare_home "$home"
+
+  local json status
+  json="$(status_json_for_home "$home")"
+  status="$(check_status "$json" "reachability_snapshotter")"
+
+  assert_eq "snapshotter reachability not_checked by default" "$status" "pass"
+}
+
 test_status_reports_installed_scripts_in_sync
 test_status_warns_when_installed_script_differs_from_source
+test_conflict_markers_pass_on_clean_vault
+test_conflict_markers_error_on_conflict_block
+test_conflict_markers_pass_on_standalone_separator
+
+test_reachability_local_vault_on_clean_git_vault
+test_reachability_snapshotter_not_checked_by_default
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
