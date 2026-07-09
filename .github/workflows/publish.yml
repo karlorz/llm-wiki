@@ -78,4 +78,4 @@ jobs:
           fi
           echo "GitHub Release: ${RELEASE_URL}" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish to npm
-        run: unset NODE_AUTH_TOKEN && npm publish -w skillwiki --tag ${{ steps.tag.outputs.npm_tag }} --provenance --access public
+        run: unset NODE_AUTH_TOKEN && npx -y npm@11 publish -w skillwiki --tag ${{ steps.tag.outputs.npm_tag }} --provenance --access public
