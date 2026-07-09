@@ -18,6 +18,8 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
 ## Steps
 
 1. **Run vault_sync_* doctor checks** directly (equivalent to `skillwiki doctor --only vault_sync` but available without skillwiki).
+   - Reports `vault_sync_conflict_markers` so poisoned Markdown is visible before
+     push, pull, or snapshot workflows continue.
 2. **Read scheduler state**:
    - leaf/full hosts: wiki-push and wiki-fetch.
    - snapshotter hosts: wiki-snapshot.

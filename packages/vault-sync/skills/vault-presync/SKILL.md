@@ -82,6 +82,16 @@ To abort a broken rebase: `git rebase --abort`
 
 The script runs `skillwiki lint` before syncing. Errors block the sync (use `--force` to override). Warnings are logged but do not block. This prevents pushing malformed frontmatter (like the 2026-05-22 YAML bug where orphaned `- tags` lines broke 8 pages).
 
+## Conflict-marker guard
+
+If sync reports `conflict_markers`, inspect the reported file and remove the
+literal Git marker block after preserving the intended content. Then run:
+
+```bash
+skillwiki lint --only conflict_markers
+~/bin/wiki-sync.sh --execute
+```
+
 ## Multi-writer sync topology (current, 2026-05-22)
 
 The ~/wiki vault has three concurrent writers:
