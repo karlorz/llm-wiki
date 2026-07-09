@@ -26,6 +26,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/platform.sh"
 . "$SCRIPT_DIR/lib/lockfile.sh"
 . "$SCRIPT_DIR/lib/git-case.sh"
+. "$SCRIPT_DIR/lib/conflict-markers.sh"
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
@@ -113,13 +114,12 @@ rollback_resolved() {
 verify_no_tracked_conflict_markers() {
     local matches
     matches="$(mktemp)" || { log "FAIL could not create conflict-marker scan temp file"; return 1; }
-    if git grep -n -E '^(<<<<<<< .+|=======$|>>>>>>> .+)' -- '*.md' >"$matches" 2>/dev/null; then
-        log "FAIL unresolved conflict markers remain after pull"
-        cat "$matches" >>"$LOG_FILE"
+    if ! vault_sync_scan_conflict_markers "$WIKI_DIR" "$matches"; then
+        log "FAIL unresolved conflict marker blocks remain after pull"
+        vault_sync_log_conflict_marker_findings "$matches" "$LOG_FILE"
         rm -f "$matches"
         return 1
     fi
-
     rm -f "$matches"
     return 0
 }
