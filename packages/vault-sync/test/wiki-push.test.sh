@@ -66,6 +66,7 @@ make_script_dir() {
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/platform.sh" "$script_dir/lib/platform.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/lockfile.sh" "$script_dir/lib/lockfile.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/git-case.sh" "$script_dir/lib/git-case.sh"
+  cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/conflict-markers.sh" "$script_dir/lib/conflict-markers.sh"
   chmod +x "$script_dir/wiki-push.sh"
   printf '%s\n' "$script_dir"
 }
@@ -416,6 +417,69 @@ STUB
   rm -rf "$root"
 }
 
+test_conflict_marker_blocks_s3_push() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone" "$home/Library/Logs"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  {
+    printf '%s\n' '<<<<<<< HEAD'
+    printf 'local\n'
+    printf '%s\n' '======='
+    printf 'remote\n'
+    printf '%s\n' '>>>>>>> branch'
+  } > "$vault/bad.md"
+
+  local rc=0
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLS_FILE="$root/rclone.calls" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1 || rc=$?
+
+  assert_eq "push conflict marker guard exits nonzero" "$rc" "1"
+  assert_eq "push conflict marker guard prevents rclone upload" "$(grep -c '^copy ' "$root/rclone.calls" 2>/dev/null || echo 0)" "0"
+  assert_file_contains "push conflict marker guard logs refusal" "$home/Library/Logs/wiki-push.log" "FAIL conflict marker blocks present; refusing S3 push"
+  rm -rf "$root"
+}
+
+test_standalone_equals_line_does_not_block_push() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  printf '%s\n' 'some heading' '=======' 'more content' > "$vault/standalone.md"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    RCLONE_CALLS_FILE="$root/rclone.calls" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_eq "standalone equals line does not block push" "$(cat "$root/rclone-called" 2>/dev/null || true)" "called"
+  assert_eq "standalone equals line allows rclone copy" "$(grep -c '^copy ' "$root/rclone.calls" 2>/dev/null || echo 0)" "1"
+  rm -rf "$root"
+}
+
 test_dirty_local_files_trigger_rclone_copy
 test_git_remote_failure_does_not_block_s3_publish
 test_pull_helper_not_invoked_by_push
@@ -425,6 +489,8 @@ test_memory_cache_dirty_does_not_block_s3_push
 test_case_only_collision_blocks_publish
 test_long_path_fix_runs_before_rclone
 test_long_path_fix_failure_blocks_publish
+test_conflict_marker_blocks_s3_push
+test_standalone_equals_line_does_not_block_push
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
