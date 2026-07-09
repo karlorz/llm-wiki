@@ -295,6 +295,19 @@ export async function loadFleetManifestAndHost(
   };
 }
 
+/** First SSH alias from this host to the fleet snapshotter, when fleet access is configured. */
+export function snapshotterAliasForLocalHost(
+  fleetLoad: FleetManifestAndHost | null,
+): string | undefined {
+  if (!fleetLoad?.manifest || !fleetLoad.hostId) return undefined;
+  const snapshotterId = Object.entries(fleetLoad.manifest.hosts).find(([, h]) => h.role === "snapshotter")?.[0];
+  if (!snapshotterId) return undefined;
+  const profile = fleetLoad.manifest.hosts[snapshotterId]?.access?.from?.[fleetLoad.hostId];
+  if (!profile || (profile.status !== "configured" && profile.status !== "local")) return undefined;
+  const aliases = profile.ssh_aliases ?? [];
+  return aliases.length > 0 ? aliases[0] : undefined;
+}
+
 export function satelliteGateFromFleetLoad(load: FleetManifestAndHost | null): FleetSatelliteGate {
   if (!load?.hostId) return { satelliteExpected: false };
   const host = load.manifest.hosts[load.hostId];

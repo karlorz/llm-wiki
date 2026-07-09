@@ -16,10 +16,15 @@ import {
   probeGithubReachability,
   probeS3Reachability,
   probeSnapshotterSsh,
-  readWikiS3RemoteFromEnv,
+  readWikiS3RemoteConfigured,
   type ExecProbe,
 } from "../utils/remote-health.js";
-import { loadFleetManifestAndHost, satelliteGateFromFleetLoad, type FleetManifestAndHost } from "./fleet.js";
+import {
+  loadFleetManifestAndHost,
+  satelliteGateFromFleetLoad,
+  snapshotterAliasForLocalHost,
+  type FleetManifestAndHost,
+} from "./fleet.js";
 import {
   evaluateSatelliteRunHealth,
   satelliteLatestRunPath,
@@ -653,7 +658,10 @@ function checkVaultGithubRemote(
 }
 
 function checkVaultS3Remote(home: string, exec?: ExecProbe): CheckResult {
-  const remote = readWikiS3RemoteFromEnv(home);
+  const remote = readWikiS3RemoteConfigured(home);
+  if (!remote) {
+    return check("pass", "vault_s3_remote", "Vault S3 remote", "S3 remote not configured — check skipped");
+  }
   const state = probeS3Reachability(remote, exec);
   if (state === "ok") {
     return check("pass", "vault_s3_remote", "Vault S3 remote", `rclone lsf ${remote} succeeded`);
@@ -661,19 +669,7 @@ function checkVaultS3Remote(home: string, exec?: ExecProbe): CheckResult {
   if (state === "unreachable") {
     return check("warn", "vault_s3_remote", "Vault S3 remote", `S3 remote unreachable (${remote}) — local/GitHub work may continue`);
   }
-  return check("warn", "vault_s3_remote", "Vault S3 remote", "S3 remote not configured — probe skipped");
-}
-
-function snapshotterAliasForLocalHost(
-  fleetLoad: FleetManifestAndHost | null,
-): string | undefined {
-  if (!fleetLoad?.manifest || !fleetLoad.hostId) return undefined;
-  const snapshotterId = Object.entries(fleetLoad.manifest.hosts).find(([, h]) => h.role === "snapshotter")?.[0];
-  if (!snapshotterId) return undefined;
-  const profile = fleetLoad.manifest.hosts[snapshotterId]?.access?.from?.[fleetLoad.hostId];
-  if (!profile || (profile.status !== "configured" && profile.status !== "local")) return undefined;
-  const aliases = profile.ssh_aliases ?? [];
-  return aliases.length > 0 ? aliases[0] : undefined;
+  return check("pass", "vault_s3_remote", "Vault S3 remote", "S3 remote not configured — check skipped");
 }
 
 function checkVaultSnapshotterReachable(

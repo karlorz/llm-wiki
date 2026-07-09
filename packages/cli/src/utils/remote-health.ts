@@ -40,7 +40,8 @@ const defaultExec: ExecProbe = (file, args, cwd) =>
 /** Default rclone remote for wiki push (wiki-push.sh WIKI_REMOTE). */
 export const DEFAULT_WIKI_S3_REMOTE = "seaweed-wiki:cloud/wiki";
 
-export function readWikiS3RemoteFromEnv(home: string): string {
+/** Returns WIKI_REMOTE from ~/.skillwiki/.env when set; otherwise undefined (no implicit default). */
+export function readWikiS3RemoteConfigured(home: string): string | undefined {
   try {
     const content = readFileSync(join(home, ".skillwiki", ".env"), "utf8");
     for (const line of content.split(/\r?\n/)) {
@@ -55,7 +56,11 @@ export function readWikiS3RemoteFromEnv(home: string): string {
   } catch {
     /* optional */
   }
-  return DEFAULT_WIKI_S3_REMOTE;
+  return undefined;
+}
+
+export function readWikiS3RemoteFromEnv(home: string): string {
+  return readWikiS3RemoteConfigured(home) ?? DEFAULT_WIKI_S3_REMOTE;
 }
 
 export function probeGithubReachability(

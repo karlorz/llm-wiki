@@ -663,10 +663,35 @@ describe("runDoctor", () => {
     }
   });
 
-  it("vault_s3_remote warns when rclone fails", async () => {
+  it("vault_s3_remote skips when WIKI_REMOTE is not configured", async () => {
     const h = home();
     const v = fullVault();
     writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
+    const r = await runDoctor({
+      home: h,
+      envValue: v,
+      argv: ["node", "skillwiki", "doctor"],
+      currentVersion: "0.2.0-beta.15",
+      execProbe: (file, args) => {
+        if (file === "git" && args[0] === "remote") return "https://example.com/v.git";
+        if (file === "git" && args[0] === "ls-remote") return "deadbeef refs/heads/main\n";
+        if (file === "rclone") throw new Error("should not probe");
+        return "";
+      },
+    });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const s3 = r.result.data.checks.find(c => c.id === "vault_s3_remote");
+      expect(s3?.status).toBe("pass");
+      expect(s3?.detail).toContain("not configured");
+      expect(s3?.detail).toContain("skipped");
+    }
+  });
+
+  it("vault_s3_remote warns when rclone fails", async () => {
+    const h = home();
+    const v = fullVault();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\nWIKI_REMOTE=seaweed-wiki:cloud/wiki\n`);
     const execProbe = (file: string, args: string[]) => {
       if (file === "git" && args[0] === "remote") return "https://example.com/v.git";
       if (file === "git" && args[0] === "ls-remote") return "abc refs/heads/main\n";

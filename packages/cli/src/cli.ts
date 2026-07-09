@@ -51,7 +51,7 @@ import { runCanvasGenerate } from "./commands/canvas.js";
 import { runQuery } from "./commands/query.js";
 import { runIndexLinkFormat } from "./commands/index-link-format.js";
 import { runTopicMapCheck } from "./commands/topic-map-check.js";
-import { runFleetContext, runFleetValidate } from "./commands/fleet.js";
+import { loadFleetManifestAndHost, runFleetContext, runFleetValidate, snapshotterAliasForLocalHost } from "./commands/fleet.js";
 import { runFleetHealth } from "./commands/fleet-health.js";
 import { resolveRuntimePath } from "./utils/wiki-path.js";
 import { postCommit } from "./utils/auto-commit.js";
@@ -789,12 +789,22 @@ syncCmd
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else {
       const home = process.env.HOME ?? "";
+      let snapshotterAlias: string | undefined;
+      if (opts.checkSnapshotter) {
+        const fleetLoad = await loadFleetManifestAndHost({
+          vault: v.vault,
+          home,
+          cwd: process.cwd(),
+        });
+        snapshotterAlias = snapshotterAliasForLocalHost(fleetLoad);
+      }
       emit(runSyncStatus({
         vault: v.vault,
         includeStashes: !!opts.includeStashes,
         includeRemoteHealth: !!opts.includeRemoteHealth,
         home,
         checkSnapshotter: !!opts.checkSnapshotter,
+        snapshotterAlias,
       }));
     }
   });

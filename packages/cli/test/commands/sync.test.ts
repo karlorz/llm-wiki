@@ -199,6 +199,36 @@ describe("runSyncStatus", () => {
     }
   });
 
+  it("probes snapshotter when includeRemoteHealth, checkSnapshotter, and alias provided", () => {
+    const dir = makeTempDir();
+    git(dir, "init");
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    git(dir, "remote add origin https://example.com/v.git");
+    writeFileSync(join(dir, "README.md"), "hello");
+    git(dir, "add .");
+    git(dir, 'commit -m init');
+    const execProbe = (file: string, args: string[]) => {
+      if (file === "git" && args[0] === "remote") return "https://example.com/v.git";
+      if (file === "git" && args[0] === "ls-remote") return "abc refs/heads/main\n";
+      if (file === "rclone") return "note.md\n";
+      if (file === "ssh") return "";
+      return "";
+    };
+    const { result } = runSyncStatus({
+      vault: dir,
+      includeRemoteHealth: true,
+      checkSnapshotter: true,
+      snapshotterAlias: "sg01",
+      home: tmpdir(),
+      execProbe,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.remote_health?.snapshotter).toBe("ok");
+    }
+  });
+
   it("reports degraded_reasons when includeRemoteHealth and remotes fail", () => {
     const dir = makeTempDir();
     git(dir, "init");
