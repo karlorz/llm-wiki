@@ -619,10 +619,10 @@ function checkStaleRemoteMain(resolvedPath: string | undefined): CheckResult | u
 
 function checkVaultLocalGit(resolvedPath: string | undefined): CheckResult {
   if (resolvedPath === undefined) {
-    return check("error", "vault_local_git", "Vault local git", "Cannot check — WIKI_PATH not resolved");
+    return check("warn", "vault_local_git", "Vault local git", "Cannot check — WIKI_PATH not resolved");
   }
   if (!existsSync(join(resolvedPath, ".git"))) {
-    return check("error", "vault_local_git", "Vault local git", "Not a git repository — local vault metadata unusable for sync");
+    return check("warn", "vault_local_git", "Vault local git", "Not a git repository - sync features unavailable");
   }
   try {
     execSync("git rev-parse --git-dir", {
