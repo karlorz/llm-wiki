@@ -1,8 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readCache, writeCache, needsCheck, latestFromCache, cachePath, distTagFromCache, triggerAutoUpdate } from "../../src/utils/auto-update.js";
+import { readCache, writeCache, needsCheck, latestFromCache, cachePath, distTagFromCache, triggerAutoUpdate, resolveAutoApplyAt, formatCountdown, notifyPendingUpdate, type UpdateCache } from "../../src/utils/auto-update.js";
+import { AUTO_APPLY_DELAY_MS } from "../../src/utils/update-consts.js";
 
 function home(): string {
   const h = mkdtempSync(join(tmpdir(), "autoupdate-home-"));
@@ -100,5 +101,175 @@ describe("auto-update utilities", () => {
     triggerAutoUpdate("/tmp", "0.2.0-beta.15");
     if (orig === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = orig;
+  });
+});
+
+describe("resolveAutoApplyAt countdown", () => {
+  it("stamps firstSeenAt + autoApplyAt when version is new", () => {
+    const now = 1_000_000;
+    const r = resolveAutoApplyAt(null, "0.9.55", now);
+    expect(r.firstSeenAt).toBe(now);
+    expect(r.autoApplyAt).toBe(now + AUTO_APPLY_DELAY_MS);
+  });
+
+  it("preserves existing firstSeenAt/autoApplyAt when version is unchanged", () => {
+    const firstSeenAt = 1_000_000;
+    const autoApplyAt = firstSeenAt + AUTO_APPLY_DELAY_MS;
+    const cache = { lastCheck: firstSeenAt, latestVersion: "0.9.55", currentVersion: "0.9.37", firstSeenAt, autoApplyAt };
+    const r = resolveAutoApplyAt(cache, "0.9.55", firstSeenAt + 60_000);
+    expect(r.firstSeenAt).toBe(firstSeenAt);
+    expect(r.autoApplyAt).toBe(autoApplyAt);
+  });
+
+  it("resets countdown when latest version changes", () => {
+    const firstSeenAt = 1_000_000;
+    const autoApplyAt = firstSeenAt + AUTO_APPLY_DELAY_MS;
+    const cache = { lastCheck: firstSeenAt, latestVersion: "0.9.55", currentVersion: "0.9.37", firstSeenAt, autoApplyAt };
+    const now = firstSeenAt + 7_200_000;
+    const r = resolveAutoApplyAt(cache, "0.9.56", now);
+    expect(r.firstSeenAt).toBe(now);
+    expect(r.autoApplyAt).toBe(now + AUTO_APPLY_DELAY_MS);
+  });
+
+  it("resets countdown when prior cache lacks firstSeenAt", () => {
+    const cache = { lastCheck: 1_000_000, latestVersion: "0.9.55", currentVersion: "0.9.37" };
+    const now = 2_000_000;
+    const r = resolveAutoApplyAt(cache, "0.9.55", now);
+    expect(r.firstSeenAt).toBe(now);
+    expect(r.autoApplyAt).toBe(now + AUTO_APPLY_DELAY_MS);
+  });
+});
+
+describe("formatCountdown", () => {
+  it("returns null when no autoApplyAt", () => {
+    expect(formatCountdown(undefined)).toBeNull();
+  });
+
+  it("returns null when countdown has elapsed", () => {
+    const now = 2_000_000;
+    expect(formatCountdown(1_000_000, now)).toBeNull();
+  });
+
+  it("formats remaining hours and minutes", () => {
+    const now = 1_000_000;
+    // 5h 30m remaining
+    const autoApplyAt = now + (5 * 60 + 30) * 60_000;
+    expect(formatCountdown(autoApplyAt, now)).toBe("5h 30m");
+  });
+
+  it("formats minutes only when under an hour", () => {
+    const now = 1_000_000;
+    const autoApplyAt = now + 25 * 60_000;
+    expect(formatCountdown(autoApplyAt, now)).toBe("25m");
+  });
+});
+
+describe("notifyPendingUpdate", () => {
+  // notifyPendingUpdate checks isDisabled(), which is true under NODE_ENV=test.
+  // Unset it for these tests so the notify path is exercised.
+  let origNodeEnv: string | undefined;
+  beforeEach(() => {
+    origNodeEnv = process.env.NODE_ENV;
+    delete process.env.NODE_ENV;
+  });
+  afterEach(() => {
+    if (origNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = origNodeEnv;
+  });
+
+  it("writes a stderr countdown line when an update is pending", () => {
+    const firstSeenAt = Date.now();
+    const cache: UpdateCache = {
+      lastCheck: firstSeenAt,
+      latestVersion: "0.9.60",
+      currentVersion: "0.9.55",
+      distTag: "latest",
+      firstSeenAt,
+      autoApplyAt: firstSeenAt + AUTO_APPLY_DELAY_MS,
+    };
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      notifyPendingUpdate(cache, "0.9.55");
+      expect(spy).toHaveBeenCalled();
+      const msg = spy.mock.calls[0][0].toString();
+      expect(msg).toContain("0.9.55 -> 0.9.60");
+      expect(msg).toMatch(/Auto-applying in \d+h \d+m|Auto-applying in \d+m/);
+      expect(msg).toContain("NO_UPDATE_NOTIFIER=1");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("is silent when no update is pending", () => {
+    const now = Date.now();
+    const cache: UpdateCache = { lastCheck: now, latestVersion: "0.9.55", currentVersion: "0.9.55", distTag: "latest" };
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      notifyPendingUpdate(cache, "0.9.55");
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("is silent when countdown has elapsed (apply will happen in background)", () => {
+    const firstSeenAt = Date.now() - AUTO_APPLY_DELAY_MS - 60_000;
+    const cache: UpdateCache = {
+      lastCheck: firstSeenAt,
+      latestVersion: "0.9.60",
+      currentVersion: "0.9.55",
+      distTag: "latest",
+      firstSeenAt,
+      autoApplyAt: firstSeenAt + AUTO_APPLY_DELAY_MS,
+    };
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      notifyPendingUpdate(cache, "0.9.55");
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("is silent when latest is older than running (stale cache, no phantom downgrade)", () => {
+    const firstSeenAt = Date.now();
+    const cache: UpdateCache = {
+      lastCheck: firstSeenAt,
+      latestVersion: "0.9.39",
+      currentVersion: "0.9.37",
+      distTag: "latest",
+      firstSeenAt,
+      autoApplyAt: firstSeenAt + AUTO_APPLY_DELAY_MS,
+    };
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      notifyPendingUpdate(cache, "0.9.55");
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("respects NO_UPDATE_NOTIFIER", () => {
+    const firstSeenAt = Date.now();
+    const cache: UpdateCache = {
+      lastCheck: firstSeenAt,
+      latestVersion: "0.9.60",
+      currentVersion: "0.9.55",
+      distTag: "latest",
+      firstSeenAt,
+      autoApplyAt: firstSeenAt + AUTO_APPLY_DELAY_MS,
+    };
+    const orig = process.env.NO_UPDATE_NOTIFIER;
+    process.env.NO_UPDATE_NOTIFIER = "1";
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      notifyPendingUpdate(cache, "0.9.55");
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+      if (orig === undefined) delete process.env.NO_UPDATE_NOTIFIER;
+      else process.env.NO_UPDATE_NOTIFIER = orig;
+    }
   });
 });
