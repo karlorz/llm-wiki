@@ -287,12 +287,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 40 checks", async () => {
+  it("always returns exactly 41 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(40);
+      expect(r.result.data.checks).toHaveLength(41);
       const freshness = r.result.data.checks.find(c => c.id === "s3_mount_freshness");
       expect(freshness).toBeDefined();
       expect(freshness?.status).toBe("pass");
@@ -312,6 +312,29 @@ describe("runDoctor", () => {
         expect(row, `missing metric ${id}`).toBeDefined();
         expect(row!.status).toBe("info");
       }
+    }
+  });
+
+  it("vault_conflict_markers is error when vault has a complete conflict block", async () => {
+    const h = home();
+    const v = fullVault();
+    const conflictBody = [
+      "## Overview",
+      "",
+      "<<<<<<< HEAD",
+      "ours",
+      "=======",
+      "theirs",
+      ">>>>>>> branch",
+      "",
+    ].join("\n");
+    writeFileSync(join(v, "concepts", "bad.md"), conflictBody);
+    const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const row = r.result.data.checks.find(c => c.id === "vault_conflict_markers");
+      expect(row?.status).toBe("error");
+      expect(row?.detail).toContain("concepts/bad.md");
     }
   });
 

@@ -40,14 +40,16 @@ case "$(uname -s)" in
     share_bin="$home_dir/Library/Application Support/vault-sync/bin"
     log_dir="$home_dir/Library/Logs"
     unit_dir="$home_dir/Library/LaunchAgents"
-    mkdir -p "$share_bin" "$log_dir" "$unit_dir" "$home_dir/.config/rclone" "$home_dir/bin"
+    mkdir -p "$share_bin" "$log_dir" "$unit_dir" "$home_dir/.config/rclone" "$home_dir/bin" "$home_dir/wiki/concepts"
+    printf '# Clean vault\n' > "$home_dir/wiki/concepts/clean.md"
     touch "$unit_dir/com.karlchow.wiki-push.plist" "$unit_dir/com.karlchow.wiki-fetch.plist"
     ;;
   Linux)
     share_bin="$home_dir/.local/share/vault-sync/bin"
     log_dir="$home_dir/.local/state/vault-sync/log"
     unit_dir="$home_dir/.config/systemd/user"
-    mkdir -p "$share_bin" "$log_dir" "$unit_dir" "$home_dir/.config/rclone" "$home_dir/bin"
+    mkdir -p "$share_bin" "$log_dir" "$unit_dir" "$home_dir/.config/rclone" "$home_dir/bin" "$home_dir/wiki/concepts"
+    printf '# Clean vault\n' > "$home_dir/wiki/concepts/clean.md"
     touch "$unit_dir/wiki-push.timer" "$unit_dir/wiki-fetch.timer"
     ;;
   *)
@@ -92,6 +94,13 @@ if ! grep -q '"id":"vault_sync_last_push_age".*"status":"pass".*OK push' "$helpe
   cat "$helper_out" >&2
   rm -f "$helper_out"
   echo "FAIL: expected push recency check to use last meaningful OK push line" >&2
+  exit 1
+fi
+
+if ! grep -q '"id":"vault_sync_conflict_markers".*"status":"pass"' "$helper_out"; then
+  cat "$helper_out" >&2
+  rm -f "$helper_out"
+  echo "FAIL: expected vault_sync_conflict_markers pass on clean vault" >&2
   exit 1
 fi
 

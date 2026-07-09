@@ -13,6 +13,13 @@ fi
 # shellcheck source=/dev/null
 source "$PLATFORM_LIB"
 
+CONFLICT_MARKERS_LIB="$VAULT_SYNC_ROOT/scripts/lib/conflict-markers.sh"
+if [ ! -f "$CONFLICT_MARKERS_LIB" ]; then
+  fatal "missing conflict-markers helper: $CONFLICT_MARKERS_LIB"
+fi
+# shellcheck source=/dev/null
+source "$CONFLICT_MARKERS_LIB"
+
 lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
@@ -464,6 +471,32 @@ else
     add_check "vault_sync_snapshot_guard" "Snapshot script guard" "pass" "--max-delete guard present in $SNAPSHOT_SCRIPT"
   else
     add_check "vault_sync_snapshot_guard" "Snapshot script guard" "error" "--max-delete guard missing"
+  fi
+fi
+
+# Check: vault conflict markers (all roles)
+CONFLICT_VAULT="${WIKI_PATH:-$HOME/wiki}"
+if [ ! -d "$CONFLICT_VAULT" ]; then
+  add_check "vault_sync_conflict_markers" "Vault conflict markers" "warn" "Vault directory missing: $CONFLICT_VAULT"
+else
+  conflict_tmp="$(mktemp)"
+  if vault_sync_scan_conflict_markers "$CONFLICT_VAULT" "$conflict_tmp"; then
+    add_check "vault_sync_conflict_markers" "Vault conflict markers" "pass" "No complete conflict-marker blocks"
+    rm -f "$conflict_tmp"
+  else
+    scan_rc=$?
+    if [ "$scan_rc" -eq 2 ]; then
+      add_check "vault_sync_conflict_markers" "Vault conflict markers" "warn" "Scanner could not access vault: $CONFLICT_VAULT"
+      rm -f "$conflict_tmp"
+    elif [ -s "$conflict_tmp" ]; then
+      conflict_count="$(wc -l <"$conflict_tmp" | tr -d ' ')"
+      first_line="$(head -n 1 "$conflict_tmp")"
+      add_check "vault_sync_conflict_markers" "Vault conflict markers" "error" "${conflict_count} finding(s), first: ${first_line}"
+      rm -f "$conflict_tmp"
+    else
+      add_check "vault_sync_conflict_markers" "Vault conflict markers" "warn" "Conflict marker scan failed (exit $scan_rc)"
+      rm -f "$conflict_tmp"
+    fi
   fi
 fi
 

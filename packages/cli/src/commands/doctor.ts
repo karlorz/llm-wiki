@@ -10,6 +10,7 @@ import { latestFromCache } from "../utils/auto-update.js";
 import { semverGt } from "../utils/semver.js";
 import { findPlugin, findPluginInstallations, type PluginChannelInstall } from "../utils/plugin-registry.js";
 import { scanVault } from "../utils/vault.js";
+import { scanVaultConflictMarkers } from "../utils/conflict-markers.js";
 import { buildWikilinkAdjacency, toUndirectedWeighted, louvain, communityCohesion } from "../utils/community.js";
 import { loadFleetManifestAndHost, satelliteGateFromFleetLoad, type FleetManifestAndHost } from "./fleet.js";
 import {
@@ -444,6 +445,25 @@ function checkDotStoreClean(resolvedPath: string | undefined): CheckResult {
     return check("pass", "dsstore_clean", "No .DS_Store in raw/", "No .DS_Store files found");
   }
   return check("info", "dsstore_clean", "No .DS_Store in raw/", `${found.length} .DS_Store file(s) found — remove with: find ${rawDir} -name .DS_Store -delete`);
+}
+
+function checkVaultConflictMarkers(resolvedPath: string | undefined): CheckResult {
+  if (resolvedPath === undefined) {
+    return check("pass", "vault_conflict_markers", "Vault conflict markers", "No vault path — check skipped");
+  }
+  const findings = scanVaultConflictMarkers(resolvedPath);
+  if (findings.length === 0) {
+    return check("pass", "vault_conflict_markers", "Vault conflict markers", "No complete conflict-marker blocks");
+  }
+  const first = findings[0];
+  const n = findings.length;
+  const fileWord = n === 1 ? "file" : "files";
+  return check(
+    "error",
+    "vault_conflict_markers",
+    "Vault conflict markers",
+    `${n} ${fileWord}, first: ${first.path}:${first.line}`,
+  );
 }
 
 function checkSyncLastPush(resolvedPath: string | undefined): CheckResult {
@@ -1617,6 +1637,7 @@ export async function runDoctor(
   checks.push(checkVaultGitBehind(gitCheckPath));
   checks.push(checkVaultGitPullFailures(input.home));
   checks.push(checkDotStoreClean(resolvedPath));
+  checks.push(checkVaultConflictMarkers(resolvedPath));
   checks.push(checkS3MountPerf(resolvedPath));
   checks.push(checkS3MountFreshness(resolvedPath));
   checks.push(checkRcloneFlagAudit(resolvedPath));
