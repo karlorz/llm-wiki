@@ -1,6 +1,6 @@
 {
   "name": "@skillwiki/agent-memory-trends",
-  "version": "0.9.54",
+  "version": "0.9.55",
   "private": true,
   "type": "module",
   "exports": {
