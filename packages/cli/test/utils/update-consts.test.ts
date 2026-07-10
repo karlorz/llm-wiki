@@ -7,6 +7,7 @@ import {
   VIEW_TIMEOUT_MS,
   INSTALL_TIMEOUT_MS,
   BG_SCRIPT_TIMEOUT_MS,
+  AUTO_APPLY_DELAY_MS,
   ENV_DISABLE_KEY,
   CLI_DISABLE_FLAG,
   normalizeDistTag,
@@ -33,6 +34,10 @@ describe("update-consts", () => {
     expect(VIEW_TIMEOUT_MS).toBe(15_000);
     expect(INSTALL_TIMEOUT_MS).toBe(60_000);
     expect(BG_SCRIPT_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it("exports AUTO_APPLY_DELAY_MS as 6 hours", () => {
+    expect(AUTO_APPLY_DELAY_MS).toBe(6 * 60 * 60 * 1000);
   });
 
   it("exports disable flags", () => {

@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { join } from "node:path";
-import { readCache, writeCache, type UpdateCache } from "../utils/auto-update.js";
+import { readCache, writeCache, type UpdateCache, resolveAutoApplyAt } from "../utils/auto-update.js";
 import { normalizeDistTag } from "../utils/update-consts.js";
 import { readCliPackageJson } from "../utils/package-info.js";
 import { runInstall } from "./install.js";
@@ -83,11 +83,14 @@ export async function runUpdate(
   }
 
   // Update cache with the check result
+  const { firstSeenAt, autoApplyAt } = resolveAutoApplyAt(readCache(input.home).cache, latest);
   const cache: UpdateCache = {
     lastCheck: Date.now(),
     latestVersion: latest,
     currentVersion,
     distTag: tag,
+    firstSeenAt,
+    autoApplyAt,
   };
 
   if (latest === currentVersion) {

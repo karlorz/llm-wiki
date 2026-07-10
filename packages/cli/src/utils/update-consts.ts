@@ -8,6 +8,13 @@ export const VIEW_TIMEOUT_MS = 15_000;
 export const INSTALL_TIMEOUT_MS = 60_000;
 export const BG_SCRIPT_TIMEOUT_MS = 30_000;
 
+// Auto-apply countdown: once an update is first seen, wait this long before
+// the background script auto-installs it. Mirrors the stable-rollout delay
+// pattern used by update-notifier-derived CLIs (e.g. openclaw's stableDelay).
+// Gives the user a window to run `skillwiki update` themselves or opt out
+// via NO_UPDATE_NOTIFIER / `--no-update-notifier`.
+export const AUTO_APPLY_DELAY_MS = 6 * 60 * 60 * 1000; // 6 hours
+
 // Disable flags
 export const ENV_DISABLE_KEY = "NO_UPDATE_NOTIFIER";
 export const CLI_DISABLE_FLAG = "--no-update-notifier";
