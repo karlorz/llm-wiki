@@ -49,25 +49,41 @@ npm run materialize:plugins:check
 | `proj-*` | `proj-init`, `proj-work`, `proj-distill`, `proj-decide` |
 | onboarding | `using-skillwiki` |
 
+A sibling `vault-sync` plugin ships six operational skills (install, status, presync, snapshot, FUSE freshness, uninstall). It is packaged separately from the skillwiki skill set.
+
 ## CLI
 
-`skillwiki` exposes 36 deterministic subcommands consumed by the skills:
+`skillwiki` exposes a deterministic CLI consumed by the skills. Prefer the built
+help over hard-coded counts:
+
+```bash
+npm run -w packages/cli build
+node packages/cli/dist/cli.js --help
+```
+
+As of package version `0.9.56`, the built CLI advertises 47 public top-level
+subcommands plus `help` (48 including `help`). Nested groups include `graph`,
+`canvas`, `compound`, `config`, `sync`, `backup`, `memory`, and `fleet`.
 
 | Subcommand | Purpose |
 |---|---|
-| `init <vault>` | Bootstrap vault with SCHEMA.md, index.md, log.md. |
+| `init` | Bootstrap vault with SCHEMA.md, index.md, log.md. |
 | `install` | Cross-platform skills installer (copies or symlinks SKILL.md files). |
 | `hash <file>` | sha256 of body bytes after closing `---`. |
 | `validate <file>` | Frontmatter Zod validation. |
 | `lint <vault>` | Vault health check (stale pages, dedup, taxonomy, citations, sources). |
+| `health <vault>` | Bounded whole-system wiki health report. |
+| `status <vault>` | Vault diagnostics. |
 | `audit <file>` | Citation marker + sources↔body consistency. |
 | `fetch-guard <url>` | URL preflight (Layer 1 security). |
-| `graph build <vault>` | Wikilink adjacency + Adamic-Adar table. |
+| `query <text>` | Score and rank vault pages by relevance. |
+| `graph` | Wikilink adjacency + Adamic-Adar table. |
 | `overlap <vault>` | Source-overlap clusters. |
 | `orphans <vault>` | Orphan + bridge node detection. |
 | `drift <vault>` | Detect raw source drift via sha256 comparison. |
 | `dedup <vault>` | Detect duplicate raw articles. |
 | `archive <page>` | Move superseded typed-knowledge page to `_archive/`. |
+| `claim <transcript>` | Claim an unclaimed transcript by creating a work item. |
 | `config` | Manage skillwiki configuration and wiki profiles. |
 | `doctor` | Diagnose setup issues (paths, env, plugin, sync health). |
 | `path` | Resolve vault or project paths. |
@@ -76,6 +92,7 @@ npm run materialize:plugins:check
 | `stale <vault>` | List stale transcripts and incomplete work items. |
 | `links <vault>` | Wikilink graph analysis. |
 | `log-rotate <vault>` | Rotate log.md when it exceeds size limit. |
+| `log-append <vault>` | Append a vault log entry under an advisory lock. |
 | `migrate-citations <vault>` | Convert legacy citation markers to current format. |
 | `frontmatter-fix <vault>` | Auto-fix common frontmatter issues. |
 | `tag-audit <vault>` | Audit tag taxonomy compliance. |
@@ -84,14 +101,20 @@ npm run materialize:plugins:check
 | `index-check <vault>` | Validate index.md entries. |
 | `index-link-format <vault>` | Fix index link format issues. |
 | `project-index <slug>` | Build project workspace knowledge index. |
-| `compound promote` | Promote retros to compound entries. |
-| `compound list` | List compound entries for a project. |
-| `sync status` | Check vault git sync status. |
+| `compound` | Promote retros and list compound entries. |
+| `sync` | Vault git sync helpers. |
+| `backup` | S3-compatible remote backup sync/restore. |
 | `seed <vault>` | Populate a new vault with example content. |
 | `observe <vault>` | Create raw transcript observation entry. |
-| `canvas generate` | Generate Obsidian Canvas from graph.json. |
+| `session-brief <vault>` | Render or refresh the bounded startup session brief. |
+| `memory` | Inspect derived agent memory caches. |
+| `ingest <source>` | Ingest a URL or local file into the vault. |
+| `fleet` | Fleet topology validate/context/health. |
+| `canvas` | Generate and manage Obsidian Canvas files. |
 | `transcripts <vault>` | Scan raw/transcripts for new ad-hoc captures. |
-| `update` | Check for skillwiki updates. |
+| `update` | Check for skillwiki updates from npm. |
+| `self-update` | Update skillwiki CLI from local source or npm dist-tag. |
+| `mcp` | Local experimental MCP server entry (unsupported; see below). |
 
 All subcommands emit JSON by default. Pass `--human` for terminal output.
 
@@ -113,4 +136,6 @@ Requires Node ≥ 20.
 
 ## Spec
 
-The canonical specification lives at `~/wiki/projects/llm-wiki/history/specs/2026-05-02-llm-wiki-skill-design.md` (revised 2026-05-03).
+The archive-only canonical specification lives under the active SkillWiki vault at
+`{WIKI_PATH}/projects/llm-wiki/history/specs/2026-05-02-llm-wiki-skill-design.md`
+(revised 2026-05-03). Resolve `{WIKI_PATH}` with `skillwiki path`.

@@ -4,11 +4,31 @@ Private `llm-wiki` workspace package for the nightly agent-memory research workf
 
 The package stages high-signal agent-memory research into the vault. It collects bounded GitHub candidates through `gh api`, prepares an agent-neutral synthesis input, runs a non-interactive synthesis runner when there is a selected research signal, validates generated vault output through the publisher gate, pushes successful changes, and sends a heartbeat only after the push succeeds.
 
+## CLI surface
+
+```text
+agent-memory-trends <doctor|collect|daily|publish|version>
+  [--dry-run] [--generate-only] [--preview-only]
+  [--dedupe-digest-ttl-days <n>]
+  [--synthesis-retries <n>]
+  [--synthesis-fallback <claude|none>]
+  [--synthesis-timeout-ms <ms>]
+  [--help] [--version]
+```
+
+Package scripts: `build`, `doctor`, `collect`, `daily`, `publish`, `test`,
+`typecheck`. Build first when using the dist entrypoint:
+
+```bash
+npm run -w @skillwiki/agent-memory-trends build
+node packages/agent-memory-trends/dist/cli.js --help
+```
+
 ## GitHub Discovery Lanes
 
 GitHub recall is lane-based rather than a single updated-first query list. The
-owned config at
-`/Users/karlchow/wiki/projects/llm-wiki/architecture/agent-memory-research-sources.yaml`
+owned vault config at
+`{WIKI_PATH}/projects/llm-wiki/architecture/agent-memory-research-sources.yaml`
 defines four lanes:
 
 - `daily_fresh`: short pushed window, `sort=updated`, filtered by a low but real
@@ -46,6 +66,9 @@ hard suppressions because they represent explicit ownership, not historical
 trend coverage. For controlled real-candidate debugging, use
 `--dedupe-digest-ttl-days <n>` to shorten or lengthen only the current CLI run;
 do not use synthetic provider prompts.
+
+Resolve `{WIKI_PATH}` with `skillwiki path`. The package also accepts an explicit
+config path through `AGENT_MEMORY_TRENDS_CONFIG` for controlled runs.
 
 Legacy configs with a flat `github.queries` list still parse through an explicit
 `legacy_flat` compatibility lane. New owned config should use `github.lanes`.
