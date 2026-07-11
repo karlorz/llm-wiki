@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * Background auto-update script for skillwiki.
  *
@@ -6,6 +5,9 @@
  * Queries npm for the configured skillwiki dist-tag version, compares
  * with the current version, and installs the update if newer AND the
  * auto-apply countdown has elapsed (firstSeenAt + AUTO_APPLY_DELAY_MS).
+ *
+ * Shebang is injected by tsup banner — do NOT put #! in this source file
+ * or dist/auto-update-bg.js gets a double shebang and Node ESM fails to parse.
  *
  * Args: <home> <currentVersion> <distTag>
  */

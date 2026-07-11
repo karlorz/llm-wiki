@@ -273,3 +273,28 @@ describe("notifyPendingUpdate", () => {
     }
   });
 });
+
+
+describe("auto-update-bg dist artifact", () => {
+  it("has exactly one shebang and is parseable by node --check", () => {
+    // Drives the shipped dist entry (tsup banner + no source shebang).
+    // Double shebang breaks Node ESM on Linux (sg01) with SyntaxError.
+    const { readFileSync, existsSync } = require("node:fs") as typeof import("node:fs");
+    const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+    const { resolve, dirname, join } = require("node:path") as typeof import("node:path");
+    const { fileURLToPath } = require("node:url") as typeof import("node:url");
+    // Prefer built dist next to package
+    const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+    const bg = join(pkgRoot, "dist", "auto-update-bg.js");
+    expect(existsSync(bg)).toBe(true);
+    const text = readFileSync(bg, "utf8");
+    const shebangCount = (text.match(/^#!\/usr\/bin\/env node$/gm) ?? []).length;
+    expect(shebangCount).toBe(1);
+    // Second line must not be another shebang
+    const lines = text.split(/\r?\n/);
+    expect(lines[0]).toBe("#!/usr/bin/env node");
+    expect(lines[1]?.startsWith("#!")).toBe(false);
+    // Real Node parse (same failure mode as sg01)
+    expect(() => execFileSync(process.execPath, ["--check", bg], { stdio: "pipe" })).not.toThrow();
+  });
+});
