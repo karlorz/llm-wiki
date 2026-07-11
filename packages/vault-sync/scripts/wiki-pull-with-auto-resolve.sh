@@ -20,6 +20,16 @@
 # `git rebase --quit` (never abort). Fully materialized local commits (content
 # already present on the remote tip) may be dropped from the rebase todo.
 #
+# Convergence uses a frozen TARGET_OID from the post-fetch tip. On a non-archive
+# manual conflict the helper may retry once if the remote advanced while the
+# conflict identity is still owned/unmutated; otherwise it fails closed with
+# handoff=1 (review-required). Later runs refuse to reclaim handoff rebases.
+#
+# Force-push guard: this helper never publishes to a remote. Do not add
+# non-fast-forward push flags here. If a publish path is added later,
+# require merge-base ancestry of the remote tip before a plain push.
+
+#
 # Usage:
 #   wiki-pull-with-auto-resolve.sh [--remote <name>] [--branch <name>]
 #   Defaults: origin, main
@@ -261,11 +271,83 @@ EOF
     chmod +x "$editor_script"
 }
 
+# Rebase onto an exact frozen OID (not a moving symbolic remote tip alone).
+# Materialization drop list is computed against that same OID.
+run_rebase_onto_target() {
+    local target="$1"
+    local drop_list editor_script merge_base rc
+
+    drop_list="$(mktemp)"
+    editor_script="$(mktemp)"
+    merge_base="$(git merge-base HEAD "$target" 2>/dev/null || true)"
+    export GIT_SEQUENCE_EDITOR=:
+    if [ -n "$merge_base" ]; then
+        vault_sync_list_materialized_commits "$merge_base" "$target" "$drop_list" "$WIKI_DIR"
+        if [ -s "$drop_list" ]; then
+            while IFS= read -r drop_sha; do
+                [ -n "$drop_sha" ] || continue
+                log "DROP materialized commit $drop_sha (proven on $target)"
+            done <"$drop_list"
+            prepare_materialization_sequence_editor "$drop_list" "$editor_script"
+            export GIT_SEQUENCE_EDITOR="$editor_script"
+        fi
+    fi
+    git -c rebase.reapplyCherryPicks=true rebase "$target" 2>>"$LOG_FILE"
+    rc=$?
+    rm -f "$drop_list" "$editor_script"
+    return $rc
+}
+
+# Surface a non-archive manual conflict: optional one owned stale-target retry,
+# else review-required handoff. Returns 0 with REBASE_RC set when a retry was
+# started (caller should continue the loop); exits 1 on handoff.
+handle_manual_conflict() {
+    local commit_msg="$1"
+    local conflicts="$2"
+    local live_oid
+
+    vault_sync_op_record_conflict_identity "$WIKI_DIR" "$OP_ID"
+
+    # Test-only hook (unset in production): inject remote advance / human mutation.
+    if [ -n "${VAULT_SYNC_TEST_ON_CONFLICT_HOOK:-}" ]; then
+        eval "$VAULT_SYNC_TEST_ON_CONFLICT_HOOK"
+    fi
+
+    git fetch --quiet "$REMOTE" "$BRANCH" 2>>"$LOG_FILE"
+    live_oid="$(git rev-parse "$REMOTE/$BRANCH")"
+
+    if vault_sync_op_may_retry "$WIKI_DIR" "$OP_ID" "$live_oid"; then
+        log "RETRY stale target $TARGET_OID -> $live_oid op=$OP_ID"
+        vault_sync_op_set_phase "$WIKI_DIR" "$OP_ID" "retrying"
+        vault_sync_op_set_field "$WIKI_DIR" "$OP_ID" "retry_count" "1"
+        git rebase --abort 2>>"$LOG_FILE" || true
+        TARGET_OID="$live_oid"
+        vault_sync_op_set_field "$WIKI_DIR" "$OP_ID" "target_oid" "$TARGET_OID"
+        # Best-effort update recovery target ref to the new frozen tip.
+        git update-ref "refs/vault-sync/recovery/${OP_ID}/target" "$TARGET_OID" 2>/dev/null || true
+        vault_sync_op_set_phase "$WIKI_DIR" "$OP_ID" "rebasing"
+        run_rebase_onto_target "$TARGET_OID"
+        REBASE_RC=$?
+        return 0
+    fi
+
+    vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "semantic-conflict-or-stale-exhausted"
+    log "MANUAL-RESOLVE-NEEDED ($commit_msg): $conflicts"
+    echo "=== CONFLICT on non-archive commit op=$OP_ID ==="
+    echo "Commit: $commit_msg"
+    echo "Conflicted files:"
+    echo "$conflicts"
+    echo ""
+    echo "Resolve manually, then run: git rebase --continue"
+    exit 1
+}
+
 cd "$WIKI_DIR" || { log "ERROR: cd $WIKI_DIR failed"; exit 1; }
 
 # Classify leftover rebase state. Active rebases fail closed; stale-clean
 # state is cleared with recovery-ref + quit (never abort — abort would reset
 # the branch tip to orig-head and discard newer authored work).
+# Handoff immunity: never abort a rebase owned by a handoff journal.
 if [ -d "$WIKI_DIR/.git/rebase-merge" ] || [ -d "$WIKI_DIR/.git/rebase-apply" ]; then
     REBASE_STATE="$(vault_sync_rebase_state "$WIKI_DIR")"
     log "REBASE-STATE $REBASE_STATE"
@@ -288,6 +370,17 @@ if [ -d "$WIKI_DIR/.git/rebase-merge" ] || [ -d "$WIKI_DIR/.git/rebase-apply" ];
             ;;
         active|*)
             log "FAIL active rebase state present — refusing auto-cleanup"
+            # Explicit handoff check: later runs must not reclaim handoff ops.
+            JDIR="$(vault_sync_op_journal_dir "$WIKI_DIR" 2>/dev/null || true)"
+            if [ -n "${JDIR:-}" ] && [ -d "$JDIR" ]; then
+                for jf in "$JDIR"/*.env; do
+                    [ -f "$jf" ] || continue
+                    if grep -q '^handoff=1$' "$jf" 2>/dev/null; then
+                        log "handoff journal present; refusing auto-cleanup"
+                        break
+                    fi
+                done
+            fi
             exit 1
             ;;
     esac
@@ -323,6 +416,7 @@ fi
 OP_ID="pull-$(hostname -s 2>/dev/null || echo host)-$(date -u +%Y%m%dT%H%M%SZ)-${$}-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 ORIGINAL_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 ORIGINAL_HEAD="$(git rev-parse HEAD)"
+# Freeze the convergence tip as an exact OID (not a moving symbolic name).
 TARGET_OID="$(git rev-parse "$REMOTE/$BRANCH")"
 HELPER_VERSION="${VAULT_SYNC_HELPER_VERSION:-unknown}"
 RUNTIME_HASH="${VAULT_SYNC_RUNTIME_HASH:-}"
@@ -372,32 +466,20 @@ if [ "$NEED_STASH" -eq 1 ]; then
   fi
 fi
 
-# Drop only fully proven materialized local commits from the rebase todo.
-DROP_LIST="$(mktemp)"
-EDITOR_SCRIPT="$(mktemp)"
-MERGE_BASE="$(git merge-base HEAD "$REMOTE/$BRANCH" 2>/dev/null || true)"
-if [ -n "$MERGE_BASE" ]; then
-    vault_sync_list_materialized_commits "$MERGE_BASE" "$REMOTE/$BRANCH" "$DROP_LIST" "$WIKI_DIR"
-    if [ -s "$DROP_LIST" ]; then
-        while IFS= read -r drop_sha; do
-            [ -n "$drop_sha" ] || continue
-            log "DROP materialized commit $drop_sha (proven on $REMOTE/$BRANCH)"
-        done < "$DROP_LIST"
-        prepare_materialization_sequence_editor "$DROP_LIST" "$EDITOR_SCRIPT"
-        export GIT_SEQUENCE_EDITOR="$EDITOR_SCRIPT"
-    else
-        export GIT_SEQUENCE_EDITOR=:
-    fi
-else
-    export GIT_SEQUENCE_EDITOR=:
+# Test-only hook (unset in production): crash after stash to prove journal retention.
+if [ "${VAULT_SYNC_TEST_EXIT_AFTER_STASH:-0}" = "1" ]; then
+  log "TEST exit after stash"
+  exit 99
 fi
 
-# Run rebase with auto-resolve for archive conflict storms.
+vault_sync_op_set_phase "$WIKI_DIR" "$OP_ID" "rebasing"
+
+# Run rebase onto frozen TARGET_OID with auto-resolve for archive conflict storms.
 # --reapply-cherry-picks prevents git from skipping matching patch-ids and
-# dirtying the working tree mid-rebase.
-git -c rebase.reapplyCherryPicks=true pull --rebase "$REMOTE" "$BRANCH" 2>>"$LOG_FILE"
+# dirtying the working tree mid-rebase. Prefer `git rebase $TARGET_OID` over
+# `pull --rebase` so the pin is explicit (fetch already done).
+run_rebase_onto_target "$TARGET_OID"
 REBASE_RC=$?
-rm -f "$DROP_LIST" "$EDITOR_SCRIPT"
 
 # Defense-in-depth: cap rebase iterations so a silent resolver failure cannot
 # spin the unattended pull forever. A healthy conflict storm is bounded by the
@@ -409,6 +491,7 @@ while [ $REBASE_RC -ne 0 ]; do
     REBASE_ITERS=$((REBASE_ITERS + 1))
     if [ $REBASE_ITERS -gt $MAX_REBASE_ITERS ]; then
         log "FAIL rebase iteration cap ($MAX_REBASE_ITERS) exceeded — aborting to avoid spin"
+        vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "rebase-iteration-cap"
         git rebase --abort 2>/dev/null || true
         exit 1
     fi
@@ -419,10 +502,11 @@ while [ $REBASE_RC -ne 0 ]; do
         # unattended push loop does not wedge on recoverable non-rebase errors.
         log "REBASE failed to start (rc=$REBASE_RC) — falling back to merge"
         git rebase --abort 2>/dev/null || true
-        if git merge --no-edit "$REMOTE/$BRANCH" 2>>"$LOG_FILE"; then
+        if git merge --no-edit "$TARGET_OID" 2>>"$LOG_FILE"; then
             log "OK fallback merge succeeded"
             REBASE_RC=0
         else
+            vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "fallback-merge-failed"
             log "FAIL fallback merge also failed"
             exit 1
         fi
@@ -435,6 +519,7 @@ while [ $REBASE_RC -ne 0 ]; do
         # No file-level conflicts — maybe the conflict was resolved externally
         # or it's a different kind of failure. Try to continue.
         if ! GIT_EDITOR=true git rebase --continue 2>>"$LOG_FILE"; then
+            vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "rebase-continue-no-conflicts"
             log "FAIL rebase continue (no conflicts but failed)"
             exit 1
         fi
@@ -463,6 +548,7 @@ while [ $REBASE_RC -ne 0 ]; do
     # Detect if current commit is archive-only
     STOPPED_SHA=$(cat "$WIKI_DIR/.git/rebase-merge/stopped-sha" 2>/dev/null || echo "")
     if [ -z "$STOPPED_SHA" ]; then
+        vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "missing-stopped-sha"
         log "WARN cannot determine stopped-sha — surfacing conflicts"
         exit 1
     fi
@@ -475,15 +561,10 @@ while [ $REBASE_RC -ne 0 ]; do
             git checkout --ours "$f" 2>/dev/null && git add "$f"
         done
     else
-        # Non-archive conflict — surface to user
-        log "MANUAL-RESOLVE-NEEDED ($COMMIT_MSG): $CONFLICTS"
-        echo "=== CONFLICT on non-archive commit ==="
-        echo "Commit: $COMMIT_MSG"
-        echo "Conflicted files:"
-        echo "$CONFLICTS"
-        echo ""
-        echo "Resolve manually, then run: git rebase --continue"
-        exit 1
+        # Non-archive conflict — one owned stale-target retry, else handoff.
+        # handle_manual_conflict exits 1 on handoff; returns 0 after starting a retry.
+        handle_manual_conflict "$COMMIT_MSG" "$CONFLICTS"
+        continue
     fi
 
     # Continue rebase
@@ -521,8 +602,11 @@ if [ "$STASHED" = true ] && [ -n "$OWNED_STASH_OID" ]; then
 fi
 
 if ! verify_no_tracked_conflict_markers; then
+    vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "conflict-markers-remain"
     exit 1
 fi
 
-log "OK pull completed"
+# Pull helper does not push; close the owned journal after successful convergence.
+vault_sync_op_close_complete "$WIKI_DIR" "$OP_ID"
+log "OK pull completed op=$OP_ID"
 exit 0

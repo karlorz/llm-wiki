@@ -1,5 +1,12 @@
 #!/bin/bash
 # Regression tests for packages/vault-sync/scripts/wiki-pull-with-auto-resolve.sh.
+#
+# Test-only env hooks honored by the helper (unset in production):
+#   VAULT_SYNC_TEST_ON_CONFLICT_HOOK  — eval'd after conflict_identity record,
+#                                       before may_retry / fetch, so fixtures can
+#                                       advance the remote or mutate the worktree.
+#   VAULT_SYNC_TEST_EXIT_AFTER_STASH  — when set to 1, helper exits 99 after
+#                                       recording an owned stash (crash simulation).
 
 set -u
 
@@ -50,6 +57,16 @@ add_remote_commit() {
   printf '%s\n' "$content" > "$remote_work/$file"
   git_commit "$remote_work" "$msg"
   git -C "$remote_work" push origin main >/dev/null
+}
+
+journal_dir() {
+  local vault="$1"
+  local jdir
+  jdir="$(git -C "$vault" rev-parse --git-path vault-sync/operations)"
+  case "$jdir" in
+    /*) printf '%s\n' "$jdir" ;;
+    *) printf '%s\n' "$vault/$jdir" ;;
+  esac
 }
 
 test_dirty_tree_pull_restores_edit() {
@@ -787,6 +804,287 @@ test_untracked_dirty_is_preserved_when_in_scope() {
   rm -rf "$root"
 }
 
+# --- Task 3: frozen OID, one owned retry, handoff immunity ---
+
+test_stale_target_retries_once_when_remote_advances() {
+  # Local exclusive edit conflicts with remote A; while stopped, remote advances
+  # to B whose tip materializes local-only content so retry converges.
+  local root home vault jdir complete_count pull_log
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+
+  printf 'local-only\n' > "$vault/note.md"
+  git_commit "$vault" "local note"
+
+  local rw="$root/remote-a"
+  git clone --branch main "$root/origin.git" "$rw" >/dev/null
+  printf 'remote-a\n' > "$rw/note.md"
+  git_commit "$rw" "remote a"
+  git -C "$rw" push origin main >/dev/null
+
+  # Advance origin to a tip that fully materializes the local commit (same tree
+  # content for note.md) so materialization drop + rebase succeeds on retry.
+  export VAULT_SYNC_TEST_ON_CONFLICT_HOOK="
+    rw2='$root/remote-b'
+    git clone --branch main '$root/origin.git' \"\$rw2\" >/dev/null 2>&1
+    printf 'local-only\n' > \"\$rw2/note.md\"
+    git -C \"\$rw2\" add note.md
+    git -C \"\$rw2\" -c user.name=t -c user.email=t@t commit -m 'Snapshot B materializes local' >/dev/null
+    git -C \"\$rw2\" push origin main >/dev/null
+  "
+
+  HOME="$home" WIKI_DIR="$vault" \
+    VAULT_SYNC_TEST_ON_CONFLICT_HOOK="$VAULT_SYNC_TEST_ON_CONFLICT_HOOK" \
+    "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+  unset VAULT_SYNC_TEST_ON_CONFLICT_HOOK
+
+  assert_eq "stale target retry converges" "$rc" "0"
+  assert_eq "not behind after retry" "$(git -C "$vault" rev-list --count HEAD..origin/main)" "0"
+
+  jdir="$(journal_dir "$vault")"
+  complete_count="$(grep -l 'phase=complete' "$jdir"/*.env 2>/dev/null | wc -l | tr -d ' ')"
+  assert_eq "has complete journal" "$complete_count" "1"
+
+  pull_log="$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)"
+  assert_eq "pull log records RETRY" \
+    "$( [ -n "$pull_log" ] && grep -c 'RETRY stale target' "$pull_log" | tr -d ' ' || echo 0 )" \
+    "1"
+
+  rm -rf "$root"
+}
+
+test_second_stale_advance_marks_review_required() {
+  # Hook advances remote on every conflict. First conflict may retry once;
+  # second conflict after retry_count=1 must handoff with review-required.
+  local root home vault jdir review_count handoff_count
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+
+  printf 'local-only\n' > "$vault/note.md"
+  git_commit "$vault" "local note"
+
+  local rw="$root/remote-a2"
+  git clone --branch main "$root/origin.git" "$rw" >/dev/null
+  printf 'remote-a\n' > "$rw/note.md"
+  git_commit "$rw" "remote a still conflicts"
+  git -C "$rw" push origin main >/dev/null
+
+  # On every conflict, push a new tip that still conflicts with local-only.
+  # Counter file ensures distinct commit messages/OIDs.
+  export VAULT_SYNC_TEST_ON_CONFLICT_HOOK="
+    n=\$(( \$(cat '$root/advance-count' 2>/dev/null || echo 0) + 1 ))
+    echo \"\$n\" > '$root/advance-count'
+    rw2='$root/remote-advance-'\$n
+    git clone --branch main '$root/origin.git' \"\$rw2\" >/dev/null 2>&1
+    printf 'remote-advance-%s\n' \"\$n\" > \"\$rw2/note.md\"
+    git -C \"\$rw2\" add note.md
+    git -C \"\$rw2\" -c user.name=t -c user.email=t@t commit -m \"remote advance \$n\" >/dev/null
+    git -C \"\$rw2\" push origin main >/dev/null
+  "
+
+  HOME="$home" WIKI_DIR="$vault" \
+    VAULT_SYNC_TEST_ON_CONFLICT_HOOK="$VAULT_SYNC_TEST_ON_CONFLICT_HOOK" \
+    "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+  unset VAULT_SYNC_TEST_ON_CONFLICT_HOOK
+
+  assert_eq "second advance fails closed" "$rc" "1"
+  assert_eq "rebase still active after handoff" \
+    "$(test -d "$vault/.git/rebase-merge" && echo present || echo absent)" "present"
+
+  jdir="$(journal_dir "$vault")"
+  review_count="$(grep -l 'phase=review-required' "$jdir"/*.env 2>/dev/null | wc -l | tr -d ' ')"
+  handoff_count="$(grep -l 'handoff=1' "$jdir"/*.env 2>/dev/null | wc -l | tr -d ' ')"
+  assert_eq "review-required journal" "$review_count" "1"
+  assert_eq "handoff=1 journal" "$handoff_count" "1"
+
+  # Only one RETRY (second conflict must not retry again)
+  local pull_log
+  pull_log="$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)"
+  assert_eq "exactly one RETRY attempt" \
+    "$( [ -n "$pull_log" ] && grep -c 'RETRY stale target' "$pull_log" | tr -d ' ' || echo 0 )" \
+    "1"
+
+  git -C "$vault" rebase --abort >/dev/null 2>&1 || true
+  rm -rf "$root"
+}
+
+test_human_mutation_blocks_retry() {
+  # Hook mutates a conflicted file after identity capture so may_retry fails
+  # even if remote also advanced.
+  local root home vault jdir
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+
+  printf 'local-only\n' > "$vault/note.md"
+  git_commit "$vault" "local note"
+
+  local rw="$root/remote-hm"
+  git clone --branch main "$root/origin.git" "$rw" >/dev/null
+  printf 'remote-a\n' > "$rw/note.md"
+  git_commit "$rw" "remote a"
+  git -C "$rw" push origin main >/dev/null
+
+  export VAULT_SYNC_TEST_ON_CONFLICT_HOOK="
+    # Human-like mutation of conflicted worktree after identity capture
+    printf 'human-edited-conflict\n' > '$vault/note.md'
+    # Also advance remote so the only reason may_retry fails is identity change
+    rw2='$root/remote-hm-b'
+    git clone --branch main '$root/origin.git' \"\$rw2\" >/dev/null 2>&1
+    printf 'remote-b\n' > \"\$rw2/note.md\"
+    git -C \"\$rw2\" add note.md
+    git -C \"\$rw2\" -c user.name=t -c user.email=t@t commit -m 'remote b' >/dev/null
+    git -C \"\$rw2\" push origin main >/dev/null
+  "
+
+  HOME="$home" WIKI_DIR="$vault" \
+    VAULT_SYNC_TEST_ON_CONFLICT_HOOK="$VAULT_SYNC_TEST_ON_CONFLICT_HOOK" \
+    "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+  unset VAULT_SYNC_TEST_ON_CONFLICT_HOOK
+
+  assert_eq "human mutation blocks retry (exit 1)" "$rc" "1"
+  jdir="$(journal_dir "$vault")"
+  assert_eq "review-required after human mutation" \
+    "$(grep -l 'phase=review-required' "$jdir"/*.env 2>/dev/null | wc -l | tr -d ' ')" "1"
+  assert_eq "no RETRY after human mutation" \
+    "$(grep -c 'RETRY stale target' "$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)" 2>/dev/null | tr -d ' ' || echo 0)" \
+    "0"
+
+  git -C "$vault" rebase --abort >/dev/null 2>&1 || true
+  rm -rf "$root"
+}
+
+test_later_run_refuses_handoff_rebase() {
+  # Create active rebase + journal handoff=1; second pull must exit 1 without aborting.
+  local root home vault jdir op_id orig_head target_oid rebase_head_before
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+
+  printf 'base\n' > "$vault/conflict.md"
+  git_commit "$vault" "add conflict base"
+  git -C "$vault" push origin main >/dev/null
+
+  local remote_work="$root/remote-handoff"
+  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
+  printf 'base\nremote line\n' > "$remote_work/conflict.md"
+  git_commit "$remote_work" "remote conflict edit"
+  git -C "$remote_work" push origin main >/dev/null
+
+  printf 'base\nlocal line\n' > "$vault/conflict.md"
+  git_commit "$vault" "local conflict edit"
+
+  git -C "$vault" fetch origin >/dev/null 2>&1
+  git -C "$vault" rebase origin/main >/dev/null 2>&1 || true
+
+  rebase_head_before="$(git -C "$vault" rev-parse REBASE_HEAD 2>/dev/null || echo none)"
+  assert_eq "precondition active rebase" "$( [ "$rebase_head_before" != "none" ] && echo yes || echo no )" "yes"
+
+  # Seed a handoff journal matching this foreign/active sequencer.
+  # shellcheck source=/dev/null
+  . "$(cd "$(dirname "$SCRIPT_UNDER_TEST")" && pwd)/lib/git-operation-journal.sh"
+  op_id="pull-handoff-fixture"
+  orig_head="$(tr -d '[:space:]' < "$vault/.git/rebase-merge/orig-head" 2>/dev/null || git -C "$vault" rev-parse HEAD)"
+  target_oid="$(tr -d '[:space:]' < "$vault/.git/rebase-merge/onto" 2>/dev/null || git -C "$vault" rev-parse origin/main)"
+  vault_sync_op_begin "$vault" "$op_id" "main" "$orig_head" "$target_oid" "lock:fixture" "test" "x" || true
+  vault_sync_op_mark_review_required "$vault" "$op_id" "seeded-handoff"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  assert_eq "later run refuses handoff rebase" "$rc" "1"
+  assert_eq "REBASE_HEAD unchanged under handoff" \
+    "$(git -C "$vault" rev-parse REBASE_HEAD 2>/dev/null || echo none)" \
+    "$rebase_head_before"
+  assert_eq "rebase-merge still present under handoff" \
+    "$(test -d "$vault/.git/rebase-merge" && echo present || echo absent)" "present"
+
+  local pull_log
+  pull_log="$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)"
+  assert_eq "log notes handoff journal present" \
+    "$( [ -n "$pull_log" ] && grep -c 'handoff journal present' "$pull_log" | tr -d ' ' || echo 0 )" \
+    "1"
+
+  git -C "$vault" rebase --abort >/dev/null 2>&1 || true
+  rm -rf "$root"
+}
+
+test_kill_after_stash_retains_journal_and_stash() {
+  local root home vault jdir stash_oid journal_stash
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+
+  add_remote_commit "$root" "remote.md" "remote" "remote-kill"
+  printf 'local dirty\n' > "$vault/note.md"
+
+  HOME="$home" WIKI_DIR="$vault" VAULT_SYNC_TEST_EXIT_AFTER_STASH=1 \
+    "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  assert_eq "test exit after stash is 99" "$rc" "99"
+
+  jdir="$(journal_dir "$vault")"
+  assert_eq "journal file retained after kill" \
+    "$(ls "$jdir"/*.env 2>/dev/null | wc -l | tr -d ' ')" "1"
+
+  journal_stash="$(awk -F= '$1=="owned_stash_oid"{print substr($0,index($0,"=")+1)}' "$jdir"/*.env)"
+  assert_eq "journal records owned stash oid" "$( [ -n "$journal_stash" ] && echo yes || echo no )" "yes"
+  assert_eq "owned stash still in stash list" \
+    "$(git -C "$vault" stash list --format='%H' | grep -c "$journal_stash" | tr -d ' ')" "1"
+  assert_eq "phase not complete after kill" \
+    "$(grep -c 'phase=complete' "$jdir"/*.env | tr -d ' ')" "0"
+
+  rm -rf "$root"
+}
+
+test_rerere_not_autoupdated() {
+  # Enable rerere in fixture; helper must not set rerere.autoupdate true and
+  # must not silently git-add from rr-cache alone on non-archive conflicts.
+  local root home vault
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+
+  git -C "$vault" config rerere.enabled true
+  git -C "$vault" config rerere.autoupdate false
+
+  printf 'local-only\n' > "$vault/note.md"
+  git_commit "$vault" "local note"
+
+  local rw="$root/remote-rerere"
+  git clone --branch main "$root/origin.git" "$rw" >/dev/null
+  printf 'remote-a\n' > "$rw/note.md"
+  git_commit "$rw" "remote a"
+  git -C "$rw" push origin main >/dev/null
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  assert_eq "non-archive conflict still surfaces (no silent rr-cache resolve)" "$rc" "1"
+  assert_eq "rerere.autoupdate remains false" \
+    "$(git -C "$vault" config --get rerere.autoupdate)" "false"
+  assert_eq "helper script has no force-push flags" \
+    "$(grep -Ec '(--force-with-lease|[[:space:]]--force([[:space:]]|$))' "$SCRIPT_UNDER_TEST" || true)" "0"
+  # Helper source must not enable autoupdate
+  assert_eq "helper does not set rerere.autoupdate true" \
+    "$(grep -c 'rerere.autoupdate' "$SCRIPT_UNDER_TEST" || true)" "0"
+
+  git -C "$vault" rebase --abort >/dev/null 2>&1 || true
+  rm -rf "$root"
+}
+
+test_force_push_absent_from_pull_helper() {
+  # Match actual CLI force flags, not prose that says "force-push".
+  assert_eq "no push --force in pull helper" \
+    "$(grep -Ec '(--force-with-lease|[[:space:]]--force([[:space:]]|$))' "$SCRIPT_UNDER_TEST" || true)" "0"
+}
+
 test_dirty_tree_pull_restores_edit
 test_stale_rebase_state_is_cleaned_before_pull
 test_stale_sequencer_preserves_advanced_tip
@@ -805,6 +1103,13 @@ test_aa_log_only_conflict_is_union_resolved
 test_aa_log_mixed_with_plan_still_manual
 test_intervening_stash_does_not_steal_restore
 test_untracked_dirty_is_preserved_when_in_scope
+test_stale_target_retries_once_when_remote_advances
+test_second_stale_advance_marks_review_required
+test_human_mutation_blocks_retry
+test_later_run_refuses_handoff_rebase
+test_kill_after_stash_retains_journal_and_stash
+test_rerere_not_autoupdated
+test_force_push_absent_from_pull_helper
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

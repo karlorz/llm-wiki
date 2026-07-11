@@ -132,6 +132,7 @@ vault_sync_op_record_inventory() {
 vault_sync_op_fingerprint_repo_state() {
   local repo="$1"
   local git_dir rebase_dir onto orig stopped head_name rebase_head index_tree porcelain
+  local unmerged_paths unmerged_content path blob
 
   git_dir="$(git -C "$repo" rev-parse --git-dir)" || return 1
   case "$git_dir" in
@@ -164,8 +165,29 @@ vault_sync_op_fingerprint_repo_state() {
   rebase_head="$(git -C "$repo" rev-parse -q --verify REBASE_HEAD 2>/dev/null || true)"
   index_tree="$(git -C "$repo" write-tree 2>/dev/null || echo none)"
   porcelain="$(git -C "$repo" status --porcelain=v1 --untracked-files=all 2>/dev/null | shasum -a 256 | awk '{print $1}')"
-  printf 'onto=%s;orig=%s;stopped=%s;head_name=%s;rebase_head=%s;index_tree=%s;porcelain=%s\n' \
-    "$onto" "$orig" "$stopped" "$head_name" "$rebase_head" "$index_tree" "$porcelain"
+
+  # Include worktree content of unmerged paths so human edits to conflicted
+  # files change the fingerprint (porcelain alone does not hash file bodies).
+  unmerged_paths="$(git -C "$repo" diff --name-only --diff-filter=U 2>/dev/null || true)"
+  unmerged_content=""
+  if [ -n "$unmerged_paths" ]; then
+    while IFS= read -r path; do
+      [ -n "$path" ] || continue
+      if [ -f "$repo/$path" ]; then
+        # hash-object needs a filesystem path; -C does not re-root relative paths.
+        blob="$(git -C "$repo" hash-object -- "$repo/$path" 2>/dev/null || echo missing)"
+      else
+        blob="missing"
+      fi
+      unmerged_content="${unmerged_content}${path}=${blob};"
+    done <<EOF
+$unmerged_paths
+EOF
+  fi
+  unmerged_content="$(printf '%s' "$unmerged_content" | shasum -a 256 | awk '{print $1}')"
+
+  printf 'onto=%s;orig=%s;stopped=%s;head_name=%s;rebase_head=%s;index_tree=%s;porcelain=%s;unmerged=%s\n' \
+    "$onto" "$orig" "$stopped" "$head_name" "$rebase_head" "$index_tree" "$porcelain" "$unmerged_content"
 }
 
 vault_sync_op_record_conflict_identity() {
