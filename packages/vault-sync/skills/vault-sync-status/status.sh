@@ -15,10 +15,19 @@ source "$PLATFORM_LIB"
 
 CONFLICT_MARKERS_LIB="$VAULT_SYNC_ROOT/scripts/lib/conflict-markers.sh"
 if [ ! -f "$CONFLICT_MARKERS_LIB" ]; then
-  fatal "missing conflict-markers helper: $CONFLICT_MARKERS_LIB"
+  echo "FATAL: missing conflict-markers helper: $CONFLICT_MARKERS_LIB" >&2
+  exit 1
 fi
 # shellcheck source=/dev/null
 source "$CONFLICT_MARKERS_LIB"
+
+RUNTIME_MANIFEST_LIB="$VAULT_SYNC_ROOT/scripts/lib/runtime-manifest.sh"
+if [ ! -f "$RUNTIME_MANIFEST_LIB" ]; then
+  echo "FATAL: missing runtime-manifest helper: $RUNTIME_MANIFEST_LIB" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$RUNTIME_MANIFEST_LIB"
 
 lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
@@ -56,6 +65,20 @@ add_check() {
   CHECK_DETAIL+=("$4")
 }
 
+lookup_check_status() {
+  local want="$1"
+  local idx=0
+  local total="${#CHECK_IDS[@]}"
+  while [ "$idx" -lt "$total" ]; do
+    if [ "${CHECK_IDS[$idx]}" = "$want" ]; then
+      printf '%s\n' "${CHECK_STATUS[$idx]}"
+      return 0
+    fi
+    idx=$((idx + 1))
+  done
+  printf 'missing\n'
+}
+
 config_value() {
   local key="$1"
   local file="$HOME/.skillwiki/.env"
@@ -63,6 +86,39 @@ config_value() {
     return 1
   fi
   awk -F= -v k="$key" '$1==k {print substr($0, index($0,"=")+1); exit}' "$file"
+}
+
+# Resolve vault path once. Priority: VS_VAULT_PATH, WIKI_PATH, skillwiki, $HOME/wiki.
+# Always returns an absolute path when possible.
+resolve_vault_path() {
+  local candidate=""
+  if [ -n "${VS_VAULT_PATH:-}" ]; then
+    candidate="$VS_VAULT_PATH"
+  elif [ -n "${WIKI_PATH:-}" ]; then
+    candidate="$WIKI_PATH"
+  elif command -v skillwiki >/dev/null 2>&1; then
+    candidate="$(skillwiki --human path 2>/dev/null | sed 's/ (via.*//' | head -1 || true)"
+    candidate="$(printf '%s' "$candidate" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+    # skillwiki may print error text when no vault is configured — ignore non-paths.
+    case "$candidate" in
+      /*) ;;
+      *) candidate="" ;;
+    esac
+  fi
+  if [ -z "$candidate" ]; then
+    candidate="${HOME}/wiki"
+  fi
+  case "$candidate" in
+    /*) printf '%s\n' "$candidate" ;;
+    *)
+      if [ -d "$candidate" ]; then
+        (cd "$candidate" 2>/dev/null && pwd) || printf '%s\n' "$candidate"
+      else
+        # Relative path that does not exist yet — make absolute via $PWD.
+        printf '%s/%s\n' "$(pwd -P 2>/dev/null || pwd)" "$candidate" | sed 's#//#/#g'
+      fi
+      ;;
+  esac
 }
 
 assert_read_only_allows_no_state_changes() {
@@ -163,6 +219,154 @@ check_installed_script_drift() {
   fi
 }
 
+# Compare runtime-manifest file hashes to package sources under VAULT_SYNC_ROOT.
+# Sets RUNTIME_MATCH_STATUS / RUNTIME_MATCH_DETAIL for later registration check.
+RUNTIME_MATCH_STATUS="warn"
+RUNTIME_MATCH_DETAIL=""
+
+check_runtime_proof() {
+  local share_dir manifest_path live_marker
+  share_dir="$(platform_share_dir)"
+  manifest_path="$share_dir/runtime-manifest.json"
+  live_marker="$share_dir/live-verify.ok"
+
+  # vault_sync_runtime_manifest — present + parseable
+  if [ ! -f "$manifest_path" ]; then
+    add_check "vault_sync_runtime_manifest" "Vault sync runtime manifest" "warn" "Missing runtime manifest: $manifest_path"
+    RUNTIME_MATCH_STATUS="warn"
+    RUNTIME_MATCH_DETAIL="runtime manifest missing"
+    add_check "vault_sync_runtime_match" "Vault sync runtime hash match" "warn" "$RUNTIME_MATCH_DETAIL"
+  else
+    local compared mismatches detail_bits
+    compared=0
+    mismatches=0
+    detail_bits=""
+
+    if ! command -v python3 >/dev/null 2>&1; then
+      add_check "vault_sync_runtime_manifest" "Vault sync runtime manifest" "warn" "python3 required to parse $manifest_path"
+      RUNTIME_MATCH_STATUS="warn"
+      RUNTIME_MATCH_DETAIL="cannot parse runtime manifest without python3"
+      add_check "vault_sync_runtime_match" "Vault sync runtime hash match" "warn" "$RUNTIME_MATCH_DETAIL"
+    else
+      # Parse + compare in one python pass for reliability.
+      local py_out
+      py_out="$(
+        MANIFEST_PATH="$manifest_path" VAULT_SYNC_ROOT="$VAULT_SYNC_ROOT" python3 <<'PY'
+import hashlib
+import json
+import os
+import sys
+
+manifest_path = os.environ["MANIFEST_PATH"]
+root = os.environ["VAULT_SYNC_ROOT"]
+
+def sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def package_source(rel: str) -> str:
+    if rel.startswith("bin/lib/"):
+        return os.path.join(root, "scripts", "lib", rel[len("bin/lib/"):])
+    if rel == "bin/wiki-sync.sh":
+        return os.path.join(root, "skills", "vault-presync", "wiki-sync.sh")
+    if rel.startswith("bin/"):
+        return os.path.join(root, "scripts", rel[len("bin/"):])
+    return ""
+
+try:
+    with open(manifest_path, encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception as exc:  # noqa: BLE001 — surface parse errors to shell
+    print(f"PARSE_ERROR\t{exc}")
+    sys.exit(0)
+
+if not isinstance(data, dict):
+    print("PARSE_ERROR\tmanifest root is not an object")
+    sys.exit(0)
+
+files = data.get("files")
+if not isinstance(files, dict):
+    print("PARSE_ERROR\tfiles map missing or invalid")
+    sys.exit(0)
+
+print("PARSE_OK")
+compared = 0
+mismatches = []
+skipped = 0
+for rel, expected in sorted(files.items()):
+    src = package_source(rel)
+    if not src or not os.path.isfile(src):
+        skipped += 1
+        continue
+    compared += 1
+    actual = sha256(src)
+    if actual != expected:
+        mismatches.append(f"{rel}: expected {expected[:12]}… got {actual[:12]}…")
+
+print(f"COMPARED\t{compared}")
+print(f"SKIPPED\t{skipped}")
+print(f"MISMATCH\t{len(mismatches)}")
+for m in mismatches[:5]:
+    print(f"DETAIL\t{m}")
+PY
+      )" || true
+
+      if printf '%s\n' "$py_out" | grep -q '^PARSE_ERROR'; then
+        local parse_err
+        parse_err="$(printf '%s\n' "$py_out" | sed -n 's/^PARSE_ERROR\t//p' | head -1)"
+        add_check "vault_sync_runtime_manifest" "Vault sync runtime manifest" "error" "Unparseable runtime manifest: ${parse_err:-$manifest_path}"
+        RUNTIME_MATCH_STATUS="error"
+        RUNTIME_MATCH_DETAIL="runtime manifest unparseable"
+        add_check "vault_sync_runtime_match" "Vault sync runtime hash match" "error" "$RUNTIME_MATCH_DETAIL"
+      else
+        add_check "vault_sync_runtime_manifest" "Vault sync runtime manifest" "pass" "Present and parseable: $manifest_path"
+        compared="$(printf '%s\n' "$py_out" | sed -n 's/^COMPARED\t//p' | head -1)"
+        mismatches="$(printf '%s\n' "$py_out" | sed -n 's/^MISMATCH\t//p' | head -1)"
+        compared="${compared:-0}"
+        mismatches="${mismatches:-0}"
+        if [ "$compared" -eq 0 ]; then
+          RUNTIME_MATCH_STATUS="warn"
+          RUNTIME_MATCH_DETAIL="runtime manifest has no comparable package-source file hashes"
+          add_check "vault_sync_runtime_match" "Vault sync runtime hash match" "warn" "$RUNTIME_MATCH_DETAIL"
+        elif [ "$mismatches" -gt 0 ]; then
+          detail_bits="$(printf '%s\n' "$py_out" | sed -n 's/^DETAIL\t//p' | paste -sd '; ' -)"
+          RUNTIME_MATCH_STATUS="warn"
+          RUNTIME_MATCH_DETAIL="${mismatches} hash mismatch(es) vs package sources: ${detail_bits}"
+          add_check "vault_sync_runtime_match" "Vault sync runtime hash match" "warn" "$RUNTIME_MATCH_DETAIL"
+        else
+          RUNTIME_MATCH_STATUS="pass"
+          RUNTIME_MATCH_DETAIL="${compared} package-source file hash(es) match runtime manifest"
+          add_check "vault_sync_runtime_match" "Vault sync runtime hash match" "pass" "$RUNTIME_MATCH_DETAIL"
+        fi
+      fi
+    fi
+  fi
+
+  # vault_sync_runtime_registration — warn if jobs enabled but runtime mismatch
+  local jobs_status
+  jobs_status="$(lookup_check_status "vault_sync_jobs_enabled")"
+  if [ "$jobs_status" = "pass" ] && [ "$RUNTIME_MATCH_STATUS" != "pass" ]; then
+    add_check "vault_sync_runtime_registration" "Vault sync runtime registration proof" "warn" \
+      "Jobs enabled but runtime hashes do not match package sources ($RUNTIME_MATCH_DETAIL)"
+  elif [ "$RUNTIME_MATCH_STATUS" = "pass" ]; then
+    add_check "vault_sync_runtime_registration" "Vault sync runtime registration proof" "pass" \
+      "Runtime hashes match package sources"
+  else
+    add_check "vault_sync_runtime_registration" "Vault sync runtime registration proof" "warn" \
+      "Runtime proof incomplete ($RUNTIME_MATCH_DETAIL); jobs_enabled=$jobs_status"
+  fi
+
+  # vault_sync_live_verify — pending warn until attended marker exists
+  if [ -f "$live_marker" ]; then
+    add_check "vault_sync_live_verify" "Vault sync live verify" "pass" "Live-verify marker present: $live_marker"
+  else
+    add_check "vault_sync_live_verify" "Vault sync live verify" "warn" "Pending live verify (marker missing: $live_marker)"
+  fi
+}
+
 restart_jobs() {
   assert_read_only_allows_no_state_changes "restart-jobs" || return $?
 
@@ -216,6 +420,8 @@ Environment overrides:
   VS_READ_ONLY=1|0
   VS_JSON=1|0
   VS_RESTART_JOBS=1|0
+  VS_VAULT_PATH=<path>
+  WIKI_PATH=<path>
 USAGE
 }
 
@@ -249,6 +455,17 @@ platform_detect_os
 SHARE_BIN="$(platform_share_dir)/bin"
 LOG_DIR="$(platform_log_dir)"
 FILTER_PATH="$(platform_rclone_config_dir)/wiki-push-filters.txt"
+
+# Resolve vault once; all vault git/conflict checks use this absolute path.
+VAULT_PATH="$(resolve_vault_path)"
+case "$VAULT_PATH" in
+  /*) ;;
+  *)
+    if [ -d "$VAULT_PATH" ]; then
+      VAULT_PATH="$(cd "$VAULT_PATH" 2>/dev/null && pwd || printf '%s' "$VAULT_PATH")"
+    fi
+    ;;
+esac
 
 ROLE="${VS_ROLE:-}"
 if role_val=$(config_value "vault_sync.role"); then
@@ -474,15 +691,18 @@ else
   fi
 fi
 
+# Check 5b: runtime proof (manifest + package-source hashes + registration + live verify)
+check_runtime_proof
+
 # Check: store/host reachability (read-only; short timeouts)
-REACH_VAULT="${WIKI_PATH:-$HOME/wiki}"
+# Always use absolute VAULT_PATH with git -C — never depend on process cwd.
 github_reach="unknown"
 github_detail="WIKI_PATH not set or vault missing"
-if [ -d "$REACH_VAULT/.git" ]; then
-  if timeout 3 git -C "$REACH_VAULT" ls-remote origin refs/heads/main >/dev/null 2>&1; then
+if [ -d "$VAULT_PATH/.git" ]; then
+  if timeout 3 git -C "$VAULT_PATH" ls-remote origin refs/heads/main >/dev/null 2>&1; then
     github_reach="ok"
     github_detail="git ls-remote origin main succeeded"
-  elif timeout 3 git -C "$REACH_VAULT" remote get-url origin >/dev/null 2>&1; then
+  elif timeout 3 git -C "$VAULT_PATH" remote get-url origin >/dev/null 2>&1; then
     github_reach="unreachable"
     github_detail="GitHub ls-remote failed — local vault may still be usable"
   else
@@ -533,18 +753,18 @@ add_check "reachability_snapshotter" "Snapshotter reachability" \
 
 local_git_status="pass"
 local_git_detail="local vault state unknown"
-if [ ! -d "$REACH_VAULT" ]; then
+if [ ! -d "$VAULT_PATH" ]; then
   local_git_status="warn"
-  local_git_detail="Vault directory missing: $REACH_VAULT"
-elif [ ! -d "$REACH_VAULT/.git" ]; then
+  local_git_detail="Vault directory missing: $VAULT_PATH"
+elif [ ! -d "$VAULT_PATH/.git" ]; then
   local_git_status="warn"
   local_git_detail="Not a git repository"
 else
   dirty_n=0
   ahead_n=0
   behind_n=0
-  dirty_n=$(git -C "$REACH_VAULT" status --porcelain 2>/dev/null | grep -c . || true)
-  if ab=$(git -C "$REACH_VAULT" rev-list --left-right --count origin/HEAD...HEAD 2>/dev/null); then
+  dirty_n=$(git -C "$VAULT_PATH" status --porcelain 2>/dev/null | grep -c . || true)
+  if ab=$(git -C "$VAULT_PATH" rev-list --left-right --count origin/HEAD...HEAD 2>/dev/null); then
     behind_n=$(printf '%s' "$ab" | awk '{print $1}')
     ahead_n=$(printf '%s' "$ab" | awk '{print $2}')
   fi
@@ -560,19 +780,18 @@ else
 fi
 add_check "reachability_local_vault" "Local vault git state" "$local_git_status" "$local_git_detail"
 
-# Check: vault conflict markers (all roles)
-CONFLICT_VAULT="${WIKI_PATH:-$HOME/wiki}"
-if [ ! -d "$CONFLICT_VAULT" ]; then
-  add_check "vault_sync_conflict_markers" "Vault conflict markers" "warn" "Vault directory missing: $CONFLICT_VAULT"
+# Check: vault conflict markers (all roles) — use absolute VAULT_PATH only
+if [ ! -d "$VAULT_PATH" ]; then
+  add_check "vault_sync_conflict_markers" "Vault conflict markers" "warn" "Vault directory missing: $VAULT_PATH"
 else
   conflict_tmp="$(mktemp)"
-  if vault_sync_scan_conflict_markers "$CONFLICT_VAULT" "$conflict_tmp"; then
+  if vault_sync_scan_conflict_markers "$VAULT_PATH" "$conflict_tmp"; then
     add_check "vault_sync_conflict_markers" "Vault conflict markers" "pass" "No complete conflict-marker blocks"
     rm -f "$conflict_tmp"
   else
     scan_rc=$?
     if [ "$scan_rc" -eq 2 ]; then
-      add_check "vault_sync_conflict_markers" "Vault conflict markers" "warn" "Scanner could not access vault: $CONFLICT_VAULT"
+      add_check "vault_sync_conflict_markers" "Vault conflict markers" "warn" "Scanner could not access vault: $VAULT_PATH"
       rm -f "$conflict_tmp"
     elif [ -s "$conflict_tmp" ]; then
       conflict_count="$(wc -l <"$conflict_tmp" | tr -d ' ')"
@@ -620,7 +839,7 @@ if [ "$JSON_OUT" -eq 1 ]; then
   printf '],"summary":{"pass":%d,"info":%d,"warn":%d,"error":%d},"humanHint":%s}\n' \
     "$pass_count" "$info_count" "$warn_count" "$error_count" "$(json_escape "vault-sync checks complete")"
 else
-  printf 'vault-sync status (os=%s read_only=%s)\n' "$VS_OS" "$READ_ONLY"
+  printf 'vault-sync status (os=%s read_only=%s vault=%s)\n' "$VS_OS" "$READ_ONLY" "$VAULT_PATH"
   printf '%-32s %-6s %s\n' "Check" "Status" "Detail"
   printf '%-32s %-6s %s\n' "-----" "------" "------"
   idx=0

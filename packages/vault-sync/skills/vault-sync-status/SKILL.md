@@ -1,12 +1,12 @@
 ---
 name: vault-sync-status
-description: Health snapshot of vault-sync — scheduler health, push/fetch recency, filter integrity, snapshot guard, and Linux fuse-refresh timer status. JSON + human output.
+description: Health snapshot of vault-sync — scheduler health, push/fetch recency, filter integrity, snapshot guard, runtime manifest proof, and Linux fuse-refresh timer status. JSON + human output.
 argument-hint: "[--read-only] [--json]"
 ---
 
 # vault-sync-status
 
-One-shot detailed health report of vault-sync on the current host. Reports scheduler state, role-specific log/filter/script checks, snapshot guard presence, and Linux fuse-refresh timer status.
+One-shot detailed health report of vault-sync on the current host. Reports scheduler state, role-specific log/filter/script checks, snapshot guard presence, runtime-manifest / live-verify proof, and Linux fuse-refresh timer status.
 
 ## When to use
 
@@ -14,33 +14,57 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
 - Debugging sync issues
 - CI read-only verification of production hosts (sg01)
 - Before and after migration
+- Proving installed runtime hashes match package sources after rollout
 
 ## Steps
 
-1. **Run vault_sync_* doctor checks** directly (equivalent to `skillwiki doctor --only vault_sync` but available without skillwiki).
+1. **Resolve vault path once** (cwd-independent): `VS_VAULT_PATH` → `WIKI_PATH` → `skillwiki --human path` (absolute only) → `$HOME/wiki`. All git checks use `git -C "$VAULT_PATH"`.
+2. **Run vault_sync_* doctor checks** directly (equivalent to `skillwiki doctor --only vault_sync` but available without skillwiki).
    - Reports `vault_sync_conflict_markers` so poisoned Markdown is visible before
      push, pull, or snapshot workflows continue.
-2. **Read scheduler state**:
+3. **Read scheduler state**:
    - leaf/full hosts: wiki-push and wiki-fetch.
    - snapshotter hosts: wiki-snapshot.
-3. **Check terminal helper state** for the installed `wiki-sync.sh` and the
+4. **Check terminal helper state** for the installed `wiki-sync.sh` and the
    convenience `~/bin/wiki-sync.sh` symlink. Warn only; do not repair in status
    mode.
-4. **Role-specific checks**:
+5. **Role-specific checks**:
    - leaf/full hosts: tail last 20 lines of `wiki-push.log` and `wiki-fetch.log`; check `wiki-push-filters.txt`.
    - snapshotter hosts: skip leaf push/fetch/filter checks as not applicable; verify the configured `vault_sync.snapshot_script` or packaged `wiki-snapshot.sh` contains `--max-delete`.
-5. **Output**:
+6. **Runtime proof checks** (read-only; never write markers):
+   - `vault_sync_runtime_manifest` — `$(platform_share_dir)/runtime-manifest.json` present and parseable.
+   - `vault_sync_runtime_match` — SHA-256 of installed package-source scripts match the manifest and package sources under the vault-sync package root.
+   - `vault_sync_runtime_registration` — warn when scheduler jobs are enabled but runtime match is not pass.
+   - `vault_sync_live_verify` — pass only when `$(platform_share_dir)/live-verify.ok` exists; otherwise warn. Status **never** creates this marker.
+7. **Output**:
    - Default: human-readable two-column table.
    - `--json`: machine-readable record matching the doctor JSON shape.
-6. **`--read-only` flag**: explicitly forbid any state-changing call. Used by sg01 e2e leg. The skill MUST honor this — no `touch`, no `launchctl print` (which on some platforms can spawn helpers), no service restart.
+8. **`--read-only` flag**: explicitly forbid any state-changing call. Used by sg01 e2e leg. The skill MUST honor this — no `touch`, no `launchctl print` (which on some platforms can spawn helpers), no service restart.
+
+## Runtime proof and live verification
+
+After install, operators should see:
+
+| Check | Pass means |
+|-------|------------|
+| `vault_sync_runtime_manifest` | Install wrote a parseable inventory at `$(platform_share_dir)/runtime-manifest.json` |
+| `vault_sync_runtime_match` | Installed script hashes match package sources (not just "files exist") |
+| `vault_sync_live_verify` | Attended rollout touched `$(platform_share_dir)/live-verify.ok` after a live pull cycle showed `op=` journal lines |
+
+Exact live-verify path:
+
+- macOS: `~/Library/Application Support/vault-sync/live-verify.ok`
+- Linux: `~/.local/share/vault-sync/live-verify.ok`
+
+**Completion gate:** repository tests green ≠ work complete. Do not set the vault work item `status: completed` until live evidence (runtime match + pull log `op=` lines + `live-verify.ok`) is recorded in the work retro. See vault-sync-install attended verification checklist.
 
 ## Read-only contract
 
 When `--read-only` is passed:
-- No files are written.
+- No files are written (including never writing `live-verify.ok`).
 - No services are restarted.
 - No `launchctl` or `systemctl` commands that modify state.
-- Only read operations: file existence checks, log tailing, config reads.
+- Only read operations: file existence checks, log tailing, config reads, hash comparison.
 
 This is the **safety lifeline for sg01**. Test ruthlessly.
 

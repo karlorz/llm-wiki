@@ -6,6 +6,7 @@ VAULT_SYNC_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 PLATFORM_LIB="$VAULT_SYNC_ROOT/scripts/lib/platform.sh"
 FLEET_LIB="$VAULT_SYNC_ROOT/scripts/lib/fleet.sh"
+RUNTIME_MANIFEST_LIB="$VAULT_SYNC_ROOT/scripts/lib/runtime-manifest.sh"
 
 if [ ! -f "$PLATFORM_LIB" ]; then
   echo "FATAL: missing platform helper: $PLATFORM_LIB" >&2
@@ -15,11 +16,17 @@ if [ ! -f "$FLEET_LIB" ]; then
   echo "FATAL: missing fleet helper: $FLEET_LIB" >&2
   exit 1
 fi
+if [ ! -f "$RUNTIME_MANIFEST_LIB" ]; then
+  echo "FATAL: missing runtime-manifest helper: $RUNTIME_MANIFEST_LIB" >&2
+  exit 1
+fi
 
 # shellcheck source=/dev/null
 source "$PLATFORM_LIB"
 # shellcheck source=/dev/null
 source "$FLEET_LIB"
+# shellcheck source=/dev/null
+source "$RUNTIME_MANIFEST_LIB"
 
 lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
@@ -163,22 +170,15 @@ set_vault_config() {
   set_env_key_raw "$key" "$value"
 }
 
-launchd_label_loaded() {
-  local label="$1"
-  launchctl print "gui/$UID/$label" >/dev/null 2>&1
+# --- launchd observed-state helpers (exit status only; never parse print fields) ---
+
+launchd_domain_ok() {
+  launchctl print "gui/$UID" >/dev/null 2>&1
 }
 
-launchd_wait_unloaded() {
-  local label="$1"
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    if ! launchd_label_loaded "$label"; then
-      return 0
-    fi
-    sleep 0.2
-  done
-  warn "launchd label $label still appears loaded after bootout; bootstrap may report an already-loaded or EIO error"
-  return 1
+launchd_label_present() {
+  # exit status only — do not parse formatted output
+  launchctl print "gui/$UID/$1" >/dev/null 2>&1
 }
 
 # Surface captured launchctl stderr with the install prefix so failures are attributable.
@@ -187,46 +187,210 @@ launchd_emit_bootstrap_err() {
   sed 's/^/[vault-sync-install] launchctl: /' "$capture" >&2
 }
 
+launchd_validate_candidate() {
+  local label="$1"
+  local plist="$2"
+  local prog
+
+  if command -v plutil >/dev/null 2>&1; then
+    if ! plutil -lint "$plist" >/dev/null 2>&1; then
+      warn "plutil -lint failed for $plist"
+      return 1
+    fi
+  fi
+
+  if ! grep -Fq "<string>$label</string>" "$plist" 2>/dev/null; then
+    warn "candidate plist missing Label $label"
+    return 1
+  fi
+
+  # ProgramArguments[0] — first <string> after ProgramArguments key
+  prog="$(
+    awk '
+      /<key>ProgramArguments<\/key>/ { want=1; next }
+      want && /<string>/ {
+        sub(/.*<string>/, "")
+        sub(/<\/string>.*/, "")
+        print
+        exit
+      }
+    ' "$plist"
+  )"
+  if [ -z "$prog" ]; then
+    warn "candidate plist missing ProgramArguments[0]"
+    return 1
+  fi
+  if [ ! -x "$prog" ] && [ ! -x "$(command -v "$prog" 2>/dev/null || true)" ]; then
+    # /bin/bash is normally present; warn-only if missing in hermetic tests
+    if [ ! -e "$prog" ]; then
+      warn "ProgramArguments[0] not found: $prog (continuing)"
+    fi
+  fi
+  return 0
+}
+
+# Observed-state launchd unit install:
+#   stage candidate → bootout (service target, then domain+plist) → atomic replace
+#   → enable → bootstrap (reconcile EIO when label present) → poll presence.
+# Rollback artifacts under $(platform_cache_dir)/install-rollback/ are retained on
+# both success and failure; later status/live-verify clears them (do not delete here).
 launchd_reload_unit() {
   local label="$1"
   local plist="$2"
+  local candidate="${3:-}"
   local domain="gui/$UID"
   local target="$domain/$label"
-  local attempt out rc
-  local unloaded=0
+  local rollback_dir old_basename
+  local deadline_s="${VS_LAUNCHD_UNLOAD_DEADLINE_S:-5}"
+  local present_poll_max="${VS_LAUNCHD_PRESENT_POLL_MAX:-25}"
+  local polled=0
+  local out rc
 
-  launchctl bootout "$target" >/dev/null 2>&1 || true
-  if launchd_wait_unloaded "$label"; then
-    unloaded=1
+  if ! launchd_domain_ok; then
+    warn "launchd gui domain missing for uid $UID"
+    return 1
   fi
 
+  if [ -n "$candidate" ]; then
+    if ! launchd_validate_candidate "$label" "$candidate"; then
+      return 1
+    fi
+  elif [ -f "$plist" ]; then
+    if ! launchd_validate_candidate "$label" "$plist"; then
+      return 1
+    fi
+  fi
+
+  old_basename="$(basename "$plist")"
+  rollback_dir="$(platform_cache_dir)/install-rollback/$(date -u +%Y%m%dT%H%M%SZ)-$$-${label##*.}"
+  mkdir -p "$rollback_dir"
+  printf '%s\n' "$label" >"$rollback_dir/label"
+  if [ -f "$plist" ]; then
+    cp "$plist" "$rollback_dir/$old_basename"
+  fi
+  if launchd_label_present "$label"; then
+    printf 'present\n' >"$rollback_dir/pre_state"
+  else
+    printf 'absent\n' >"$rollback_dir/pre_state"
+  fi
+
+  # bootout service target first
+  launchctl bootout "$target" >/dev/null 2>&1 || true
+  polled=0
+  while launchd_label_present "$label"; do
+    polled=$((polled + 1))
+    # ~0.2s sleep; deadline_s * 5 iterations ≈ deadline_s seconds
+    [ "$polled" -ge $((deadline_s * 5)) ] && break
+    sleep 0.2
+  done
+  if launchd_label_present "$label"; then
+    # domain + plist path bootout (existing on-disk path if any; else candidate)
+    if [ -f "$plist" ]; then
+      launchctl bootout "$domain" "$plist" >/dev/null 2>&1 || true
+    elif [ -n "$candidate" ] && [ -f "$candidate" ]; then
+      launchctl bootout "$domain" "$candidate" >/dev/null 2>&1 || true
+    fi
+    sleep 0.2
+  fi
+  if launchd_label_present "$label"; then
+    warn "registration still present after bootout; refusing plist replace"
+    rm -f "$candidate"
+    return 1
+  fi
+
+  # atomic replace: only after proven absence
+  if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+    mkdir -p "$(dirname "$plist")"
+    mv "$candidate" "$plist"
+  fi
+
+  # normalize disabled → enabled before bootstrap
+  launchctl enable "$target" >/dev/null 2>&1 || true
+
   out="$(mktemp)"
-  for attempt in 1 2 3; do
-    if launchctl bootstrap "$domain" "$plist" >"$out" 2>&1; then
+  if launchctl bootstrap "$domain" "$plist" >"$out" 2>&1; then
+    rm -f "$out"
+  else
+    rc=$?
+    # Reconcile: EIO/other rc is not authoritative. If label is present after
+    # proven absence, registration succeeded — do not spam a second bootstrap.
+    if launchd_label_present "$label"; then
+      warn "launchctl bootstrap rc=$rc but label present; continuing"
       rm -f "$out"
-      return 0
     else
-      rc=$?
-    fi
-
-    if [ "$unloaded" -eq 1 ] && launchd_label_loaded "$label"; then
-      warn "launchctl bootstrap reported rc=$rc for $label, but the label is loaded; continuing"
-      rm -f "$out"
-      return 0
-    fi
-
-    if [ "$attempt" -lt 3 ]; then
-      warn "launchctl bootstrap failed for $label on attempt $attempt; retrying"
+      # one clean retry
+      warn "launchctl bootstrap failed for $label on attempt 1; retrying"
       launchd_emit_bootstrap_err "$out"
       sleep 0.5
-      continue
+      if launchctl bootstrap "$domain" "$plist" >"$out" 2>&1; then
+        rm -f "$out"
+      else
+        rc=$?
+        if launchd_label_present "$label"; then
+          warn "launchctl bootstrap rc=$rc but label present; continuing"
+          rm -f "$out"
+        else
+          # rollback previous plist if we had one
+          if [ -f "$rollback_dir/$old_basename" ]; then
+            cp "$rollback_dir/$old_basename" "$plist"
+            launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1 || true
+          fi
+          warn "launchctl bootstrap failed for $label after retry"
+          launchd_emit_bootstrap_err "$out"
+          rm -f "$out"
+          return 1
+        fi
+      fi
     fi
+  fi
 
-    warn "launchctl bootstrap failed for $label after $attempt attempts"
-    launchd_emit_bootstrap_err "$out"
-    rm -f "$out"
-    return "$rc"
+  # final presence check — poll for "success but not yet observable"
+  polled=0
+  while ! launchd_label_present "$label"; do
+    polled=$((polled + 1))
+    [ "$polled" -ge "$present_poll_max" ] && break
+    sleep 0.2
   done
+  if ! launchd_label_present "$label"; then
+    warn "launchd label $label not observable after bootstrap"
+    if [ -f "$rollback_dir/$old_basename" ]; then
+      cp "$rollback_dir/$old_basename" "$plist"
+      launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1 || true
+    fi
+    return 1
+  fi
+
+  # Intentionally keep rollback_dir for later status/live-verify (Task 5).
+  printf '%s\n' "$rollback_dir" >"$rollback_dir/kept"
+  return 0
+}
+
+write_runtime_manifest() {
+  local share_dir launch_agents_dir
+  local package_version package_commit host_id installed_at
+
+  share_dir="$(platform_share_dir)"
+  launch_agents_dir="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
+
+  package_version="$(vault_sync_package_version "$VAULT_SYNC_ROOT")"
+  package_commit="$(vault_sync_package_commit "$VAULT_SYNC_ROOT")"
+  host_id="${VS_HOSTNAME:-$(hostname -s 2>/dev/null || hostname)}"
+  installed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  vault_sync_write_runtime_manifest \
+    "$share_dir/runtime-manifest.json" \
+    "$share_dir" \
+    "$launch_agents_dir" \
+    "$package_version" \
+    "$package_commit" \
+    "$package_version" \
+    "$installed_at" \
+    "$ROLE" \
+    "$host_id" || {
+      warn "failed to write runtime manifest"
+      return 1
+    }
+  log "Wrote runtime manifest: $share_dir/runtime-manifest.json"
 }
 
 ROLE="${VS_ROLE:-leaf}"
@@ -635,17 +799,28 @@ if [ "$VS_OS" = "macos" ]; then
   FETCH_PLIST="$LAUNCH_AGENTS_DIR/com.karlchow.wiki-fetch.plist"
 
   run_cmd mkdir -p "$LAUNCH_AGENTS_DIR"
-  replace_template "$PUSH_TMPL" "$PUSH_PLIST"
-  replace_template "$FETCH_TMPL" "$FETCH_PLIST"
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    log "[dry-run] launchctl bootout gui/$UID/com.karlchow.wiki-push || true"
-    log "[dry-run] launchctl bootout gui/$UID/com.karlchow.wiki-fetch || true"
-    log "[dry-run] launchctl bootstrap gui/$UID $PUSH_PLIST"
-    log "[dry-run] launchctl bootstrap gui/$UID $FETCH_PLIST"
+    log "[dry-run] launchctl print gui/$UID (domain probe)"
+    log "[dry-run] stage + bootout + enable + bootstrap gui/$UID $PUSH_PLIST"
+    log "[dry-run] stage + bootout + enable + bootstrap gui/$UID $FETCH_PLIST"
+    log "[dry-run] write runtime-manifest.json"
   else
-    launchd_reload_unit "com.karlchow.wiki-push" "$PUSH_PLIST" || fatal "failed to load launchd unit com.karlchow.wiki-push"
-    launchd_reload_unit "com.karlchow.wiki-fetch" "$FETCH_PLIST" || fatal "failed to load launchd unit com.karlchow.wiki-fetch"
+    # Domain must be reachable before any plist replace.
+    if ! launchd_domain_ok; then
+      fatal "launchd gui domain missing for uid $UID"
+    fi
+
+    PUSH_CAND="$(mktemp "${TMPDIR:-/tmp}/wiki-push.XXXXXX")"
+    FETCH_CAND="$(mktemp "${TMPDIR:-/tmp}/wiki-fetch.XXXXXX")"
+    # Force non-dry-run write into candidates (DRY_RUN already 0 here).
+    replace_template "$PUSH_TMPL" "$PUSH_CAND"
+    replace_template "$FETCH_TMPL" "$FETCH_CAND"
+
+    launchd_reload_unit "com.karlchow.wiki-push" "$PUSH_PLIST" "$PUSH_CAND" \
+      || fatal "failed to load launchd unit com.karlchow.wiki-push"
+    launchd_reload_unit "com.karlchow.wiki-fetch" "$FETCH_PLIST" "$FETCH_CAND" \
+      || fatal "failed to load launchd unit com.karlchow.wiki-fetch"
   fi
 else
   if [ "$ROLE" = "snapshotter" ]; then
@@ -737,6 +912,10 @@ if [ "$VS_OS" = "linux" ]; then
   fi
 else
   set_vault_config "vault_sync.fuse_refresh_enabled" "false"
+fi
+
+if [ "$DRY_RUN" -eq 0 ]; then
+  write_runtime_manifest || fatal "runtime manifest write failed — install incomplete"
 fi
 
 log "Install plan complete."

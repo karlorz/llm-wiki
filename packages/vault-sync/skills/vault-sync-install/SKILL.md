@@ -66,7 +66,8 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    skillwiki config set vault_sync.fuse_max_dir_cache 15m       # Linux only
    ```
    Snapshotter installs also record `vault_sync.snapshot_script` and the conventional profile path `vault_sync.snapshot_profile=/etc/vault-sync/profiles/<host>-snapshotter.env`.
-8. **`--dry-run` mode**: print the entire plan (paths, commands, fleet.yaml diff) but execute nothing.
+8. **Write runtime inventory** for successful non-dry-run full installs: `$(platform_share_dir)/runtime-manifest.json` (package/installer version, host role, SHA-256 hashes of installed scripts and LaunchAgents plists).
+9. **`--dry-run` mode**: print the entire plan (paths, commands, fleet.yaml diff) but execute nothing.
 
 ## FUSE-Only Mode
 
@@ -89,6 +90,65 @@ Do not use FUSE-only mode on a normal git-backed wiki vault.
 ## Idempotency
 
 Re-running the install upgrades scripts in-place. Existing scheduler units are reloaded, not duplicated.
+
+On macOS, launchd install is an **observed-state** transaction:
+
+1. Domain probe (`launchctl print`)
+2. Bootout until the label is absent
+3. Enable
+4. Bootstrap
+
+EIO from `launchctl` is **not special** — it is reconciled only when `launchctl print` shows the label present (exit status only; no field parsing of launchctl output). Candidate plists are staged and moved into place only after registration is proven absent.
+
+Rollback copies live under `$(platform_cache_dir)/install-rollback/<timestamp>/` and are **retained after success** until a later status/live-verify step clears them. Do not delete rollback dirs merely because bootstrap returned success.
+
+After a successful non-dry-run install, `$(platform_share_dir)/runtime-manifest.json` records package/installer version, host role, and SHA-256 hashes of installed scripts and LaunchAgents plists.
+
+Typical share / cache / log roots:
+
+| OS | `platform_share_dir` | `platform_cache_dir` | `platform_log_dir` |
+|----|----------------------|----------------------|--------------------|
+| macOS | `~/Library/Application Support/vault-sync` | `~/Library/Caches/vault-sync` | `~/Library/Logs` |
+| Linux | `~/.local/share/vault-sync` | `~/.cache/vault-sync` | `~/.local/state/vault-sync/log` |
+
+Pull log path for live verification: `$(platform_log_dir)/wiki-pull.log` (macOS: `~/Library/Logs/wiki-pull.log`).
+
+## Attended verification checklist (rollout proof)
+
+Repository tests green ≠ install work complete. After deploying to a real host, run this attended checklist before treating the install as done:
+
+1. From package source (not only a packaged tarball), reinstall leaf role:
+   ```bash
+   bash packages/vault-sync/skills/vault-sync-install/install.sh --role leaf --execute
+   ```
+2. Prove runtime hashes match package sources:
+   ```bash
+   bash packages/vault-sync/skills/vault-sync-status/status.sh --read-only
+   ```
+   Expect `vault_sync_runtime_match=pass` (and a parseable `runtime-manifest.json`).
+3. Wait for a scheduled `wiki-fetch` cycle, or kickstart it / run the pull helper once so a live pull executes on the installed scripts.
+4. Confirm the pull log shows helper-owned journal lines (`op=…`) and **no** legacy `wiki-pull auto-stash` messages:
+   ```bash
+   # macOS
+   grep -E 'op=|auto-stash' "$HOME/Library/Logs/wiki-pull.log"
+   # Linux
+   # grep -E 'op=|auto-stash' "$HOME/.local/state/vault-sync/log/wiki-pull.log"
+   ```
+5. Touch the live-verify marker **only after step 4** succeeds:
+   ```bash
+   # Exact path: $(platform_share_dir)/live-verify.ok
+   # macOS:  ~/Library/Application Support/vault-sync/live-verify.ok
+   # Linux:  ~/.local/share/vault-sync/live-verify.ok
+   touch "$HOME/Library/Application Support/vault-sync/live-verify.ok"   # macOS
+   # touch "$HOME/.local/share/vault-sync/live-verify.ok"               # Linux
+   ```
+   Status reports `vault_sync_live_verify=pass` only when this marker exists. Status never writes the marker itself.
+
+## Completion gate
+
+- Green `npm run test:vault-sync` (or CI) is **necessary but not sufficient**.
+- Update the vault work item `status: completed` **only** after live scheduled-cycle evidence is recorded in the work retro (attended checklist above, including `live-verify.ok`).
+- Do not mark the work item completed from repository tests alone.
 
 ## Guardrails
 
