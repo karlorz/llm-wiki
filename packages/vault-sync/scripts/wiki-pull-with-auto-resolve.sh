@@ -33,6 +33,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/conflict-markers.sh"
 . "$SCRIPT_DIR/lib/git-rebase-state.sh"
 . "$SCRIPT_DIR/lib/git-materialization.sh"
+. "$SCRIPT_DIR/lib/git-operation-journal.sh"
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
@@ -318,16 +319,57 @@ if ! drop_or_preserve_untracked_remote_overlaps; then
     exit 1
 fi
 
+# After fetch + behind check + untracked remote-overlap handling:
+OP_ID="pull-$(hostname -s 2>/dev/null || echo host)-$(date -u +%Y%m%dT%H%M%SZ)-${$}-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+ORIGINAL_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+ORIGINAL_HEAD="$(git rev-parse HEAD)"
+TARGET_OID="$(git rev-parse "$REMOTE/$BRANCH")"
+HELPER_VERSION="${VAULT_SYNC_HELPER_VERSION:-unknown}"
+RUNTIME_HASH="${VAULT_SYNC_RUNTIME_HASH:-}"
+LOCK_IDENTITY="wiki-pull:$$"
+
+if ! vault_sync_op_begin "$WIKI_DIR" "$OP_ID" "$ORIGINAL_BRANCH" "$ORIGINAL_HEAD" "$TARGET_OID" \
+    "$LOCK_IDENTITY" "$HELPER_VERSION" "$RUNTIME_HASH"; then
+  log "FAIL could not begin operation journal"
+  exit 1
+fi
+
+INV="$(mktemp)"
+vault_sync_op_write_inventory "$WIKI_DIR" "$INV"
+vault_sync_op_record_inventory "$WIKI_DIR" "$OP_ID" "$INV"
+rm -f "$INV"
+
 STASHED=false
+OWNED_STASH_OID=""
+PRESERVE_SCOPE="none"
+NEED_STASH=0
+INCLUDE_UNTRACKED=0
 if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-    STASH_MSG="wiki-pull auto-stash $(date -u +%Y-%m-%dT%H:%MZ)"
-    if git stash push -m "$STASH_MSG" 2>>"$LOG_FILE" >/dev/null; then
-        STASHED=true
-        log "STASH local tracked edits before rebase"
-    else
-        log "FAIL stash before rebase"
-        exit 1
-    fi
+  NEED_STASH=1
+  PRESERVE_SCOPE="tracked"
+fi
+if [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+  # After drop_or_preserve_untracked_remote_overlaps, remaining untracked must be preserved.
+  NEED_STASH=1
+  INCLUDE_UNTRACKED=1
+  if [ "$PRESERVE_SCOPE" = "tracked" ]; then
+    PRESERVE_SCOPE="tracked+untracked"
+  else
+    PRESERVE_SCOPE="untracked"
+  fi
+fi
+
+if [ "$NEED_STASH" -eq 1 ]; then
+  STASH_MSG="vault-sync op=${OP_ID} $(date -u +%Y-%m-%dT%H:%MZ)"
+  if OWNED_STASH_OID="$(vault_sync_op_stash_push_owned "$WIKI_DIR" "$STASH_MSG" "$INCLUDE_UNTRACKED")"; then
+    STASHED=true
+    vault_sync_op_record_stash "$WIKI_DIR" "$OP_ID" "$OWNED_STASH_OID" "$PRESERVE_SCOPE"
+    log "STASH oid=$OWNED_STASH_OID scope=$PRESERVE_SCOPE op=$OP_ID"
+  else
+    vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "stash-failed"
+    log "FAIL stash before rebase"
+    exit 1
+  fi
 fi
 
 # Drop only fully proven materialized local commits from the rebase todo.
@@ -452,23 +494,30 @@ while [ $REBASE_RC -ne 0 ]; do
     fi
 done
 
-if [ "$STASHED" = true ]; then
-    if git stash pop 2>>"$LOG_FILE" >/dev/null; then
-        log "STASH pop ok"
+if [ "$STASHED" = true ] && [ -n "$OWNED_STASH_OID" ]; then
+  if vault_sync_op_stash_apply_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE"; then
+    # optional: verify inventory paths exist/content for tracked files
+    if vault_sync_op_stash_drop_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE"; then
+      log "STASH apply+drop ok oid=$OWNED_STASH_OID"
     else
-        CONFLICTS=$(git diff --name-only --diff-filter=U 2>/dev/null)
-        if [ -n "$CONFLICTS" ] && try_auto_resolve_project_knowledge_conflicts "$CONFLICTS"; then
-            if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
-                log "FAIL stash pop project knowledge auto-resolve left conflicts"
-                exit 1
-            fi
-            git stash drop 2>>"$LOG_FILE" >/dev/null || log "WARN could not drop auto-resolved stash"
-            log "STASH pop project knowledge conflicts auto-resolved"
-        else
-            log "FAIL stash pop after rebase"
-            exit 1
-        fi
+      log "WARN could not drop owned stash oid=$OWNED_STASH_OID"
     fi
+  else
+    CONFLICTS=$(git diff --name-only --diff-filter=U 2>/dev/null)
+    if [ -n "$CONFLICTS" ] && try_auto_resolve_project_knowledge_conflicts "$CONFLICTS"; then
+      if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+        vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "stash-restore-conflicts"
+        log "FAIL stash apply project knowledge auto-resolve left conflicts"
+        exit 1
+      fi
+      vault_sync_op_stash_drop_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE" || true
+      log "STASH apply project knowledge conflicts auto-resolved"
+    else
+      vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "stash-restore-failed"
+      log "FAIL stash apply after rebase oid=$OWNED_STASH_OID"
+      exit 1
+    fi
+  fi
 fi
 
 if ! verify_no_tracked_conflict_markers; then

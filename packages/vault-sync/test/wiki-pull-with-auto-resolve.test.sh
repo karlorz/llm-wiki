@@ -745,6 +745,48 @@ test_aa_log_mixed_with_plan_still_manual() {
   rm -rf "$root"
 }
 
+test_intervening_stash_does_not_steal_restore() {
+  local root home vault
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+  add_remote_commit "$root" "remote.md" "remote" "remote-int"
+  printf 'local dirty\n' > "$vault/note.md"
+
+  # Pre-seed an older stash that must not be applied/dropped by unqualified pop
+  printf 'other\n' > "$vault/other.md"
+  git -C "$vault" add other.md
+  git -C "$vault" stash push -m "user-stash-before" >/dev/null
+  # note.md remains dirty tracked
+  printf 'local dirty\n' > "$vault/note.md"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+  assert_eq "pull with prior stash succeeds" "$rc" "0"
+  assert_eq "dirty edit restored" "$(cat "$vault/note.md")" "local dirty"
+  # User stash still present (list length >= 1 with user-stash-before)
+  assert_eq "user stash still listed" \
+    "$(git -C "$vault" stash list | grep -c 'user-stash-before' | tr -d ' ')" "1"
+  rm -rf "$root"
+}
+
+test_untracked_dirty_is_preserved_when_in_scope() {
+  local root home vault
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+  add_remote_commit "$root" "remote.md" "remote" "remote-u"
+  printf 'tracked dirty\n' > "$vault/note.md"
+  printf 'untracked keep\n' > "$vault/local-only.md"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+  assert_eq "pull with untracked succeeds" "$rc" "0"
+  assert_eq "tracked dirty restored" "$(cat "$vault/note.md")" "tracked dirty"
+  assert_eq "untracked preserved" "$(cat "$vault/local-only.md" 2>/dev/null || true)" "untracked keep"
+  rm -rf "$root"
+}
+
 test_dirty_tree_pull_restores_edit
 test_stale_rebase_state_is_cleaned_before_pull
 test_stale_sequencer_preserves_advanced_tip
@@ -761,6 +803,8 @@ test_pull_allows_markdown_equals_separator
 test_stash_pop_regenerates_project_knowledge_conflict
 test_aa_log_only_conflict_is_union_resolved
 test_aa_log_mixed_with_plan_still_manual
+test_intervening_stash_does_not_steal_restore
+test_untracked_dirty_is_preserved_when_in_scope
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
