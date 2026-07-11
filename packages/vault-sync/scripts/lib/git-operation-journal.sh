@@ -83,6 +83,17 @@ EOF
   return 0
 }
 
+# CAS-update the recovery target ref: only succeeds if current value is expected_old.
+vault_sync_op_cas_recovery_target() {
+  local repo="$1" op_id="$2" new_oid="$3" expected_old="$4"
+  if git -C "$repo" update-ref \
+    "refs/vault-sync/recovery/${op_id}/target" "$new_oid" "$expected_old" 2>/dev/null; then
+    return 0
+  fi
+  return 1
+}
+
+
 vault_sync_op_begin() {
   local repo="$1" op_id="$2" branch="$3" original_head="$4" target_oid="$5"
   local lock_identity="$6" helper_version="$7" runtime_hash="$8"
@@ -256,6 +267,74 @@ vault_sync_op_write_inventory() {
     echo "# untracked"
     git -C "$repo" ls-files --others --exclude-standard
   } >"$out"
+}
+
+# Verify inventory after owned-stash apply.
+# - tracked/staged paths that are blobs in the stash tree must reappear.
+# - When skip_content_paths is non-empty (newline-separated), those paths only
+#   require presence (post-conflict auto-resolve may legitimately change content).
+# - Other tracked paths must content-match the stash blob.
+# - untracked inventory paths must reappear (and content-match untracked tree when present).
+# Fail closed on any mismatch.
+vault_sync_op_verify_inventory() {
+  local repo="$1" op_id="$2" stash_oid="${3:-}" skip_content_paths="${4:-}"
+  local inv section path expected_hash actual_hash unmerged skip
+
+  inv="$(vault_sync_op_get_field "$repo" "$op_id" inventory_path)" || return 1
+  [ -f "$inv" ] || return 1
+
+  unmerged="$(git -C "$repo" diff --name-only --diff-filter=U 2>/dev/null || true)"
+  section=""
+  while IFS= read -r path || [ -n "$path" ]; do
+    case "$path" in
+      "# staged") section="staged"; continue ;;
+      "# tracked") section="tracked"; continue ;;
+      "# untracked") section="untracked"; continue ;;
+      ""|\#*) continue ;;
+    esac
+    [ -n "$path" ] || continue
+    [ -n "$section" ] || continue
+
+    # Skip content checks for currently-unmerged conflict paths.
+    if printf '%s\n' "$unmerged" | grep -Fxq -- "$path"; then
+      continue
+    fi
+
+    skip=0
+    if [ -n "$skip_content_paths" ] && printf '%s\n' "$skip_content_paths" | grep -Fxq -- "$path"; then
+      skip=1
+    fi
+
+    case "$section" in
+      staged|tracked)
+        if [ -n "$stash_oid" ] && git -C "$repo" cat-file -e "$stash_oid:$path" 2>/dev/null; then
+          if [ ! -f "$repo/$path" ] && [ ! -L "$repo/$path" ]; then
+            return 1
+          fi
+          if [ "$skip" -eq 0 ]; then
+            expected_hash="$(git -C "$repo" rev-parse "$stash_oid:$path" 2>/dev/null || echo missing)"
+            actual_hash="$(git -C "$repo" hash-object -- "$repo/$path" 2>/dev/null || echo missing)"
+            [ "$expected_hash" = "$actual_hash" ] || return 1
+          fi
+        fi
+        ;;
+      untracked)
+        if [ ! -e "$repo/$path" ] && [ ! -L "$repo/$path" ]; then
+          return 1
+        fi
+        if [ "$skip" -eq 0 ] && [ -n "$stash_oid" ] && git -C "$repo" rev-parse -q --verify "${stash_oid}^3" >/dev/null 2>&1; then
+          if git -C "$repo" cat-file -e "${stash_oid}^3:$path" 2>/dev/null; then
+            expected_hash="$(git -C "$repo" rev-parse "${stash_oid}^3:$path" 2>/dev/null || echo missing)"
+            if [ -f "$repo/$path" ]; then
+              actual_hash="$(git -C "$repo" hash-object -- "$repo/$path" 2>/dev/null || echo missing)"
+              [ "$expected_hash" = "$actual_hash" ] || return 1
+            fi
+          fi
+        fi
+        ;;
+    esac
+  done <"$inv"
+  return 0
 }
 
 vault_sync_op_stash_push_owned() {

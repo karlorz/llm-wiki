@@ -615,5 +615,25 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# Full non-dry-run install must hard-fail if runtime manifest cannot be written
+MAC_MANIFEST_FAIL_HOME="$TEST_ROOT/macos-manifest-fail-home"
+mkdir -p "$MAC_MANIFEST_FAIL_HOME/Library/Application Support/vault-sync"
+# Block writing runtime-manifest.json by making that path a directory
+mkdir -p "$MAC_MANIFEST_FAIL_HOME/Library/Application Support/vault-sync/runtime-manifest.json"
+MAC_MANIFEST_FAIL_OUT="$TEST_ROOT/macos-manifest-fail.out"
+make_fake_bin "$TEST_ROOT/fake-bin"
+fresh_launchctl_state
+HOME="$MAC_MANIFEST_FAIL_HOME" \
+USER=root \
+PATH="$TEST_ROOT/fake-bin:$NODE_DIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+VS_HOSTNAME=pvelxc-test \
+TEST_UNAME_S=Darwin \
+TEST_LAUNCHCTL_PRESENT_FILE="$TEST_LAUNCHCTL_PRESENT_FILE" \
+bash "$INSTALL_SH" --role leaf --execute >"$MAC_MANIFEST_FAIL_OUT" 2>&1
+MAC_MANIFEST_FAIL_RC=$?
+assert_exit "install fails when runtime manifest cannot be written" "$MAC_MANIFEST_FAIL_RC" 1
+assert_contains "manifest failure is fatal" "$MAC_MANIFEST_FAIL_OUT" "runtime manifest write failed"
+assert_not_contains "no success banner without manifest" "$MAC_MANIFEST_FAIL_OUT" "vault-sync installed successfully."
+
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

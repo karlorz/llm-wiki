@@ -915,7 +915,7 @@ else
 fi
 
 if [ "$DRY_RUN" -eq 0 ]; then
-  write_runtime_manifest || warn "runtime manifest write failed (non-fatal for config registration)"
+  write_runtime_manifest || fatal "runtime manifest write failed — install incomplete"
 fi
 
 log "Install plan complete."

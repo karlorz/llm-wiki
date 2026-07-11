@@ -82,7 +82,9 @@ warn()  { echo -e "[wiki-sync] ${YELLOW}WARN:${NC} $*" >&2; }
 error() { echo -e "[wiki-sync] ${RED}ERROR:${NC} $*" >&2; }
 ok()    { echo -e "[wiki-sync] ${GREEN}OK:${NC} $*"; }
 
-# Peer-detectable stash name: wiki-sync:{session}:{cwd_hash}:{iso8601}:{summary}
+# Peer-detectable stash name format retained for documentation / external tooling.
+# The canonical pull helper owns stash lifecycle (journals owned stash OID); wiki-sync
+# must not pre-stash/pop around the helper.
 make_wiki_sync_stash_msg() {
     local summary="${1:-pre-pull}"
     local session_id cwd_hash iso
@@ -243,20 +245,8 @@ if [[ "$BEHIND" -gt 0 ]]; then
         exit 1
     }
     log "Delegating pull/rebase to canonical helper: $PULL_HELPER"
-
-    # If the helper will not stash itself with peer-detectable names, we still
-    # let the helper own stash/rebase. Optionally pre-stash with wiki-sync name
-    # only when there are dirty tracked edits — helper also stashes, so prefer
-    # letting the helper manage the tree; but create a peer-visible stash name
-    # by exporting nothing and relying on helper. For peer detection tests we
-    # stash ourselves first with the canonical name when dirty.
-    STASHED_HERE=false
-    if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-        STASH_MSG="$(make_wiki_sync_stash_msg pre-pull)"
-        log "Stashing local tracked edits: $STASH_MSG"
-        git stash push -m "$STASH_MSG"
-        STASHED_HERE=true
-    fi
+    # Helper owns dirty-tree stash lifecycle (owned stash OID + journal).
+    # Do not pre-stash/pop here — that double-stashes and risks unqualified pop.
 
     set +e
     WIKI_DIR="$WIKI_DIR" bash "$PULL_HELPER" origin main
@@ -267,20 +257,9 @@ if [[ "$BEHIND" -gt 0 ]]; then
         error "Canonical pull helper failed (exit $PULL_RC)."
         error "If a rebase is active: resolve conflicts, then git rebase --continue"
         error "Active rebases are never auto-aborted."
-        [[ "$STASHED_HERE" == true ]] && warn "Stash saved — list with: git stash list"
         exit 1
     fi
     ok "Canonical pull helper succeeded."
-
-    if [[ "$STASHED_HERE" == true ]]; then
-        log "Reapplying pre-pull stash..."
-        if git stash pop; then
-            ok "Stash reapplied cleanly."
-        else
-            error "Stash pop had conflicts — resolve manually, then git stash drop if applied."
-            exit 1
-        fi
-    fi
 elif [[ "$AHEAD" -gt 0 ]]; then
     log "No remote commits to pull — local is ahead. Ready to push."
 else

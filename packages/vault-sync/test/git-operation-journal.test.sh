@@ -113,10 +113,71 @@ test_may_retry_only_once_when_remote_advanced() {
   rm -rf "$root"
 }
 
+test_cas_recovery_target_requires_expected_old() {
+  local root head new_oid wrong_old
+  root="$(mktemp -d)"
+  make_repo "$root"
+  head="$(git -C "$root" rev-parse HEAD)"
+  vault_sync_op_begin "$root" "op-cas" "main" "$head" "$head" "lock:cas" "0.0.0" "x"
+  new_oid="$(printf 'new-target\n' | git -C "$root" hash-object -w --stdin)"
+  wrong_old="$(printf 'wrong\n' | git -C "$root" hash-object -w --stdin)"
+
+  vault_sync_op_cas_recovery_target "$root" "op-cas" "$new_oid" "$wrong_old"
+  rc=$?
+  assert_rc "CAS with wrong expected-old fails" "$rc" "1"
+  assert_eq "target unchanged after failed CAS" \
+    "$(git -C "$root" rev-parse "refs/vault-sync/recovery/op-cas/target")" \
+    "$head"
+
+  vault_sync_op_cas_recovery_target "$root" "op-cas" "$new_oid" "$head"
+  rc=$?
+  assert_rc "CAS with correct expected-old succeeds" "$rc" "0"
+  assert_eq "target updated after CAS" \
+    "$(git -C "$root" rev-parse "refs/vault-sync/recovery/op-cas/target")" \
+    "$new_oid"
+  rm -rf "$root"
+}
+
+test_inventory_verify_fails_when_tracked_missing() {
+  local root head inv stash_oid
+  root="$(mktemp -d)"
+  make_repo "$root"
+  head="$(git -C "$root" rev-parse HEAD)"
+  vault_sync_op_begin "$root" "op-inv" "main" "$head" "$head" "lock:inv" "0.0.0" "x"
+
+  printf 'dirty-body\n' > "$root/f"
+  inv="$(mktemp)"
+  vault_sync_op_write_inventory "$root" "$inv"
+  vault_sync_op_record_inventory "$root" "op-inv" "$inv"
+  rm -f "$inv"
+
+  stash_oid="$(vault_sync_op_stash_push_owned "$root" "op-inv-stash" 0)"
+  # Apply then remove the restored file to force verification failure
+  vault_sync_op_stash_apply_owned "$root" "$stash_oid" >/dev/null
+  rm -f "$root/f"
+  # Recreate HEAD version so path is absent as dirty restore (file exists from HEAD checkout?)
+  # After stash push, worktree was clean with HEAD content; apply restores dirty; rm removes file.
+  # If f is tracked, rm leaves it deleted vs HEAD — verify should fail because stash blob missing in worktree.
+  vault_sync_op_verify_inventory "$root" "op-inv" "$stash_oid"
+  rc=$?
+  assert_rc "inventory verify fails when tracked path missing" "$rc" "1"
+
+  # Restore and verify success path
+  git -C "$root" checkout -- "$root/f" 2>/dev/null || true
+  vault_sync_op_stash_apply_owned "$root" "$stash_oid" >/dev/null 2>&1 || true
+  printf 'dirty-body\n' > "$root/f"
+  vault_sync_op_verify_inventory "$root" "op-inv" "$stash_oid"
+  rc=$?
+  assert_rc "inventory verify ok when content matches" "$rc" "0"
+  rm -rf "$root"
+}
+
 test_journal_dir_uses_git_path
 test_begin_creates_journal_and_recovery_refs
 test_recovery_ref_collision_fails
 test_may_retry_only_once_when_remote_advanced
+test_cas_recovery_target_requires_expected_old
+test_inventory_verify_fails_when_tracked_missing
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

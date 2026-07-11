@@ -1085,6 +1085,147 @@ test_force_push_absent_from_pull_helper() {
     "$(grep -Ec '(--force-with-lease|[[:space:]]--force([[:space:]]|$))' "$SCRIPT_UNDER_TEST" || true)" "0"
 }
 
+test_pull_lock_contention_refuses() {
+  local root home vault lock_hash lock_file
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+  add_remote_commit "$root" "remote.md" "remote" "remote-lock"
+
+  # Mirror helper lock path: platform_cache_dir under HOME + vault hash.
+  # shellcheck source=/dev/null
+  . "$(cd "$(dirname "$SCRIPT_UNDER_TEST")" && pwd)/lib/platform.sh"
+  . "$(cd "$(dirname "$SCRIPT_UNDER_TEST")" && pwd)/lib/lockfile.sh"
+  platform_detect_os
+  lock_hash="$(printf '%s' "$vault" | shasum -a 256 | cut -c1-16)"
+  lock_file="$(HOME="$home" bash -c '
+    . "'$(cd "$(dirname "$SCRIPT_UNDER_TEST")" && pwd)'/lib/platform.sh"
+    platform_detect_os
+    printf "%s/wiki-pull.%s.lock" "$(platform_cache_dir)" "'"$lock_hash"'"
+  ')"
+  # Recompute with HOME set the same way the helper does
+  lock_file="$(
+    HOME="$home" WIKI_DIR="$vault" bash -c '
+      SCRIPT_DIR="'"$(cd "$(dirname "$SCRIPT_UNDER_TEST")" && pwd)"'"
+      . "$SCRIPT_DIR/lib/platform.sh"
+      platform_detect_os
+      h=$(printf "%s" "$WIKI_DIR" | shasum -a 256 | cut -c1-16)
+      printf "%s/wiki-pull.%s.lock\n" "$(platform_cache_dir)" "$h"
+    '
+  )"
+  mkdir -p "$(dirname "$lock_file")"
+  # Hold the mkdir-mutex form of the lock (macOS path)
+  mkdir "${lock_file}.d" || true
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+  assert_eq "lock contention exits nonzero" "$rc" "1"
+
+  local pull_log
+  pull_log="$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)"
+  assert_eq "log records pull lock contention" \
+    "$( [ -n "$pull_log" ] && grep -c 'pull lock contention' "$pull_log" | tr -d ' ' || echo 0 )" \
+    "1"
+  # Behind state unchanged (no mutation under contention)
+  assert_eq "still behind under lock contention" \
+    "$(git -C "$vault" rev-list --count HEAD..origin/main)" "1"
+
+  rmdir "${lock_file}.d" 2>/dev/null || true
+  rm -rf "$root"
+}
+
+test_complete_op_handoff_does_not_pollute_log() {
+  # Active rebase + complete journal (handoff=1) must refuse cleanup but must
+  # NOT log "handoff journal present" — that line is reserved for review-required.
+  local root home vault op_id orig_head target_oid
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+
+  printf 'base\n' > "$vault/conflict.md"
+  git_commit "$vault" "add conflict base"
+  git -C "$vault" push origin main >/dev/null
+
+  local remote_work="$root/remote-complete"
+  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
+  printf 'base\nremote line\n' > "$remote_work/conflict.md"
+  git_commit "$remote_work" "remote conflict edit"
+  git -C "$remote_work" push origin main >/dev/null
+
+  printf 'base\nlocal line\n' > "$vault/conflict.md"
+  git_commit "$vault" "local conflict edit"
+  git -C "$vault" fetch origin >/dev/null 2>&1
+  git -C "$vault" rebase origin/main >/dev/null 2>&1 || true
+
+  # shellcheck source=/dev/null
+  . "$(cd "$(dirname "$SCRIPT_UNDER_TEST")" && pwd)/lib/git-operation-journal.sh"
+  op_id="pull-complete-fixture"
+  orig_head="$(tr -d '[:space:]' < "$vault/.git/rebase-merge/orig-head" 2>/dev/null || git -C "$vault" rev-parse HEAD)"
+  target_oid="$(tr -d '[:space:]' < "$vault/.git/rebase-merge/onto" 2>/dev/null || git -C "$vault" rev-parse origin/main)"
+  vault_sync_op_begin "$vault" "$op_id" "main" "$orig_head" "$target_oid" "lock:fixture" "test" "x" || true
+  vault_sync_op_close_complete "$vault" "$op_id"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+  assert_eq "active rebase still refused with complete journal" "$rc" "1"
+
+  local pull_log
+  pull_log="$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)"
+  assert_eq "complete handoff does not log handoff journal present" \
+    "$( [ -n "$pull_log" ] && grep -c 'handoff journal present' "$pull_log" | tr -d ' ' || echo 0 )" \
+    "0"
+
+  git -C "$vault" rebase --abort >/dev/null 2>&1 || true
+  rm -rf "$root"
+}
+
+test_inventory_verify_failure_marks_review_required() {
+  # After successful apply, force inventory verify to fail via a journal inventory
+  # that lists a path not present in the worktree. Use unit-level helper + journal
+  # to prove fail-closed; integration path is covered by unit test of verify +
+  # pull helper calling mark_review_required on failure.
+  local root home vault jdir op_id head stash_oid inv
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+  add_remote_commit "$root" "remote.md" "remote" "remote-inv-fail"
+  printf 'local dirty\n' > "$vault/note.md"
+
+  # shellcheck source=/dev/null
+  . "$(cd "$(dirname "$SCRIPT_UNDER_TEST")" && pwd)/lib/git-operation-journal.sh"
+  op_id="op-inv-fail-unit"
+  head="$(git -C "$vault" rev-parse HEAD)"
+  vault_sync_op_begin "$vault" "$op_id" "main" "$head" "$head" "lock:inv" "t" "x"
+  inv="$(mktemp)"
+  vault_sync_op_write_inventory "$vault" "$inv"
+  # Poison inventory: claim an extra tracked path that will not reappear
+  printf 'ghost-tracked.md\n' >> "$inv"
+  # Ensure ghost is under tracked section by rewriting
+  {
+    echo "# staged"
+    echo "# tracked"
+    echo "note.md"
+    echo "ghost-tracked.md"
+    echo "# untracked"
+  } > "$inv"
+  vault_sync_op_record_inventory "$vault" "$op_id" "$inv"
+  rm -f "$inv"
+  stash_oid="$(vault_sync_op_stash_push_owned "$vault" "inv-fail" 0)"
+  vault_sync_op_stash_apply_owned "$vault" "$stash_oid" >/dev/null
+  # ghost-tracked is not in stash tree so verify only checks note.md... force fail by deleting note
+  rm -f "$vault/note.md"
+  vault_sync_op_verify_inventory "$vault" "$op_id" "$stash_oid"
+  rc=$?
+  assert_eq "inventory verify fails closed on missing dirty path" "$rc" "1"
+
+  # Integration: helper source must call inventory-verify-failed on failure
+  assert_eq "helper marks inventory-verify-failed" \
+    "$( [ "$(grep -c 'inventory-verify-failed' "$SCRIPT_UNDER_TEST" || true)" -ge 1 ] && echo yes || echo no )" "yes"
+
+
+  rm -rf "$root"
+}
+
 test_dirty_tree_pull_restores_edit
 test_stale_rebase_state_is_cleaned_before_pull
 test_stale_sequencer_preserves_advanced_tip
@@ -1107,9 +1248,12 @@ test_stale_target_retries_once_when_remote_advances
 test_second_stale_advance_marks_review_required
 test_human_mutation_blocks_retry
 test_later_run_refuses_handoff_rebase
+test_complete_op_handoff_does_not_pollute_log
 test_kill_after_stash_retains_journal_and_stash
 test_rerere_not_autoupdated
 test_force_push_absent_from_pull_helper
+test_pull_lock_contention_refuses
+test_inventory_verify_failure_marks_review_required
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

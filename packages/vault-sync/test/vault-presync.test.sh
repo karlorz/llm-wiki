@@ -158,7 +158,7 @@ test_presync_stash_name_peer_detectable() {
   local vault
   vault="$(make_repo "$root")"
 
-  # Make dirty tracked edit so presync stashes before pull
+  # Make dirty tracked edit so helper (not wiki-sync) stashes during pull
   printf 'dirty\n' > "$vault/note.md"
   # Need to be behind so pull path runs
   local remote_work="$root/remote-work"
@@ -170,14 +170,8 @@ test_presync_stash_name_peer_detectable() {
   local stub="$root/bin"
   make_skillwiki_stub "$stub" inherited
 
-  # Intercept: run only the stash naming function by sourcing... instead run execute
-  # and leave a stash if pop fails. Simpler: unit-test message format via bash -c.
+  # Unit-test message format (helper naming retained for peer tooling docs)
   local msg
-  msg="$(WIKI_DIR="$vault" SKILLWIKI_SESSION_ID=sess1 bash -c '
-    source '"$PRESYNC"' 2>/dev/null || true
-  ' 2>/dev/null || true)"
-
-  # Directly invoke the function by extracting it
   msg="$(
     WIKI_DIR="$vault" SKILLWIKI_SESSION_ID=sess1 bash <<'EOS'
 set -euo pipefail
@@ -198,6 +192,12 @@ EOS
     "$(printf '%s' "$msg" | grep -E '^wiki-sync:[^:]+:[^:]+:[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z:pre-pull$' >/dev/null && echo yes || echo no)" \
     "yes"
 
+  # wiki-sync must not call unqualified git stash pop (helper owns stash lifecycle)
+  assert_eq "wiki-sync has no unqualified stash pop" \
+    "$(grep -cE 'git stash pop' "$PRESYNC" || true)" "0"
+  assert_eq "wiki-sync has no pre-stash push of dirty tree" \
+    "$(grep -cE 'git stash push' "$PRESYNC" || true)" "0"
+
   # Also verify real execute creates/consumes without error and dirty edit restored
   HOME="$home" PATH="$stub:$PATH" WIKI_DIR="$vault" SKILLWIKI_SESSION_ID=sess1 \
     bash "$PRESYNC" --execute >/dev/null 2>&1
@@ -205,6 +205,9 @@ EOS
   assert_eq "presync with dirty tree exits 0" "$rc" "0"
   assert_eq "dirty edit restored" "$(cat "$vault/note.md")" "dirty"
   assert_eq "remote present" "$(cat "$vault/remote.md" 2>/dev/null || true)" "remote"
+  # No leftover wiki-sync-named stashes from double-stash path
+  assert_eq "no leftover wiki-sync named stash" \
+    "$(git -C "$vault" stash list | grep -c 'wiki-sync:' | tr -d ' ' || true)" "0"
 
   rm -rf "$root"
 }

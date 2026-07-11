@@ -50,10 +50,42 @@ WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
 REMOTE="${1:-origin}"
 BRANCH="${2:-main}"
 LOG_FILE="$(platform_log_dir)/wiki-pull.log"
+# Vault-scoped cooperative lock so concurrent pulls on the same vault fail closed.
+WIKI_DIR_HASH="$(printf '%s' "$WIKI_DIR" | shasum -a 256 2>/dev/null | cut -c1-16)"
+if [ -z "$WIKI_DIR_HASH" ]; then
+  WIKI_DIR_HASH="$(printf '%s' "$WIKI_DIR" | cksum | awk '{print $1}')"
+fi
+LOCK_FILE="$(platform_cache_dir)/wiki-pull.${WIKI_DIR_HASH}.lock"
+LOCK_HELD=0
 
-mkdir -p "$(dirname "$LOG_FILE")"
+mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$LOCK_FILE")"
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"; }
+
+release_pull_lock() {
+  if [ "${LOCK_HELD:-0}" = "1" ] && [ -n "${LOCK_FILE:-}" ]; then
+    lockfile_release "$LOCK_FILE"
+    LOCK_HELD=0
+  fi
+}
+
+# Always release cooperative lock on process exit (covers fail-closed paths).
+trap 'release_pull_lock' EXIT
+
+acquire_pull_lock() {
+  local lock_rc=0
+  lockfile_acquire "$LOCK_FILE" 600 || lock_rc=$?
+  if [ "$lock_rc" -eq 1 ]; then
+    log "FAIL pull lock contention path=$LOCK_FILE"
+    echo "FAIL: another wiki-pull is in flight for this vault (lock=$LOCK_FILE)" >&2
+    return 1
+  fi
+  if [ "$lock_rc" -eq 2 ]; then
+    log "stale pull lock reclaimed path=$LOCK_FILE"
+  fi
+  LOCK_HELD=1
+  return 0
+}
 
 drop_or_preserve_untracked_remote_overlaps() {
     local removed=0
@@ -304,7 +336,7 @@ run_rebase_onto_target() {
 handle_manual_conflict() {
     local commit_msg="$1"
     local conflicts="$2"
-    local live_oid
+    local live_oid old_target
 
     vault_sync_op_record_conflict_identity "$WIKI_DIR" "$OP_ID"
 
@@ -321,10 +353,15 @@ handle_manual_conflict() {
         vault_sync_op_set_phase "$WIKI_DIR" "$OP_ID" "retrying"
         vault_sync_op_set_field "$WIKI_DIR" "$OP_ID" "retry_count" "1"
         git rebase --abort 2>>"$LOG_FILE" || true
+        old_target="$TARGET_OID"
         TARGET_OID="$live_oid"
+        # CAS update recovery target ref (expected old = previous TARGET_OID).
+        if ! vault_sync_op_cas_recovery_target "$WIKI_DIR" "$OP_ID" "$TARGET_OID" "$old_target" 2>>"$LOG_FILE"; then
+            vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "recovery-target-cas-failed"
+            log "FAIL recovery target CAS failed op=$OP_ID old=$old_target new=$TARGET_OID"
+            exit 1
+        fi
         vault_sync_op_set_field "$WIKI_DIR" "$OP_ID" "target_oid" "$TARGET_OID"
-        # Best-effort update recovery target ref to the new frozen tip.
-        git update-ref "refs/vault-sync/recovery/${OP_ID}/target" "$TARGET_OID" 2>/dev/null || true
         vault_sync_op_set_phase "$WIKI_DIR" "$OP_ID" "rebasing"
         run_rebase_onto_target "$TARGET_OID"
         REBASE_RC=$?
@@ -340,6 +377,57 @@ handle_manual_conflict() {
     echo ""
     echo "Resolve manually, then run: git rebase --continue"
     exit 1
+}
+
+# Log handoff only for review-required journals (not complete ops that also set
+# handoff=1). Prefer matching sequencer onto/orig-head to journal fields.
+log_review_required_handoff_if_present() {
+    local jdir jf op_id phase handoff j_target j_orig seq_onto seq_orig matched any_review
+    jdir="$(vault_sync_op_journal_dir "$WIKI_DIR" 2>/dev/null || true)"
+    [ -n "${jdir:-}" ] && [ -d "$jdir" ] || return 0
+
+    seq_onto=""
+    seq_orig=""
+    if [ -f "$WIKI_DIR/.git/rebase-merge/onto" ]; then
+        seq_onto="$(tr -d '[:space:]' <"$WIKI_DIR/.git/rebase-merge/onto")"
+    elif [ -f "$WIKI_DIR/.git/rebase-apply/onto" ]; then
+        seq_onto="$(tr -d '[:space:]' <"$WIKI_DIR/.git/rebase-apply/onto")"
+    fi
+    if [ -f "$WIKI_DIR/.git/rebase-merge/orig-head" ]; then
+        seq_orig="$(tr -d '[:space:]' <"$WIKI_DIR/.git/rebase-merge/orig-head")"
+    elif [ -f "$WIKI_DIR/.git/rebase-merge/orig_head" ]; then
+        seq_orig="$(tr -d '[:space:]' <"$WIKI_DIR/.git/rebase-merge/orig_head")"
+    elif [ -f "$WIKI_DIR/.git/rebase-apply/orig-head" ]; then
+        seq_orig="$(tr -d '[:space:]' <"$WIKI_DIR/.git/rebase-apply/orig-head")"
+    fi
+
+    matched=0
+    any_review=0
+    for jf in "$jdir"/*.env; do
+        [ -f "$jf" ] || continue
+        phase="$(awk -F= '$1=="phase"{print substr($0,index($0,"=")+1); exit}' "$jf")"
+        handoff="$(awk -F= '$1=="handoff"{print substr($0,index($0,"=")+1); exit}' "$jf")"
+        # Only review-required (ignore complete ops that also set handoff=1).
+        [ "$phase" = "review-required" ] || continue
+        [ "$handoff" = "1" ] || continue
+        any_review=1
+        j_target="$(awk -F= '$1=="target_oid"{print substr($0,index($0,"=")+1); exit}' "$jf")"
+        j_orig="$(awk -F= '$1=="original_head"{print substr($0,index($0,"=")+1); exit}' "$jf")"
+        if [ -n "$seq_onto" ] && [ -n "$j_target" ] && [ "$seq_onto" = "$j_target" ]; then
+            if [ -z "$seq_orig" ] || [ -z "$j_orig" ] || [ "$seq_orig" = "$j_orig" ]; then
+                op_id="$(awk -F= '$1=="operation_id"{print substr($0,index($0,"=")+1); exit}' "$jf")"
+                log "handoff journal present; refusing auto-cleanup op=${op_id:-unknown} (sequencer match)"
+                matched=1
+                break
+            fi
+        fi
+    done
+
+    if [ "$matched" -eq 0 ] && [ "$any_review" -eq 1 ]; then
+        # review-required handoff exists but sequencer fields did not uniquely match;
+        # still note handoff without claiming complete-op journals.
+        log "handoff journal present; refusing auto-cleanup"
+    fi
 }
 
 cd "$WIKI_DIR" || { log "ERROR: cd $WIKI_DIR failed"; exit 1; }
@@ -370,17 +458,7 @@ if [ -d "$WIKI_DIR/.git/rebase-merge" ] || [ -d "$WIKI_DIR/.git/rebase-apply" ];
             ;;
         active|*)
             log "FAIL active rebase state present — refusing auto-cleanup"
-            # Explicit handoff check: later runs must not reclaim handoff ops.
-            JDIR="$(vault_sync_op_journal_dir "$WIKI_DIR" 2>/dev/null || true)"
-            if [ -n "${JDIR:-}" ] && [ -d "$JDIR" ]; then
-                for jf in "$JDIR"/*.env; do
-                    [ -f "$jf" ] || continue
-                    if grep -q '^handoff=1$' "$jf" 2>/dev/null; then
-                        log "handoff journal present; refusing auto-cleanup"
-                        break
-                    fi
-                done
-            fi
+            log_review_required_handoff_if_present
             exit 1
             ;;
     esac
@@ -408,11 +486,13 @@ fi
 
 log "PULL --rebase ($BEHIND commits behind)"
 
-if ! drop_or_preserve_untracked_remote_overlaps; then
+# Cooperative lock before first mutation (untracked overlap handling, stash, rebase).
+if ! acquire_pull_lock; then
     exit 1
 fi
 
-# After fetch + behind check + untracked remote-overlap handling:
+# Begin journal + freeze target BEFORE untracked-overlap mutations so the
+# operation owns the whole convergence transaction.
 OP_ID="pull-$(hostname -s 2>/dev/null || echo host)-$(date -u +%Y%m%dT%H%M%SZ)-${$}-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 ORIGINAL_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 ORIGINAL_HEAD="$(git rev-parse HEAD)"
@@ -420,12 +500,17 @@ ORIGINAL_HEAD="$(git rev-parse HEAD)"
 TARGET_OID="$(git rev-parse "$REMOTE/$BRANCH")"
 HELPER_VERSION="${VAULT_SYNC_HELPER_VERSION:-unknown}"
 RUNTIME_HASH="${VAULT_SYNC_RUNTIME_HASH:-}"
-LOCK_IDENTITY="wiki-pull:$$"
+LOCK_IDENTITY="$LOCK_FILE"
 
 if ! vault_sync_op_begin "$WIKI_DIR" "$OP_ID" "$ORIGINAL_BRANCH" "$ORIGINAL_HEAD" "$TARGET_OID" \
     "$LOCK_IDENTITY" "$HELPER_VERSION" "$RUNTIME_HASH"; then
   log "FAIL could not begin operation journal"
   exit 1
+fi
+
+if ! drop_or_preserve_untracked_remote_overlaps; then
+    vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "untracked-overlap-failed"
+    exit 1
 fi
 
 INV="$(mktemp)"
@@ -577,7 +662,11 @@ done
 
 if [ "$STASHED" = true ] && [ -n "$OWNED_STASH_OID" ]; then
   if vault_sync_op_stash_apply_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE"; then
-    # optional: verify inventory paths exist/content for tracked files
+    if ! vault_sync_op_verify_inventory "$WIKI_DIR" "$OP_ID" "$OWNED_STASH_OID" 2>>"$LOG_FILE"; then
+      vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "inventory-verify-failed"
+      log "FAIL inventory verification after stash apply oid=$OWNED_STASH_OID"
+      exit 1
+    fi
     if vault_sync_op_stash_drop_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE"; then
       log "STASH apply+drop ok oid=$OWNED_STASH_OID"
     else
@@ -591,6 +680,15 @@ if [ "$STASHED" = true ] && [ -n "$OWNED_STASH_OID" ]; then
         log "FAIL stash apply project knowledge auto-resolve left conflicts"
         exit 1
       fi
+      # Knowledge regeneration intentionally rewrites conflicted paths; verify
+      # presence for those paths and content for everything else.
+      SKIP_CONTENT="$(printf '%s\n' $CONFLICTS)"
+      if ! vault_sync_op_verify_inventory "$WIKI_DIR" "$OP_ID" "$OWNED_STASH_OID" "$SKIP_CONTENT" 2>>"$LOG_FILE"; then
+        vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "inventory-verify-failed"
+        log "FAIL inventory verification after knowledge auto-resolve oid=$OWNED_STASH_OID"
+        exit 1
+      fi
+
       vault_sync_op_stash_drop_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE" || true
       log "STASH apply project knowledge conflicts auto-resolved"
     else
