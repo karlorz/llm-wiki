@@ -148,13 +148,19 @@ try_auto_resolve_log_union_conflicts() {
         theirs="$tmpdir/theirs"
         merged="$tmpdir/merged"
 
-        if ! git show ":1:$f" >"$base" 2>/dev/null ||
-           ! git show ":2:$f" >"$ours" 2>/dev/null ||
+        # Stage 2 (ours) and 3 (theirs) are required. Stage 1 (base) is absent
+        # for add/add (AA) conflicts — treat missing base as empty so append-only
+        # logs can still union-merge. Never invent content for missing ours/theirs.
+        if ! git show ":2:$f" >"$ours" 2>/dev/null ||
            ! git show ":3:$f" >"$theirs" 2>/dev/null; then
             rm -rf "$tmpdir"
-            log "WARN cannot read all index stages for log union conflict: $f"
+            log "WARN cannot read ours/theirs index stages for log union conflict: $f"
             rollback_resolved resolved
             return 1
+        fi
+        if ! git show ":1:$f" >"$base" 2>/dev/null; then
+            : >"$base"
+            log "LOG-UNION empty base for add/add (AA) conflict: $f"
         fi
 
         if ! git merge-file --union -p "$ours" "$base" "$theirs" >"$merged"; then

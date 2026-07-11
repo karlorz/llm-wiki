@@ -656,6 +656,95 @@ test_raw_path_difference_is_not_dropped() {
   rm -rf "$root"
 }
 
+
+test_aa_log_only_conflict_is_union_resolved() {
+  # Add/add (AA) on */log.md has no stage-1 base. Union must still succeed with
+  # empty base so work-item logs are not left MANUAL when only logs conflict.
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  git -C "$vault" push origin main >/dev/null
+
+  # Divergent add of the same new log path on both sides
+  local remote_work="$root/remote-aa"
+  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
+  mkdir -p "$remote_work/projects/demo/work/item"
+  cat > "$remote_work/projects/demo/work/item/log.md" <<'EOF'
+# Work Log
+
+## 2026-07-11 remote
+
+Remote log section body.
+EOF
+  git_commit "$remote_work" "remote add work log"
+  git -C "$remote_work" push origin main >/dev/null
+
+  mkdir -p "$vault/projects/demo/work/item"
+  cat > "$vault/projects/demo/work/item/log.md" <<'EOF'
+# Work Log
+
+## 2026-07-11 local
+
+Local log section body.
+EOF
+  git_commit "$vault" "local add work log"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  assert_eq "AA log-only pull exits successfully" "$rc" "0"
+  assert_eq "AA log-only branch not behind" "$(git -C "$vault" rev-list --count HEAD..origin/main 2>/dev/null || echo x)" "0"
+  assert_eq "remote log section preserved" "$(grep -c 'Remote log section body' "$vault/projects/demo/work/item/log.md" | tr -d ' ')" "1"
+  assert_eq "local log section preserved" "$(grep -c 'Local log section body' "$vault/projects/demo/work/item/log.md" | tr -d ' ')" "1"
+  assert_eq "AA log no conflict markers" "$(grep -Ec '^(<<<<<<<|=======|>>>>>>>)' "$vault/projects/demo/work/item/log.md" | tr -d ' ')" "0"
+  assert_eq "AA log no unmerged paths" "$(git -C "$vault" diff --name-only --diff-filter=U | wc -l | tr -d ' ')" "0"
+  # Prove empty-base path was used (pull log)
+  local pull_log
+  pull_log="$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)"
+  assert_eq "pull log records empty-base AA union" \
+    "$( [ -n "$pull_log" ] && grep -c 'empty base for add/add' "$pull_log" | tr -d ' ' || echo 0 )" \
+    "1"
+
+  rm -rf "$root"
+}
+
+test_aa_log_mixed_with_plan_still_manual() {
+  # AA log + AA plan must still fail closed (no silent plan body merge).
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  local remote_work="$root/remote-aa-mix"
+  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
+  mkdir -p "$remote_work/projects/demo/work/item"
+  printf '# Work Log\n\n## remote\n\nR\n' > "$remote_work/projects/demo/work/item/log.md"
+  printf '# Plan remote\n' > "$remote_work/projects/demo/work/item/plan.md"
+  git_commit "$remote_work" "remote aa log+plan"
+  git -C "$remote_work" push origin main >/dev/null
+
+  mkdir -p "$vault/projects/demo/work/item"
+  printf '# Work Log\n\n## local\n\nL\n' > "$vault/projects/demo/work/item/log.md"
+  printf '# Plan local\n' > "$vault/projects/demo/work/item/plan.md"
+  git_commit "$vault" "local aa log+plan"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  assert_eq "AA mixed log+plan surfaces manual" "$rc" "1"
+  assert_eq "plan still unmerged" "$(git -C "$vault" status --short projects/demo/work/item/plan.md | cut -c1-2)" "AA"
+  # Log may still be unmerged because union declines the whole set
+  assert_eq "log still unmerged in mixed set" \
+    "$(git -C "$vault" diff --name-only --diff-filter=U | grep -c 'log.md' | tr -d ' ')" "1"
+
+  git -C "$vault" rebase --abort >/dev/null 2>&1 || true
+  rm -rf "$root"
+}
+
 test_dirty_tree_pull_restores_edit
 test_stale_rebase_state_is_cleaned_before_pull
 test_stale_sequencer_preserves_advanced_tip
@@ -670,6 +759,8 @@ test_mixed_log_and_non_log_conflict_falls_through_safely
 test_pull_fails_if_tracked_markdown_contains_conflict_markers
 test_pull_allows_markdown_equals_separator
 test_stash_pop_regenerates_project_knowledge_conflict
+test_aa_log_only_conflict_is_union_resolved
+test_aa_log_mixed_with_plan_still_manual
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
