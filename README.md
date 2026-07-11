@@ -132,6 +132,15 @@ npm run -w skillwiki build
 npm run -w skillwiki test
 ```
 
+Local CLI tarball (for scp / offline install) goes to a **gitignored** folder — never
+next to `packages/cli/package.json`:
+
+```bash
+npm run pack:cli                 # build + pack → artifacts/npm/skillwiki-<ver>.tgz
+npm run pack:cli -- --no-build   # pack only
+npm run pack:cli -- --json       # machine-readable path + sha256
+```
+
 Requires Node ≥ 20.
 
 ## Spec

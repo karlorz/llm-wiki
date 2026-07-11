@@ -16,9 +16,10 @@
     "lint": "npm run -ws --if-present lint",
     "bump": "bash scripts/bump-version.sh",
     "release": "bash scripts/release.sh",
+    "pack:cli": "bash scripts/pack-cli.sh",
     "materialize:plugins": "bash scripts/materialize-plugin-assets.sh",
     "materialize:plugins:check": "bash scripts/materialize-plugin-assets.sh --check",
-    "clean": "rm -rf packages/*/dist packages/*/.tsbuildinfo"
+    "clean": "rm -rf packages/*/dist packages/*/.tsbuildinfo artifacts"
   },
   "engines": {
     "node": ">=20"
