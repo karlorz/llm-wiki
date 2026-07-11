@@ -82,21 +82,8 @@ warn()  { echo -e "[wiki-sync] ${YELLOW}WARN:${NC} $*" >&2; }
 error() { echo -e "[wiki-sync] ${RED}ERROR:${NC} $*" >&2; }
 ok()    { echo -e "[wiki-sync] ${GREEN}OK:${NC} $*"; }
 
-# Peer-detectable stash name format retained for documentation / external tooling.
-# The canonical pull helper owns stash lifecycle (journals owned stash OID); wiki-sync
-# must not pre-stash/pop around the helper.
-make_wiki_sync_stash_msg() {
-    local summary="${1:-pre-pull}"
-    local session_id cwd_hash iso
-    session_id="${SKILLWIKI_SESSION_ID:-${CLAUDE_SESSION_ID:-local}}"
-    # 8-char cwd hash (portable)
-    cwd_hash="$(printf '%s' "$WIKI_DIR" | shasum -a 256 2>/dev/null | cut -c1-8)"
-    if [ -z "$cwd_hash" ]; then
-        cwd_hash="$(printf '%s' "$WIKI_DIR" | cksum | awk '{print $1}')"
-    fi
-    iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf 'wiki-sync:%s:%s:%s:%s' "$session_id" "$cwd_hash" "$iso" "$summary"
-}
+# The canonical pull helper owns stash lifecycle (journals owned stash OID).
+# wiki-sync must not pre-stash/pop around the helper.
 
 # Parse lint-delta JSON; print full/base/new/resolved; return 0 if new_errors==0.
 # Fail closed on missing CLI or malformed output.

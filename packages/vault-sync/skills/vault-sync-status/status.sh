@@ -458,14 +458,6 @@ FILTER_PATH="$(platform_rclone_config_dir)/wiki-push-filters.txt"
 
 # Resolve vault once; all vault git/conflict checks use this absolute path.
 VAULT_PATH="$(resolve_vault_path)"
-case "$VAULT_PATH" in
-  /*) ;;
-  *)
-    if [ -d "$VAULT_PATH" ]; then
-      VAULT_PATH="$(cd "$VAULT_PATH" 2>/dev/null && pwd || printf '%s' "$VAULT_PATH")"
-    fi
-    ;;
-esac
 
 ROLE="${VS_ROLE:-}"
 if role_val=$(config_value "vault_sync.role"); then

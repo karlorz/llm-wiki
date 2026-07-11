@@ -30,19 +30,32 @@ vault_sync_op_get_field() {
 
 vault_sync_op_set_field() {
   local repo="$1" op_id="$2" key="$3" value="$4"
+  vault_sync_op_set_fields "$repo" "$op_id" "$key" "$value"
+}
+
+# Batch journal field updates in one rewrite.
+# Usage: vault_sync_op_set_fields <repo> <op_id> <key> <value> [<key> <value> ...]
+vault_sync_op_set_fields() {
+  local repo="$1" op_id="$2"
+  shift 2
   local file tmp
   file="$(vault_sync_op_journal_path "$repo" "$op_id")" || return 1
   tmp="$(mktemp)" || return 1
   if [ -f "$file" ]; then
-    awk -F= -v k="$key" -v v="$value" '
+    cp "$file" "$tmp" || { rm -f "$tmp"; return 1; }
+  else
+    : >"$tmp"
+  fi
+  while [ "$#" -ge 2 ]; do
+    awk -F= -v k="$1" -v v="$2" '
       BEGIN{found=0}
       $1==k {print k"="v; found=1; next}
       {print}
       END{if(!found) print k"="v}
-    ' "$file" >"$tmp"
-  else
-    printf '%s=%s\n' "$key" "$value" >"$tmp"
-  fi
+    ' "$tmp" >"${tmp}.new" || { rm -f "$tmp" "${tmp}.new"; return 1; }
+    mv "${tmp}.new" "$tmp"
+    shift 2
+  done
   mv "$tmp" "$file"
 }
 
@@ -52,22 +65,18 @@ vault_sync_op_set_phase() {
 
 vault_sync_op_create_recovery_refs() {
   local repo="$1" op_id="$2" original_head="$3" target_oid="$4"
-  local stdin
 
   # Prefer transactional create (CAS: fail if ref already exists).
-  stdin="$(mktemp)" || return 1
-  cat >"$stdin" <<EOF
+  if git -C "$repo" update-ref --stdin --create-reflog -m "vault-sync operation begin" >/dev/null 2>&1 <<EOF
 start
 create refs/vault-sync/recovery/${op_id}/original-head ${original_head}
 create refs/vault-sync/recovery/${op_id}/target ${target_oid}
 prepare
 commit
 EOF
-  if git -C "$repo" update-ref --stdin --create-reflog -m "vault-sync operation begin" <"$stdin" >/dev/null 2>&1; then
-    rm -f "$stdin"
+  then
     return 0
   fi
-  rm -f "$stdin"
 
   # Fallback: create-only update-ref (empty oldoid means must not exist).
   if ! git -C "$repo" update-ref \
@@ -127,8 +136,9 @@ EOF
 }
 
 vault_sync_op_record_stash() {
-  vault_sync_op_set_field "$1" "$2" "owned_stash_oid" "$3" || return 1
-  vault_sync_op_set_field "$1" "$2" "preservation_scope" "$4"
+  vault_sync_op_set_fields "$1" "$2" \
+    "owned_stash_oid" "$3" \
+    "preservation_scope" "$4"
 }
 
 vault_sync_op_record_inventory() {
@@ -217,14 +227,38 @@ vault_sync_op_conflict_identity_unchanged() {
   [ "$expected" = "$actual" ]
 }
 
+# Load common may_retry fields from one journal file read.
+vault_sync_op_load_retry_fields() {
+  local repo="$1" op_id="$2"
+  local file
+  file="$(vault_sync_op_journal_path "$repo" "$op_id")" || return 1
+  [ -f "$file" ] || return 1
+  # shellcheck disable=SC2034
+  eval "$(awk -F= '
+    $1=="phase" || $1=="retry_count" || $1=="handoff" || $1=="target_oid" || $1=="conflict_identity" {
+      key=$1
+      val=substr($0, index($0,"=")+1)
+      gsub(/'\''/, "'\''\\'\'''\''", val)
+      printf "_vs_jf_%s='\''%s'\''\n", key, val
+    }
+  ' "$file")"
+}
+
 vault_sync_op_may_retry() {
   local repo="$1" op_id="$2" live_remote_oid="$3"
-  local phase retry handoff target fp onto
+  local phase retry handoff target fp onto actual
 
-  phase="$(vault_sync_op_get_field "$repo" "$op_id" phase)" || return 1
-  retry="$(vault_sync_op_get_field "$repo" "$op_id" retry_count)" || return 1
-  handoff="$(vault_sync_op_get_field "$repo" "$op_id" handoff)" || return 1
-  target="$(vault_sync_op_get_field "$repo" "$op_id" target_oid)" || return 1
+  _vs_jf_phase=""
+  _vs_jf_retry_count=""
+  _vs_jf_handoff=""
+  _vs_jf_target_oid=""
+  _vs_jf_conflict_identity=""
+  vault_sync_op_load_retry_fields "$repo" "$op_id" || return 1
+  phase="${_vs_jf_phase}"
+  retry="${_vs_jf_retry_count}"
+  handoff="${_vs_jf_handoff}"
+  target="${_vs_jf_target_oid}"
+  fp="${_vs_jf_conflict_identity}"
 
   # Fail closed: only one retry, never after handoff.
   [ "$handoff" = "0" ] || return 1
@@ -236,24 +270,27 @@ vault_sync_op_may_retry() {
   [ -n "$live_remote_oid" ] && [ "$live_remote_oid" != "$target" ] || return 1
 
   # Require stable conflict identity (empty / no sequencer → fail closed).
-  vault_sync_op_conflict_identity_unchanged "$repo" "$op_id" || return 1
+  [ -n "$fp" ] || return 1
+  actual="$(vault_sync_op_fingerprint_repo_state "$repo")" || return 1
+  [ "$fp" = "$actual" ] || return 1
 
   # Journal ownership of sequencer: onto must match journaled target.
-  fp="$(vault_sync_op_get_field "$repo" "$op_id" conflict_identity)" || return 1
   onto="$(printf '%s' "$fp" | sed -n 's/.*onto=\([^;]*\).*/\1/p')"
   [ -n "$onto" ] && [ "$onto" = "$target" ] || return 1
   return 0
 }
 
 vault_sync_op_mark_review_required() {
-  vault_sync_op_set_phase "$1" "$2" "review-required" || return 1
-  vault_sync_op_set_field "$1" "$2" "handoff" "1" || return 1
-  vault_sync_op_set_field "$1" "$2" "reason" "$3"
+  vault_sync_op_set_fields "$1" "$2" \
+    "phase" "review-required" \
+    "handoff" "1" \
+    "reason" "$3"
 }
 
 vault_sync_op_close_complete() {
-  vault_sync_op_set_phase "$1" "$2" "complete" || return 1
-  vault_sync_op_set_field "$1" "$2" "handoff" "1"
+  vault_sync_op_set_fields "$1" "$2" \
+    "phase" "complete" \
+    "handoff" "1"
 }
 
 # Dirty-state helpers used by pull integration
@@ -278,12 +315,16 @@ vault_sync_op_write_inventory() {
 # Fail closed on any mismatch.
 vault_sync_op_verify_inventory() {
   local repo="$1" op_id="$2" stash_oid="${3:-}" skip_content_paths="${4:-}"
-  local inv section path expected_hash actual_hash unmerged skip
+  local inv section path expected_hash actual_hash unmerged skip has_u3
 
   inv="$(vault_sync_op_get_field "$repo" "$op_id" inventory_path)" || return 1
   [ -f "$inv" ] || return 1
 
   unmerged="$(git -C "$repo" diff --name-only --diff-filter=U 2>/dev/null || true)"
+  has_u3=0
+  if [ -n "$stash_oid" ] && git -C "$repo" rev-parse -q --verify "${stash_oid}^3" >/dev/null 2>&1; then
+    has_u3=1
+  fi
   section=""
   while IFS= read -r path || [ -n "$path" ]; do
     case "$path" in
@@ -322,7 +363,7 @@ vault_sync_op_verify_inventory() {
         if [ ! -e "$repo/$path" ] && [ ! -L "$repo/$path" ]; then
           return 1
         fi
-        if [ "$skip" -eq 0 ] && [ -n "$stash_oid" ] && git -C "$repo" rev-parse -q --verify "${stash_oid}^3" >/dev/null 2>&1; then
+        if [ "$skip" -eq 0 ] && [ "$has_u3" -eq 1 ]; then
           if git -C "$repo" cat-file -e "${stash_oid}^3:$path" 2>/dev/null; then
             expected_hash="$(git -C "$repo" rev-parse "${stash_oid}^3:$path" 2>/dev/null || echo missing)"
             if [ -f "$repo/$path" ]; then

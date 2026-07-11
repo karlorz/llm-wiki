@@ -14,29 +14,52 @@
 #     <package_version> <package_commit> <installer_version> \
 #     <installed_at> <role> <host_id>
 
+# Resolve once per process when possible.
+_vault_sync_sha256_resolved=0
+_vault_sync_sha256_tool=""
+
+_vault_sync_sha256_resolve() {
+  if [ "$_vault_sync_sha256_resolved" = "1" ]; then
+    return 0
+  fi
+  _vault_sync_sha256_resolved=1
+  if command -v shasum >/dev/null 2>&1; then
+    _vault_sync_sha256_tool=shasum
+  elif command -v sha256sum >/dev/null 2>&1; then
+    _vault_sync_sha256_tool=sha256sum
+  elif command -v openssl >/dev/null 2>&1; then
+    _vault_sync_sha256_tool=openssl
+  elif command -v python3 >/dev/null 2>&1; then
+    _vault_sync_sha256_tool=python3
+  else
+    _vault_sync_sha256_tool=""
+  fi
+}
+
 vault_sync_sha256() {
   _f="$1"
   if [ ! -f "$_f" ]; then
     echo ""
     return 0
   fi
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$_f" 2>/dev/null | awk '{print $1}'
-    return 0
-  fi
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$_f" 2>/dev/null | awk '{print $1}'
-    return 0
-  fi
-  if command -v openssl >/dev/null 2>&1; then
-    openssl dgst -sha256 "$_f" 2>/dev/null | awk '{print $NF}'
-    return 0
-  fi
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$_f" 2>/dev/null
-    return 0
-  fi
-  echo ""
+  _vault_sync_sha256_resolve
+  case "$_vault_sync_sha256_tool" in
+    shasum)
+      shasum -a 256 "$_f" 2>/dev/null | awk '{print $1}'
+      ;;
+    sha256sum)
+      sha256sum "$_f" 2>/dev/null | awk '{print $1}'
+      ;;
+    openssl)
+      openssl dgst -sha256 "$_f" 2>/dev/null | awk '{print $NF}'
+      ;;
+    python3)
+      python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$_f" 2>/dev/null
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
 }
 
 vault_sync_package_version() {

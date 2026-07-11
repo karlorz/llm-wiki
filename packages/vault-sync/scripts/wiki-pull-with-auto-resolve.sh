@@ -383,40 +383,51 @@ handle_manual_conflict() {
 # handoff=1). Prefer matching sequencer onto/orig-head to journal fields.
 log_review_required_handoff_if_present() {
     local jdir jf op_id phase handoff j_target j_orig seq_onto seq_orig matched any_review
+    local git_dir rebase_dir
     jdir="$(vault_sync_op_journal_dir "$WIKI_DIR" 2>/dev/null || true)"
     [ -n "${jdir:-}" ] && [ -d "$jdir" ] || return 0
 
     seq_onto=""
     seq_orig=""
-    if [ -f "$WIKI_DIR/.git/rebase-merge/onto" ]; then
-        seq_onto="$(tr -d '[:space:]' <"$WIKI_DIR/.git/rebase-merge/onto")"
-    elif [ -f "$WIKI_DIR/.git/rebase-apply/onto" ]; then
-        seq_onto="$(tr -d '[:space:]' <"$WIKI_DIR/.git/rebase-apply/onto")"
+    git_dir="$(git -C "$WIKI_DIR" rev-parse --git-dir 2>/dev/null || true)"
+    case "$git_dir" in
+        /*) ;;
+        "") git_dir="" ;;
+        *) git_dir="$WIKI_DIR/$git_dir" ;;
+    esac
+    rebase_dir=""
+    if [ -n "$git_dir" ]; then
+        if [ -d "$git_dir/rebase-merge" ]; then
+            rebase_dir="$git_dir/rebase-merge"
+        elif [ -d "$git_dir/rebase-apply" ]; then
+            rebase_dir="$git_dir/rebase-apply"
+        fi
     fi
-    if [ -f "$WIKI_DIR/.git/rebase-merge/orig-head" ]; then
-        seq_orig="$(tr -d '[:space:]' <"$WIKI_DIR/.git/rebase-merge/orig-head")"
-    elif [ -f "$WIKI_DIR/.git/rebase-merge/orig_head" ]; then
-        seq_orig="$(tr -d '[:space:]' <"$WIKI_DIR/.git/rebase-merge/orig_head")"
-    elif [ -f "$WIKI_DIR/.git/rebase-apply/orig-head" ]; then
-        seq_orig="$(tr -d '[:space:]' <"$WIKI_DIR/.git/rebase-apply/orig-head")"
+    if [ -n "$rebase_dir" ]; then
+        [ -f "$rebase_dir/onto" ] && seq_onto="$(tr -d '[:space:]' <"$rebase_dir/onto")"
+        if [ -f "$rebase_dir/orig-head" ]; then
+            seq_orig="$(tr -d '[:space:]' <"$rebase_dir/orig-head")"
+        elif [ -f "$rebase_dir/orig_head" ]; then
+            seq_orig="$(tr -d '[:space:]' <"$rebase_dir/orig_head")"
+        fi
     fi
 
     matched=0
     any_review=0
     for jf in "$jdir"/*.env; do
         [ -f "$jf" ] || continue
-        phase="$(awk -F= '$1=="phase"{print substr($0,index($0,"=")+1); exit}' "$jf")"
-        handoff="$(awk -F= '$1=="handoff"{print substr($0,index($0,"=")+1); exit}' "$jf")"
+        op_id="$(basename "$jf" .env)"
+        phase="$(vault_sync_op_get_field "$WIKI_DIR" "$op_id" phase 2>/dev/null || true)"
+        handoff="$(vault_sync_op_get_field "$WIKI_DIR" "$op_id" handoff 2>/dev/null || true)"
         # Only review-required (ignore complete ops that also set handoff=1).
         [ "$phase" = "review-required" ] || continue
         [ "$handoff" = "1" ] || continue
         any_review=1
-        j_target="$(awk -F= '$1=="target_oid"{print substr($0,index($0,"=")+1); exit}' "$jf")"
-        j_orig="$(awk -F= '$1=="original_head"{print substr($0,index($0,"=")+1); exit}' "$jf")"
+        j_target="$(vault_sync_op_get_field "$WIKI_DIR" "$op_id" target_oid 2>/dev/null || true)"
+        j_orig="$(vault_sync_op_get_field "$WIKI_DIR" "$op_id" original_head 2>/dev/null || true)"
         if [ -n "$seq_onto" ] && [ -n "$j_target" ] && [ "$seq_onto" = "$j_target" ]; then
             if [ -z "$seq_orig" ] || [ -z "$j_orig" ] || [ "$seq_orig" = "$j_orig" ]; then
-                op_id="$(awk -F= '$1=="operation_id"{print substr($0,index($0,"=")+1); exit}' "$jf")"
-                log "handoff journal present; refusing auto-cleanup op=${op_id:-unknown} (sequencer match)"
+                log "handoff journal present; refusing auto-cleanup op=${op_id} (sequencer match)"
                 matched=1
                 break
             fi
@@ -518,7 +529,6 @@ vault_sync_op_write_inventory "$WIKI_DIR" "$INV"
 vault_sync_op_record_inventory "$WIKI_DIR" "$OP_ID" "$INV"
 rm -f "$INV"
 
-STASHED=false
 OWNED_STASH_OID=""
 PRESERVE_SCOPE="none"
 NEED_STASH=0
@@ -541,7 +551,6 @@ fi
 if [ "$NEED_STASH" -eq 1 ]; then
   STASH_MSG="vault-sync op=${OP_ID} $(date -u +%Y-%m-%dT%H:%MZ)"
   if OWNED_STASH_OID="$(vault_sync_op_stash_push_owned "$WIKI_DIR" "$STASH_MSG" "$INCLUDE_UNTRACKED")"; then
-    STASHED=true
     vault_sync_op_record_stash "$WIKI_DIR" "$OP_ID" "$OWNED_STASH_OID" "$PRESERVE_SCOPE"
     log "STASH oid=$OWNED_STASH_OID scope=$PRESERVE_SCOPE op=$OP_ID"
   else
@@ -660,7 +669,7 @@ while [ $REBASE_RC -ne 0 ]; do
     fi
 done
 
-if [ "$STASHED" = true ] && [ -n "$OWNED_STASH_OID" ]; then
+if [ -n "$OWNED_STASH_OID" ]; then
   if vault_sync_op_stash_apply_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE"; then
     if ! vault_sync_op_verify_inventory "$WIKI_DIR" "$OP_ID" "$OWNED_STASH_OID" 2>>"$LOG_FILE"; then
       vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "inventory-verify-failed"

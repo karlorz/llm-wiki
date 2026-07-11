@@ -170,28 +170,6 @@ test_presync_stash_name_peer_detectable() {
   local stub="$root/bin"
   make_skillwiki_stub "$stub" inherited
 
-  # Unit-test message format (helper naming retained for peer tooling docs)
-  local msg
-  msg="$(
-    WIKI_DIR="$vault" SKILLWIKI_SESSION_ID=sess1 bash <<'EOS'
-set -euo pipefail
-WIKI_DIR="${WIKI_DIR}"
-make_wiki_sync_stash_msg() {
-    local summary="${1:-pre-pull}"
-    local session_id cwd_hash iso
-    session_id="${SKILLWIKI_SESSION_ID:-${CLAUDE_SESSION_ID:-local}}"
-    cwd_hash="$(printf '%s' "$WIKI_DIR" | shasum -a 256 2>/dev/null | cut -c1-8)"
-    iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    printf 'wiki-sync:%s:%s:%s:%s' "$session_id" "$cwd_hash" "$iso" "$summary"
-}
-make_wiki_sync_stash_msg pre-pull
-EOS
-  )"
-
-  assert_eq "stash message matches peer parser" \
-    "$(printf '%s' "$msg" | grep -E '^wiki-sync:[^:]+:[^:]+:[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z:pre-pull$' >/dev/null && echo yes || echo no)" \
-    "yes"
-
   # wiki-sync must not call unqualified git stash pop (helper owns stash lifecycle)
   assert_eq "wiki-sync has no unqualified stash pop" \
     "$(grep -cE 'git stash pop' "$PRESYNC" || true)" "0"
