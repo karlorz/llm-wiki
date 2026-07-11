@@ -18,6 +18,18 @@ vault_sync_is_log_path() {
     esac
 }
 
+# Return 0 if file contains at least one NUL byte (binary). Do NOT use
+# `grep -q $'\0'` — on macOS BSD grep that matches every non-empty file.
+vault_sync_file_has_nul() {
+    local f="$1"
+    [ -f "$f" ] || return 1
+    # Compare original to a NUL-stripped copy; differ ⇒ had NUL.
+    if ! tr -d '\0' <"$f" | cmp -s - "$f"; then
+        return 0
+    fi
+    return 1
+}
+
 # Extract Markdown sections starting at ^##  from stdin; print each section
 # separated by a form-feed so callers can compare complete bodies.
 vault_sync_extract_h2_sections() {
@@ -152,7 +164,8 @@ vault_sync_commit_materialized() {
                 rm -rf "$tmpdir"
                 return 1
             fi
-            if grep -q $'\0' "$new_blob" 2>/dev/null || grep -q $'\0' "$target_blob" 2>/dev/null; then
+            # Real binary/NUL check (not BSD-grep $'\0', which false-positives on text).
+            if vault_sync_file_has_nul "$new_blob" || vault_sync_file_has_nul "$target_blob"; then
                 rm -rf "$tmpdir"
                 return 1
             fi
@@ -228,7 +241,7 @@ vault_sync_sequence_editor_drop() {
                     while IFS= read -r full || [ -n "$full" ]; do
                         [ -n "$full" ] || continue
                         case "$full" in
-                            "$sha"*) 
+                            "$sha"*)
                                 # omit this pick line (drop)
                                 continue 2
                                 ;;

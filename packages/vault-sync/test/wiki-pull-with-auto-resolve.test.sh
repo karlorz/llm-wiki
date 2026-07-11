@@ -484,6 +484,8 @@ EOF
 Local authored section body.
 EOF
   git_commit "$vault" "dev-loop: local work item"
+  local local_sha
+  local_sha="$(git -C "$vault" rev-parse HEAD)"
 
   local remote_work="$root/remote-snap"
   git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
@@ -510,23 +512,49 @@ EOF
   git_commit "$remote_work" "Snapshot 2026-07-11T12:00:00Z"
   git -C "$remote_work" push origin main >/dev/null
 
+  # Precondition: materialization proof must succeed against remote tip (drives real helper).
+  git -C "$vault" fetch origin main >/dev/null 2>&1
+  # shellcheck source=/dev/null
+  . "$(cd "$(dirname "$SCRIPT_UNDER_TEST")" && pwd)/lib/git-materialization.sh"
+  if vault_sync_commit_materialized "$local_sha" "origin/main" "$vault"; then
+    assert_eq "precondition local commit is fully materialized on origin/main" "proven" "proven"
+  else
+    assert_eq "precondition local commit is fully materialized on origin/main" "not_proven" "proven"
+  fi
+
+  # Capture pull log path used by platform helper under HOME
   HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
   rc=$?
 
-  local left_right local_section_count remote_section_count
+  local left_right local_section_count remote_section_count pull_log drop_lines
   left_right="$(git -C "$vault" rev-list --left-right --count HEAD...origin/main 2>/dev/null || echo 'err')"
   local_section_count="$(grep -c 'Local authored section body' "$vault/log.md" | tr -d ' ')"
   remote_section_count="$(grep -c 'Remote-only section' "$vault/log.md" | tr -d ' ')"
+  pull_log="$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)"
+  drop_lines=0
+  if [ -n "$pull_log" ] && [ -f "$pull_log" ]; then
+    drop_lines="$(grep -c "DROP materialized commit $local_sha" "$pull_log" 2>/dev/null | tr -d ' ')"
+  fi
 
   assert_eq "materialized pull exits successfully" "$rc" "0"
-  assert_eq "no local/remote content divergence (ahead behind)" "$left_right" "0	0"
+  assert_eq "no local/remote content divergence (ahead behind)" "$left_right" $'0\t0'
   assert_eq "local log section once" "$local_section_count" "1"
   assert_eq "remote log section once" "$remote_section_count" "1"
   assert_eq "work item present" "$(test -f "$vault/projects/demo/work/2026-07-11-item/spec.md" && echo present || echo absent)" "present"
   assert_eq "no conflict markers in log" "$(grep -Ec '^(<<<<<<<|=======|>>>>>>>)' "$vault/log.md" | tr -d ' ')" "0"
+  # Require the materialization drop path — log-union alone must not satisfy this fixture.
+  assert_eq "pull log records DROP materialized for local commit" "$( [ "${drop_lines:-0}" -ge 1 ] && echo yes || echo no )" "yes"
+  # Dropped commit must not remain as an ancestor of HEAD (rebase todo omitted it).
+  assert_eq "local commit not replayed onto HEAD" \
+    "$(git -C "$vault" merge-base --is-ancestor "$local_sha" HEAD 2>/dev/null && echo ancestor || echo dropped)" \
+    "dropped"
+  assert_eq "HEAD equals origin/main after drop" \
+    "$(git -C "$vault" rev-parse HEAD)" \
+    "$(git -C "$vault" rev-parse origin/main)"
 
   rm -rf "$root"
 }
+
 
 test_partial_match_commit_is_not_dropped() {
   local root
