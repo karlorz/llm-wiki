@@ -17,3 +17,4 @@ logs/
 # Local npm pack / release bundles (never commit)
 artifacts/
 *.tgz
+.worktrees/
