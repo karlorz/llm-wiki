@@ -23,8 +23,8 @@ Pre-sync helper that handles the full sync pipeline for the ~/wiki vault: lint g
 3. **Finds collisions** — untracked local files that `origin/main` already tracks
 4. **Removes collisions** — deletes byte-identical local copies (safe dedup); preserves local edits that differ
 5. **Detects rebase conflicts** — when local and remote both touch the same files, warns before rebase
-6. **Canonical pull** — delegates to `wiki-pull-with-auto-resolve.sh` (shared with unattended fetch). That helper classifies rebase state, drops only fully materialized local commits, and auto-resolves archive/log conflicts.
-7. **Stash protection** — stashes dirty tracked files with peer-detectable names `wiki-sync:{session}:{cwd_hash}:{iso8601}:pre-pull` before pull, pops after
+6. **Canonical pull** — delegates to `wiki-pull-with-auto-resolve.sh` (shared with unattended fetch). That helper owns an operation journal, freezes the remote tip as an exact OID, classifies rebase state, drops only fully materialized local commits, and auto-resolves archive/log conflicts.
+7. **Owned stash protection** — dirty tracked/untracked files are stashed with a helper-owned message `vault-sync op=<op_id> …` and recorded by **exact stash OID** in the journal (not legacy peer-name stash guessing). Apply/drop use that OID only.
 8. **Reports** remaining untracked files (genuine new work)
 
 ## Execution
@@ -65,6 +65,24 @@ bash packages/vault-sync/skills/vault-presync/wiki-sync.sh --execute
 
 The script auto-detects the vault root from `skillwiki path` → git root → script-relative path → `$HOME/wiki` fallback. No hardcoded paths.
 
+## Operation journal + frozen tip + one owned retry
+
+`wiki-pull-with-auto-resolve.sh` records every convergence attempt under the vault git path (helper-owned journal files + recovery refs). Logs include `op=<op_id>` lines (for example `STASH oid=… op=…`, `RETRY … op=…`, `OK pull completed op=…`). There is **no** legacy `wiki-pull auto-stash` path.
+
+Convergence properties:
+
+| Property | Behavior |
+|----------|----------|
+| Frozen tip | After fetch, pin `TARGET_OID=$(git rev-parse origin/main)` (exact OID, not a moving symbolic tip alone) |
+| Owned stash | Stash message embeds `op=<id>`; journal stores `owned_stash_oid`; restore/drop only that OID |
+| One stale-target retry | On non-archive manual conflict, if remote advanced and conflict identity is still owned/unmutated, **one** retry: abort, re-freeze tip, rebase again |
+| Handoff | Second conflict, human mutation, or exhausted retry → `handoff=1` / review-required; later runs refuse to reclaim handoff rebases |
+| No force-push | Pull helper never publishes; no `--force` / `--force-with-lease` push flags |
+
+Journal lifecycle (high level): begin → inventory → optional stash → rebasing → (optional retrying) → complete **or** review-required handoff.
+
+After install/rollout, confirm pull logs show `op=` journal lines and no legacy auto-stash wording before touching `$(platform_share_dir)/live-verify.ok` (see vault-sync-install attended checklist).
+
 ## Rebase-state classification (canonical pull helper)
 
 Before pull, `wiki-pull-with-auto-resolve.sh` classifies leftover sequencer state:
@@ -73,7 +91,7 @@ Before pull, `wiki-pull-with-auto-resolve.sh` classifies leftover sequencer stat
 |-------|---------|--------|
 | `none` | No rebase directory | Proceed |
 | `stale-clean` | Sequencer dir exists, no unmerged paths, live tip advanced past `orig-head` | Create `refs/vault-sync/recovery/<UTC>` at current HEAD, then `git rebase --quit` (never `--abort`) |
-| `active` | `REBASE_HEAD` / unmerged paths / in-progress context | Fail closed — leave state untouched |
+| `active` | `REBASE_HEAD` / unmerged paths / in-progress context | Fail closed — leave state untouched (handoff journals are never auto-cleaned) |
 
 **Never** raw-`rm` sequencer directories or `git rebase --abort` for unattended cleanup: abort resets the tip to `orig-head` and can discard newer authored work (2026-07-11 incident class).
 
@@ -105,9 +123,9 @@ When both local and remote touch the same files, `git rebase` pauses with confli
 3. **Body conflicts** — prefer the version with more content (the other side may be a truncated rclone race victim)
 4. **Mark resolved:** `git add <file>`
 5. **Continue:** `git rebase --continue`
-6. **Restore stash:** `git stash pop` (if the script stashed before rebase)
+6. **Restore owned stash:** only the journaled stash OID is applied/dropped (if the pull helper stashed before rebase)
 
-To abort a broken rebase: `git rebase --abort`
+To abort a broken rebase when you intend to discard the in-progress replay: `git rebase --abort` (attended only — unattended cleanup never uses abort for stale-clean state).
 
 ## Lint gate
 
