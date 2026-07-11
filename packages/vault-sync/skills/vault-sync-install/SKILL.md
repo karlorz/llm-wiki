@@ -90,6 +90,10 @@ Do not use FUSE-only mode on a normal git-backed wiki vault.
 
 Re-running the install upgrades scripts in-place. Existing scheduler units are reloaded, not duplicated.
 
+On macOS, launchd install is an observed-state transaction: domain probe → bootout until absent → enable → bootstrap, reconciling EIO only when `launchctl print` shows the label present (exit status only; no field parsing). Candidate plists are staged and moved into place only after registration is proven absent. Rollback copies live under `$(platform_cache_dir)/install-rollback/<timestamp>/` and are **retained after success** until a later status/live-verify step clears them.
+
+After a successful non-dry-run install, `$(platform_share_dir)/runtime-manifest.json` records package/installer version, host role, and SHA-256 hashes of installed scripts and LaunchAgents plists.
+
 ## Guardrails
 
 - **sg01 is production.** Never run this skill with `--execute` on sg01 from CI. Only hand-migration with human supervision.
