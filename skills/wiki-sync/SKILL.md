@@ -44,8 +44,8 @@ On every invocation, count `wiki-sync:*` stashes older than 24 hours via `skillw
 
 ### Push workflow
 4. If vault is dirty, ask the user to review uncommitted changes before proceeding.
-5. Run `skillwiki lint <vault>`. If errors exist, stop and report — do not push lint errors to remote.
-6. If lint passes (errors = 0), stage and commit:
+5. Run `skillwiki sync lint-delta <vault> --base-ref origin/main`. Block only when `new_errors > 0`. Report full/base/new/resolved. Malformed delta evidence fails closed — do not push.
+6. If lint-delta allows (new_errors = 0), stage and commit:
    - `git -C <vault> add -A`
    - `git -C <vault> commit -m "sync: vault update $(date -u +%Y-%m-%dT%H:%MZ)"`
 7. Run `git -C <vault> push origin HEAD`. Report result.
@@ -62,7 +62,7 @@ On every invocation, count `wiki-sync:*` stashes older than 24 hours via `skillw
     MSG="wiki-sync:${SESSION_ID}:${CWD_HASH}:${ISO_TS}:pre-pull"
     git -C "$VAULT" stash push -m "$MSG"
     ```
-11. Run `git -C <vault> pull --rebase origin HEAD`. Report result.
+11. Prefer the canonical pull helper (`wiki-pull-with-auto-resolve.sh` / vault-presync `--execute`) so stale-clean rebase state uses recovery-ref + `rebase --quit`, active rebases fail closed, and only fully materialized commits are dropped. If invoking git directly: `git -C <vault> pull --rebase origin HEAD`. Report result.
 12. If a stash was created, pop it: `git -C <vault> stash pop`.
 13. If conflicts occur during stash pop, identify them and present to the user for resolution (see Conflict Resolution below).
 14. Run `skillwiki lint <vault>` after pull to verify vault integrity.
@@ -240,3 +240,20 @@ bash ~/.hermes/scripts/wiki-snapshot.sh  # Re-sync fresh
 - Modifying files in `raw/` to resolve conflicts (N9 — archive and re-ingest instead).
 - Stashing without the `wiki-sync:...` name format (breaks peer detection).
 - Force-deleting a peer's lockfile (use `--force` only if peer is confirmed dead).
+
+## Convergence safeguards (2026-07-11)
+
+### Rebase-state classification
+- `stale-clean`: recovery ref at tip + `git rebase --quit` (preserves advanced tip; never abort-reset to orig-head).
+- `active` (REBASE_HEAD / UU paths): leave untouched; fail closed.
+- Recovery refs live under `refs/vault-sync/recovery/<UTC timestamp>`.
+
+### Materialized-commit proof
+Drop a local commit from rebase only when every path is proven present on the target ref (exact blobs; byte-identical added `## ` log sections). Partial/raw/rename mismatches retain or stop.
+
+### Lint-delta fail-closed
+- Fingerprints: `<bucket>\0<page>\0<normalized-detail>`
+- CLI: `skillwiki sync lint-delta <vault> --base-ref origin/main`
+- Block publication only when `new_errors > 0`; inherited full debt remains visible.
+- Missing/malformed delta evidence blocks (never silent lint skip).
+

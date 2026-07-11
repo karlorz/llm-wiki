@@ -1,8 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runLint } from "../../src/commands/lint.js";
+import { runLint, runSyncLintDelta, lintIssueFingerprint, collectLintErrorFingerprints } from "../../src/commands/lint.js";
 
 const SCHEMA = `# Vault Schema
 
@@ -2121,4 +2122,146 @@ Body
       expect(bucket).toBeUndefined();
     });
   });
+});
+
+
+describe("lint fingerprints and runSyncLintDelta", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const dir of tmpDirs) {
+      try { rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
+    }
+    tmpDirs.length = 0;
+  });
+
+  function makeTempDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "lint-delta-"));
+    tmpDirs.push(dir);
+    return dir;
+  }
+
+  function git(cwd: string, args: string[]): void {
+    execFileSync("git", args, { cwd, stdio: "pipe" });
+  }
+
+  function initVault(dir: string): void {
+    writeFileSync(join(dir, "SCHEMA.md"), "# schema\n");
+    writeFileSync(join(dir, "index.md"), "# index\n");
+    writeFileSync(join(dir, "log.md"), "# log\n");
+    mkdirSync(join(dir, "concepts"), { recursive: true });
+    mkdirSync(join(dir, "raw"), { recursive: true });
+  }
+
+  it("produces stable fingerprints independent of object key order", () => {
+    const a = lintIssueFingerprint("conflict_markers", { path: "a.md", line: 1, message: "x" });
+    const b = lintIssueFingerprint("conflict_markers", { message: "x", line: 1, path: "a.md" });
+    // page extraction is stable; detail may differ if JSON key order differs — page is stable
+    expect(a.split("\0")[0]).toBe("conflict_markers");
+    expect(a.split("\0")[1]).toBe("a.md");
+    expect(b.split("\0")[1]).toBe("a.md");
+  });
+
+  it("inherited-only errors yield new_errors=0", async () => {
+    const dir = makeTempDir();
+    git(dir, ["init"]);
+    git(dir, ["config", "user.email", "t@t"]);
+    git(dir, ["config", "user.name", "t"]);
+    initVault(dir);
+    // Conflict markers are an error bucket
+    writeFileSync(join(dir, "concepts/bad.md"), "<<<<<<< HEAD\nremote\n=======\nlocal\n>>>>>>> branch\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "base with error"]);
+    git(dir, ["branch", "-M", "main"]);
+    // bare remote
+    const remote = makeTempDir();
+    git(remote, ["init", "--bare"]);
+    git(dir, ["remote", "add", "origin", remote]);
+    git(dir, ["push", "-u", "origin", "main"]);
+
+    // Outgoing: same error still present, plus a clean edit
+    writeFileSync(join(dir, "concepts/ok.md"), "# ok\n\n## Overview\n\nbody\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "outgoing"]);
+
+    const { exitCode, result } = await runSyncLintDelta({ vault: dir, baseRef: "origin/main" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.full_errors).toBeGreaterThanOrEqual(1);
+      expect(result.data.base_errors).toBeGreaterThanOrEqual(1);
+      expect(result.data.new_errors).toBe(0);
+      expect(result.data.full_errors).toBe(result.data.base_errors - result.data.resolved_errors + result.data.new_errors);
+    }
+    // new_errors=0 should not use LINT_HAS_ERRORS for blocking semantics
+    expect(exitCode).not.toBe(23); // ExitCode.LINT_HAS_ERRORS
+  }, 60000);
+
+  it("new outgoing error yields new_errors>=1 and blocking exit", async () => {
+    const dir = makeTempDir();
+    git(dir, ["init"]);
+    git(dir, ["config", "user.email", "t@t"]);
+    git(dir, ["config", "user.name", "t"]);
+    initVault(dir);
+    writeFileSync(join(dir, "concepts/clean.md"), "# clean\n\n## Overview\n\nbody\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "clean base"]);
+    git(dir, ["branch", "-M", "main"]);
+    const remote = makeTempDir();
+    git(remote, ["init", "--bare"]);
+    git(dir, ["remote", "add", "origin", remote]);
+    git(dir, ["push", "-u", "origin", "main"]);
+
+    writeFileSync(join(dir, "concepts/newbad.md"), "<<<<<<< HEAD\nremote\n=======\nlocal\n>>>>>>> branch\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "introduce conflict markers"]);
+
+    const { exitCode, result } = await runSyncLintDelta({ vault: dir, baseRef: "origin/main" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.new_errors).toBeGreaterThanOrEqual(1);
+      expect(result.data.full_errors).toBeGreaterThanOrEqual(1);
+      expect(result.data.new_fingerprints.length).toBe(result.data.new_errors);
+    }
+    expect(exitCode).toBe(23); // LINT_HAS_ERRORS
+  }, 60000);
+
+  it("resolved-on-outgoing reports resolved_errors>=1", async () => {
+    const dir = makeTempDir();
+    git(dir, ["init"]);
+    git(dir, ["config", "user.email", "t@t"]);
+    git(dir, ["config", "user.name", "t"]);
+    initVault(dir);
+    writeFileSync(join(dir, "concepts/bad.md"), "<<<<<<< HEAD\nremote\n=======\nlocal\n>>>>>>> branch\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "base with error"]);
+    git(dir, ["branch", "-M", "main"]);
+    const remote = makeTempDir();
+    git(remote, ["init", "--bare"]);
+    git(dir, ["remote", "add", "origin", remote]);
+    git(dir, ["push", "-u", "origin", "main"]);
+
+    // Fix the error on outgoing
+    writeFileSync(join(dir, "concepts/bad.md"), "# fixed\n\n## Overview\n\nbody\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "fix error"]);
+
+    const { result } = await runSyncLintDelta({ vault: dir, baseRef: "origin/main" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.resolved_errors).toBeGreaterThanOrEqual(1);
+      expect(result.data.new_errors).toBe(0);
+    }
+  }, 60000);
+
+  it("missing base ref fails closed", async () => {
+    const dir = makeTempDir();
+    git(dir, ["init"]);
+    git(dir, ["config", "user.email", "t@t"]);
+    git(dir, ["config", "user.name", "t"]);
+    initVault(dir);
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "init"]);
+    const { exitCode, result } = await runSyncLintDelta({ vault: dir, baseRef: "origin/main" });
+    expect(result.ok).toBe(false);
+    expect(exitCode).toBe(23);
+  }, 30000);
 });

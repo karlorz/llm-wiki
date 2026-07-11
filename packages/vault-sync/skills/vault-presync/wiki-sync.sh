@@ -8,12 +8,12 @@
 #
 # What it does:
 #   1. Fetches remote state, checks AHEAD/BEHIND
-#   2. Runs skillwiki lint (warns on errors, continues on warnings)
+#   2. Runs skillwiki lint-delta (blocks only on new errors; inherited visible)
 #   3. Finds local untracked files that remote already tracks
 #      - Byte-identical → removes (safe dedup)
 #      - Content differs → preserves as LOCAL_EDITS
 #   4. Detects potential rebase conflicts (files touched by both sides)
-#   5. git pull --rebase (not ff-only — handles divergent histories)
+#   5. On --execute: delegates pull/rebase to wiki-pull-with-auto-resolve.sh
 #   6. Reports remaining untracked files (genuine new work)
 #
 # Usage:
@@ -27,11 +27,30 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Source platform.sh — handles both dev (../../scripts/lib/) and deployed (lib/) layouts
 if [ -f "$SCRIPT_DIR/lib/platform.sh" ]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/lib/platform.sh"
 elif [ -f "$SCRIPT_DIR/../../scripts/lib/platform.sh" ]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/../../scripts/lib/platform.sh"
 fi
 platform_detect_os
+
+# Resolve canonical pull helper (dev tree vs deployed plugin layout)
+resolve_pull_helper() {
+    local candidate
+    for candidate in \
+        "$SCRIPT_DIR/../../scripts/wiki-pull-with-auto-resolve.sh" \
+        "$SCRIPT_DIR/../scripts/wiki-pull-with-auto-resolve.sh" \
+        "$SCRIPT_DIR/wiki-pull-with-auto-resolve.sh" \
+        "$SCRIPT_DIR/lib/../wiki-pull-with-auto-resolve.sh"
+    do
+        if [ -x "$candidate" ] || [ -f "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
 
 # Auto-detect vault root: skillwiki config → git root → script-relative → fallback
 if command -v skillwiki &>/dev/null; then
@@ -41,7 +60,6 @@ if [[ -z "${WIKI_DIR:-}" ]]; then
     WIKI_DIR=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null) || true
 fi
 if [[ -z "${WIKI_DIR:-}" ]]; then
-    # Script is at <vault-presync>/wiki-sync.sh → vault is 2 dirs up from scripts/lib/ or script-relative
     WIKI_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd 2>/dev/null)" || true
 fi
 : "${WIKI_DIR:=$HOME/wiki}"
@@ -64,57 +82,66 @@ warn()  { echo -e "[wiki-sync] ${YELLOW}WARN:${NC} $*" >&2; }
 error() { echo -e "[wiki-sync] ${RED}ERROR:${NC} $*" >&2; }
 ok()    { echo -e "[wiki-sync] ${GREEN}OK:${NC} $*"; }
 
-is_project_knowledge_conflict_path() {
-    [[ "$1" =~ ^projects/[^/]+/knowledge\.md$ ]]
+# Peer-detectable stash name: wiki-sync:{session}:{cwd_hash}:{iso8601}:{summary}
+make_wiki_sync_stash_msg() {
+    local summary="${1:-pre-pull}"
+    local session_id cwd_hash iso
+    session_id="${SKILLWIKI_SESSION_ID:-${CLAUDE_SESSION_ID:-local}}"
+    # 8-char cwd hash (portable)
+    cwd_hash="$(printf '%s' "$WIKI_DIR" | shasum -a 256 2>/dev/null | cut -c1-8)"
+    if [ -z "$cwd_hash" ]; then
+        cwd_hash="$(printf '%s' "$WIKI_DIR" | cksum | awk '{print $1}')"
+    fi
+    iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'wiki-sync:%s:%s:%s:%s' "$session_id" "$cwd_hash" "$iso" "$summary"
 }
 
-project_slug_from_knowledge_path() {
-    local path="$1"
-    path="${path#projects/}"
-    printf '%s\n' "${path%%/*}"
-}
-
-try_auto_resolve_project_knowledge_conflicts() {
-    local conflicts="$1"
-    local f slug slugs rc
-
-    command -v skillwiki >/dev/null 2>&1 || return 1
-
-    for f in $conflicts; do
-        is_project_knowledge_conflict_path "$f" || return 1
-    done
-
-    slugs="$(mktemp)" || return 1
-    for f in $conflicts; do
-        project_slug_from_knowledge_path "$f" >>"$slugs"
-    done
-
-    rc=0
-    while read -r slug; do
-        [[ -n "$slug" ]] || continue
-        if ! skillwiki project-index "$slug" "$WIKI_DIR" --apply >/dev/null; then
-            rc=1
-        fi
-    done < <(sort -u "$slugs")
-    rm -f "$slugs"
-    [[ "$rc" -eq 0 ]] || return 1
-
-    for f in $conflicts; do
-        git add "$f" || return 1
-    done
-
-    ok "Auto-resolved generated project knowledge index conflict(s): $conflicts"
-    return 0
-}
-
-need_confirm() {
-    if [[ "$DRY_RUN" == true ]]; then
-        warn "[DRY RUN] Would require confirmation: $*"
+# Parse lint-delta JSON; print full/base/new/resolved; return 0 if new_errors==0.
+# Fail closed on missing CLI or malformed output.
+run_lint_delta_gate() {
+    local out rc new_errors full_errors base_errors resolved_errors
+    if ! command -v skillwiki &>/dev/null; then
+        error "skillwiki CLI not available — lint-delta gate fails closed"
         return 1
     fi
-    echo -n "$* [y/N] "
-    read -r ans
-    [[ "$ans" == "y" || "$ans" == "Y" ]]
+    set +e
+    out=$(skillwiki sync lint-delta "$WIKI_DIR" --base-ref origin/main 2>&1)
+    rc=$?
+    set -e
+    # Extract counts via python (stable JSON envelope)
+    eval "$(printf '%s\n' "$out" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    data=d.get("data") or {}
+    print("full_errors=%s" % int(data.get("full_errors", -1)))
+    print("base_errors=%s" % int(data.get("base_errors", -1)))
+    print("new_errors=%s" % int(data.get("new_errors", -1)))
+    print("resolved_errors=%s" % int(data.get("resolved_errors", -1)))
+except Exception:
+    print("full_errors=-1")
+    print("base_errors=-1")
+    print("new_errors=-1")
+    print("resolved_errors=-1")
+' 2>/dev/null)" || {
+        full_errors=-1; base_errors=-1; new_errors=-1; resolved_errors=-1
+    }
+
+    if [ "${full_errors:- -1}" = "-1" ] || [ "${new_errors:--1}" = "-1" ]; then
+        error "lint-delta evidence missing or malformed — fail closed"
+        printf '%s\n' "$out" >&2
+        return 1
+    fi
+
+    log "Lint delta: full=$full_errors base=$base_errors new=$new_errors resolved=$resolved_errors"
+    if [ "$new_errors" -gt 0 ]; then
+        error "Lint introduced $new_errors new error(s) (full=$full_errors). Fix before syncing, or use --force to skip."
+        return 1
+    fi
+    if [ "$full_errors" -gt 0 ]; then
+        warn "Inherited lint debt remains: full_errors=$full_errors (outgoing introduced 0 new errors)."
+    fi
+    return 0
 }
 
 # ── 1. Fetch ──────────────────────────────────────────────
@@ -139,24 +166,17 @@ else
     log "Already in sync with origin/main."
 fi
 
-# ── 3. Lint gate ──────────────────────────────────────────
+# ── 3. Lint gate (delta) ──────────────────────────────────
 if [[ "$SKIP_LINT" == true ]]; then
     warn "Skipping lint gate (--force)."
-elif command -v skillwiki &>/dev/null; then
-    LINT_OUT=$(skillwiki lint "$WIKI_DIR" 2>&1) || true
-    LINT_ERRORS=$(echo "$LINT_OUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['data']['summary']['errors'])" 2>/dev/null || echo "?")
-    LINT_WARNINGS=$(echo "$LINT_OUT" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['data']['summary']['warnings'])" 2>/dev/null || echo "?")
-    log "Lint: errors=$LINT_ERRORS  warnings=$LINT_WARNINGS"
-    if [[ "$LINT_ERRORS" != "0" && "$LINT_ERRORS" != "?" ]]; then
-        error "Lint has $LINT_ERRORS error(s). Fix before syncing, or use --force to skip."
+else
+    if ! run_lint_delta_gate; then
         if [[ "$DRY_RUN" == true ]]; then
             log "[DRY RUN] Would block sync here."
         else
             exit 1
         fi
     fi
-else
-    warn "skillwiki CLI not available — skipping lint gate."
 fi
 
 # ── 4. Find collision candidates ──────────────────────────
@@ -194,7 +214,6 @@ fi
 
 # ── 5. Pre-rebase conflict detection ──────────────────────
 if [[ "$BEHIND" -gt 0 && "$AHEAD" -gt 0 ]]; then
-    # Find files touched by both local commits and remote commits
     LOCAL_FILES=$(git diff --name-only origin/main..HEAD 2>/dev/null || true)
     REMOTE_FILES=$(git diff --name-only HEAD..origin/main 2>/dev/null || true)
     OVERLAP=$(comm -12 <(echo "$LOCAL_FILES" | sort) <(echo "$REMOTE_FILES" | sort) 2>/dev/null || true)
@@ -217,55 +236,49 @@ if [[ "$DRY_RUN" == true ]]; then
     exit 0
 fi
 
-# ── 7. Pull (rebase) ─────────────────────────────────────
+# ── 7. Pull via canonical helper ──────────────────────────
 if [[ "$BEHIND" -gt 0 ]]; then
-    log "Rebasing $AHEAD local commit(s) onto origin/main..."
+    PULL_HELPER="$(resolve_pull_helper)" || {
+        error "Cannot locate wiki-pull-with-auto-resolve.sh"
+        exit 1
+    }
+    log "Delegating pull/rebase to canonical helper: $PULL_HELPER"
 
-    STASHED=false
+    # If the helper will not stash itself with peer-detectable names, we still
+    # let the helper own stash/rebase. Optionally pre-stash with wiki-sync name
+    # only when there are dirty tracked edits — helper also stashes, so prefer
+    # letting the helper manage the tree; but create a peer-visible stash name
+    # by exporting nothing and relying on helper. For peer detection tests we
+    # stash ourselves first with the canonical name when dirty.
+    STASHED_HERE=false
     if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
-        log "Stashing local tracked edits before rebase..."
-        git stash push -m "wiki-sync auto-stash $(date +%s)"
-        STASHED=true
+        STASH_MSG="$(make_wiki_sync_stash_msg pre-pull)"
+        log "Stashing local tracked edits: $STASH_MSG"
+        git stash push -m "$STASH_MSG"
+        STASHED_HERE=true
     fi
 
-    if git rebase origin/main; then
-        ok "Rebase succeeded."
-    else
-        error "Rebase had conflicts. You're now in a rebase session."
-        error ""
-        error "Resolution steps:"
-        error "  1. Fix conflicts: git diff --name-only --diff-filter=U"
-        error "  2. For frontmatter 'updated:' conflicts: keep the newer timestamp"
-        error "  3. For body conflicts: keep the version with more content"
-        error "  4. git add <resolved-files>"
-        error "  5. git rebase --continue"
-        error "  6. Then: git stash pop  (if stash was created)"
-        error ""
-        error "To abort: git rebase --abort"
-        [[ "$STASHED" == true ]] && warn "Stash is saved — pop it after resolving: git stash pop"
+    set +e
+    WIKI_DIR="$WIKI_DIR" bash "$PULL_HELPER" origin main
+    PULL_RC=$?
+    set -e
+
+    if [[ "$PULL_RC" -ne 0 ]]; then
+        error "Canonical pull helper failed (exit $PULL_RC)."
+        error "If a rebase is active: resolve conflicts, then git rebase --continue"
+        error "Active rebases are never auto-aborted."
+        [[ "$STASHED_HERE" == true ]] && warn "Stash saved — list with: git stash list"
         exit 1
     fi
+    ok "Canonical pull helper succeeded."
 
-    if [[ "$STASHED" == true ]]; then
-        log "Reapplying stashed edits..."
+    if [[ "$STASHED_HERE" == true ]]; then
+        log "Reapplying pre-pull stash..."
         if git stash pop; then
             ok "Stash reapplied cleanly."
         else
-            CONFLICTS=$(git diff --name-only --diff-filter=U 2>/dev/null || true)
-            if [[ -n "$CONFLICTS" ]] && try_auto_resolve_project_knowledge_conflicts "$CONFLICTS"; then
-                if [[ -n "$(git diff --name-only --diff-filter=U 2>/dev/null || true)" ]]; then
-                    error "Generated project knowledge auto-resolve left conflicts."
-                    exit 1
-                fi
-                git stash drop >/dev/null 2>&1 || warn "Could not drop auto-resolved stash."
-                ok "Stash project knowledge conflicts auto-resolved."
-            else
-                error "Stash pop had conflicts."
-                error "  - Your edits are in the stash (git stash list)"
-                error "  - Resolve conflicts in the working tree"
-                error "  - Then: git stash drop  (to remove the applied stash)"
-                exit 1
-            fi
+            error "Stash pop had conflicts — resolve manually, then git stash drop if applied."
+            exit 1
         fi
     fi
 elif [[ "$AHEAD" -gt 0 ]]; then

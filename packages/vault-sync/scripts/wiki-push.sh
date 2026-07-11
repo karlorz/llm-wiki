@@ -194,6 +194,44 @@ if ! conflict_marker_guard; then
     exit 1
 fi
 
+# Lint delta gate: block S3 publication only on newly introduced lint errors.
+# Inherited debt is logged. Malformed/missing delta evidence fails closed.
+if command -v skillwiki >/dev/null 2>&1; then
+    DELTA_OUT=$(skillwiki sync lint-delta "$WIKI_DIR" --base-ref origin/main 2>&1) || true
+    printf '%s
+' "$DELTA_OUT" >>"$LOG_FILE"
+    eval "$(printf '%s\n' "$DELTA_OUT" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    data=d.get("data") or {}
+    print("DELTA_FULL=%s" % int(data.get("full_errors", -1)))
+    print("DELTA_BASE=%s" % int(data.get("base_errors", -1)))
+    print("DELTA_NEW=%s" % int(data.get("new_errors", -1)))
+    print("DELTA_RESOLVED=%s" % int(data.get("resolved_errors", -1)))
+except Exception:
+    print("DELTA_FULL=-1")
+    print("DELTA_BASE=-1")
+    print("DELTA_NEW=-1")
+    print("DELTA_RESOLVED=-1")
+' 2>/dev/null)" || { DELTA_FULL=-1; DELTA_BASE=-1; DELTA_NEW=-1; DELTA_RESOLVED=-1; }
+    if [ "${DELTA_NEW:--1}" = "-1" ] || [ "${DELTA_FULL:--1}" = "-1" ]; then
+        log "FAIL lint-delta evidence missing or malformed — refusing S3 push"
+        exit 1
+    fi
+    log "LINT-DELTA full=$DELTA_FULL base=$DELTA_BASE new=$DELTA_NEW resolved=$DELTA_RESOLVED"
+    if [ "$DELTA_NEW" -gt 0 ]; then
+        log "FAIL lint-delta new_errors=$DELTA_NEW blocks S3 push (full=$DELTA_FULL)"
+        exit 1
+    fi
+    if [ "$DELTA_FULL" -gt 0 ]; then
+        log "WARN inherited lint debt full_errors=$DELTA_FULL (new_errors=0) — push allowed"
+    fi
+else
+    log "FAIL skillwiki CLI not found — lint-delta gate cannot run; refusing S3 push"
+    exit 1
+fi
+
 # rclone copy (NOT sync) → never bulk-deletes on remote.
 # After a successful copy, prune only those stale live paths whose matching
 # _archive/<path> object is now present on the remote and whose live path is

@@ -42,7 +42,7 @@ import { runSessionBrief } from "./commands/session-brief.js";
 import { runMemoryImport, runMemoryIndex, runMemoryRecall, runMemoryReview, runMemoryTopics } from "./commands/memory.js";
 import { runIngest } from "./commands/ingest.js";
 import { runTagSync } from "./commands/tag-sync.js";
-import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "./commands/sync.js";
+import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers, runSyncLintDelta } from "./commands/sync.js";
 import { getCliSessionId } from "./utils/sync-lock.js";
 import { runBackupSync, runBackupRestore } from "./commands/backup.js";
 import { runStatus } from "./commands/status.js";
@@ -880,6 +880,17 @@ syncCmd
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(runSyncPeers({ vault: v.vault, sessionId: getCliSessionId() }));
+  });
+
+syncCmd
+  .command("lint-delta [vault]")
+  .description("compare lint errors against a base ref; block only on new errors")
+  .option("--base-ref <ref>", "base git ref to compare against", "origin/main")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runSyncLintDelta({ vault: v.vault, baseRef: opts.baseRef }));
   });
 
 // backup — grouped under a parent command

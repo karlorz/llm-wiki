@@ -1,6 +1,6 @@
 ---
 name: vault-presync
-description: Pre-sync lint gate, collision dedup, and rebase for ~/wiki vault. Removes untracked local files that are byte-identical to remote-tracked files, detects rebase conflicts, then git pull --rebase. Run before wiki-sync or git push.
+description: Pre-sync lint-delta gate, collision dedup, and rebase for ~/wiki vault. Removes untracked local files that are byte-identical to remote-tracked files, detects rebase conflicts, then delegates pull to wiki-pull-with-auto-resolve. Run before wiki-sync or git push.
 argument-hint: "[--dry-run|--execute|--force]"
 ---
 
@@ -19,12 +19,12 @@ Pre-sync helper that handles the full sync pipeline for the ~/wiki vault: lint g
 ## What it does
 
 1. **Fetches** remote state, reports AHEAD/BEHIND/DIRTY counts
-2. **Lint gate** — runs `skillwiki lint`; blocks on errors (unless `--force`)
+2. **Lint-delta gate** — runs `skillwiki sync lint-delta --base-ref origin/main`; blocks only when `new_errors > 0` (unless `--force`). Inherited debt is visible but non-blocking. Malformed/missing delta evidence fails closed.
 3. **Finds collisions** — untracked local files that `origin/main` already tracks
 4. **Removes collisions** — deletes byte-identical local copies (safe dedup); preserves local edits that differ
 5. **Detects rebase conflicts** — when local and remote both touch the same files, warns before rebase
-6. **git pull --rebase** — replays local commits on top of remote (handles divergent histories, unlike ff-only)
-7. **Stash protection** — stashes dirty tracked files before rebase, pops after, with conflict guidance
+6. **Canonical pull** — delegates to `wiki-pull-with-auto-resolve.sh` (shared with unattended fetch). That helper classifies rebase state, drops only fully materialized local commits, and auto-resolves archive/log conflicts.
+7. **Stash protection** — stashes dirty tracked files with peer-detectable names `wiki-sync:{session}:{cwd_hash}:{iso8601}:pre-pull` before pull, pops after
 8. **Reports** remaining untracked files (genuine new work)
 
 ## Execution
@@ -65,7 +65,38 @@ bash packages/vault-sync/skills/vault-presync/wiki-sync.sh --execute
 
 The script auto-detects the vault root from `skillwiki path` → git root → script-relative path → `$HOME/wiki` fallback. No hardcoded paths.
 
+## Rebase-state classification (canonical pull helper)
+
+Before pull, `wiki-pull-with-auto-resolve.sh` classifies leftover sequencer state:
+
+| State | Meaning | Action |
+|-------|---------|--------|
+| `none` | No rebase directory | Proceed |
+| `stale-clean` | Sequencer dir exists, no unmerged paths, live tip advanced past `orig-head` | Create `refs/vault-sync/recovery/<UTC>` at current HEAD, then `git rebase --quit` (never `--abort`) |
+| `active` | `REBASE_HEAD` / unmerged paths / in-progress context | Fail closed — leave state untouched |
+
+**Never** raw-`rm` sequencer directories or `git rebase --abort` for unattended cleanup: abort resets the tip to `orig-head` and can discard newer authored work (2026-07-11 incident class).
+
+## Materialized-commit proof
+
+Local commits fully present on the remote tip may be dropped from the rebase todo only when every changed path is proven:
+
+- Ordinary add/modify: target blob equals commit blob
+- Delete: path absent on target
+- `log.md` / `*/log.md`: every added `## ` section body occurs byte-for-byte in the target log
+
+Any partial match, rename, binary mismatch, raw-path difference, or unprovable change retains the commit or stops for review — never silent drop.
+
+## Lint-delta fail-closed
+
+Publication and presync execute parse `skillwiki sync lint-delta` JSON:
+
+- Report `full_errors` / `base_errors` / `new_errors` / `resolved_errors`
+- Block only when `new_errors > 0`
+- If the CLI is missing or JSON is malformed → fail closed (do not skip lint)
+
 ## Rebase conflict resolution
+
 
 When both local and remote touch the same files, `git rebase` pauses with conflicts. The script detects this pre-rebase (step 5) and warns which files overlap. If conflicts occur during rebase:
 
@@ -80,7 +111,7 @@ To abort a broken rebase: `git rebase --abort`
 
 ## Lint gate
 
-The script runs `skillwiki lint` before syncing. Errors block the sync (use `--force` to override). Warnings are logged but do not block. This prevents pushing malformed frontmatter (like the 2026-05-22 YAML bug where orphaned `- tags` lines broke 8 pages).
+The script runs `skillwiki sync lint-delta` before syncing. Only **new** errors block the sync (use `--force` to override). Inherited full-error debt is warned but non-blocking. Malformed delta evidence fails closed. This prevents pushing malformed frontmatter (like the 2026-05-22 YAML bug where orphaned `- tags` lines broke 8 pages).
 
 ## Conflict-marker guard
 

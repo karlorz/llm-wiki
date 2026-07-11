@@ -16,6 +16,10 @@
 # archive/manual branch handles the full set. A rebase iteration cap
 # (MAX_REBASE_ITERS) prevents a silent resolver failure from spinning forever.
 #
+# Before pull, stale-clean sequencer state is cleared with recovery-ref +
+# `git rebase --quit` (never abort). Fully materialized local commits (content
+# already present on the remote tip) may be dropped from the rebase todo.
+#
 # Usage:
 #   wiki-pull-with-auto-resolve.sh [--remote <name>] [--branch <name>]
 #   Defaults: origin, main
@@ -27,6 +31,8 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/lockfile.sh"
 . "$SCRIPT_DIR/lib/git-case.sh"
 . "$SCRIPT_DIR/lib/conflict-markers.sh"
+. "$SCRIPT_DIR/lib/git-rebase-state.sh"
+. "$SCRIPT_DIR/lib/git-materialization.sh"
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
@@ -233,16 +239,51 @@ try_auto_resolve_project_knowledge_conflicts() {
     return 0
 }
 
+# Build a temporary sequence editor that drops fully materialized commits.
+prepare_materialization_sequence_editor() {
+    local drop_list="$1"
+    local editor_script="$2"
+    cat > "$editor_script" <<EOF
+#!/bin/bash
+set -u
+DROP_LIST="$drop_list"
+LIB="$SCRIPT_DIR/lib/git-materialization.sh"
+. "\$LIB"
+vault_sync_sequence_editor_drop "\$DROP_LIST" "\$1"
+EOF
+    chmod +x "$editor_script"
+}
+
 cd "$WIKI_DIR" || { log "ERROR: cd $WIKI_DIR failed"; exit 1; }
 
-# Clean up leftover rebase state from a previous failed unattended run. An
-# empty/corrupt rebase-merge directory is enough to block the next pull.
+# Classify leftover rebase state. Active rebases fail closed; stale-clean
+# state is cleared with recovery-ref + quit (never abort — abort would reset
+# the branch tip to orig-head and discard newer authored work).
 if [ -d "$WIKI_DIR/.git/rebase-merge" ] || [ -d "$WIKI_DIR/.git/rebase-apply" ]; then
-    log "CLEANUP stale rebase state from previous run"
-    git rebase --abort 2>>"$LOG_FILE" || true
-    if ! git rev-parse -q --verify REBASE_HEAD >/dev/null 2>&1; then
-        rm -rf "$WIKI_DIR/.git/rebase-merge" "$WIKI_DIR/.git/rebase-apply"
-    fi
+    REBASE_STATE="$(vault_sync_rebase_state "$WIKI_DIR")"
+    log "REBASE-STATE $REBASE_STATE"
+    case "$REBASE_STATE" in
+        none)
+            ;;
+        stale-clean)
+            PRE_CLEANUP_HEAD="$(git rev-parse HEAD)"
+            if vault_sync_clear_stale_rebase "$WIKI_DIR"; then
+                POST_CLEANUP_HEAD="$(git rev-parse HEAD)"
+                if [ "$PRE_CLEANUP_HEAD" != "$POST_CLEANUP_HEAD" ]; then
+                    log "FAIL stale rebase cleanup moved HEAD ($PRE_CLEANUP_HEAD -> $POST_CLEANUP_HEAD)"
+                    exit 1
+                fi
+                log "CLEANUP stale-clean rebase via quit (tip preserved at $PRE_CLEANUP_HEAD)"
+            else
+                log "FAIL could not clear stale-clean rebase state safely"
+                exit 1
+            fi
+            ;;
+        active|*)
+            log "FAIL active rebase state present — refusing auto-cleanup"
+            exit 1
+            ;;
+    esac
 fi
 
 if ! CASE_CONFLICTS=$(git_case_conflicts); then
@@ -283,12 +324,32 @@ if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; th
     fi
 fi
 
+# Drop only fully proven materialized local commits from the rebase todo.
+DROP_LIST="$(mktemp)"
+EDITOR_SCRIPT="$(mktemp)"
+MERGE_BASE="$(git merge-base HEAD "$REMOTE/$BRANCH" 2>/dev/null || true)"
+if [ -n "$MERGE_BASE" ]; then
+    vault_sync_list_materialized_commits "$MERGE_BASE" "$REMOTE/$BRANCH" "$DROP_LIST" "$WIKI_DIR"
+    if [ -s "$DROP_LIST" ]; then
+        while IFS= read -r drop_sha; do
+            [ -n "$drop_sha" ] || continue
+            log "DROP materialized commit $drop_sha (proven on $REMOTE/$BRANCH)"
+        done < "$DROP_LIST"
+        prepare_materialization_sequence_editor "$DROP_LIST" "$EDITOR_SCRIPT"
+        export GIT_SEQUENCE_EDITOR="$EDITOR_SCRIPT"
+    else
+        export GIT_SEQUENCE_EDITOR=:
+    fi
+else
+    export GIT_SEQUENCE_EDITOR=:
+fi
+
 # Run rebase with auto-resolve for archive conflict storms.
 # --reapply-cherry-picks prevents git from skipping matching patch-ids and
 # dirtying the working tree mid-rebase.
-export GIT_SEQUENCE_EDITOR=:
 git -c rebase.reapplyCherryPicks=true pull --rebase "$REMOTE" "$BRANCH" 2>>"$LOG_FILE"
 REBASE_RC=$?
+rm -f "$DROP_LIST" "$EDITOR_SCRIPT"
 
 # Defense-in-depth: cap rebase iterations so a silent resolver failure cannot
 # spin the unattended pull forever. A healthy conflict storm is bounded by the

@@ -1434,3 +1434,225 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     result: ok(input.summary ? summarizeLintOutput(output, input.examplesLimit) : output)
   };
 }
+
+
+// ── lint issue fingerprints + base-ref delta ───────────────────────────────
+
+/** Stable fingerprint: <bucket>\0<page>\0<normalized-detail> */
+export function lintIssueFingerprint(bucket: string, item: unknown): string {
+  const page = extractIssuePage(item);
+  const detail = normalizeIssueDetail(item);
+  return `${bucket}\0${page}\0${detail}`;
+}
+
+function extractIssuePage(item: unknown): string {
+  if (typeof item === "string") {
+    // Common forms: "path.md: message" or bare path
+    const m = item.match(/^([^:]+?)(?::\s|$)/);
+    return (m?.[1] ?? item).trim();
+  }
+  if (item && typeof item === "object") {
+    const obj = item as Record<string, unknown>;
+    for (const key of ["path", "file", "page", "relPath"]) {
+      if (typeof obj[key] === "string") return obj[key] as string;
+    }
+  }
+  return "";
+}
+
+function normalizeIssueDetail(item: unknown): string {
+  if (typeof item === "string") {
+    // Drop volatile whitespace only
+    return item.replace(/\s+/g, " ").trim();
+  }
+  try {
+    return JSON.stringify(item, Object.keys(item as object).sort());
+  } catch {
+    return String(item);
+  }
+}
+
+/** Collect stable fingerprints for all error-severity issues in a lint output. */
+export function collectLintErrorFingerprints(output: LintOutput): Set<string> {
+  const fps = new Set<string>();
+  for (const bucket of output.by_severity.error) {
+    for (const item of bucket.items) {
+      fps.add(lintIssueFingerprint(bucket.kind, item));
+    }
+  }
+  return fps;
+}
+
+export interface SyncLintDeltaInput {
+  vault: string;
+  baseRef?: string;
+  days?: number;
+  lines?: number;
+  logThreshold?: number;
+}
+
+export interface SyncLintDeltaOutput {
+  full_errors: number;
+  base_errors: number;
+  new_errors: number;
+  resolved_errors: number;
+  full_fingerprints: string[];
+  new_fingerprints: string[];
+  resolved_fingerprints: string[];
+  base_ref: string;
+  humanHint: string;
+}
+
+/**
+ * Compare outgoing vault lint errors against a base git ref (default origin/main).
+ * Base tree is exported via `git archive` into a temporary directory (no worktree).
+ * Fail closed when base ref is missing/malformed or archive fails.
+ */
+export async function runSyncLintDelta(
+  input: SyncLintDeltaInput,
+): Promise<{ exitCode: number; result: Result<SyncLintDeltaOutput> }> {
+  const { mkdtempSync, rmSync, existsSync: fsExists } = await import("node:fs");
+  const { join: pathJoin } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const { execFileSync } = await import("node:child_process");
+
+  const vault = input.vault;
+  const baseRef = input.baseRef ?? "origin/main";
+  const days = input.days ?? 90;
+  const lines = input.lines ?? 200;
+  const logThreshold = input.logThreshold ?? 500;
+
+  if (!fsExists(pathJoin(vault, ".git"))) {
+    return {
+      exitCode: ExitCode.VAULT_PATH_INVALID,
+      result: err("NOT_A_GIT_REPO", { path: vault }),
+    };
+  }
+
+  // Verify base ref resolves
+  try {
+    execFileSync("git", ["rev-parse", "--verify", baseRef], {
+      cwd: vault,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch {
+    return {
+      exitCode: ExitCode.LINT_HAS_ERRORS,
+      result: err("LINT_DELTA_BASE_UNAVAILABLE", {
+        baseRef,
+        message: `base ref ${baseRef} does not resolve — fail closed`,
+      }),
+    };
+  }
+
+  // Lint outgoing tree
+  const fullLint = await runLint({ vault, days, lines, logThreshold });
+  if (!fullLint.result.ok) {
+    return {
+      exitCode: ExitCode.LINT_HAS_ERRORS,
+      result: err("LINT_DELTA_FULL_FAILED", { detail: fullLint.result }),
+    };
+  }
+  const fullOutput = fullLint.result.data as LintOutput;
+  // When summary mode is not requested, data is LintOutput with by_severity.
+  // If summary was returned somehow, fail closed.
+  if (!("by_severity" in fullOutput) || !fullOutput.by_severity) {
+    return {
+      exitCode: ExitCode.LINT_HAS_ERRORS,
+      result: err("LINT_DELTA_MALFORMED", { message: "full lint missing by_severity" }),
+    };
+  }
+  const fullFps = collectLintErrorFingerprints(fullOutput);
+
+  // Export base tree to temp dir via git archive
+  const tmpRoot = mkdtempSync(pathJoin(tmpdir(), "skillwiki-lint-delta-"));
+  try {
+    const archive = execFileSync("git", ["archive", "--format=tar", baseRef], {
+      cwd: vault,
+      stdio: ["pipe", "pipe", "pipe"],
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    execFileSync("tar", ["-xf", "-"], {
+      cwd: tmpRoot,
+      input: archive,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    // Minimal SCHEMA.md check — lint requires vault shape
+    if (!fsExists(pathJoin(tmpRoot, "SCHEMA.md"))) {
+      // Still attempt lint; runLint will return VAULT_PATH_INVALID if needed.
+    }
+
+    const baseLint = await runLint({ vault: tmpRoot, days, lines, logThreshold });
+    if (!baseLint.result.ok) {
+      // Base vault may be incomplete; fail closed rather than skip.
+      return {
+        exitCode: ExitCode.LINT_HAS_ERRORS,
+        result: err("LINT_DELTA_BASE_LINT_FAILED", {
+          baseRef,
+          detail: baseLint.result,
+        }),
+      };
+    }
+    const baseOutput = baseLint.result.data as LintOutput;
+    if (!("by_severity" in baseOutput) || !baseOutput.by_severity) {
+      return {
+        exitCode: ExitCode.LINT_HAS_ERRORS,
+        result: err("LINT_DELTA_MALFORMED", { message: "base lint missing by_severity" }),
+      };
+    }
+    const baseFps = collectLintErrorFingerprints(baseOutput);
+
+    const newFps: string[] = [];
+    const resolvedFps: string[] = [];
+    for (const fp of fullFps) {
+      if (!baseFps.has(fp)) newFps.push(fp);
+    }
+    for (const fp of baseFps) {
+      if (!fullFps.has(fp)) resolvedFps.push(fp);
+    }
+    newFps.sort();
+    resolvedFps.sort();
+    const fullList = [...fullFps].sort();
+
+    const output: SyncLintDeltaOutput = {
+      full_errors: fullFps.size,
+      base_errors: baseFps.size,
+      new_errors: newFps.length,
+      resolved_errors: resolvedFps.length,
+      full_fingerprints: fullList,
+      new_fingerprints: newFps,
+      resolved_fingerprints: resolvedFps,
+      base_ref: baseRef,
+      humanHint:
+        newFps.length > 0
+          ? `lint delta: ${newFps.length} new error(s) vs ${baseRef} (full=${fullFps.size}, base=${baseFps.size}, resolved=${resolvedFps.length})`
+          : fullFps.size > 0
+            ? `lint delta: 0 new errors vs ${baseRef}; inherited full_errors=${fullFps.size} (base=${baseFps.size}, resolved=${resolvedFps.length})`
+            : `lint delta: clean (0 errors) vs ${baseRef}`,
+    };
+
+    const exitCode =
+      output.new_errors > 0
+        ? ExitCode.LINT_HAS_ERRORS
+        : fullLint.exitCode === ExitCode.LINT_HAS_WARNINGS
+          ? ExitCode.LINT_HAS_WARNINGS
+          : ExitCode.OK;
+
+    return { exitCode, result: ok(output) };
+  } catch (e: unknown) {
+    return {
+      exitCode: ExitCode.LINT_HAS_ERRORS,
+      result: err("LINT_DELTA_ARCHIVE_FAILED", {
+        baseRef,
+        message: String(e),
+      }),
+    };
+  } finally {
+    try {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup
+    }
+  }
+}

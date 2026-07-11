@@ -107,6 +107,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   syncCmd.command("lock").option("--summary <text>").option("--ttl-minutes <n>").option("--force").option("--wiki <name>");
   syncCmd.command("unlock").option("--force").option("--wiki <name>");
   syncCmd.command("peers").option("--wiki <name>");
+  syncCmd.command("lint-delta").option("--base-ref <ref>").option("--wiki <name>");
 
   const backupCmd = program.commands.find(c => c.name() === "backup")!;
   backupCmd.command("sync").option("--dry-run").option("--bucket <name>").option("--endpoint <url>").option("--region <region>").option("--prune").option("--wiki <name>");

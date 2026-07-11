@@ -109,3 +109,15 @@ rg "marketplaces\\.llm-wiki" ~/.codex/config.toml
 - Run `npm run materialize:plugins` after changing canonical skill, agent, or
   hook assets. Run `npm run materialize:plugins:check` for read-only drift
   detection.
+
+## wiki-sync / vault-sync convergence notes
+
+- Stale clean rebase sequencer state is cleared with a recovery ref under
+  `refs/vault-sync/recovery/` plus `git rebase --quit` (never abort-reset).
+- Active rebases (`REBASE_HEAD` / unmerged paths) fail closed and are left untouched.
+- Only fully proven snapshot-materialized local commits may be dropped during
+  pull/rebase (exact ordinary-path blobs; byte-identical added `## ` log sections).
+- Publication and presync gate on `skillwiki sync lint-delta --base-ref origin/main`:
+  block only when `new_errors > 0`; inherited full debt remains visible;
+  malformed or missing delta evidence fails closed (never silent lint skip).
+

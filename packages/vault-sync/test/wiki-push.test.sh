@@ -99,6 +99,10 @@ if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "path_too_long" ] && [ "
   echo "path_too_long: 0"
   exit 0
 fi
+if [ "$1" = "sync" ] && [ "$2" = "lint-delta" ]; then
+  echo '{"ok":true,"data":{"full_errors":0,"base_errors":0,"new_errors":0,"resolved_errors":0,"humanHint":"clean"}}'
+  exit 0
+fi
 echo "unexpected skillwiki invocation: $*" >&2
 exit 1
 STUB
@@ -349,6 +353,10 @@ if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "path_too_long" ] && [ "
   echo fixed > "$SKILLWIKI_FIX_MARKER"
   exit 0
 fi
+if [ "$1" = "sync" ] && [ "$2" = "lint-delta" ]; then
+  echo '{"ok":true,"data":{"full_errors":0,"base_errors":0,"new_errors":0,"resolved_errors":0,"humanHint":"clean"}}'
+  exit 0
+fi
 exit 99
 STUB
   chmod +x "$bin_dir/skillwiki"
@@ -394,6 +402,10 @@ test_long_path_fix_failure_blocks_publish() {
 if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "path_too_long" ] && [ "$5" = "--fix" ]; then
   echo failed
   exit 23
+fi
+if [ "$1" = "sync" ] && [ "$2" = "lint-delta" ]; then
+  echo '{"ok":true,"data":{"full_errors":0,"base_errors":0,"new_errors":0,"resolved_errors":0,"humanHint":"clean"}}'
+  exit 0
 fi
 exit 99
 STUB
@@ -480,6 +492,118 @@ test_standalone_equals_line_does_not_block_push() {
   rm -rf "$root"
 }
 
+
+test_lint_delta_inherited_allows_s3_push() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  # Override skillwiki with inherited-only delta
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "path_too_long" ] && [ "$5" = "--fix" ]; then
+  exit 0
+fi
+if [ "$1" = "sync" ] && [ "$2" = "lint-delta" ]; then
+  echo '{"ok":true,"data":{"full_errors":5,"base_errors":5,"new_errors":0,"resolved_errors":0,"humanHint":"inherited"}}'
+  exit 0
+fi
+exit 1
+STUB
+  chmod +x "$bin_dir/skillwiki"
+  mkdir -p "$home/.config/rclone" "$home/Library/Logs"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  HOME="$home" WIKI_DIR="$vault" WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+  rc=$?
+
+  assert_eq "inherited lint debt allows push" "$(cat "$root/rclone-called" 2>/dev/null || true)" "called"
+  assert_file_contains "logs full/base/new/resolved" "$home/Library/Logs/wiki-push.log" "LINT-DELTA full=5 base=5 new=0 resolved=0"
+  rm -rf "$root"
+}
+
+test_lint_delta_new_errors_block_s3_push() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "path_too_long" ] && [ "$5" = "--fix" ]; then
+  exit 0
+fi
+if [ "$1" = "sync" ] && [ "$2" = "lint-delta" ]; then
+  echo '{"ok":true,"data":{"full_errors":2,"base_errors":1,"new_errors":1,"resolved_errors":0,"humanHint":"new"}}'
+  exit 23
+fi
+exit 1
+STUB
+  chmod +x "$bin_dir/skillwiki"
+  mkdir -p "$home/.config/rclone" "$home/Library/Logs"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  local rc=0
+  HOME="$home" WIKI_DIR="$vault" WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1 || rc=$?
+
+  assert_eq "new lint errors block push exit" "$rc" "1"
+  assert_eq "new lint errors prevent rclone" "$(test -f "$root/rclone-called" && echo called || echo skipped)" "skipped"
+  assert_file_contains "logs new_errors block" "$home/Library/Logs/wiki-push.log" "new_errors=1 blocks S3 push"
+  rm -rf "$root"
+}
+
+test_lint_delta_malformed_blocks_s3_push() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "path_too_long" ] && [ "$5" = "--fix" ]; then
+  exit 0
+fi
+if [ "$1" = "sync" ] && [ "$2" = "lint-delta" ]; then
+  echo 'not-json-at-all'
+  exit 0
+fi
+exit 1
+STUB
+  chmod +x "$bin_dir/skillwiki"
+  mkdir -p "$home/.config/rclone" "$home/Library/Logs"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  local rc=0
+  HOME="$home" WIKI_DIR="$vault" WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1 || rc=$?
+
+  assert_eq "malformed delta blocks push exit" "$rc" "1"
+  assert_eq "malformed delta prevents rclone" "$(test -f "$root/rclone-called" && echo called || echo skipped)" "skipped"
+  assert_file_contains "logs malformed refusal" "$home/Library/Logs/wiki-push.log" "lint-delta evidence missing or malformed"
+  rm -rf "$root"
+}
+
 test_dirty_local_files_trigger_rclone_copy
 test_git_remote_failure_does_not_block_s3_publish
 test_pull_helper_not_invoked_by_push
@@ -491,6 +615,9 @@ test_long_path_fix_runs_before_rclone
 test_long_path_fix_failure_blocks_publish
 test_conflict_marker_blocks_s3_push
 test_standalone_equals_line_does_not_block_push
+test_lint_delta_inherited_allows_s3_push
+test_lint_delta_new_errors_block_s3_push
+test_lint_delta_malformed_blocks_s3_push
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

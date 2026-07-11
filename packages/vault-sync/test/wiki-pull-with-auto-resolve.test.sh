@@ -362,8 +362,279 @@ EOF
   rm -rf "$root"
 }
 
+
+test_stale_sequencer_preserves_advanced_tip() {
+  # Reproduce 2026-07-11: orig-head at A, tip advanced to B, clean worktree,
+  # leftover rebase-merge. Cleanup must keep B (not abort-reset to A).
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  local commit_a commit_b
+  commit_a="$(git -C "$vault" rev-parse HEAD)"
+
+  printf 'local advance\n' > "$vault/local-advance.md"
+  git_commit "$vault" "local tip advance"
+  commit_b="$(git -C "$vault" rev-parse HEAD)"
+
+  add_remote_commit "$root" "remote.md" "remote" "remote-after-stale"
+
+  # Fabricate stale sequencer: orig-head=A, tip=B, clean tree.
+  mkdir -p "$vault/.git/rebase-merge"
+  printf '%s\n' "$commit_a" > "$vault/.git/rebase-merge/orig-head"
+  printf 'refs/heads/main\n' > "$vault/.git/rebase-merge/head-name"
+  printf '%s\n' "$commit_a" > "$vault/.git/rebase-merge/onto"
+
+  local tip_before
+  tip_before="$(git -C "$vault" rev-parse HEAD)"
+  assert_eq "precondition tip is B" "$tip_before" "$commit_b"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  local tip_after
+  tip_after="$(git -C "$vault" rev-parse HEAD)"
+
+  assert_eq "stale sequencer cleanup exits successfully" "$rc" "0"
+  assert_eq "stale sequencer directory removed" "$(test -d "$vault/.git/rebase-merge" && echo present || echo absent)" "absent"
+  assert_eq "advanced tip content preserved" "$(test -f "$vault/local-advance.md" && echo present || echo absent)" "present"
+  assert_eq "tip is not reset to orig-head A" "$( [ "$tip_after" = "$commit_a" ] && echo reset_to_a || echo kept )" "kept"
+  assert_eq "remote commit integrated" "$(cat "$vault/remote.md" 2>/dev/null || true)" "remote"
+  local recovery_count
+  recovery_count="$(git -C "$vault" for-each-ref --format='%(refname)' refs/vault-sync/recovery/ 2>/dev/null | wc -l | tr -d ' ')"
+  assert_eq "recovery ref created" "$( [ "$recovery_count" -ge 1 ] && echo yes || echo no )" "yes"
+
+  rm -rf "$root"
+}
+
+test_active_rebase_is_refused() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  printf 'base\n' > "$vault/conflict.md"
+  git_commit "$vault" "add conflict base"
+  git -C "$vault" push origin main >/dev/null
+
+  local remote_work="$root/remote-active"
+  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
+  printf 'base\nremote line\n' > "$remote_work/conflict.md"
+  git_commit "$remote_work" "remote conflict edit"
+  git -C "$remote_work" push origin main >/dev/null
+
+  printf 'base\nlocal line\n' > "$vault/conflict.md"
+  git_commit "$vault" "local conflict edit"
+
+  git -C "$vault" fetch origin >/dev/null 2>&1
+  # Intentionally ignore rebase failure (expected conflict); do NOT enable set -e.
+  git -C "$vault" rebase origin/main >/dev/null 2>&1 || true
+
+  local rebase_head_before unmerged_before
+  rebase_head_before="$(git -C "$vault" rev-parse REBASE_HEAD 2>/dev/null || echo none)"
+  unmerged_before="$(git -C "$vault" diff --name-only --diff-filter=U | tr '\n' ' ' | sed 's/ *$//')"
+
+  assert_eq "precondition has REBASE_HEAD" "$( [ "$rebase_head_before" != "none" ] && echo yes || echo no )" "yes"
+  assert_eq "precondition has UU path" "$(echo "$unmerged_before" | grep -c conflict.md | tr -d ' ')" "1"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  local rebase_head_after unmerged_after
+  rebase_head_after="$(git -C "$vault" rev-parse REBASE_HEAD 2>/dev/null || echo none)"
+  unmerged_after="$(git -C "$vault" diff --name-only --diff-filter=U | tr '\n' ' ' | sed 's/ *$//')"
+
+  assert_eq "active rebase refusal exits nonzero" "$rc" "1"
+  assert_eq "REBASE_HEAD unchanged" "$rebase_head_after" "$rebase_head_before"
+  assert_eq "unmerged path unchanged" "$unmerged_after" "$unmerged_before"
+  assert_eq "rebase-merge still present" "$(test -d "$vault/.git/rebase-merge" && echo present || echo absent)" "present"
+
+  git -C "$vault" rebase --abort >/dev/null 2>&1 || true
+  rm -rf "$root"
+}
+
+test_snapshot_materialized_commit_is_dropped_without_log_dup() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  mkdir -p "$vault/projects/demo/work/2026-07-11-item"
+  printf '# base log\n\n' > "$vault/log.md"
+  git_commit "$vault" "seed log"
+  git -C "$vault" push origin main >/dev/null
+
+  cat > "$vault/projects/demo/work/2026-07-11-item/spec.md" <<'EOF'
+---
+title: Item
+status: in-progress
+---
+
+# Item
+EOF
+  cat > "$vault/log.md" <<'EOF'
+# base log
+
+## 2026-07-11 local work
+
+Local authored section body.
+EOF
+  git_commit "$vault" "dev-loop: local work item"
+
+  local remote_work="$root/remote-snap"
+  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
+  mkdir -p "$remote_work/projects/demo/work/2026-07-11-item"
+  cat > "$remote_work/projects/demo/work/2026-07-11-item/spec.md" <<'EOF'
+---
+title: Item
+status: in-progress
+---
+
+# Item
+EOF
+  cat > "$remote_work/log.md" <<'EOF'
+# base log
+
+## 2026-07-11 local work
+
+Local authored section body.
+
+## 2026-07-11 remote snapshot
+
+Remote-only section.
+EOF
+  git_commit "$remote_work" "Snapshot 2026-07-11T12:00:00Z"
+  git -C "$remote_work" push origin main >/dev/null
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  local left_right local_section_count remote_section_count
+  left_right="$(git -C "$vault" rev-list --left-right --count HEAD...origin/main 2>/dev/null || echo 'err')"
+  local_section_count="$(grep -c 'Local authored section body' "$vault/log.md" | tr -d ' ')"
+  remote_section_count="$(grep -c 'Remote-only section' "$vault/log.md" | tr -d ' ')"
+
+  assert_eq "materialized pull exits successfully" "$rc" "0"
+  assert_eq "no local/remote content divergence (ahead behind)" "$left_right" "0	0"
+  assert_eq "local log section once" "$local_section_count" "1"
+  assert_eq "remote log section once" "$remote_section_count" "1"
+  assert_eq "work item present" "$(test -f "$vault/projects/demo/work/2026-07-11-item/spec.md" && echo present || echo absent)" "present"
+  assert_eq "no conflict markers in log" "$(grep -Ec '^(<<<<<<<|=======|>>>>>>>)' "$vault/log.md" | tr -d ' ')" "0"
+
+  rm -rf "$root"
+}
+
+test_partial_match_commit_is_not_dropped() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  mkdir -p "$vault/projects/demo"
+  printf '# base log\n\n' > "$vault/log.md"
+  printf 'shared\n' > "$vault/projects/demo/same.md"
+  printf 'local-only-base\n' > "$vault/projects/demo/diff.md"
+  git_commit "$vault" "seed partial"
+  git -C "$vault" push origin main >/dev/null
+
+  printf 'shared\n' > "$vault/projects/demo/same.md"
+  printf 'local unique body\n' > "$vault/projects/demo/diff.md"
+  cat > "$vault/log.md" <<'EOF'
+# base log
+
+## 2026-07-11 partial
+
+Full local section that remote will only half-match.
+EOF
+  git_commit "$vault" "dev-loop: partial local"
+
+  local remote_work="$root/remote-partial"
+  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
+  mkdir -p "$remote_work/projects/demo"
+  printf 'shared\n' > "$remote_work/projects/demo/same.md"
+  printf 'remote unique body\n' > "$remote_work/projects/demo/diff.md"
+  cat > "$remote_work/log.md" <<'EOF'
+# base log
+
+## 2026-07-11 partial
+
+Full local section that remote will only
+EOF
+  git_commit "$remote_work" "Snapshot partial remote"
+  git -C "$remote_work" push origin main >/dev/null
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  local has_local_unique left_right
+  has_local_unique="$(grep -c 'local unique body' "$vault/projects/demo/diff.md" 2>/dev/null | tr -d ' ')"
+  left_right="$(git -C "$vault" rev-list --left-right --count HEAD...origin/main 2>/dev/null || echo 'x')"
+
+  if [ "$rc" -eq 0 ] && [ "$has_local_unique" = "0" ] && [ "$left_right" = "0	0" ]; then
+    assert_eq "partial match must not silent-drop local content" "silent_drop" "protected"
+  else
+    assert_eq "partial match protected (retained or stopped)" "protected" "protected"
+  fi
+
+  git -C "$vault" rebase --abort >/dev/null 2>&1 || true
+  rm -rf "$root"
+}
+
+test_raw_path_difference_is_not_dropped() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  mkdir -p "$vault/raw/articles"
+  printf 'local raw body v1\n' > "$vault/raw/articles/note.md"
+  git_commit "$vault" "seed raw"
+  git -C "$vault" push origin main >/dev/null
+
+  printf 'local raw body v2 unique\n' > "$vault/raw/articles/note.md"
+  git_commit "$vault" "local raw edit"
+
+  local remote_work="$root/remote-raw"
+  git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
+  mkdir -p "$remote_work/raw/articles"
+  printf 'remote raw body different\n' > "$remote_work/raw/articles/note.md"
+  git_commit "$remote_work" "Snapshot raw remote"
+  git -C "$remote_work" push origin main >/dev/null
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  # Differing raw blobs must never be treated as fully materialized.
+  # Accept stop (exit 1) or retain local unique / conflict — never silent full sync that loses uniqueness without review.
+  local content left_right
+  content="$(cat "$vault/raw/articles/note.md" 2>/dev/null || true)"
+  left_right="$(git -C "$vault" rev-list --left-right --count HEAD...origin/main 2>/dev/null || echo 'x')"
+
+  if [ "$rc" -eq 0 ] && [ "$content" = "remote raw body different" ] && [ "$left_right" = "0	0" ]; then
+    # Snapshot auto-resolve --ours may keep local during conflict; if remote won via drop, fail.
+    # Check whether local commit was dropped: if tip equals origin and content is remote-only, that is a silent materialization drop of differing raw — fail.
+    assert_eq "raw difference must not be fully materialized-dropped" "silent_drop" "protected"
+  else
+    assert_eq "raw difference retained or stopped" "protected" "protected"
+  fi
+
+  git -C "$vault" rebase --abort >/dev/null 2>&1 || true
+  rm -rf "$root"
+}
+
 test_dirty_tree_pull_restores_edit
 test_stale_rebase_state_is_cleaned_before_pull
+test_stale_sequencer_preserves_advanced_tip
+test_active_rebase_is_refused
+test_snapshot_materialized_commit_is_dropped_without_log_dup
+test_partial_match_commit_is_not_dropped
+test_raw_path_difference_is_not_dropped
 test_untracked_remote_duplicate_is_removed_before_pull
 test_divergent_untracked_remote_overlap_is_preserved_before_pull
 test_non_archive_log_append_conflict_is_union_resolved
