@@ -53,6 +53,22 @@ json_escape() {
   python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
 }
 
+# Portable short-timeout wrapper.
+# Prefer GNU timeout, then Homebrew gtimeout. When neither exists (common on
+# stock macOS), run the command without an external timeout so a missing
+# binary is not misreported as remote unreachability.
+with_timeout() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+  else
+    "$@"
+  fi
+}
+
 declare -a CHECK_IDS=()
 declare -a CHECK_LABELS=()
 declare -a CHECK_STATUS=()
@@ -746,10 +762,10 @@ check_runtime_proof
 github_reach="unknown"
 github_detail="WIKI_PATH not set or vault missing"
 if [ -d "$VAULT_PATH/.git" ]; then
-  if timeout 3 git -C "$VAULT_PATH" ls-remote origin refs/heads/main >/dev/null 2>&1; then
+  if with_timeout 3 git -C "$VAULT_PATH" ls-remote origin refs/heads/main >/dev/null 2>&1; then
     github_reach="ok"
     github_detail="git ls-remote origin main succeeded"
-  elif timeout 3 git -C "$VAULT_PATH" remote get-url origin >/dev/null 2>&1; then
+  elif with_timeout 3 git -C "$VAULT_PATH" remote get-url origin >/dev/null 2>&1; then
     github_reach="unreachable"
     github_detail="GitHub ls-remote failed — local vault may still be usable"
   else
@@ -766,7 +782,7 @@ s3_detail="S3 remote not configured — reachability probe skipped"
 if ! resolve_s3_remote; then
   :
 elif command -v rclone >/dev/null 2>&1; then
-  if timeout 3 rclone lsf "$S3_REMOTE" --max-depth 1 --files-only >/dev/null 2>&1; then
+  if with_timeout 3 rclone lsf "$S3_REMOTE" --max-depth 1 --files-only >/dev/null 2>&1; then
     s3_reach="ok"
     s3_detail="rclone lsf $S3_REMOTE succeeded (source: $S3_REMOTE_SOURCE)"
   else
@@ -784,7 +800,7 @@ snapshotter_reach="not_checked"
 snapshotter_detail="Snapshotter SSH check skipped (set VS_CHECK_SNAPSHOTTER=1 to probe)"
 if is_true "${VS_CHECK_SNAPSHOTTER:-0}"; then
   SNAP_ALIAS="${VS_SNAPSHOTTER_SSH_ALIAS:-sg01}"
-  if timeout 3 ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new "$SNAP_ALIAS" true >/dev/null 2>&1; then
+  if with_timeout 3 ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new "$SNAP_ALIAS" true >/dev/null 2>&1; then
     snapshotter_reach="ok"
     snapshotter_detail="SSH reachable via $SNAP_ALIAS"
   else

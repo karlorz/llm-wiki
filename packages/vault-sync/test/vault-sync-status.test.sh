@@ -493,6 +493,54 @@ test_s3_reachability_process_env_overrides_env_file() {
   fi
 }
 
+test_s3_reachability_works_without_timeout_binary() {
+  # Stock macOS often lacks GNU timeout. Missing timeout must not become a
+  # false "S3 remote unreachable" when rclone itself succeeds.
+  local home="$TEST_ROOT/home-s3-no-timeout"
+  local stub="$TEST_ROOT/stub-s3-no-timeout"
+  local calls="$TEST_ROOT/s3-no-timeout.calls"
+  prepare_home "$home"
+  mkdir -p "$stub/bin"
+  cat > "$stub/bin/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$RCLONE_CALLS"
+if [ "${2:-}" = "${RCLONE_OK_REMOTE:-}" ]; then
+  exit 0
+fi
+exit 1
+STUB
+  # Intentionally no timeout/gtimeout stub — only rclone on PATH prefix.
+  chmod +x "$stub/bin/rclone"
+  mkdir -p "$home/.skillwiki"
+  printf 'WIKI_REMOTE=cloud:cloud/wiki\n' > "$home/.skillwiki/.env"
+  : > "$calls"
+
+  # Build a PATH with only the stub bin + essential system dirs, excluding
+  # any real timeout/gtimeout from the ambient environment.
+  local clean_path="$stub/bin:/usr/bin:/bin"
+  local json status detail call_count
+  json="$(
+    HOME="$home" \
+    PATH="$clean_path" \
+    RCLONE_CALLS="$calls" \
+    RCLONE_OK_REMOTE="cloud:cloud/wiki" \
+    env -u WIKI_REMOTE bash "$STATUS_SH" --read-only --json
+  )"
+  status="$(check_status "$json" "reachability_s3")"
+  detail="$(check_detail "$json" "reachability_s3")"
+  call_count="$(wc -l < "$calls" | tr -d ' ')"
+
+  assert_eq "S3 pass without timeout binary" "$status" "pass"
+  assert_eq "rclone invoked without timeout binary" "$call_count" "1"
+  if printf '%s' "$detail" | grep -q 'rclone lsf cloud:cloud/wiki succeeded'; then
+    printf "PASS: missing timeout does not report S3 unreachable\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: missing timeout S3 detail wrong — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 test_s3_reachability_warns_when_configured_remote_fails() {
   local home="$TEST_ROOT/home-s3-failure"
   local stub="$TEST_ROOT/stub-s3-failure"
@@ -641,6 +689,7 @@ test_s3_reachability_uses_snapshotter_profile
 test_s3_reachability_uses_installed_snapshot_profile_path
 test_s3_reachability_env_file_overrides_snapshotter_profile
 test_s3_reachability_process_env_overrides_env_file
+test_s3_reachability_works_without_timeout_binary
 test_s3_reachability_warns_when_configured_remote_fails
 
 test_status_identical_from_arbitrary_cwd
