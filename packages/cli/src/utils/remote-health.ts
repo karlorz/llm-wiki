@@ -56,6 +56,25 @@ export function readWikiS3RemoteConfigured(home: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Resolve the diagnostic S3 remote without inventing a host-local alias.
+ * Order: explicit s3Remote → process WIKI_REMOTE → ~/.skillwiki/.env WIKI_REMOTE → undefined.
+ */
+export function resolveWikiS3Remote(input: {
+  home: string;
+  s3Remote?: string;
+  env?: NodeJS.ProcessEnv;
+}): string | undefined {
+  if (input.s3Remote !== undefined) {
+    const explicit = input.s3Remote.trim();
+    return explicit.length > 0 ? explicit : undefined;
+  }
+  const env = input.env ?? process.env;
+  const fromProcess = (env.WIKI_REMOTE ?? "").trim();
+  if (fromProcess.length > 0) return fromProcess;
+  return readWikiS3RemoteConfigured(input.home);
+}
+
 export function probeGithubReachability(
   vaultPath: string,
   exec: ExecProbe = defaultExec,
@@ -122,10 +141,15 @@ export function probeRemoteHealth(input: {
   snapshotterAlias?: string;
   checkSnapshotter?: boolean;
   exec?: ExecProbe;
+  env?: NodeJS.ProcessEnv;
 }): RemoteHealthSnapshot {
   const exec = input.exec ?? defaultExec;
   const github = probeGithubReachability(input.vaultPath, exec);
-  const s3Remote = input.s3Remote ?? readWikiS3RemoteConfigured(input.home);
+  const s3Remote = resolveWikiS3Remote({
+    home: input.home,
+    s3Remote: input.s3Remote,
+    env: input.env,
+  });
   const s3 = s3Remote === undefined
     ? "unknown"
     : probeS3Reachability(s3Remote, exec);

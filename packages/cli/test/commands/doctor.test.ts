@@ -672,6 +672,7 @@ describe("runDoctor", () => {
       envValue: v,
       argv: ["node", "skillwiki", "doctor"],
       currentVersion: "0.2.0-beta.15",
+      env: {},
       execProbe: (file, args) => {
         if (file === "git" && args[0] === "remote") return "https://example.com/v.git";
         if (file === "git" && args[0] === "ls-remote") return "deadbeef refs/heads/main\n";
@@ -685,6 +686,34 @@ describe("runDoctor", () => {
       expect(s3?.status).toBe("pass");
       expect(s3?.detail).toContain("not configured");
       expect(s3?.detail).toContain("skipped");
+    }
+  });
+
+  it("vault_s3_remote probes process WIKI_REMOTE ahead of the env file", async () => {
+    const h = home();
+    const v = fullVault();
+    writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\nWIKI_REMOTE=env-file:wiki\n`);
+    const r = await runDoctor({
+      home: h,
+      envValue: v,
+      argv: ["node", "skillwiki", "doctor"],
+      currentVersion: "0.2.0-beta.15",
+      env: { WIKI_REMOTE: "process:wiki" },
+      execProbe: (file, args) => {
+        if (file === "git" && args[0] === "remote") return "https://example.com/v.git";
+        if (file === "git" && args[0] === "ls-remote") return "deadbeef refs/heads/main\n";
+        if (file === "rclone") {
+          if (args[1] === "process:wiki") return "";
+          throw new Error(`unexpected remote ${args[1]}`);
+        }
+        return "";
+      },
+    });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const s3 = r.result.data.checks.find(c => c.id === "vault_s3_remote");
+      expect(s3?.status).toBe("pass");
+      expect(s3?.detail).toContain("process:wiki");
     }
   });
 
@@ -703,6 +732,7 @@ describe("runDoctor", () => {
       envValue: v,
       argv: ["node", "skillwiki", "doctor"],
       currentVersion: "0.2.0-beta.15",
+      env: {},
       execProbe,
     });
     expect(r.result.ok).toBe(true);

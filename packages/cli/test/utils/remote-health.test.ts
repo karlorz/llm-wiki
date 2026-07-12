@@ -7,6 +7,7 @@ import {
   probeS3Reachability,
   buildDegradedReasons,
   probeRemoteHealth,
+  resolveWikiS3Remote,
   type ExecProbe,
 } from "../../src/utils/remote-health.js";
 
@@ -44,6 +45,7 @@ describe("remote-health probes", () => {
       const health = probeRemoteHealth({
         vaultPath: join(home, "not-a-git-vault"),
         home,
+        env: {},
         exec: (file, args) => {
           calls.push({ file, args });
           return "";
@@ -68,6 +70,7 @@ describe("remote-health probes", () => {
       const health = probeRemoteHealth({
         vaultPath: join(home, "not-a-git-vault"),
         home,
+        env: {},
         exec: (file, args) => {
           calls.push({ file, args });
           return "";
@@ -78,6 +81,38 @@ describe("remote-health probes", () => {
       expect(calls.filter(call => call.file === "rclone")).toEqual([{
         file: "rclone",
         args: ["lsf", "cloud:cloud/wiki", "--max-depth", "1", "--files-only"],
+      }]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers process WIKI_REMOTE over the SkillWiki env file", () => {
+    const home = mkdtempSync(join(tmpdir(), "remote-health-home-"));
+    const calls: Array<{ file: string; args: string[] }> = [];
+    try {
+      mkdirSync(join(home, ".skillwiki"), { recursive: true });
+      writeFileSync(join(home, ".skillwiki", ".env"), "WIKI_REMOTE=env-file:wiki\n");
+
+      expect(resolveWikiS3Remote({
+        home,
+        env: { WIKI_REMOTE: "process:wiki" },
+      })).toBe("process:wiki");
+
+      const health = probeRemoteHealth({
+        vaultPath: join(home, "not-a-git-vault"),
+        home,
+        env: { WIKI_REMOTE: "process:wiki" },
+        exec: (file, args) => {
+          calls.push({ file, args });
+          return "";
+        },
+      });
+
+      expect(health.s3).toBe("ok");
+      expect(calls.filter(call => call.file === "rclone")).toEqual([{
+        file: "rclone",
+        args: ["lsf", "process:wiki", "--max-depth", "1", "--files-only"],
       }]);
     } finally {
       rmSync(home, { recursive: true, force: true });

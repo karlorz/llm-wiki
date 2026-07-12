@@ -16,7 +16,7 @@ import {
   probeGithubReachability,
   probeS3Reachability,
   probeSnapshotterSsh,
-  readWikiS3RemoteConfigured,
+  resolveWikiS3Remote,
   type ExecProbe,
 } from "../utils/remote-health.js";
 import {
@@ -68,6 +68,8 @@ export interface DoctorInput {
   checkSnapshotter?: boolean;
   /** Injectable exec for reachability probes (tests). */
   execProbe?: ExecProbe;
+  /** Injectable process env for remote resolution (tests). Defaults to process.env. */
+  env?: NodeJS.ProcessEnv;
 }
 
 function check(status: CheckStatus, id: string, label: string, detail: string): CheckResult {
@@ -657,8 +659,8 @@ function checkVaultGithubRemote(
   return check("pass", "vault_github_remote", "Vault GitHub remote", "No origin remote — network probe skipped");
 }
 
-function checkVaultS3Remote(home: string, exec?: ExecProbe): CheckResult {
-  const remote = readWikiS3RemoteConfigured(home);
+function checkVaultS3Remote(home: string, exec?: ExecProbe, env?: NodeJS.ProcessEnv): CheckResult {
+  const remote = resolveWikiS3Remote({ home, env });
   if (!remote) {
     return check("pass", "vault_s3_remote", "Vault S3 remote", "S3 remote not configured — check skipped");
   }
@@ -1756,7 +1758,7 @@ export async function runDoctor(
   checks.push(checkVaultGitPullFailures(input.home));
   checks.push(checkVaultLocalGit(gitCheckPath));
   checks.push(checkVaultGithubRemote(gitCheckPath, input.execProbe));
-  checks.push(checkVaultS3Remote(input.home, input.execProbe));
+  checks.push(checkVaultS3Remote(input.home, input.execProbe, input.env ?? process.env));
   checks.push(checkVaultSnapshotterReachable(fleetLoad, input.checkSnapshotter, input.execProbe));
   checks.push(checkVaultPromotionLag(gitCheckPath));
   checks.push(checkDotStoreClean(resolvedPath));

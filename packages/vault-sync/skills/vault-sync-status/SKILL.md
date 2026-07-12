@@ -40,7 +40,9 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
    - non-empty process `WIKI_REMOTE`;
    - otherwise `WIKI_REMOTE` from `~/.skillwiki/.env`;
    - otherwise, for snapshotters, `WIKI_REMOTE` or `CLOUD_REMOTE` parsed as data
-     from `/etc/vault-sync/profiles/$(hostname)-snapshotter.env`;
+     from the snapshot profile path resolved as:
+     `VS_SNAPSHOT_PROFILE` → `vault_sync.snapshot_profile` in `~/.skillwiki/.env`
+     → `/etc/vault-sync/profiles/$(hostname)-snapshotter.env`;
    - otherwise report `S3 remote not configured — reachability probe skipped`.
    A missing remote is unknown/unconfigured, not unreachable. Only a failed
    probe of a resolved remote produces an S3 warning. Snapshot profiles are

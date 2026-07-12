@@ -112,7 +112,8 @@ resolve_s3_remote() {
   fi
 
   if [ "${ROLE:-}" = "snapshotter" ]; then
-    local profile="${VS_SNAPSHOT_PROFILE:-/etc/vault-sync/profiles/$(hostname)-snapshotter.env}"
+    # Prefer process override, then installed path resolved once at startup, then hostname default.
+    local profile="${VS_SNAPSHOT_PROFILE:-${SNAPSHOT_PROFILE:-/etc/vault-sync/profiles/$(hostname)-snapshotter.env}}"
     local profile_remote=""
     if profile_remote=$(file_value "$profile" "WIKI_REMOTE"); then
       if [ -n "$profile_remote" ]; then
@@ -522,6 +523,15 @@ if [ -z "$SNAPSHOT_SCRIPT" ]; then
   SNAPSHOT_SCRIPT="$SHARE_BIN/wiki-snapshot.sh"
   if [ ! -f "$SNAPSHOT_SCRIPT" ] && [ -f "/root/.hermes/scripts/wiki-snapshot-v3.sh" ]; then
     SNAPSHOT_SCRIPT="/root/.hermes/scripts/wiki-snapshot-v3.sh"
+  fi
+fi
+
+# Installed snapshot profile path (S3 remote fallback for snapshotters). Process
+# VS_SNAPSHOT_PROFILE still wins inside resolve_s3_remote.
+SNAPSHOT_PROFILE="${VS_SNAPSHOT_PROFILE:-}"
+if [ -z "$SNAPSHOT_PROFILE" ]; then
+  if profile_val=$(config_value "vault_sync.snapshot_profile"); then
+    [ -n "$profile_val" ] && SNAPSHOT_PROFILE="$profile_val"
   fi
 fi
 

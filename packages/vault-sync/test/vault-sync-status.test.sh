@@ -97,9 +97,15 @@ PY
   fi
 }
 
+# Hermetic status launcher: always drops ambient WIKI_REMOTE so process-env
+# precedence cannot leak into unconfigured/profile tests.
+run_status_json() {
+  env -u WIKI_REMOTE bash "$STATUS_SH" --read-only --json
+}
+
 status_json_for_home() {
   local home="$1"
-  HOME="$home" bash "$STATUS_SH" --read-only --json
+  HOME="$home" run_status_json
 }
 
 prepare_rclone_stub() {
@@ -341,7 +347,7 @@ test_s3_reachability_skips_when_remote_is_unconfigured() {
   : > "$calls"
 
   local json status detail call_count
-  json="$(HOME="$home" PATH="$stub/bin:$PATH" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="none:wiki" bash "$STATUS_SH" --read-only --json)"
+  json="$(HOME="$home" PATH="$stub/bin:$PATH" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="none:wiki" run_status_json)"
   status="$(check_status "$json" "reachability_s3")"
   detail="$(check_detail "$json" "reachability_s3")"
   call_count="$(wc -l < "$calls" | tr -d ' ')"
@@ -372,7 +378,7 @@ CLOUD_REMOTE=cloud:cloud/wiki
 EOF
 
   local json status detail first_call
-  json="$(HOME="$home" PATH="$stub/bin:$PATH" VS_ROLE=snapshotter VS_SNAPSHOT_PROFILE="$profile" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="cloud:cloud/wiki" bash "$STATUS_SH" --read-only --json)"
+  json="$(HOME="$home" PATH="$stub/bin:$PATH" VS_ROLE=snapshotter VS_SNAPSHOT_PROFILE="$profile" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="cloud:cloud/wiki" run_status_json)"
   status="$(check_status "$json" "reachability_s3")"
   detail="$(check_detail "$json" "reachability_s3")"
   first_call="$(head -n 1 "$calls" 2>/dev/null || true)"
@@ -401,6 +407,41 @@ EOF
   fi
 }
 
+test_s3_reachability_uses_installed_snapshot_profile_path() {
+  local home="$TEST_ROOT/home-s3-installed-profile"
+  local stub="$TEST_ROOT/stub-s3-installed-profile"
+  local calls="$TEST_ROOT/s3-installed-profile.calls"
+  local profile="$TEST_ROOT/custom-installed-snapshotter.env"
+  prepare_home "$home"
+  prepare_rclone_stub "$stub"
+  mkdir -p "$home/.skillwiki"
+  printf 'vault_sync.role=snapshotter\nvault_sync.snapshot_profile=%s\n' "$profile" > "$home/.skillwiki/.env"
+  printf 'CLOUD_REMOTE=installed-profile:wiki\n' > "$profile"
+  : > "$calls"
+
+  local json first_call detail
+  # Clear process override without wrapping the shell function in `env` (env cannot exec functions).
+  json="$(HOME="$home" PATH="$stub/bin:$PATH" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="installed-profile:wiki" VS_SNAPSHOT_PROFILE= run_status_json)"
+  first_call="$(head -n 1 "$calls" 2>/dev/null || true)"
+  detail="$(check_detail "$json" "reachability_s3")"
+
+  assert_eq "installed snapshot_profile check passes" "$(check_status "$json" "reachability_s3")" "pass"
+  if printf '%s' "$first_call" | grep -q '^lsf installed-profile:wiki '; then
+    printf "PASS: vault_sync.snapshot_profile supplies CLOUD_REMOTE without VS_SNAPSHOT_PROFILE\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: installed snapshot_profile remote not used — call='%s'\n" "$first_call"
+    FAIL=$((FAIL + 1))
+  fi
+  if printf '%s' "$detail" | grep -q 'snapshotter profile'; then
+    printf "PASS: installed snapshot_profile source appears in detail\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: installed snapshot_profile source missing from detail — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 test_s3_reachability_env_file_overrides_snapshotter_profile() {
   local home="$TEST_ROOT/home-s3-env-file"
   local stub="$TEST_ROOT/stub-s3-env-file"
@@ -414,7 +455,7 @@ test_s3_reachability_env_file_overrides_snapshotter_profile() {
   : > "$calls"
 
   local json first_call
-  json="$(HOME="$home" PATH="$stub/bin:$PATH" VS_SNAPSHOT_PROFILE="$profile" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="env-file:wiki" bash "$STATUS_SH" --read-only --json)"
+  json="$(HOME="$home" PATH="$stub/bin:$PATH" VS_SNAPSHOT_PROFILE="$profile" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="env-file:wiki" run_status_json)"
   first_call="$(head -n 1 "$calls" 2>/dev/null || true)"
 
   assert_eq "env-file remote check passes" "$(check_status "$json" "reachability_s3")" "pass"
@@ -438,6 +479,7 @@ test_s3_reachability_process_env_overrides_env_file() {
   : > "$calls"
 
   local json first_call
+  # Intentionally set process WIKI_REMOTE (overrides env -u in run_status_json via assignment).
   json="$(HOME="$home" PATH="$stub/bin:$PATH" WIKI_REMOTE="process:wiki" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="process:wiki" bash "$STATUS_SH" --read-only --json)"
   first_call="$(head -n 1 "$calls" 2>/dev/null || true)"
 
@@ -462,7 +504,7 @@ test_s3_reachability_warns_when_configured_remote_fails() {
   : > "$calls"
 
   local json status detail first_call
-  json="$(HOME="$home" PATH="$stub/bin:$PATH" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="different:wiki" bash "$STATUS_SH" --read-only --json)"
+  json="$(HOME="$home" PATH="$stub/bin:$PATH" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="different:wiki" run_status_json)"
   status="$(check_status "$json" "reachability_s3")"
   detail="$(check_detail "$json" "reachability_s3")"
   first_call="$(head -n 1 "$calls" 2>/dev/null || true)"
@@ -596,6 +638,7 @@ test_reachability_local_vault_on_clean_git_vault
 test_reachability_snapshotter_not_checked_by_default
 test_s3_reachability_skips_when_remote_is_unconfigured
 test_s3_reachability_uses_snapshotter_profile
+test_s3_reachability_uses_installed_snapshot_profile_path
 test_s3_reachability_env_file_overrides_snapshotter_profile
 test_s3_reachability_process_env_overrides_env_file
 test_s3_reachability_warns_when_configured_remote_fails
