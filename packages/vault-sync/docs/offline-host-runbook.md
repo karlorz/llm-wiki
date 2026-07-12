@@ -6,7 +6,7 @@ This runbook classifies **independent** availability states:
 |---|---|
 | `local_vault` | The checkout at `~/wiki` is readable/writable and has valid Git metadata. |
 | `github_remote` | `origin/main` can be fetched/pushed depending on operation. |
-| `s3_remote` | configured rclone S3 remote can be listed or written depending on operation. |
+| `s3_remote` | An explicitly configured or snapshot-profile rclone S3 remote can be listed or written depending on operation. |
 | `snapshotter_host` | sg01 or replacement snapshotter can be reached for rollout/status checks. |
 
 Rule: local skillwiki reads/writes require only `local_vault`. Sync and promotion
@@ -14,6 +14,12 @@ commands may degrade when remote stores or hosts are unavailable, but they must
 report which dependency failed.
 
 Use `skillwiki sync status` (local-first) and `skillwiki sync status --include-remote-health` (opt-in probes). Use `skillwiki doctor` for detailed reachability checks.
+
+Rclone remote names are host-local aliases. A missing `WIKI_REMOTE` is an
+unconfigured/unknown diagnostic state, not evidence of an S3 outage. On a
+snapshotter, `vault-sync-status` may resolve the remote from the systemd
+snapshot profile's `CLOUD_REMOTE`. Classify S3 as offline only after a probe of
+an explicitly resolved remote fails.
 
 ## Outage matrix
 

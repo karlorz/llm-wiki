@@ -66,6 +66,12 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    skillwiki config set vault_sync.fuse_max_dir_cache 15m       # Linux only
    ```
    Snapshotter installs also record `vault_sync.snapshot_script` and the conventional profile path `vault_sync.snapshot_profile=/etc/vault-sync/profiles/<host>-snapshotter.env`.
+   The snapshotter profile is the operational authority for its host-local
+   rclone alias and should contain `CLOUD_REMOTE=<remote:path>`. Managed leaf
+   hosts should set `WIKI_REMOTE=<remote:path>` in `~/.skillwiki/.env`. Rclone
+   remote names are local aliases and may legitimately differ between hosts.
+   Status treats a missing remote as unconfigured/unknown; it must not probe a
+   guessed alias and report a false outage.
 8. **Write runtime inventory** for successful non-dry-run full installs: `$(platform_share_dir)/runtime-manifest.json` (package/installer version, host role, SHA-256 hashes of installed scripts and LaunchAgents plists).
 9. **`--dry-run` mode**: print the entire plan (paths, commands, fleet.yaml diff) but execute nothing.
 

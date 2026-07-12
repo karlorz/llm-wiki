@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   probeGithubReachability,
   probeS3Reachability,
@@ -32,5 +35,52 @@ describe("remote-health probes", () => {
     expect(reasons).toContain("github_remote_unreachable");
     expect(reasons).toContain("s3_remote_unreachable");
     expect(reasons).not.toContain("snapshotter_host_unreachable");
+  });
+
+  it("classifies an unconfigured S3 remote as unknown without invoking rclone", () => {
+    const home = mkdtempSync(join(tmpdir(), "remote-health-home-"));
+    const calls: Array<{ file: string; args: string[] }> = [];
+    try {
+      const health = probeRemoteHealth({
+        vaultPath: join(home, "not-a-git-vault"),
+        home,
+        exec: (file, args) => {
+          calls.push({ file, args });
+          return "";
+        },
+      });
+
+      expect(health.s3).toBe("unknown");
+      expect(calls.filter(call => call.file === "rclone")).toEqual([]);
+      expect(buildDegradedReasons(health)).not.toContain("s3_remote_unreachable");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("probes the exact WIKI_REMOTE configured in the SkillWiki env file", () => {
+    const home = mkdtempSync(join(tmpdir(), "remote-health-home-"));
+    const calls: Array<{ file: string; args: string[] }> = [];
+    try {
+      mkdirSync(join(home, ".skillwiki"), { recursive: true });
+      writeFileSync(join(home, ".skillwiki", ".env"), "WIKI_REMOTE=cloud:cloud/wiki\n");
+
+      const health = probeRemoteHealth({
+        vaultPath: join(home, "not-a-git-vault"),
+        home,
+        exec: (file, args) => {
+          calls.push({ file, args });
+          return "";
+        },
+      });
+
+      expect(health.s3).toBe("ok");
+      expect(calls.filter(call => call.file === "rclone")).toEqual([{
+        file: "rclone",
+        args: ["lsf", "cloud:cloud/wiki", "--max-depth", "1", "--files-only"],
+      }]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

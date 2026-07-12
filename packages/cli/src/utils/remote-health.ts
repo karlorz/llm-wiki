@@ -37,9 +37,6 @@ const defaultExec: ExecProbe = (file, args, cwd) =>
     timeout: REMOTE_PROBE_TIMEOUT_MS,
   }).trim();
 
-/** Default rclone remote for wiki push (wiki-push.sh WIKI_REMOTE). */
-export const DEFAULT_WIKI_S3_REMOTE = "seaweed-wiki:cloud/wiki";
-
 /** Returns WIKI_REMOTE from ~/.skillwiki/.env when set; otherwise undefined (no implicit default). */
 export function readWikiS3RemoteConfigured(home: string): string | undefined {
   try {
@@ -57,10 +54,6 @@ export function readWikiS3RemoteConfigured(home: string): string | undefined {
     /* optional */
   }
   return undefined;
-}
-
-export function readWikiS3RemoteFromEnv(home: string): string {
-  return readWikiS3RemoteConfigured(home) ?? DEFAULT_WIKI_S3_REMOTE;
 }
 
 export function probeGithubReachability(
@@ -132,8 +125,10 @@ export function probeRemoteHealth(input: {
 }): RemoteHealthSnapshot {
   const exec = input.exec ?? defaultExec;
   const github = probeGithubReachability(input.vaultPath, exec);
-  const s3Remote = input.s3Remote ?? readWikiS3RemoteFromEnv(input.home);
-  const s3 = probeS3Reachability(s3Remote, exec);
+  const s3Remote = input.s3Remote ?? readWikiS3RemoteConfigured(input.home);
+  const s3 = s3Remote === undefined
+    ? "unknown"
+    : probeS3Reachability(s3Remote, exec);
   let snapshotter: SnapshotterReachability = "not_checked";
   if (input.checkSnapshotter && input.snapshotterAlias) {
     snapshotter = probeSnapshotterSsh(input.snapshotterAlias, exec);

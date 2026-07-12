@@ -102,6 +102,42 @@ status_json_for_home() {
   HOME="$home" bash "$STATUS_SH" --read-only --json
 }
 
+prepare_rclone_stub() {
+  local root="$1"
+  mkdir -p "$root/bin"
+  cat > "$root/bin/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$RCLONE_CALLS"
+if [ "${2:-}" = "${RCLONE_OK_REMOTE:-}" ]; then
+  exit 0
+fi
+exit 1
+STUB
+  cat > "$root/bin/timeout" <<'STUB'
+#!/bin/bash
+shift
+exec "$@"
+STUB
+  chmod +x "$root/bin/rclone" "$root/bin/timeout"
+}
+
+check_detail() {
+  local json="$1"
+  local check_id="$2"
+  JSON_INPUT="$json" python3 - "$check_id" <<'PY'
+import json
+import os
+import sys
+
+data = json.loads(os.environ["JSON_INPUT"])
+check_id = sys.argv[1]
+for check in data.get("checks", []):
+    if check.get("id") == check_id:
+        print(check.get("detail", ""))
+        break
+PY
+}
+
 check_status() {
   local json="$1"
   local check_id="$2"
@@ -296,6 +332,158 @@ test_reachability_snapshotter_not_checked_by_default() {
   assert_eq "snapshotter reachability not_checked by default" "$status" "pass"
 }
 
+test_s3_reachability_skips_when_remote_is_unconfigured() {
+  local home="$TEST_ROOT/home-s3-unconfigured"
+  local stub="$TEST_ROOT/stub-s3-unconfigured"
+  local calls="$TEST_ROOT/s3-unconfigured.calls"
+  prepare_home "$home"
+  prepare_rclone_stub "$stub"
+  : > "$calls"
+
+  local json status detail call_count
+  json="$(HOME="$home" PATH="$stub/bin:$PATH" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="none:wiki" bash "$STATUS_SH" --read-only --json)"
+  status="$(check_status "$json" "reachability_s3")"
+  detail="$(check_detail "$json" "reachability_s3")"
+  call_count="$(wc -l < "$calls" | tr -d ' ')"
+
+  assert_eq "unconfigured S3 status is non-degraded" "$status" "pass"
+  assert_eq "unconfigured S3 does not invoke rclone" "$call_count" "0"
+  if printf '%s' "$detail" | grep -q 'not configured.*skipped'; then
+    printf "PASS: unconfigured S3 detail explains skipped probe\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: unconfigured S3 detail missing skipped explanation — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+test_s3_reachability_uses_snapshotter_profile() {
+  local home="$TEST_ROOT/home-s3-profile"
+  local stub="$TEST_ROOT/stub-s3-profile"
+  local calls="$TEST_ROOT/s3-profile.calls"
+  local profile="$TEST_ROOT/sg01-snapshotter.env"
+  local marker="$TEST_ROOT/profile-must-not-execute"
+  prepare_home "$home"
+  prepare_rclone_stub "$stub"
+  : > "$calls"
+  cat > "$profile" <<EOF
+UNRELATED=\$(touch "$marker")
+CLOUD_REMOTE=cloud:cloud/wiki
+EOF
+
+  local json status detail first_call
+  json="$(HOME="$home" PATH="$stub/bin:$PATH" VS_ROLE=snapshotter VS_SNAPSHOT_PROFILE="$profile" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="cloud:cloud/wiki" bash "$STATUS_SH" --read-only --json)"
+  status="$(check_status "$json" "reachability_s3")"
+  detail="$(check_detail "$json" "reachability_s3")"
+  first_call="$(head -n 1 "$calls" 2>/dev/null || true)"
+
+  assert_eq "snapshotter profile S3 probe passes" "$status" "pass"
+  if printf '%s' "$first_call" | grep -q '^lsf cloud:cloud/wiki '; then
+    printf "PASS: snapshotter profile supplies exact CLOUD_REMOTE\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: snapshotter profile remote not used — call='%s'\n" "$first_call"
+    FAIL=$((FAIL + 1))
+  fi
+  if printf '%s' "$detail" | grep -q 'snapshotter profile'; then
+    printf "PASS: snapshotter profile source appears in detail\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: snapshotter profile source missing from detail — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+  if [ ! -e "$marker" ]; then
+    printf "PASS: snapshotter profile parsed without execution\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: snapshotter profile content was executed\n"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+test_s3_reachability_env_file_overrides_snapshotter_profile() {
+  local home="$TEST_ROOT/home-s3-env-file"
+  local stub="$TEST_ROOT/stub-s3-env-file"
+  local calls="$TEST_ROOT/s3-env-file.calls"
+  local profile="$TEST_ROOT/sg01-env-file-snapshotter.env"
+  prepare_home "$home"
+  prepare_rclone_stub "$stub"
+  mkdir -p "$home/.skillwiki"
+  printf 'vault_sync.role=snapshotter\nWIKI_REMOTE=env-file:wiki\n' > "$home/.skillwiki/.env"
+  printf 'CLOUD_REMOTE=profile:wiki\n' > "$profile"
+  : > "$calls"
+
+  local json first_call
+  json="$(HOME="$home" PATH="$stub/bin:$PATH" VS_SNAPSHOT_PROFILE="$profile" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="env-file:wiki" bash "$STATUS_SH" --read-only --json)"
+  first_call="$(head -n 1 "$calls" 2>/dev/null || true)"
+
+  assert_eq "env-file remote check passes" "$(check_status "$json" "reachability_s3")" "pass"
+  if printf '%s' "$first_call" | grep -q '^lsf env-file:wiki '; then
+    printf "PASS: env-file WIKI_REMOTE overrides snapshotter profile\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: env-file WIKI_REMOTE precedence wrong — call='%s'\n" "$first_call"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+test_s3_reachability_process_env_overrides_env_file() {
+  local home="$TEST_ROOT/home-s3-process-env"
+  local stub="$TEST_ROOT/stub-s3-process-env"
+  local calls="$TEST_ROOT/s3-process-env.calls"
+  prepare_home "$home"
+  prepare_rclone_stub "$stub"
+  mkdir -p "$home/.skillwiki"
+  printf 'WIKI_REMOTE=env-file:wiki\n' > "$home/.skillwiki/.env"
+  : > "$calls"
+
+  local json first_call
+  json="$(HOME="$home" PATH="$stub/bin:$PATH" WIKI_REMOTE="process:wiki" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="process:wiki" bash "$STATUS_SH" --read-only --json)"
+  first_call="$(head -n 1 "$calls" 2>/dev/null || true)"
+
+  assert_eq "process env remote check passes" "$(check_status "$json" "reachability_s3")" "pass"
+  if printf '%s' "$first_call" | grep -q '^lsf process:wiki '; then
+    printf "PASS: process WIKI_REMOTE overrides env file\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: process WIKI_REMOTE precedence wrong — call='%s'\n" "$first_call"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+test_s3_reachability_warns_when_configured_remote_fails() {
+  local home="$TEST_ROOT/home-s3-failure"
+  local stub="$TEST_ROOT/stub-s3-failure"
+  local calls="$TEST_ROOT/s3-failure.calls"
+  prepare_home "$home"
+  prepare_rclone_stub "$stub"
+  mkdir -p "$home/.skillwiki"
+  printf 'WIKI_REMOTE=configured:wiki\n' > "$home/.skillwiki/.env"
+  : > "$calls"
+
+  local json status detail first_call
+  json="$(HOME="$home" PATH="$stub/bin:$PATH" RCLONE_CALLS="$calls" RCLONE_OK_REMOTE="different:wiki" bash "$STATUS_SH" --read-only --json)"
+  status="$(check_status "$json" "reachability_s3")"
+  detail="$(check_detail "$json" "reachability_s3")"
+  first_call="$(head -n 1 "$calls" 2>/dev/null || true)"
+
+  assert_eq "configured failing S3 remote warns" "$status" "warn"
+  if printf '%s' "$detail" | grep -q 'unreachable.*configured:wiki'; then
+    printf "PASS: configured failing S3 detail identifies unreachable remote\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: configured failing S3 detail is incomplete — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+  if printf '%s' "$first_call" | grep -q '^lsf configured:wiki '; then
+    printf "PASS: configured failing S3 probe uses exact remote\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: configured failing S3 probe used wrong remote — call='%s'\n" "$first_call"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 # --- Task 5: cwd independence + runtime proof ---
 
 test_status_identical_from_arbitrary_cwd() {
@@ -406,6 +594,11 @@ test_conflict_markers_pass_on_standalone_separator
 
 test_reachability_local_vault_on_clean_git_vault
 test_reachability_snapshotter_not_checked_by_default
+test_s3_reachability_skips_when_remote_is_unconfigured
+test_s3_reachability_uses_snapshotter_profile
+test_s3_reachability_env_file_overrides_snapshotter_profile
+test_s3_reachability_process_env_overrides_env_file
+test_s3_reachability_warns_when_configured_remote_fails
 
 test_status_identical_from_arbitrary_cwd
 test_status_warns_runtime_hash_mismatch

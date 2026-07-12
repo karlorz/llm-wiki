@@ -248,6 +248,7 @@ describe("runSyncStatus", () => {
       vault: dir,
       includeRemoteHealth: true,
       home: tmpdir(),
+      s3Remote: "configured:wiki",
       execProbe,
     });
     expect(result.ok).toBe(true);
@@ -258,6 +259,36 @@ describe("runSyncStatus", () => {
       expect(result.data.degraded_reasons).toContain("s3_remote_unreachable");
       expect(result.data.status).toBe("clean");
     }
+  });
+
+  it("does not report an S3 outage when remote health has no configured remote", () => {
+    const dir = makeTempDir();
+    const home = makeTempDir();
+    git(dir, "init");
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    writeFileSync(join(dir, "README.md"), "hello");
+    git(dir, "add .");
+    git(dir, 'commit -m init');
+    const calls: Array<{ file: string; args: string[] }> = [];
+
+    const { result } = runSyncStatus({
+      vault: dir,
+      includeRemoteHealth: true,
+      home,
+      execProbe: (file, args) => {
+        calls.push({ file, args });
+        if (file === "git" && args[0] === "remote") throw new Error("no origin");
+        return "";
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.remote_health?.s3).toBe("unknown");
+      expect(result.data.degraded_reasons ?? []).not.toContain("s3_remote_unreachable");
+    }
+    expect(calls.filter(call => call.file === "rclone")).toEqual([]);
   });
 
   it("includes last_commit timestamp", () => {

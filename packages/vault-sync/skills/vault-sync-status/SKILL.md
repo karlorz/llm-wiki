@@ -36,10 +36,28 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
    - `vault_sync_runtime_match` — SHA-256 of installed package-source scripts match the manifest and package sources under the vault-sync package root.
    - `vault_sync_runtime_registration` — warn when scheduler jobs are enabled but runtime match is not pass.
    - `vault_sync_live_verify` — pass only when `$(platform_share_dir)/live-verify.ok` exists; otherwise warn. Status **never** creates this marker.
-7. **Output**:
+7. **Resolve S3 reachability without guessing a host-local alias**:
+   - non-empty process `WIKI_REMOTE`;
+   - otherwise `WIKI_REMOTE` from `~/.skillwiki/.env`;
+   - otherwise, for snapshotters, `WIKI_REMOTE` or `CLOUD_REMOTE` parsed as data
+     from `/etc/vault-sync/profiles/$(hostname)-snapshotter.env`;
+   - otherwise report `S3 remote not configured — reachability probe skipped`.
+   A missing remote is unknown/unconfigured, not unreachable. Only a failed
+   probe of a resolved remote produces an S3 warning. Snapshot profiles are
+   parsed by exact assignment and are never sourced as shell code.
+8. **Output**:
    - Default: human-readable two-column table.
    - `--json`: machine-readable record matching the doctor JSON shape.
-8. **`--read-only` flag**: explicitly forbid any state-changing call. Used by sg01 e2e leg. The skill MUST honor this — no `touch`, no `launchctl print` (which on some platforms can spawn helpers), no service restart.
+9. **`--read-only` flag**: explicitly forbid any state-changing call. Used by sg01 e2e leg. The skill MUST honor this — no `touch`, no `launchctl print` (which on some platforms can spawn helpers), no service restart.
+
+## S3 configuration contract
+
+Rclone remote names such as `cloud:` or `seaweed-wiki:` are host-local aliases.
+Managed leaf hosts should set `WIKI_REMOTE` explicitly in
+`~/.skillwiki/.env`. Snapshotter services carry their operational source in the
+systemd profile as `CLOUD_REMOTE`; status can consume that profile when
+`WIKI_REMOTE` is absent. Do not interpret a shared legacy script default as
+proof that the alias exists on the current host.
 
 ## Runtime proof and live verification
 

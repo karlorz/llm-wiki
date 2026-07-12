@@ -79,13 +79,58 @@ lookup_check_status() {
   printf 'missing\n'
 }
 
-config_value() {
-  local key="$1"
-  local file="$HOME/.skillwiki/.env"
+file_value() {
+  local file="$1"
+  local key="$2"
   if [ ! -f "$file" ]; then
     return 1
   fi
   awk -F= -v k="$key" '$1==k {print substr($0, index($0,"=")+1); exit}' "$file"
+}
+
+config_value() {
+  file_value "$HOME/.skillwiki/.env" "$1"
+}
+
+resolve_s3_remote() {
+  S3_REMOTE=""
+  S3_REMOTE_SOURCE=""
+
+  if [ -n "${WIKI_REMOTE:-}" ]; then
+    S3_REMOTE="$WIKI_REMOTE"
+    S3_REMOTE_SOURCE="process environment"
+    return 0
+  fi
+
+  local configured=""
+  if configured=$(config_value "WIKI_REMOTE"); then
+    if [ -n "$configured" ]; then
+      S3_REMOTE="$configured"
+      S3_REMOTE_SOURCE="SkillWiki env file"
+      return 0
+    fi
+  fi
+
+  if [ "${ROLE:-}" = "snapshotter" ]; then
+    local profile="${VS_SNAPSHOT_PROFILE:-/etc/vault-sync/profiles/$(hostname)-snapshotter.env}"
+    local profile_remote=""
+    if profile_remote=$(file_value "$profile" "WIKI_REMOTE"); then
+      if [ -n "$profile_remote" ]; then
+        S3_REMOTE="$profile_remote"
+        S3_REMOTE_SOURCE="snapshotter profile"
+        return 0
+      fi
+    fi
+    if profile_remote=$(file_value "$profile" "CLOUD_REMOTE"); then
+      if [ -n "$profile_remote" ]; then
+        S3_REMOTE="$profile_remote"
+        S3_REMOTE_SOURCE="snapshotter profile"
+        return 0
+      fi
+    fi
+  fi
+
+  return 1
 }
 
 # Resolve vault path once. Priority: VS_VAULT_PATH, WIKI_PATH, skillwiki, $HOME/wiki.
@@ -706,22 +751,20 @@ add_check "reachability_github" "GitHub reachability" \
   "$( [ "$github_reach" = ok ] && printf pass || { [ "$github_reach" = unreachable ] && printf warn || printf pass; } )" \
   "$github_detail"
 
-S3_REMOTE="${WIKI_REMOTE:-seaweed-wiki:cloud/wiki}"
-if env_val=$(config_value "WIKI_REMOTE"); then
-  [ -n "$env_val" ] && S3_REMOTE="$env_val"
-fi
 s3_reach="unknown"
-s3_detail="rclone not probed"
-if command -v rclone >/dev/null 2>&1; then
+s3_detail="S3 remote not configured — reachability probe skipped"
+if ! resolve_s3_remote; then
+  :
+elif command -v rclone >/dev/null 2>&1; then
   if timeout 3 rclone lsf "$S3_REMOTE" --max-depth 1 --files-only >/dev/null 2>&1; then
     s3_reach="ok"
-    s3_detail="rclone lsf $S3_REMOTE succeeded"
+    s3_detail="rclone lsf $S3_REMOTE succeeded (source: $S3_REMOTE_SOURCE)"
   else
     s3_reach="unreachable"
-    s3_detail="S3 remote unreachable ($S3_REMOTE)"
+    s3_detail="S3 remote unreachable ($S3_REMOTE; source: $S3_REMOTE_SOURCE)"
   fi
 else
-  s3_detail="rclone not on PATH — S3 state unknown"
+  s3_detail="rclone not on PATH — configured S3 state unknown ($S3_REMOTE; source: $S3_REMOTE_SOURCE)"
 fi
 add_check "reachability_s3" "S3 reachability" \
   "$( [ "$s3_reach" = ok ] && printf pass || { [ "$s3_reach" = unreachable ] && printf warn || printf pass; } )" \
