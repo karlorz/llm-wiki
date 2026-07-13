@@ -53,19 +53,68 @@ json_escape() {
   python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
 }
 
-# Portable short-timeout wrapper.
-# Prefer GNU timeout, then Homebrew gtimeout. When neither exists (common on
-# stock macOS), run the command without an external timeout so a missing
-# binary is not misreported as remote unreachability.
+# Portable short-timeout wrapper for network reachability probes.
+# Prefer GNU timeout, then Homebrew gtimeout, then a hard fallback so probes
+# never hang indefinitely (fleet hosts without coreutils timeout).
+# Returns 124 on timeout (GNU convention) when the hard fallback fires.
 with_timeout() {
   local secs="$1"
   shift
+  if [ -z "${secs:-}" ] || ! printf '%s' "$secs" | grep -Eq '^[1-9][0-9]*$'; then
+    secs=3
+  fi
   if command -v timeout >/dev/null 2>&1; then
     timeout "$secs" "$@"
-  elif command -v gtimeout >/dev/null 2>&1; then
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
     gtimeout "$secs" "$@"
+    return $?
+  fi
+  # Hard fallback: python3 subprocess timeout (widely available on fleet hosts).
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$secs" "$@" <<'PY'
+import subprocess, sys
+secs = int(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    r = subprocess.run(cmd, timeout=secs)
+    sys.exit(r.returncode)
+except subprocess.TimeoutExpired:
+    sys.exit(124)
+except OSError:
+    sys.exit(127)
+PY
+    return $?
+  fi
+  # Bash background + kill (Bash 3.2-safe; no mapfile/associative arrays).
+  "$@" &
+  local pid=$!
+  local i=0
+  while [ "$i" -lt "$secs" ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid"
+      return $?
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    return 124
+  fi
+  wait "$pid"
+  return $?
+}
+
+# Optional override for reachability probe bound (positive integer seconds).
+reachability_timeout_secs() {
+  local secs="${VS_REACHABILITY_TIMEOUT:-3}"
+  if printf '%s' "$secs" | grep -Eq '^[1-9][0-9]*$'; then
+    printf '%s\n' "$secs"
   else
-    "$@"
+    printf '3\n'
   fi
 }
 
@@ -761,11 +810,12 @@ check_runtime_proof
 # Always use absolute VAULT_PATH with git -C — never depend on process cwd.
 github_reach="unknown"
 github_detail="WIKI_PATH not set or vault missing"
+REACH_SECS="$(reachability_timeout_secs)"
 if [ -d "$VAULT_PATH/.git" ]; then
-  if with_timeout 3 git -C "$VAULT_PATH" ls-remote origin refs/heads/main >/dev/null 2>&1; then
+  if with_timeout "$REACH_SECS" git -C "$VAULT_PATH" ls-remote origin refs/heads/main >/dev/null 2>&1; then
     github_reach="ok"
     github_detail="git ls-remote origin main succeeded"
-  elif with_timeout 3 git -C "$VAULT_PATH" remote get-url origin >/dev/null 2>&1; then
+  elif with_timeout "$REACH_SECS" git -C "$VAULT_PATH" remote get-url origin >/dev/null 2>&1; then
     github_reach="unreachable"
     github_detail="GitHub ls-remote failed — local vault may still be usable"
   else
@@ -782,7 +832,7 @@ s3_detail="S3 remote not configured — reachability probe skipped"
 if ! resolve_s3_remote; then
   :
 elif command -v rclone >/dev/null 2>&1; then
-  if with_timeout 3 rclone lsf "$S3_REMOTE" --max-depth 1 --files-only >/dev/null 2>&1; then
+  if with_timeout "$REACH_SECS" rclone lsf "$S3_REMOTE" --max-depth 1 --files-only >/dev/null 2>&1; then
     s3_reach="ok"
     s3_detail="rclone lsf $S3_REMOTE succeeded (source: $S3_REMOTE_SOURCE)"
   else
@@ -800,7 +850,7 @@ snapshotter_reach="not_checked"
 snapshotter_detail="Snapshotter SSH check skipped (set VS_CHECK_SNAPSHOTTER=1 to probe)"
 if is_true "${VS_CHECK_SNAPSHOTTER:-0}"; then
   SNAP_ALIAS="${VS_SNAPSHOTTER_SSH_ALIAS:-sg01}"
-  if with_timeout 3 ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new "$SNAP_ALIAS" true >/dev/null 2>&1; then
+  if with_timeout "$REACH_SECS" ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new "$SNAP_ALIAS" true >/dev/null 2>&1; then
     snapshotter_reach="ok"
     snapshotter_detail="SSH reachable via $SNAP_ALIAS"
   else

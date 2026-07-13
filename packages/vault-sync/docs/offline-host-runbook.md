@@ -33,6 +33,50 @@ an explicitly resolved remote fails.
 
 **Warning:** do not treat `sg01` as data authority. It is a worker that can be rebuilt from the GitHub repo, S3 remote, vault-sync package, and `fleet.yaml`.
 
+## Staged / rsync install provenance
+
+When installing from a **rsynced or staged** package tree that is not a full
+monorepo checkout, `runtime-manifest.json` can record `package_version: 0.0.0`
+and an empty `package_commit` because helpers walk `../../package.json` and git.
+
+Set deploy provenance (metadata only; does not change copied scripts):
+
+```bash
+VS_PACKAGE_VERSION=0.9.60 \
+VS_PACKAGE_COMMIT=<source-monorepo-git-sha> \
+bash skills/vault-sync-install/install.sh --role snapshotter --service-scope system --execute
+```
+
+Equivalent flags: `--package-version` / `--package-commit` (assign the same env).
+
+Prefer a monorepo-shaped tree (`package.json` with `"version"` two levels above
+`packages/vault-sync`) when possible; overrides remain the headless SSOT for
+CI and attended rsync deploys.
+
+## Satellite-only leaf hosts (e.g. sg02)
+
+Some fleet leaves intentionally **do not** install vault-sync timers when
+`writes_to` is GitHub-only and skillwiki satellite maintenance
+(`vault-sync-preflight`, self-update) keeps the vault checkout current.
+
+On those hosts:
+
+- Missing `~/.local/share/vault-sync` is **expected**, not an automatic outage.
+- Prefer satellite journals + `git` as the maintenance user (e.g. `agent-memory`).
+- Do not run GitHub probes as root if host keys / SSH identity differ.
+- Install leaf vault-sync only after an explicit product decision (not by default).
+
+## Status hang avoidance
+
+`vault-sync-status` bounds network reachability probes (`timeout` → `gtimeout`
+→ python3 → bash kill). Default bound is 3 seconds
+(`VS_REACHABILITY_TIMEOUT`).
+
+On time-bound snapshotter checks, prefer timers + log tails +
+`runtime-manifest.json` over a full doctor run. Always invoke status from the
+**same package root used to install** (monorepo or plugin cache), not ad-hoc
+worktrees.
+
 ## Snapshotter failover (manual)
 
 Do not implement automatic failover in this phase. Manual failover is safer until the fleet has fencing/lease semantics.

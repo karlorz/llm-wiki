@@ -676,6 +676,48 @@ test_status_runtime_registration_warns_when_jobs_enabled_and_mismatch() {
   assert_eq "registration warns when jobs enabled + runtime mismatch" "$reg_status" "warn"
 }
 
+test_s3_reachability_bounds_hanging_rclone_without_gnu_timeout() {
+  # Without GNU timeout/gtimeout, hard fallback (python3/bash) must still bound
+  # a hanging rclone so status does not block for tens of seconds.
+  local home="$TEST_ROOT/home-s3-hang"
+  local stub="$TEST_ROOT/stub-s3-hang"
+  local calls="$TEST_ROOT/s3-hang.calls"
+  prepare_home "$home"
+  mkdir -p "$home/.skillwiki" "$stub/bin"
+  printf 'WIKI_REMOTE=hanging:wiki\n' >"$home/.skillwiki/.env"
+  : >"$calls"
+  cat >"$stub/bin/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "${RCLONE_CALLS:-/dev/null}"
+sleep 30
+exit 0
+STUB
+  chmod +x "$stub/bin/rclone"
+  # PATH: stub rclone only + bare system bins; no timeout/gtimeout.
+  local start end elapsed status json
+  start="$(date +%s)"
+  json="$(
+    env -u WIKI_REMOTE \
+      HOME="$home" \
+      RCLONE_CALLS="$calls" \
+      VS_REACHABILITY_TIMEOUT=1 \
+      PATH="$stub/bin:/usr/bin:/bin" \
+      bash "$STATUS_SH" --read-only --json 2>/dev/null
+  )"
+  end="$(date +%s)"
+  elapsed=$((end - start))
+  status="$(check_status "$json" "reachability_s3")"
+  # Timed-out rclone is not success; warn is correct for unreachable/failed probe.
+  assert_eq "hanging rclone without GNU timeout is not pass" "$status" "warn"
+  if [ "$elapsed" -lt 15 ]; then
+    printf "PASS: %s\n" "hanging rclone bounded under 15s (elapsed=${elapsed}s)"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: %s\n" "hanging rclone bounded under 15s (elapsed=${elapsed}s)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 test_status_reports_installed_scripts_in_sync
 test_status_warns_when_installed_script_differs_from_source
 test_conflict_markers_pass_on_clean_vault
@@ -690,6 +732,7 @@ test_s3_reachability_uses_installed_snapshot_profile_path
 test_s3_reachability_env_file_overrides_snapshotter_profile
 test_s3_reachability_process_env_overrides_env_file
 test_s3_reachability_works_without_timeout_binary
+test_s3_reachability_bounds_hanging_rclone_without_gnu_timeout
 test_s3_reachability_warns_when_configured_remote_fails
 
 test_status_identical_from_arbitrary_cwd

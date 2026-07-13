@@ -1,6 +1,6 @@
 ---
 name: vault-sync-status
-description: Health snapshot of vault-sync — scheduler health, push/fetch recency, filter integrity, snapshot guard, runtime manifest proof, and Linux fuse-refresh timer status. JSON + human output.
+description: Health snapshot of vault-sync — scheduler health, push/fetch recency, filter integrity, snapshot guard, runtime manifest proof, and Linux fuse-refresh timer status. JSON + human output. Use after install, for CI read-only checks on protected hosts, when status hangs on S3/GitHub probes, or to prove runtime-manifest hashes match package sources.
 argument-hint: "[--read-only] [--json]"
 ---
 
@@ -47,10 +47,38 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
    A missing remote is unknown/unconfigured, not unreachable. Only a failed
    probe of a resolved remote produces an S3 warning. Snapshot profiles are
    parsed by exact assignment and are never sourced as shell code.
+   Reachability probes (git ls-remote, rclone lsf, optional snapshotter SSH) are
+   **hard-bounded** via `with_timeout`: GNU `timeout` → `gtimeout` → python3 →
+   bash job+kill. Default bound is 3s; override with `VS_REACHABILITY_TIMEOUT=<seconds>`.
+   Probes must not hang indefinitely when coreutils timeout is missing.
 8. **Output**:
    - Default: human-readable two-column table.
    - `--json`: machine-readable record matching the doctor JSON shape.
 9. **`--read-only` flag**: explicitly forbid any state-changing call. Used by sg01 e2e leg. The skill MUST honor this — no `touch`, no `launchctl print` (which on some platforms can spawn helpers), no service restart.
+
+## Package root for drift checks
+
+Run status from the **same package tree used to install** (monorepo
+`packages/vault-sync` or Claude/Codex plugin root containing
+`skills/vault-sync-status`). Do not use random worktrees under
+`~/.config/superpowers/worktrees/` — they produce false script_drift.
+
+```bash
+# monorepo
+VS_READ_ONLY=1 bash packages/vault-sync/skills/vault-sync-status/status.sh
+# plugin root
+VS_READ_ONLY=1 bash skills/vault-sync-status/status.sh
+```
+
+## Time-bound snapshotter alternative
+
+When wall-clock budget is tight on a snapshotter (FUSE + S3 probes), prefer:
+
+1. `systemctl is-active wiki-snapshot.timer wiki-fuse-refresh.timer`
+2. Tail `$(platform_log_dir)/wiki-snapshot.log` / `wiki-fuse-refresh.log`
+3. Read `$(platform_share_dir)/runtime-manifest.json` package_version / package_commit
+
+Then run full status when time allows.
 
 ## S3 configuration contract
 
@@ -98,4 +126,5 @@ bash packages/vault-sync/skills/vault-sync-status/status.sh --read-only   # sg01
 
 # Companion script (headless / CI)
 VS_READ_ONLY=1 VS_JSON=1 bash packages/vault-sync/skills/vault-sync-status/status.sh
+VS_READ_ONLY=1 VS_REACHABILITY_TIMEOUT=3 bash packages/vault-sync/skills/vault-sync-status/status.sh
 ```

@@ -1,7 +1,7 @@
 ---
 name: vault-sync-install
-description: Install vault-sync on the current host. Detects OS, deploys scripts, registers scheduler jobs, and supports a Linux FUSE-only mode for rclone-mounted wiki consumers.
-argument-hint: "[--mode=full|fuse-only] [--role=leaf|snapshotter] [--service-scope=user|system] [--vault-path=<path>] [--dry-run] [--override-snapshotter]"
+description: Install vault-sync on the current host. Detects OS, deploys scripts, registers scheduler jobs, and supports a Linux FUSE-only mode for rclone-mounted wiki consumers. Use when asked to install vault-sync, reinstall after plugin update, rsync/staged deploy with runtime-manifest provenance (VS_PACKAGE_VERSION / VS_PACKAGE_COMMIT), or switch leaf vs snapshotter roles.
+argument-hint: "[--mode=full|fuse-only] [--role=leaf|snapshotter] [--service-scope=user|system] [--vault-path=<path>] [--package-version=<ver>] [--package-commit=<sha>] [--dry-run] [--override-snapshotter]"
 ---
 
 # vault-sync-install
@@ -27,6 +27,7 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    - `--service-scope=auto|user|system` for Linux snapshotter or FUSE-only installs. `auto` uses `system` when run as root and `user` otherwise. Full leaf installs stay on user units.
    - `--vault-path=<path>` for the FUSE-only mount guard. Defaults to `~/wiki`.
    - `--max-dir-cache=<duration>` for the FUSE freshness envelope. Defaults to `15m`.
+   - `--package-version=<ver>` / `--package-commit=<sha>` (optional) — set deploy provenance for `runtime-manifest.json`. Equivalent env: `VS_PACKAGE_VERSION`, `VS_PACKAGE_COMMIT`. Metadata only; does not change copied scripts. Required for honest manifests when the package root is rsynced without monorepo `package.json` / git.
 3. **Check prerequisites**:
    - `command -v rclone` — required. Warn-only if not found, but install proceeds (rclone can be installed later).
    - `command -v git` — required for `--mode=full`. Fail if missing.
@@ -162,6 +163,33 @@ Repository tests green ≠ install work complete. After deploying to a real host
 - **Single-writer-git.** Only one host per fleet may be snapshotter. Fleet validation enforces this.
 - **Protected hosts.** If the host is marked `protected: true` in fleet.yaml, the install proceeds (installing is non-destructive) but prints a warning.
 
+## Package root (monorepo vs plugin)
+
+Resolve the vault-sync package root before invoking the companion script:
+
+1. **Monorepo checkout:** `<repo>/packages/vault-sync`
+2. **Claude / Codex plugin install:** directory that contains `skills/vault-sync-install` (plugin cache)
+3. **Installed share** (`~/Library/Application Support/vault-sync` or `~/.local/share/vault-sync`) is runtime only — not package source for drift checks
+
+```bash
+# monorepo
+bash packages/vault-sync/skills/vault-sync-install/install.sh --role leaf --dry-run
+# plugin root (cwd = vault-sync plugin package)
+bash skills/vault-sync-install/install.sh --role leaf --dry-run
+```
+
+Staged / rsync install (honest runtime-manifest without monorepo git tree):
+
+```bash
+VS_PACKAGE_VERSION=0.9.60 \
+VS_PACKAGE_COMMIT=<source-git-sha> \
+bash skills/vault-sync-install/install.sh --role snapshotter --service-scope system --execute
+# or flags (same env SSOT):
+# bash skills/vault-sync-install/install.sh --package-version 0.9.60 --package-commit <sha> ...
+```
+
+See `docs/offline-host-runbook.md` for the full staged-deploy matrix and satellite-only host notes.
+
 ## Execution
 
 ```bash
@@ -174,4 +202,5 @@ bash packages/vault-sync/skills/vault-sync-install/install.sh --mode fuse-only -
 VS_ROLE=leaf VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 VS_ROLE=snapshotter VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 VS_MODE=fuse-only VS_VAULT_PATH=/root/wiki VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
+VS_PACKAGE_VERSION=0.9.60 VS_PACKAGE_COMMIT=<sha> VS_ROLE=snapshotter VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 ```

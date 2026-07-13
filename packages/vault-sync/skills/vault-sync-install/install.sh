@@ -428,6 +428,10 @@ Options:
   --dry-run                       Print plan and execute nothing
   --execute                       Force execute mode
   --override-snapshotter          Allow replacing existing snapshotter
+  --package-version <ver>         Runtime-manifest package_version (sets VS_PACKAGE_VERSION)
+  --package-version=<ver>         Same as above
+  --package-commit <sha>          Runtime-manifest package_commit (sets VS_PACKAGE_COMMIT)
+  --package-commit=<sha>          Same as above
   --help                          Show this help
 
 Environment overrides:
@@ -438,6 +442,8 @@ Environment overrides:
   VS_FUSE_MAX_DIR_CACHE=<duration>
   VS_DRY_RUN=1|0
   VS_OVERRIDE_SNAPSHOTTER=1|0
+  VS_PACKAGE_VERSION=<ver>        Deploy provenance for runtime-manifest (metadata only)
+  VS_PACKAGE_COMMIT=<sha>         Deploy provenance for runtime-manifest (metadata only)
 USAGE
 }
 
@@ -498,6 +504,28 @@ while [ "$#" -gt 0 ]; do
       ;;
     --override-snapshotter)
       OVERRIDE_SNAPSHOTTER=1
+      shift
+      ;;
+    --package-version)
+      [ "$#" -ge 2 ] || fatal "--package-version requires a value"
+      VS_PACKAGE_VERSION="$2"
+      export VS_PACKAGE_VERSION
+      shift 2
+      ;;
+    --package-version=*)
+      VS_PACKAGE_VERSION="${1#*=}"
+      export VS_PACKAGE_VERSION
+      shift
+      ;;
+    --package-commit)
+      [ "$#" -ge 2 ] || fatal "--package-commit requires a value"
+      VS_PACKAGE_COMMIT="$2"
+      export VS_PACKAGE_COMMIT
+      shift 2
+      ;;
+    --package-commit=*)
+      VS_PACKAGE_COMMIT="${1#*=}"
+      export VS_PACKAGE_COMMIT
       shift
       ;;
     --help|-h)

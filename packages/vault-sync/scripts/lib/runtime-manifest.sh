@@ -62,8 +62,19 @@ vault_sync_sha256() {
   esac
 }
 
+# Trim leading/trailing whitespace (portable; no bashisms required).
+_vault_sync_trim() {
+  printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
 vault_sync_package_version() {
   _root="$1"
+  # Deploy provenance override (rsync/staged install). Metadata only.
+  _override="$(_vault_sync_trim "${VS_PACKAGE_VERSION:-}")"
+  if [ -n "$_override" ]; then
+    printf '%s\n' "$_override"
+    return 0
+  fi
   # Prefer monorepo package.json two levels up from packages/vault-sync, else root.
   if [ -f "$_root/../../package.json" ]; then
     if command -v python3 >/dev/null 2>&1; then
@@ -82,6 +93,12 @@ vault_sync_package_version() {
 
 vault_sync_package_commit() {
   _root="$1"
+  # Deploy provenance override (rsync/staged install). Metadata only.
+  _override="$(_vault_sync_trim "${VS_PACKAGE_COMMIT:-}")"
+  if [ -n "$_override" ]; then
+    printf '%s\n' "$_override"
+    return 0
+  fi
   if command -v git >/dev/null 2>&1 && [ -d "$_root/../../.git" -o -f "$_root/../../.git" ] 2>/dev/null; then
     git -C "$_root/../.." rev-parse HEAD 2>/dev/null || echo ""
     return 0
