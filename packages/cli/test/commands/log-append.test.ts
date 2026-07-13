@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runLogAppend } from "../../src/commands/log-append.js";
-import { logLockPath } from "../../src/utils/log-lock.js";
+import { acquireLogLock, logLockPath, releaseLogLock } from "../../src/utils/log-lock.js";
 
 function vault(entries = 2): string {
   const dir = mkdtempSync(join(tmpdir(), "vault-la-"));
@@ -89,5 +89,100 @@ describe("runLogAppend", () => {
     const dir = vault(2);
     await runLogAppend({ vault: dir, content: ENTRY });
     expect(existsSync(logLockPath(dir))).toBe(false);
+  });
+
+  it("deduplicates a publication operation while holding the log lock", async () => {
+    const dir = vault(2);
+    const input = {
+      vault: dir,
+      content: "## [2026-07-13] page-publish | queries/test-query.md\n\n- Published: [[queries/test-query]]",
+      operationId: "a".repeat(64),
+    };
+
+    const first = await runLogAppend(input);
+    const before = statSync(join(dir, "log.md")).mtimeMs;
+    const second = await runLogAppend(input);
+
+    expect(first.result).toMatchObject({ ok: true, data: { appended: true } });
+    expect(second.result).toMatchObject({ ok: true, data: { appended: false } });
+    expect(statSync(join(dir, "log.md")).mtimeMs).toBe(before);
+    expect(readFileSync(join(dir, "log.md"), "utf8").match(/skillwiki-page-publish:/g)).toHaveLength(1);
+  });
+
+  it("rejects an invalid operation ID without changing log.md", async () => {
+    const dir = vault(2);
+    const before = readFileSync(join(dir, "log.md"), "utf8");
+
+    const result = await runLogAppend({ vault: dir, content: ENTRY, operationId: "not-a-sha" });
+
+    expect(result).toMatchObject({ exitCode: 46, result: { ok: false, error: "USAGE" } });
+    expect(readFileSync(join(dir, "log.md"), "utf8")).toBe(before);
+  });
+
+  it("rejects sensitive log content without changing log.md", async () => {
+    const dir = vault(2);
+    const before = readFileSync(join(dir, "log.md"), "utf8");
+    const content = `${ENTRY}\n\napi_key: sk-${"a".repeat(24)}`;
+
+    const result = await runLogAppend({ vault: dir, content });
+
+    expect(result).toMatchObject({ exitCode: 51, result: { ok: false, error: "SENSITIVE_CONTENT_DETECTED" } });
+    expect(readFileSync(join(dir, "log.md"), "utf8")).toBe(before);
+  });
+
+  it("strict lock contention does not reclaim a stale lock or change log.md", async () => {
+    const dir = vault(2);
+    mkdirSync(join(dir, ".skillwiki"), { recursive: true });
+    const lock = logLockPath(dir);
+    writeFileSync(lock, JSON.stringify({ pid: 1, owner_token: "other-owner", acquired: "2000-01-01T00:00:00.000Z" }));
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    const before = readFileSync(join(dir, "log.md"), "utf8");
+
+    const result = await runLogAppend({ vault: dir, content: ENTRY, strictLock: true });
+
+    expect(result).toMatchObject({ exitCode: 49, result: { ok: false, error: "LOG_APPEND_LOCK_HELD" } });
+    expect(readFileSync(join(dir, "log.md"), "utf8")).toBe(before);
+    expect(readFileSync(lock, "utf8")).toContain("other-owner");
+  });
+
+  it("refuses a token-mismatched release without changing log.md", async () => {
+    const dir = vault(2);
+    const before = readFileSync(join(dir, "log.md"), "utf8");
+    const acquired = await acquireLogLock(dir);
+    expect(acquired.ok).toBe(true);
+    if (!acquired.ok) return;
+
+    writeFileSync(logLockPath(dir), JSON.stringify({
+      owner_token: "other-owner",
+      acquired: new Date().toISOString(),
+    }));
+
+    expect(releaseLogLock(acquired.data)).toMatchObject({ ok: false, error: "LOG_APPEND_LOCK_HELD" });
+    expect(readFileSync(join(dir, "log.md"), "utf8")).toBe(before);
+    expect(readFileSync(logLockPath(dir), "utf8")).toContain("other-owner");
+  });
+
+  it("records a legacy last-op entry by default", async () => {
+    const dir = vault(2);
+
+    const result = await runLogAppend({ vault: dir, content: ENTRY });
+
+    expect(result.result).toMatchObject({ ok: true, data: { appended: true } });
+    expect(readFileSync(join(dir, ".skillwiki", "last-op.json"), "utf8")).toContain("log-append");
+  });
+
+  it("can append an operation-marked entry without recording last-op", async () => {
+    const dir = vault(2);
+    const result = await runLogAppend({
+      vault: dir,
+      content: "## [2026-07-13] page-publish | queries/test-query.md",
+      operationId: "b".repeat(64),
+      recordLastOp: false,
+    });
+
+    expect(result.result).toMatchObject({ ok: true, data: { appended: true } });
+    expect(readFileSync(join(dir, "log.md"), "utf8")).toContain("<!-- skillwiki-page-publish:");
+    expect(existsSync(join(dir, ".skillwiki", "last-op.json"))).toBe(false);
   });
 });
