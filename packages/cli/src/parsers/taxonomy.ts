@@ -1,23 +1,157 @@
 import yaml from "js-yaml";
 import { ok, err, type Result, getErrorMessage } from "@skillwiki/shared";
 
-const FENCE_RE = /^##\s+Tag Taxonomy\s*$[\s\S]*?```yaml\s*\n([\s\S]*?)\n```/m;
+export const TAG_SLUG_RE = /^[a-z0-9][a-z0-9_./-]*$/;
 
-export function extractTaxonomy(schemaText: string): Result<string[]> {
-  const m = schemaText.match(FENCE_RE);
-  if (!m) return err("NO_TAXONOMY_BLOCK", { message: "No fenced YAML taxonomy block found in SCHEMA.md" });
+export interface TaxonomyDocument {
+  tags: string[];
+  yamlStart: number;
+  yamlEnd: number;
+  closingFenceStart: number;
+  newline: "\n" | "\r\n";
+  itemIndent: string;
+}
+
+export interface TaxonomyReconcileResult {
+  text: string;
+  requested: string[];
+  existing: string[];
+  missing: string[];
+  added: string[];
+  changed: boolean;
+}
+
+/**
+ * Locates the fenced YAML taxonomy under the exact `## Tag Taxonomy` heading.
+ * Offsets are deliberately returned so callers can splice only that block and
+ * preserve all unrelated SCHEMA.md bytes (including comments and line endings).
+ */
+export function parseTaxonomyDocument(schemaText: string): Result<TaxonomyDocument> {
+  const heading = /^##[ \t]+Tag Taxonomy[ \t]*\r?$/m.exec(schemaText);
+  if (!heading || heading.index === undefined) {
+    return err("NO_TAXONOMY_BLOCK", { message: "Tag Taxonomy heading not found" });
+  }
+
+  const newline: "\n" | "\r\n" = schemaText.includes("\r\n") ? "\r\n" : "\n";
+  const afterHeading = heading.index + heading[0].length;
+  const unboundedTail = schemaText.slice(afterHeading);
+  const nextHeading = /^#{1,2}[ \t]+/m.exec(unboundedTail);
+  const sectionEnd = nextHeading?.index === undefined
+    ? schemaText.length
+    : afterHeading + nextHeading.index;
+  const sectionText = schemaText.slice(afterHeading, sectionEnd);
+  const open = /^```yaml[ \t]*\r?$/m.exec(sectionText);
+  if (!open || open.index === undefined) {
+    return err("NO_TAXONOMY_BLOCK", { message: "Fenced YAML taxonomy block not found" });
+  }
+
+  const openStart = afterHeading + open.index;
+  // The opening-fence match includes `\r` for CRLF files, so skip only the
+  // remaining `\n` byte. Skipping `newline.length` here would drop the first
+  // byte of YAML in a CRLF document.
+  const yamlStart = openStart + open[0].length + 1;
+  const afterOpen = schemaText.slice(yamlStart, sectionEnd);
+  const close = /^```[ \t]*\r?$/m.exec(afterOpen);
+  if (!close || close.index === undefined) {
+    return err("NO_TAXONOMY_BLOCK", { message: "Taxonomy closing fence not found" });
+  }
+
+  const closingFenceStart = yamlStart + close.index;
+  const yamlEnd = closingFenceStart - newline.length;
+  const yamlText = schemaText.slice(yamlStart, yamlEnd);
+
   let parsed: unknown;
-  try { parsed = yaml.load(m[1], { schema: yaml.JSON_SCHEMA }); }
-  catch (e: unknown) { return err("INVALID_FRONTMATTER", { message: getErrorMessage(e) }); }
-  if (parsed === null || typeof parsed !== "object") {
+  try {
+    parsed = yaml.load(yamlText, { schema: yaml.JSON_SCHEMA });
+  } catch (error: unknown) {
+    return err("INVALID_FRONTMATTER", { message: getErrorMessage(error) });
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     return err("INVALID_FRONTMATTER", { message: "taxonomy block is not an object" });
   }
-  const tax = (parsed as Record<string, unknown>).taxonomy;
-  if (!Array.isArray(tax)) {
-    return err("INVALID_FRONTMATTER", { message: "taxonomy key missing or not an array" });
-  }
-  if (!tax.every(x => typeof x === "string")) {
+
+  const tags = (parsed as Record<string, unknown>).taxonomy;
+  if (!Array.isArray(tags) || !tags.every((tag) => typeof tag === "string")) {
     return err("INVALID_FRONTMATTER", { message: "taxonomy must be a list of strings" });
   }
-  return ok(tax as string[]);
+
+  const itemLine = yamlText.split(/\r?\n/).find((line) => /^\s+-\s+/.test(line));
+  const itemIndent = itemLine?.match(/^(\s*)-/)?.[1] ?? "  ";
+  return ok({ tags, yamlStart, yamlEnd, closingFenceStart, newline, itemIndent });
+}
+
+/** Retains the pre-existing list-only API for current taxonomy consumers. */
+export function extractTaxonomy(schemaText: string): Result<string[]> {
+  const parsed = parseTaxonomyDocument(schemaText);
+  if ("error" in parsed) return err(parsed.error, parsed.detail);
+  return ok(parsed.data.tags);
+}
+
+function renderTag(tag: string): string {
+  const roundTrip = yaml.load(`value: ${tag}\n`, { schema: yaml.JSON_SCHEMA }) as {
+    value: unknown;
+  };
+  return typeof roundTrip.value === "string" && roundTrip.value === tag
+    ? tag
+    : JSON.stringify(tag);
+}
+
+/**
+ * Produces the established dated reconciliation comment without deriving any
+ * taxonomy terms from the page body.
+ */
+export function taxonomyCommentForPage(page: string, date: string, reason?: string): Result<string> {
+  const cycle = /^queries\/\d{4}-\d{2}-\d{2}-research-cycle-(\d+)-report\.md$/.exec(page);
+  const chosen = reason?.trim()
+    || (cycle ? `research-cycle ${cycle[1]} taxonomy reconciliation` : `taxonomy reconciliation for ${page}`);
+  if (!/^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,159}$/.test(chosen)) {
+    return err("SCHEME_REJECTED", {
+      message: "reconciliation reason contains unsupported characters or is too long",
+    });
+  }
+  return ok(`# -- added ${date}: ${chosen} --`);
+}
+
+/**
+ * Adds only explicit, frontmatter-derived missing tags. It is pure and
+ * idempotent: callers own locking and persistence.
+ */
+export function reconcileTaxonomyDocument(
+  schemaText: string,
+  input: { tags: readonly string[]; comment: string },
+): Result<TaxonomyReconcileResult> {
+  const document = parseTaxonomyDocument(schemaText);
+  if ("error" in document) return err(document.error, document.detail);
+
+  const requested = [...new Set(input.tags)].sort();
+  const existingSet = new Set(document.data.tags);
+  const missing = requested.filter((tag) => !existingSet.has(tag));
+  const invalid = missing.filter((tag) => !TAG_SLUG_RE.test(tag));
+  if (invalid.length > 0) {
+    return err("SCHEME_REJECTED", { message: "invalid taxonomy tag", tags: invalid });
+  }
+  if (missing.length === 0) {
+    return ok({
+      text: schemaText,
+      requested,
+      existing: document.data.tags,
+      missing: [],
+      added: [],
+      changed: false,
+    });
+  }
+
+  const { newline, itemIndent, closingFenceStart } = document.data;
+  const comment = `${itemIndent}${input.comment}`;
+  const items = missing.map((tag) => `${itemIndent}- ${renderTag(tag)}`);
+  const block = `${comment}${newline}${items.join(newline)}${newline}`;
+  const text = schemaText.slice(0, closingFenceStart) + block + schemaText.slice(closingFenceStart);
+  return ok({
+    text,
+    requested,
+    existing: document.data.tags,
+    missing,
+    added: missing,
+    changed: true,
+  });
 }
