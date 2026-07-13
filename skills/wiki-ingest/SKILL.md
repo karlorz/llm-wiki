@@ -19,11 +19,21 @@ Run `skillwiki lang` at the start. Generate page-body prose, narrative sections,
 1. **Guard.** For each URL: run `skillwiki fetch-guard <url>`. If exit ≠ 0, STOP and surface the error. Do not retry.
 2. **Fetch.** Use `web_fetch` (or read local file) under Layer 2 controls (the CLI Layer 2 fetcher applies in tests; in skill runtime use `web_fetch` directly and treat any error as STOP).
    - **Portable local-source rule:** follow `using-skillwiki` → Portable Source References. Do not use `source_url: file:///...` as the canonical durable reference; prefer commit-pinned GitHub `blob/<commit>/<path>` when resolvable, else empty `source_url` plus portable repo-relative prose.
-3. **Identity guard.** Before writing raw files, ensure the target raw filename/title, `source_url`, fetched H1/title, and early body subject agree. If `skillwiki ingest` reports `INGEST_VALIDATION_FAILED` with `source identity conflict`, STOP. Do not fix by renaming after the fact; choose the correct title/source pair or ask the user.
-4. **Sensitive content guard.** Before writing or filing any vault page, scan the source and generated body for live credentials, access keys, tokens, passwords, cookies, bearer headers, or private keys. Redact generated prose before writing. If the source itself must remain raw and contains a live secret, STOP instead of preserving it.
-5. **Feature-detect publication.** Run `skillwiki page publish --help`. If unavailable, fail closed and leave typed output unpublished; update the active SkillWiki CLI/plugin channel first.
-6. **Ingest and publish.** Use `skillwiki ingest` for deterministic source capture and typed-page publication. The command writes an immutable raw source first and delegates the typed page, taxonomy, index, and structural log entry to the shared page publisher. Supply the resolved vault, type, title, tags, and provenance through the command options.
-7. **Recovery.** Never create the final typed page or edit index.md/log.md directly. A raw-only result after publication failure is valid recovery state. Keep the exact command inputs and retry; do not delete or overwrite the raw source.
+3. **Stage pasted text as a file source.** `skillwiki ingest` accepts a readable local source file or HTTP(S) URL; it does **not** accept literal pasted text. For a paste, stage the exact text in a temporary file outside the vault, then pass its path to the normal command:
+   ```bash
+   skillwiki ingest <staged-paste-path> \
+     --vault <resolved-vault> \
+     --type <entity|concept|comparison|query> \
+     --title "<title>" \
+     --tags "<tag1,tag2>" \
+     --provenance <research|project>
+   ```
+   Record the staged path and exact command inputs before execution. If ingestion or typed-page publication fails, retain the staged source and exact command inputs for retry. Remove the staged file only after `skillwiki ingest` exits 0 after typed-page publication; confirm the non-dry-run result reports its raw path, typed path, and publisher operation. Do not stage pasted text inside the vault.
+4. **Identity guard.** Before writing raw files, ensure the target raw filename/title, `source_url`, fetched H1/title, and early body subject agree. If `skillwiki ingest` reports `INGEST_VALIDATION_FAILED` with `source identity conflict`, STOP. Do not fix by renaming after the fact; choose the correct title/source pair or ask the user.
+5. **Sensitive content guard.** Before writing or filing any vault page, scan the source and generated body for live credentials, access keys, tokens, passwords, cookies, bearer headers, or private keys. Redact generated prose before writing. If the source itself must remain raw and contains a live secret, STOP instead of preserving it.
+6. **Feature-detect publication.** Run `skillwiki page publish --help`. If unavailable, fail closed and leave typed output unpublished; update the active SkillWiki CLI/plugin channel first.
+7. **Ingest and publish.** Use `skillwiki ingest` for deterministic source capture and typed-page publication. The command writes an immutable raw source first and delegates the typed page, taxonomy, index, and structural log entry to the shared page publisher. Supply the resolved vault, type, title, tags, and provenance through the command options.
+8. **Recovery.** Never create the final typed page or edit index.md/log.md directly. A raw-only result after publication failure is valid recovery state. Keep the exact command inputs and retry; do not delete or overwrite the raw source.
 ## Provenance defaults
 - Default `provenance: research`.
 - If cwd is inside `projects/{slug}/`, set `provenance: project` and add `provenance_projects: ["[[slug]]"]`.
@@ -49,7 +59,7 @@ Raw ephemeral data (market feeds, logs, transient JSON) must be written to the *
 - Writing `[[wikilinks]]` to pages that don't exist in the vault. Before linking, verify the target exists: check `index.md` or `ls` the target directory. If the target doesn't exist yet, use plain text instead of a wikilink.
 ## Batch Mode
 When the user provides multiple sources (a directory of files, a list of URLs, or a multi-document input):
-1. **Loop per source.** Execute steps 1–7 for each source individually, using one `skillwiki ingest` command per source.
+1. **Loop per source.** Execute steps 1–8 for each source individually, using one `skillwiki ingest` command per source.
 2. **Fail fast.** If an ingest command returns nonzero, STOP and report the retained raw-only state, if any, with its exact retry inputs.
 3. **Deduplication.** Let `skillwiki ingest` preserve immutable raw capture and skip sources whose content is already present.
 4. **Progress.** After each source completes, report the raw path, typed path or recovery state, and publisher operation ID.
