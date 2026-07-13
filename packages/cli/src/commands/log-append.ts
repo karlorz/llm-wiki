@@ -35,6 +35,7 @@ export async function runLogAppend(input: LogAppendInput): Promise<{ exitCode: n
   if (!acquired.ok) {
     return { exitCode: ExitCode.LOG_APPEND_LOCK_HELD, result: err("LOG_APPEND_LOCK_HELD", { vault: input.vault }) };
   }
+  const lockHandle = acquired.data;
 
   const logPath = join(input.vault, "log.md");
   try {
@@ -67,6 +68,6 @@ export async function runLogAppend(input: LogAppendInput): Promise<{ exitCode: n
       result: ok({ entries_before: entriesBefore, entries_after: entriesAfter, appended: true, humanHint: `appended log entry (${entriesBefore}->${entriesAfter})` }),
     };
   } finally {
-    releaseLogLock(input.vault);
+    releaseLogLock(lockHandle);
   }
 }

@@ -58,12 +58,14 @@ describe("runLogAppend", () => {
   it("held fresh lock -> LOG_APPEND_LOCK_HELD (49), log unchanged", async () => {
     const dir = vault(2);
     mkdirSync(join(dir, ".skillwiki"), { recursive: true });
-    writeFileSync(logLockPath(dir), JSON.stringify({ pid: 1, acquired: new Date().toISOString() }));
+    const held = JSON.stringify({ pid: 1, owner_token: "other-owner", acquired: new Date().toISOString() });
+    writeFileSync(logLockPath(dir), held);
     const before = readFileSync(join(dir, "log.md"), "utf8");
     // A fresh lock is not stale, so acquire spins for its full budget then fails.
     const r = await runLogAppend({ vault: dir, content: ENTRY });
     expect(r.exitCode).toBe(49);
     expect(readFileSync(join(dir, "log.md"), "utf8")).toBe(before);
+    expect(readFileSync(logLockPath(dir), "utf8")).toBe(held);
   });
 
   it("stale lock is broken and append succeeds", async () => {

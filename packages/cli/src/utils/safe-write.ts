@@ -1,8 +1,7 @@
-import { open, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
-import { dirname, basename, join } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
 import { ok, err, type Result } from "@skillwiki/shared";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { atomicWriteText } from "./atomic-write.js";
 
 /**
  * Defense-in-depth writer for typed-knowledge pages.
@@ -42,6 +41,8 @@ export interface SafeWriteOptions {
 }
 
 export interface SafeWriteMetrics {
+  /** True only when this call atomically installed different bytes. */
+  changed: boolean;
   /** New file: no prior content. */
   isNew: boolean;
   /** Bytes of old body (after frontmatter), or 0 for new files. */
@@ -122,34 +123,17 @@ export async function safeWritePage(
     }
   }
 
-  // Fast path: identical content. Skip the rename to avoid spurious mtime bumps
-  // (which themselves can trigger rclone uploads).
-  if (!isNew && oldContent === newContent) {
-    return ok({ isNew: false, oldBodyBytes, newBodyBytes, bodyRatio, guardSkippedSmall });
-  }
+  const written = await atomicWriteText(absPath, newContent);
+  if (!written.ok) return written;
 
-  const dir = dirname(absPath);
-  const tmpName = `.${basename(absPath)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
-  const tmpPath = join(dir, tmpName);
-
-  try {
-    // Write + fsync the temp file so the bytes hit the filesystem before the
-    // rename publishes the new inode. fsync is best-effort on FUSE mounts but
-    // is the only Node-level hook we have.
-    const handle = await open(tmpPath, "w");
-    try {
-      await handle.writeFile(newContent, "utf8");
-      try { await handle.sync(); } catch { /* fsync optional on FUSE */ }
-    } finally {
-      await handle.close();
-    }
-    await rename(tmpPath, absPath);
-    return ok({ isNew, oldBodyBytes, newBodyBytes, bodyRatio, guardSkippedSmall });
-  } catch (e: unknown) {
-    // Clean up the temp file if rename failed; ignore unlink errors.
-    try { await unlink(tmpPath); } catch { /* ignore */ }
-    return err("WRITE_FAILED", { path: absPath, phase: "atomic-write", message: String(e) });
-  }
+  return ok({
+    changed: written.data.changed,
+    isNew,
+    oldBodyBytes,
+    newBodyBytes,
+    bodyRatio,
+    guardSkippedSmall,
+  });
 }
 
 /**

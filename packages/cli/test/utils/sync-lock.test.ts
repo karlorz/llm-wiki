@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -11,7 +11,9 @@ import {
   readLock,
   isStale,
   acquireLock,
+  acquireOwnedSyncLock,
   releaseLock,
+  releaseOwnedSyncLock,
   type LockFile,
 } from "../../src/utils/sync-lock.js";
 
@@ -180,5 +182,44 @@ describe("acquireLock / releaseLock", () => {
   it("release on a missing lockfile is a no-op", () => {
     const dir = vault();
     expect(releaseLock(dir).released).toBe(false);
+  });
+});
+
+describe("acquireOwnedSyncLock / releaseOwnedSyncLock", () => {
+  it("does not let a same-CWD loser release the winner's publication lock", () => {
+    const dir = vault();
+    const winner = acquireOwnedSyncLock(dir, { summary: "winner", ttlMinutes: 1 });
+    expect(winner.ok).toBe(true);
+    const loser = acquireOwnedSyncLock(dir, { summary: "loser", ttlMinutes: 1 });
+    expect(loser.ok).toBe(false);
+    if (!winner.ok) return;
+
+    expect(releaseOwnedSyncLock({ ...winner.data, ownerToken: "not-the-winner" }).ok).toBe(false);
+    expect(readLock(dir)?.owner_token).toBe(winner.data.ownerToken);
+    expect(releaseOwnedSyncLock(winner.data)).toEqual({ ok: true, data: { released: true } });
+  });
+
+  it("fails closed on malformed existing locks in strict mode", () => {
+    const dir = vault();
+    const path = lockPath(dir);
+    mkdirSync(join(dir, ".skillwiki"), { recursive: true });
+    writeFileSync(path, "not-json\n");
+
+    const result = acquireOwnedSyncLock(dir, { summary: "publisher", ttlMinutes: 1 });
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe("not-json\n");
+  });
+
+  it("fails closed on stale existing locks in strict mode", () => {
+    const dir = vault();
+    const held = acquireLock(dir, { sessionId: "stale", ttlMinutes: -1 });
+    expect(held.ok).toBe(true);
+    const before = readFileSync(lockPath(dir), "utf8");
+
+    const result = acquireOwnedSyncLock(dir, { summary: "publisher", ttlMinutes: 1 });
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(lockPath(dir), "utf8")).toBe(before);
   });
 });

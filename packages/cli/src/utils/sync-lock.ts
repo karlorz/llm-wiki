@@ -1,14 +1,24 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { err, ok, type Result } from "@skillwiki/shared";
 
 export interface LockFile {
   session_id: string;
+  owner_token?: string;
   pid: number;
   cwd: string;
   summary: string;
   acquired: string;
   expires: string;
+}
+
+export interface OwnedLockHandle {
+  vault: string;
+  path: string;
+  sessionId: string;
+  ownerToken: string;
+  acquired: string;
 }
 
 /**
@@ -194,5 +204,67 @@ export function releaseLock(
     return { released: true };
   } catch {
     return { released: false };
+  }
+}
+
+/**
+ * Acquire the sync lock for a non-interactive publisher. Unlike acquireLock,
+ * this strict mode never reclaims malformed or stale lockfiles: an operator
+ * must resolve those before a publisher can make a decision from stale state.
+ */
+export function acquireOwnedSyncLock(
+  vault: string,
+  opts: { summary: string; ttlMinutes: number },
+): Result<OwnedLockHandle> {
+  const ownerToken = randomBytes(16).toString("hex");
+  const sessionId = `publish-${process.pid}-${ownerToken.slice(0, 12)}`;
+  const now = new Date();
+  const lock: LockFile = {
+    session_id: sessionId,
+    owner_token: ownerToken,
+    pid: process.pid,
+    cwd: process.cwd(),
+    summary: opts.summary,
+    acquired: now.toISOString(),
+    expires: new Date(now.getTime() + opts.ttlMinutes * 60_000).toISOString(),
+  };
+  const path = lockPath(vault);
+
+  mkdirSync(join(vault, ".skillwiki"), { recursive: true });
+  try {
+    writeFileSync(path, JSON.stringify(lock, null, 2) + "\n", { flag: "wx" });
+    return ok({ vault, path, sessionId, ownerToken, acquired: lock.acquired });
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      const held = readLock(vault);
+      return err("SYNC_LOCK_HELD", { vault, held, malformed: held === null });
+    }
+    return err("WRITE_FAILED", { path, message: String(error) });
+  }
+}
+
+/**
+ * Release a strict publication lock only if its original ownership tuple is
+ * still present. This prevents another same-host process from deleting a lock
+ * obtained by a later writer.
+ */
+export function releaseOwnedSyncLock(handle: OwnedLockHandle): Result<{ released: boolean }> {
+  const existing = readLock(handle.vault);
+  if (
+    !existing ||
+    existing.session_id !== handle.sessionId ||
+    existing.owner_token !== handle.ownerToken ||
+    existing.acquired !== handle.acquired
+  ) {
+    return err("SYNC_LOCK_HELD", {
+      message: "publication lock ownership changed; refusing release",
+    });
+  }
+
+  try {
+    unlinkSync(handle.path);
+    return ok({ released: true });
+  } catch (error: unknown) {
+    return err("WRITE_FAILED", { path: handle.path, message: String(error) });
   }
 }

@@ -105,6 +105,25 @@ describe("safeWritePage", () => {
     expect(mtimeAfter).toBe(mtimeBefore);
   });
 
+  it("reports the exact atomic-write changed state", async () => {
+    const p = join(dir, "page.md");
+    const original = FM("tags: [old]\n") + "\n## Overview\n\n" + "A".repeat(500) + "\n";
+    const updated = FM("tags: [new]\n") + "\n## Overview\n\n" + "A".repeat(500) + "\n";
+    writeFileSync(p, original);
+
+    const changed = await safeWritePage(p, updated);
+    expect(changed).toMatchObject({
+      ok: true,
+      data: { changed: true, isNew: false, bodyRatio: 1 },
+    });
+
+    const unchanged = await safeWritePage(p, updated);
+    expect(unchanged).toMatchObject({
+      ok: true,
+      data: { changed: false, isNew: false, bodyRatio: 1 },
+    });
+  });
+
   it("does not leak temp files on guard rejection", async () => {
     const p = join(dir, "page.md");
     const original = FM() + "\n" + "G".repeat(2000) + "\n";
