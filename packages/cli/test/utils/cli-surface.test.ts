@@ -19,6 +19,7 @@ describe("buildCliSurface", () => {
 
   it("registers nested subcommands with dot keys", () => {
     expect(surface.has("graph.build")).toBe(true);
+    expect(surface.has("page.publish")).toBe(true);
     expect(surface.has("tag.reconcile")).toBe(true);
     expect(surface.has("sync.status")).toBe(true);
     expect(surface.has("config.list")).toBe(true);
@@ -49,6 +50,10 @@ describe("buildCliSurface", () => {
     expect(surface.get("tag.reconcile")!.has("--reason")).toBe(true);
     expect(surface.get("tag.reconcile")!.has("--write")).toBe(true);
     expect(surface.get("tag.reconcile")!.has("--wiki")).toBe(true);
+    expect(surface.get("page.publish")!.has("--target")).toBe(true);
+    expect(surface.get("page.publish")!.has("--log-note")).toBe(true);
+    expect(surface.get("page.publish")!.has("--write")).toBe(true);
+    expect(surface.get("page.publish")!.has("--wiki")).toBe(true);
   });
 
   it("subcommand flag sets inherit parent + root flags", () => {
@@ -72,6 +77,11 @@ describe("validateCliRefs", () => {
 
   it("accepts a tag reconcile reference with prospective-tag flags", () => {
     expect(v("Preview with `skillwiki tag reconcile --page queries/report.md --tags alpha,beta`.")).toEqual([]);
+  });
+
+  it("accepts a page publish reference with publication flags", () => {
+    expect(v("Publish with `skillwiki page publish --target queries/report.md --log-note canary --write`."))
+      .toEqual([]);
   });
 
   it("accepts a log-append reference with --content", () => {

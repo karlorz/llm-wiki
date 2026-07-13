@@ -82,6 +82,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("memory"); // has subcommands
   program.command("ingest").requiredOption("--vault <path>").requiredOption("--type <type>").requiredOption("--title <title>").option("--tags <csv>").option("--provenance <provenance>").option("--dry-run");
   program.command("fleet"); // has subcommands
+  program.command("page"); // has subcommands
 
   // Subcommands
   const graphCmd = program.commands.find(c => c.name() === "graph")!;
@@ -107,6 +108,13 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--from <path>")
     .option("--tags <csv>")
     .option("--reason <text>")
+    .option("--write")
+    .option("--wiki <name>");
+
+  const pageCmd = program.commands.find(c => c.name() === "page")!;
+  pageCmd.command("publish")
+    .requiredOption("--target <path>")
+    .option("--log-note <text>")
     .option("--write")
     .option("--wiki <name>");
 

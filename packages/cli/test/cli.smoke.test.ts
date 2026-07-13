@@ -1,8 +1,9 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ExitCode } from "@skillwiki/shared";
 
 const BIN = join(__dirname, "..", "dist", "cli.js");
 
@@ -39,6 +40,99 @@ function setupRichVault() {
 }
 setupTmpVault();
 setupRichVault();
+
+function makePublicationSmokeFixture(): { vault: string; draft: string; home: string } {
+  const vault = mkdtempSync(join(tmpdir(), "publish-smoke-vault-"));
+  const draftDir = mkdtempSync(join(tmpdir(), "publish-smoke-draft-"));
+  const home = mkdtempSync(join(tmpdir(), "publish-smoke-home-"));
+  mkdirSync(join(vault, "queries"), { recursive: true });
+  mkdirSync(join(home, ".skillwiki"), { recursive: true });
+  writeFileSync(join(vault, "SCHEMA.md"), [
+    "# Vault Schema",
+    "",
+    "## Tag Taxonomy",
+    "",
+    "```yaml",
+    "taxonomy:",
+    "  - model",
+    "```",
+    "",
+  ].join("\n"));
+  writeFileSync(join(vault, "index.md"), "# Index\n\n## Queries\n");
+  writeFileSync(join(vault, "log.md"), "# Vault Log\n");
+  const draft = join(draftDir, "safety.md");
+  writeFileSync(draft, [
+    "---",
+    "title: Safety",
+    "aliases: []",
+    "created: 2026-07-13",
+    "updated: 2026-07-13",
+    "type: query",
+    "tags: [model, safety-novel]",
+    "sources: [raw/articles/source.md]",
+    "confidence: medium",
+    "---",
+    "",
+    "# Safety",
+    "",
+    "## Sources",
+    "",
+    "- ^[raw/articles/source.md]",
+    "",
+  ].join("\n"));
+  execFileSync("git", ["init", "-b", "main", vault]);
+  execFileSync("git", ["-C", vault, "config", "user.email", "test@example.invalid"]);
+  execFileSync("git", ["-C", vault, "config", "user.name", "Test"]);
+  execFileSync("git", ["-C", vault, "add", "-A"]);
+  execFileSync("git", ["-C", vault, "commit", "-m", "baseline"]);
+  return { vault, draft, home };
+}
+
+const PUBLICATION_WRITES = [
+  {
+    name: "tag reconcile",
+    args: (vault: string, _draft: string) => [
+      "tag", "reconcile", vault,
+      "--page", "queries/safety.md",
+      "--tags", "safety-novel",
+      "--write",
+    ],
+  },
+  {
+    name: "page publish",
+    args: (vault: string, draft: string) => [
+      "page", "publish", draft, vault,
+      "--target", "queries/safety.md",
+      "--write",
+    ],
+  },
+] as const;
+
+function makeProtectedPublicationFixture() {
+  const liveVault = makePublicationSmokeFixture().vault;
+  const snapshot = makePublicationSmokeFixture();
+  const home = mkdtempSync(join(tmpdir(), "publish-protected-home-"));
+  const fleetDir = join(liveVault, "projects", "llm-wiki", "architecture");
+  mkdirSync(fleetDir, { recursive: true });
+  writeFileSync(join(fleetDir, "fleet.yaml"), `schema_version: 1
+vault_remote: git@example.invalid:wiki.git
+s3_remote: example:wiki
+hosts:
+  sg01:
+    class: prod-linux
+    role: snapshotter
+    writes_to: [github]
+    protected: true
+    identity:
+      hostnames: [sg01]
+`);
+  mkdirSync(join(home, ".skillwiki"), { recursive: true });
+  writeFileSync(
+    join(home, ".skillwiki", ".env"),
+    `WIKI_PATH=${liveVault}\nvault_sync.snapshot_worktree=${snapshot.vault}\n`,
+  );
+  return { liveVault, snapshotVault: snapshot.vault, draft: snapshot.draft, home };
+}
 
 describe("cli smoke", () => {
   it("fetch-guard rejects http with exit 4", () => {
@@ -300,6 +394,76 @@ describe("cli smoke", () => {
     const log = execFileSync("git", ["-C", vault, "log", "--oneline"], { encoding: "utf8" }).trim();
     expect(log.split("\n")).toHaveLength(1);
     expect(readFileSync(join(vault, ".skillwiki", "last-op.json"), "utf8")).toContain("older-command");
+  });
+
+  it("page publish previews a draft as JSON and human-readable output", () => {
+    const { vault, draft } = makePublicationSmokeFixture();
+    const args = ["page", "publish", draft, vault, "--target", "queries/safety.md", "--log-note", "canary"];
+    const json = run(args);
+    const human = run([...args, "--human"]);
+
+    expect(json.status).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      ok: true,
+      data: { target: "queries/safety.md", taxonomy_added: ["safety-novel"], dry_run: true },
+    });
+    expect(human.status).toBe(0);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout).toContain("dry run");
+  });
+
+  it.each(PUBLICATION_WRITES)(
+    "$name does not auto-commit even with AUTO_COMMIT=true",
+    ({ args }) => {
+      const { vault, draft, home } = makePublicationSmokeFixture();
+      const sentinel = [{
+        operation: "sentinel",
+        summary: "must survive",
+        files: ["sentinel.md"],
+        timestamp: "2026-07-13T00:00:00.000Z",
+      }];
+      mkdirSync(join(vault, ".skillwiki"), { recursive: true });
+      writeFileSync(join(vault, ".skillwiki", "last-op.json"), JSON.stringify(sentinel, null, 2));
+      const commitsBefore = Number(execFileSync(
+        "git", ["-C", vault, "rev-list", "--count", "HEAD"], { encoding: "utf8" },
+      ));
+
+      const result = run(args(vault, draft), { ...process.env, HOME: home, AUTO_COMMIT: "true" });
+
+      expect(result.status).toBe(0);
+      expect(Number(execFileSync(
+        "git", ["-C", vault, "rev-list", "--count", "HEAD"], { encoding: "utf8" },
+      ))).toBe(commitsBefore);
+      expect(JSON.parse(readFileSync(join(vault, ".skillwiki", "last-op.json"), "utf8"))).toEqual(sentinel);
+    },
+  );
+
+  it.each(PUBLICATION_WRITES)("$name creates no standalone last-op", ({ args }) => {
+    const { vault, draft, home } = makePublicationSmokeFixture();
+    const result = run(args(vault, draft), { ...process.env, HOME: home });
+
+    expect(result.status).toBe(0);
+    expect(existsSync(join(vault, ".skillwiki", "last-op.json"))).toBe(false);
+  });
+
+  it.each(PUBLICATION_WRITES)("$name honors the protected snapshot-worktree guard", ({ args }) => {
+    const fixture = makeProtectedPublicationFixture();
+    const schemaBefore = readFileSync(join(fixture.snapshotVault, "SCHEMA.md"), "utf8");
+    const result = run(args(fixture.snapshotVault, fixture.draft), {
+      ...process.env,
+      HOME: fixture.home,
+      SKILLWIKI_HOST_ID: "sg01",
+      HOSTNAME: "sg01",
+      USER: "root",
+    });
+
+    expect(result.status).toBe(ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      error: "PROTECTED_SNAPSHOTTER_WRITE_BLOCKED",
+    });
+    expect(readFileSync(join(fixture.snapshotVault, "SCHEMA.md"), "utf8")).toBe(schemaBefore);
+    expect(existsSync(join(fixture.snapshotVault, "queries", "safety.md"))).toBe(false);
   });
 
   it("--human produces non-JSON output for validate", () => {

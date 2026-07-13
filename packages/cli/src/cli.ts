@@ -43,6 +43,7 @@ import { runMemoryImport, runMemoryIndex, runMemoryRecall, runMemoryReview, runM
 import { runIngest } from "./commands/ingest.js";
 import { runTagSync } from "./commands/tag-sync.js";
 import { runTagReconcile } from "./commands/tag-reconcile.js";
+import { runPagePublish } from "./commands/page-publish.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers, runSyncLintDelta } from "./commands/sync.js";
 import { getCliSessionId } from "./utils/sync-lock.js";
 import { runBackupSync, runBackupRestore } from "./commands/backup.js";
@@ -318,6 +319,34 @@ tagCmd
       resolved.vault,
       "tag reconcile",
       () => runTagReconcile(input),
+      { postCommit: false },
+    );
+  });
+
+const pageCmd = program.command("page").description("validate and publish typed vault pages");
+
+pageCmd
+  .command("publish <draft> [vault]")
+  .description("preview or publish an unpublished typed-page draft")
+  .requiredOption("--target <path>", "vault-relative typed page target")
+  .option("--log-note <text>", "single-line publication log note")
+  .option("--write", "publish SCHEMA, page, index, and log", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (draft, vault, opts) => {
+    const resolved = await resolveVaultArg(vault, opts.wiki);
+    if (!resolved.ok) return emit({ exitCode: resolved.exitCode, result: resolved.payload });
+    const input = {
+      vault: resolved.vault,
+      draftPath: draft,
+      target: opts.target,
+      logNote: opts.logNote,
+      write: !!opts.write,
+    };
+    if (!opts.write) return emit(await runPagePublish(input), resolved.vault, { postCommit: false });
+    return emitGuardedVaultWrite(
+      resolved.vault,
+      "page publish",
+      () => runPagePublish(input),
       { postCommit: false },
     );
   });
