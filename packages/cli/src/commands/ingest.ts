@@ -1,18 +1,20 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, open, unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
+import { ok, err, ExitCode, RawSourceSchema, type Result } from "@skillwiki/shared";
 import { runFetchGuardSync } from "./fetch-guard.js";
 import { controlledFetch } from "../utils/fetch.js";
 import { appendLastOp } from "../utils/last-op.js";
 import { assessSourceIdentity } from "../utils/source-identity.js";
 import { scanSensitiveContent } from "../utils/sensitive-content.js";
 import {
-  TypedKnowledgeSchema,
-  RawSourceSchema,
-  detectSchema,
-  type SchemaName,
-} from "@skillwiki/shared";
+  preparePagePublicationFromContent,
+  previewPreparedPagePublication,
+  publishPreparedPage,
+  type PagePublishOutput,
+} from "./page-publish.js";
+import { extractFrontmatter } from "../parsers/frontmatter.js";
+import { atomicWriteText } from "../utils/atomic-write.js";
 
 const ALLOWED_TYPES = new Set(["entity", "concept", "comparison", "query"]);
 const TYPE_DIR: Record<string, string> = {
@@ -39,6 +41,7 @@ export interface IngestOutput {
   sha256: string;
   dry_run: boolean;
   humanHint: string;
+  publication: PagePublishOutput;
 }
 
 function slugify(text: string): string {
@@ -95,20 +98,6 @@ function buildTypedContent(
   const sourcesYaml = `  - ${rawRelPath}`;
   const tagsYaml = tags.length > 0 ? tags.map(t => `  - ${t}`).join("\n") : "  []";
 
-  const fm: Record<string, unknown> = {
-    title,
-    aliases,
-    created: ingested,
-    updated: ingested,
-    type,
-    tags,
-    sources: [rawRelPath],
-    confidence: "medium",
-  };
-  if (provenance) {
-    fm.provenance = provenance;
-  }
-
   const fmLines = ["---"];
   fmLines.push(`title: "${title}"`);
   if (aliases.length > 0) {
@@ -145,6 +134,121 @@ function buildTypedContent(
   ].join("\n");
 
   return fmLines.join("\n") + body;
+}
+
+interface ResolvedRawCapture {
+  content: string;
+  ingested: string;
+  shouldWrite: boolean;
+}
+
+async function resolveRawCapture(input: {
+  path: string;
+  sourceUrl: string | null;
+  sourceContent: string;
+  sha256: string;
+  today: string;
+}): Promise<Result<ResolvedRawCapture>> {
+  try {
+    const existing = await readFile(input.path, "utf8");
+    const frontmatter = extractFrontmatter(existing);
+    if (!frontmatter.ok) {
+      return err("INGEST_VALIDATION_FAILED", {
+        path: input.path,
+        message: "existing immutable raw source has invalid frontmatter",
+        source_error: frontmatter.error,
+      });
+    }
+    const parsed = RawSourceSchema.safeParse(frontmatter.data);
+    if (
+      !parsed.success ||
+      parsed.data.sha256 !== input.sha256 ||
+      (parsed.data.source_url ?? null) !== input.sourceUrl ||
+      existing !== buildRawContent(
+        input.sourceUrl,
+        String(parsed.data.ingested),
+        input.sha256,
+        input.sourceContent,
+      )
+    ) {
+      return err("INGEST_VALIDATION_FAILED", {
+        path: input.path,
+        message: "existing immutable raw source differs from the fetched source",
+      });
+    }
+    return ok({
+      content: existing,
+      ingested: String(parsed.data.ingested),
+      shouldWrite: false,
+    });
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      return err("WRITE_FAILED", { path: input.path, message: String(error) });
+    }
+  }
+
+  return ok({
+    content: buildRawContent(input.sourceUrl, input.today, input.sha256, input.sourceContent),
+    ingested: input.today,
+    shouldWrite: true,
+  });
+}
+
+async function writeResolvedRaw(input: {
+  path: string;
+  sourceUrl: string | null;
+  sourceContent: string;
+  sha256: string;
+  today: string;
+  capture: ResolvedRawCapture;
+}): Promise<Result<{ changed: boolean; capture: ResolvedRawCapture }>> {
+  if (!input.capture.shouldWrite) return ok({ changed: false, capture: input.capture });
+  const lock = await acquireRawCaptureLock(input.path);
+  if (!lock.ok) return lock;
+  try {
+    // The initial plan can be stale by the time this writer gets the raw lock.
+    // Re-resolve inside the lock before any atomic write or publication prep.
+    const resolved = await resolveRawCapture(input);
+    if (!resolved.ok) return resolved;
+    if (!resolved.data.shouldWrite) return ok({ changed: false, capture: resolved.data });
+
+    const written = await atomicWriteText(input.path, resolved.data.content);
+    return written.ok
+      ? ok({ changed: written.data.changed, capture: resolved.data })
+      : written;
+  } finally {
+    try {
+      await unlink(lock.data);
+    } catch {
+      // A failed lock cleanup prevents a second writer from proceeding, which
+      // is safer than allowing an immutable capture to be replaced.
+    }
+  }
+}
+
+/**
+ * Serialize raw-capture creation without taking the publisher's global lock:
+ * ingest must be able to preserve the raw source even when typed publication
+ * is held. O_EXCL works on the same FUSE-capable filesystem surface as the
+ * existing sync locks, while the actual page write stays `atomicWriteText`.
+ */
+async function acquireRawCaptureLock(
+  path: string,
+): Promise<Result<string>> {
+  const lockPath = `${path}.ingest.lock`;
+  for (let attempt = 0; attempt < 200; attempt++) {
+    try {
+      const handle = await open(lockPath, "wx");
+      await handle.close();
+      return ok(lockPath);
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        return err("WRITE_FAILED", { path: lockPath, phase: "raw-lock", message: String(error) });
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  return err("WRITE_FAILED", { path: lockPath, phase: "raw-lock", message: "raw capture lock held" });
 }
 
 export async function runIngest(
@@ -260,7 +364,6 @@ export async function runIngest(
   const typedDir = TYPE_DIR[input.type] ?? `${input.type}s`;
   const typedRelPath = `${typedDir}/${slug}.md`;
   const rawAbsPath = join(input.vault, rawRelPath);
-  const typedAbsPath = join(input.vault, typedRelPath);
 
   const identity = assessSourceIdentity({
     rawPath: rawRelPath,
@@ -282,20 +385,70 @@ export async function runIngest(
     };
   }
 
-  // Build file contents
-  const rawContent = buildRawContent(sourceUrl, today, sha256, sourceContent);
-
-  const typedContent = buildTypedContent(
-    input.title,
+  const resolvedRaw = await resolveRawCapture({
+    path: rawAbsPath,
+    sourceUrl,
+    sourceContent,
+    sha256,
     today,
+  });
+  if (!resolvedRaw.ok) {
+    return {
+      exitCode: resolvedRaw.error === "INGEST_VALIDATION_FAILED"
+        ? ExitCode.INGEST_VALIDATION_FAILED
+        : ExitCode.WRITE_FAILED,
+      result: resolvedRaw,
+    };
+  }
+
+  let publicationDate = resolvedRaw.data.ingested;
+  let typedContent = buildTypedContent(
+    input.title,
+    publicationDate,
     input.type,
     tags,
     rawRelPath,
     input.provenance
   );
 
-  // Dry-run: return what would be created without writing
+  // The publisher resolves and validates the final target path, so create the
+  // target directory without directly writing its final page bytes.
+  if (!input.dryRun) {
+    try {
+      await mkdir(join(input.vault, typedDir), { recursive: true });
+    } catch (error: unknown) {
+      return {
+        exitCode: ExitCode.WRITE_FAILED,
+        result: err("WRITE_FAILED", { path: join(input.vault, typedDir), message: String(error) }),
+      };
+    }
+  }
+
+  let publication = preparePagePublicationFromContent({
+    vault: input.vault,
+    content: typedContent,
+    target: typedRelPath,
+    logNote: `ingested from ${rawRelPath}`,
+    now: new Date(`${publicationDate}T00:00:00Z`),
+  });
+  if (!publication.ok) {
+    return {
+      exitCode: ExitCode.INGEST_VALIDATION_FAILED,
+      result: publication,
+    };
+  }
+
   if (input.dryRun) {
+    const preview = await previewPreparedPagePublication(publication.data, input.vault);
+    if (!preview.result.ok) {
+      return { exitCode: preview.exitCode, result: preview.result };
+    }
+    if (preview.exitCode !== ExitCode.OK) {
+      return {
+        exitCode: preview.exitCode,
+        result: err("WRITE_FAILED", { message: "publication preview returned inconsistent success state" }),
+      };
+    }
     return {
       exitCode: ExitCode.OK,
       result: ok({
@@ -304,87 +457,90 @@ export async function runIngest(
         sha256,
         dry_run: true,
         humanHint: [
-          `DRY RUN — would create:`,
+          "DRY RUN — would create:",
           `  ${rawRelPath} (sha256: ${sha256.slice(0, 12)}...)`,
           `  ${typedRelPath}`,
           `  type: ${input.type}, tags: [${tags.join(", ")}]`,
           input.provenance ? `  provenance: ${input.provenance}` : "",
         ].filter(Boolean).join("\n"),
+        publication: preview.result.data,
       }),
     };
   }
 
-  // Validate the typed-knowledge page against the schema
-  const typedFm = {
-    title: input.title,
-    aliases: [],
-    created: today,
-    updated: today,
-    type: input.type,
-    tags,
-    sources: [rawRelPath],
-    confidence: "medium",
-    ...(input.provenance ? { provenance: input.provenance } : {}),
-  };
-
-  const det = detectSchema(typedFm);
-  if (!det.schema) {
-    return {
-      exitCode: ExitCode.INGEST_VALIDATION_FAILED,
-      result: err("INGEST_VALIDATION_FAILED", {
-        message: "generated typed-knowledge page could not be detected as a valid schema",
-      }),
-    };
-  }
-  const parsed = TypedKnowledgeSchema.safeParse(typedFm);
-  if (!parsed.success) {
-    const errors = parsed.error.issues.map(i => ({
-      path: i.path.join("."),
-      message: i.message,
-    }));
-    return {
-      exitCode: ExitCode.INGEST_VALIDATION_FAILED,
-      result: err("INGEST_VALIDATION_FAILED", {
-        message: "generated typed-knowledge page failed schema validation",
-        errors,
-      }),
-    };
-  }
-
-  // Write raw file
   try {
     await mkdir(join(input.vault, "raw", "articles"), { recursive: true });
-    await writeFile(rawAbsPath, rawContent, "utf8");
-  } catch (e: unknown) {
+  } catch (error: unknown) {
     return {
       exitCode: ExitCode.WRITE_FAILED,
-      result: err("WRITE_FAILED", { path: rawAbsPath, message: String(e) }),
+      result: err("WRITE_FAILED", { path: join(input.vault, "raw", "articles"), message: String(error) }),
     };
   }
-
-  // Write typed-knowledge file
-  try {
-    await mkdir(join(input.vault, typedDir), { recursive: true });
-    await writeFile(typedAbsPath, typedContent, "utf8");
-  } catch (e: unknown) {
-    return {
-      exitCode: ExitCode.WRITE_FAILED,
-      result: err("WRITE_FAILED", { path: typedAbsPath, message: String(e) }),
-    };
-  }
-
-  const humanHint = [
-    `created:`,
-    `  ${rawRelPath} (sha256: ${sha256.slice(0, 12)}...)`,
-    `  ${typedRelPath}`,
-  ].join("\n");
-
-  appendLastOp(input.vault, {
-    operation: "ingest",
-    summary: `added ${slug}`,
-    files: [rawRelPath, typedRelPath],
-    timestamp: new Date().toISOString(),
+  const rawWrite = await writeResolvedRaw({
+    path: rawAbsPath,
+    sourceUrl,
+    sourceContent,
+    sha256,
+    today,
+    capture: resolvedRaw.data,
   });
+  if (!rawWrite.ok) {
+    return {
+      exitCode: rawWrite.error === "INGEST_VALIDATION_FAILED"
+        ? ExitCode.INGEST_VALIDATION_FAILED
+        : ExitCode.WRITE_FAILED,
+      result: rawWrite,
+    };
+  }
+
+  if (rawWrite.data.capture.ingested !== publicationDate) {
+    publicationDate = rawWrite.data.capture.ingested;
+    typedContent = buildTypedContent(
+      input.title,
+      publicationDate,
+      input.type,
+      tags,
+      rawRelPath,
+      input.provenance,
+    );
+    publication = preparePagePublicationFromContent({
+      vault: input.vault,
+      content: typedContent,
+      target: typedRelPath,
+      logNote: `ingested from ${rawRelPath}`,
+      now: new Date(`${publicationDate}T00:00:00Z`),
+    });
+    if (!publication.ok) {
+      return {
+        exitCode: ExitCode.INGEST_VALIDATION_FAILED,
+        result: publication,
+      };
+    }
+  }
+
+  const published = await publishPreparedPage(publication.data, input.vault);
+  if (!published.result.ok) {
+    return { exitCode: published.exitCode, result: published.result };
+  }
+  if (published.exitCode !== ExitCode.OK) {
+    return {
+      exitCode: published.exitCode,
+      result: err("WRITE_FAILED", { message: "publisher returned inconsistent success state" }),
+    };
+  }
+
+  const changedFiles = [
+    ...(rawWrite.data.changed ? [rawRelPath] : []),
+    ...published.result.data.files_changed,
+  ];
+  if (changedFiles.length > 0) {
+    appendLastOp(input.vault, {
+      operation: "ingest",
+      summary: `added ${slug}`,
+      files: [...new Set(changedFiles)],
+      timestamp: new Date().toISOString(),
+    });
+  }
 
   return {
     exitCode: ExitCode.OK,
@@ -393,7 +549,12 @@ export async function runIngest(
       typed_path: typedRelPath,
       sha256,
       dry_run: false,
-      humanHint,
+      humanHint: [
+        "created:",
+        `  ${rawRelPath} (sha256: ${sha256.slice(0, 12)}...)`,
+        `  ${typedRelPath}`,
+      ].join("\n"),
+      publication: published.result.data,
     }),
   };
 }

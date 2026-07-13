@@ -6,6 +6,45 @@ import { runValidate } from "../../src/commands/validate.js";
 
 const F = (n: string) => join(__dirname, "..", "fixtures", n);
 
+function makeValidateVault(options: { tags?: string[] } = {}) {
+  const vault = mkdtempSync(join(tmpdir(), "validate-publish-"));
+  const pageTags = options.tags ?? ["research"];
+  mkdirSync(join(vault, "concepts"), { recursive: true });
+  writeFileSync(join(vault, "SCHEMA.md"), `# Vault Schema
+
+## Tag Taxonomy
+
+\`\`\`yaml
+taxonomy:
+  - research
+\`\`\`
+`);
+  writeFileSync(join(vault, "index.md"), "# Index\n\n## Concepts\n");
+  writeFileSync(join(vault, "log.md"), "# Log\n");
+  const page = join(vault, "concepts", "test.md");
+  writeFileSync(page, `---
+title: Test
+created: 2026-07-13
+updated: 2026-07-13
+type: concept
+tags: [${pageTags.join(", ")}]
+sources: [raw/articles/test.md]
+---
+
+# Test
+`);
+  return { vault, page };
+}
+
+function countIndexLinks(vault: string, target: string): number {
+  const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return (readFileSync(join(vault, "index.md"), "utf8").match(new RegExp(`\\[\\[${escaped}\\]\\]`, "g")) ?? []).length;
+}
+
+function readSchema(vault: string): string {
+  return readFileSync(join(vault, "SCHEMA.md"), "utf8");
+}
+
 describe("validate", () => {
   it("returns valid=true for a Hermes-shaped concept", async () => {
     const r = await runValidate({ file: F("valid-concept.md") });
@@ -192,6 +231,7 @@ Body.
   it("--apply skips index.md update for raw schema (only appends to log.md)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "validate-"));
     mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "SCHEMA.md"), "# Schema\n");
     writeFileSync(join(dir, "index.md"), "## Entities\n");
     writeFileSync(join(dir, "log.md"), "# Log\n");
     const file = join(dir, "raw", "articles", "source.md");
@@ -217,6 +257,7 @@ Body.
   it("--apply adds entity page under Entities section", async () => {
     const dir = mkdtempSync(join(tmpdir(), "validate-"));
     mkdirSync(join(dir, "entities"), { recursive: true });
+    writeFileSync(join(dir, "SCHEMA.md"), "# Schema\n");
     writeFileSync(join(dir, "index.md"), "## Entities\n- [[entities/existing]] — Old\n\n## Concepts\n- [[concepts/other]] — Other\n");
     writeFileSync(join(dir, "log.md"), "# Log\n");
     const file = join(dir, "entities", "new-entity.md");
@@ -247,6 +288,7 @@ Body.
   it("--apply creates new section in index.md when section does not exist", async () => {
     const dir = mkdtempSync(join(tmpdir(), "validate-"));
     mkdirSync(join(dir, "queries"), { recursive: true });
+    writeFileSync(join(dir, "SCHEMA.md"), "# Schema\n");
     writeFileSync(join(dir, "index.md"), "## Concepts\n- [[concepts/alpha]] — Alpha\n");
     writeFileSync(join(dir, "log.md"), "# Log\n");
     const file = join(dir, "queries", "search.md");
@@ -348,5 +390,24 @@ Access key: [REDACTED:access_key:abc123]
     const r = await runValidate({ file });
 
     expect(r.exitCode).toBe(0);
+  });
+
+  it("--apply uses idempotent atomic index and operation-aware log helpers", async () => {
+    const fixture = makeValidateVault();
+    const first = await runValidate({ file: fixture.page, vault: fixture.vault, apply: true });
+    const second = await runValidate({ file: fixture.page, vault: fixture.vault, apply: true });
+
+    expect(first.exitCode).toBe(0);
+    expect(second.exitCode).toBe(0);
+    expect(countIndexLinks(fixture.vault, "concepts/test")).toBe(1);
+    expect(readFileSync(join(fixture.vault, "log.md"), "utf8").match(/validate \| added: concepts\/test\.md/g)).toHaveLength(1);
+  });
+
+  it("documents that --apply does not reconcile an already-visible page", async () => {
+    const fixture = makeValidateVault({ tags: ["missing-taxonomy-tag"] });
+    const result = await runValidate({ file: fixture.page, vault: fixture.vault, apply: true });
+
+    expect(result.exitCode).toBe(0);
+    expect(readSchema(fixture.vault)).not.toContain("missing-taxonomy-tag");
   });
 });
