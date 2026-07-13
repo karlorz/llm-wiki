@@ -246,6 +246,62 @@ describe("cli smoke", () => {
     expect(human.stdout.toLowerCase()).toContain("tag");
   });
 
+  it("tag reconcile previews prospective tags as JSON and human-readable output", () => {
+    const args = ["tag", "reconcile", RICH_VAULT, "--page", "queries/prospective.md", "--tags", "alpha,beta"];
+    const json = run(args);
+    const human = run([...args, "--human"]);
+
+    expect(json.status).toBe(0);
+    const parsed = JSON.parse(json.stdout);
+    expect(parsed).toMatchObject({
+      ok: true,
+      data: {
+        page: "queries/prospective.md",
+        requested_tags: ["alpha", "beta"],
+        missing_tags: ["alpha", "beta"],
+        added_tags: [],
+        dry_run: true,
+        files_changed: [],
+      },
+    });
+    expect(human.status).toBe(0);
+    expect(() => JSON.parse(human.stdout)).toThrow();
+    expect(human.stdout).toContain("dry run");
+  });
+
+  it("tag reconcile skips post-commit effects even for a successful write", () => {
+    const vault = mkdtempSync(join(tmpdir(), "smoke-tag-reconcile-ac-"));
+    mkdirSync(join(vault, "queries"), { recursive: true });
+    writeFileSync(join(vault, "SCHEMA.md"), "# Vault Schema\n\n## Tag Taxonomy\n\n```yaml\ntaxonomy:\n  - model\n```\n");
+    writeFileSync(join(vault, "index.md"), "# Index\n");
+    writeFileSync(join(vault, "log.md"), "# Vault Log\n");
+    execFileSync("git", ["init", vault], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "config", "user.email", "test@test.com"], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "config", "user.name", "Test"], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "add", "-A"], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "commit", "-m", "init"], { encoding: "utf8" });
+    mkdirSync(join(vault, ".skillwiki"), { recursive: true });
+    writeFileSync(join(vault, ".skillwiki", "last-op.json"), JSON.stringify([{
+      operation: "older-command",
+      summary: "must not be committed by tag reconcile",
+      files: ["SCHEMA.md"],
+      timestamp: "2026-07-13T00:00:00.000Z",
+    }]));
+
+    const home = mkdtempSync(join(tmpdir(), "smoke-tag-reconcile-home-"));
+    mkdirSync(join(home, ".skillwiki"), { recursive: true });
+    writeFileSync(join(home, ".skillwiki", ".env"), "AUTO_COMMIT=true\n");
+    const result = run(
+      ["tag", "reconcile", vault, "--page", "queries/prospective.md", "--tags", "alpha", "--write"],
+      { ...process.env, HOME: home },
+    );
+
+    expect(result.status).toBe(0);
+    const log = execFileSync("git", ["-C", vault, "log", "--oneline"], { encoding: "utf8" }).trim();
+    expect(log.split("\n")).toHaveLength(1);
+    expect(readFileSync(join(vault, ".skillwiki", "last-op.json"), "utf8")).toContain("older-command");
+  });
+
   it("--human produces non-JSON output for validate", () => {
     const fixture = join(RICH_VAULT, "concepts", "test.md");
     const json = run(["validate", fixture]);

@@ -72,6 +72,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("transcripts").option("--since <date>").option("--wiki <name>");
   program.command("project-index").option("--apply").option("--wiki <name>");
   program.command("compound"); // has subcommands
+  program.command("tag"); // has subcommands
   program.command("tag-sync").option("--dry-run").option("--wiki <name>");
   program.command("sync"); // has subcommands
   program.command("backup"); // has subcommands
@@ -99,6 +100,15 @@ export function buildCliSurface(): Map<string, Set<string>> {
   compoundCmd.command("promote").requiredOption("--project <slug>").option("--dry-run").option("--wiki <name>");
   compoundCmd.command("list").requiredOption("--project <slug>").option("--wiki <name>");
   compoundCmd.command("delete").requiredOption("--project <slug>").option("--wiki <name>");
+
+  const tagCmd = program.commands.find(c => c.name() === "tag")!;
+  tagCmd.command("reconcile")
+    .requiredOption("--page <path>")
+    .option("--from <path>")
+    .option("--tags <csv>")
+    .option("--reason <text>")
+    .option("--write")
+    .option("--wiki <name>");
 
   const syncCmd = program.commands.find(c => c.name() === "sync")!;
   syncCmd.command("status").option("--wiki <name>").option("--include-stashes").option("--include-remote-health").option("--check-snapshotter");

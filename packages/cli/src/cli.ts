@@ -42,6 +42,7 @@ import { runSessionBrief } from "./commands/session-brief.js";
 import { runMemoryImport, runMemoryIndex, runMemoryRecall, runMemoryReview, runMemoryTopics } from "./commands/memory.js";
 import { runIngest } from "./commands/ingest.js";
 import { runTagSync } from "./commands/tag-sync.js";
+import { runTagReconcile } from "./commands/tag-reconcile.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers, runSyncLintDelta } from "./commands/sync.js";
 import { getCliSessionId } from "./utils/sync-lock.js";
 import { runBackupSync, runBackupRestore } from "./commands/backup.js";
@@ -288,6 +289,37 @@ program.command("tag-audit [vault]")
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runTagAudit({ vault: v.vault }), v.vault);
+  });
+
+const tagCmd = program.command("tag").description("manage the vault tag taxonomy");
+
+tagCmd
+  .command("reconcile [vault]")
+  .description("preview or add prospective page tags to SCHEMA taxonomy")
+  .requiredOption("--page <path>", "vault-relative typed page target")
+  .option("--from <path>", "unpublished draft or existing page to read tags from")
+  .option("--tags <csv>", "comma-separated prospective tags")
+  .option("--reason <text>", "reconciliation comment reason")
+  .option("--write", "write SCHEMA.md after successful preview", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const resolved = await resolveVaultArg(vault, opts.wiki);
+    if (!resolved.ok) return emit({ exitCode: resolved.exitCode, result: resolved.payload });
+    const input = {
+      vault: resolved.vault,
+      page: opts.page,
+      from: opts.from,
+      tags: opts.tags?.split(",").map((tag: string) => tag.trim()).filter(Boolean),
+      reason: opts.reason,
+      write: !!opts.write,
+    };
+    if (!opts.write) return emit(await runTagReconcile(input), resolved.vault, { postCommit: false });
+    return emitGuardedVaultWrite(
+      resolved.vault,
+      "tag reconcile",
+      () => runTagReconcile(input),
+      { postCommit: false },
+    );
   });
 
 program.command("index-check [vault]")

@@ -19,6 +19,7 @@ describe("buildCliSurface", () => {
 
   it("registers nested subcommands with dot keys", () => {
     expect(surface.has("graph.build")).toBe(true);
+    expect(surface.has("tag.reconcile")).toBe(true);
     expect(surface.has("sync.status")).toBe(true);
     expect(surface.has("config.list")).toBe(true);
     expect(surface.has("backup.restore")).toBe(true);
@@ -42,6 +43,12 @@ describe("buildCliSurface", () => {
     expect(surface.get("memory.recall")!.has("--scope")).toBe(true);
     expect(surface.get("memory.review")!.has("--dry-run")).toBe(true);
     expect(surface.get("memory.review")!.has("--pre-action")).toBe(true);
+    expect(surface.get("tag.reconcile")!.has("--page")).toBe(true);
+    expect(surface.get("tag.reconcile")!.has("--from")).toBe(true);
+    expect(surface.get("tag.reconcile")!.has("--tags")).toBe(true);
+    expect(surface.get("tag.reconcile")!.has("--reason")).toBe(true);
+    expect(surface.get("tag.reconcile")!.has("--write")).toBe(true);
+    expect(surface.get("tag.reconcile")!.has("--wiki")).toBe(true);
   });
 
   it("subcommand flag sets inherit parent + root flags", () => {
@@ -61,6 +68,10 @@ describe("validateCliRefs", () => {
   it("accepts a valid two-word subcommand reference", () => {
     expect(v("Use `skillwiki sync status` for state.")).toEqual([]);
     expect(v("Use `skillwiki graph build --out g.json`.")).toEqual([]);
+  });
+
+  it("accepts a tag reconcile reference with prospective-tag flags", () => {
+    expect(v("Preview with `skillwiki tag reconcile --page queries/report.md --tags alpha,beta`.")).toEqual([]);
   });
 
   it("accepts a log-append reference with --content", () => {

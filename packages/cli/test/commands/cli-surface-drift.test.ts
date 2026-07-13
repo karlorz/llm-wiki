@@ -30,7 +30,7 @@ describe("cli-surface drift detection", () => {
       "log-append",
       "lint", "config", "health", "doctor", "status", "archive", "drift", "dedup",
       "migrate-citations", "frontmatter-fix", "update", "self-update",
-      "transcripts", "project-index", "compound", "tag-sync", "sync",
+      "transcripts", "project-index", "compound", "tag", "tag-sync", "sync",
       "backup", "seed", "observe", "session-brief", "memory", "ingest", "fleet",
     ];
 
@@ -46,6 +46,7 @@ describe("cli-surface drift detection", () => {
       { parent: "canvas", subs: ["generate"] },
       { parent: "config", subs: ["get", "set", "list", "path"] },
       { parent: "compound", subs: ["promote", "list", "delete"] },
+      { parent: "tag", subs: ["reconcile"] },
       { parent: "sync", subs: ["status", "push", "pull"] },
       { parent: "backup", subs: ["sync", "restore"] },
       { parent: "memory", subs: ["topics", "index", "recall", "review", "import"] },
@@ -70,7 +71,7 @@ describe("cli-surface drift detection", () => {
       "log-append",
       "lint", "config", "health", "doctor", "status", "archive", "drift", "dedup",
       "migrate-citations", "frontmatter-fix", "update", "self-update",
-      "transcripts", "project-index", "compound", "tag-sync", "sync",
+      "transcripts", "project-index", "compound", "tag", "tag-sync", "sync",
       "backup", "seed", "observe", "session-brief", "memory", "ingest", "fleet",
     ]);
 
