@@ -21,6 +21,18 @@ export interface TaxonomyReconcileResult {
   changed: boolean;
 }
 
+function taxonomyItemIndent(yamlText: string): string | undefined {
+  const lines = yamlText.split(/\r?\n/);
+  const taxonomyLine = lines.findIndex((line) => /^taxonomy:[ \t]*(?:#.*)?$/.test(line));
+  if (taxonomyLine === -1) return undefined;
+
+  for (const line of lines.slice(taxonomyLine + 1)) {
+    if (/^[ \t]*(?:#.*)?$/.test(line)) continue;
+    return /^([ \t]+)-[ \t]+/.exec(line)?.[1];
+  }
+  return undefined;
+}
+
 /**
  * Locates the fenced YAML taxonomy under the exact `## Tag Taxonomy` heading.
  * Offsets are deliberately returned so callers can splice only that block and
@@ -32,7 +44,6 @@ export function parseTaxonomyDocument(schemaText: string): Result<TaxonomyDocume
     return err("NO_TAXONOMY_BLOCK", { message: "Tag Taxonomy heading not found" });
   }
 
-  const newline: "\n" | "\r\n" = schemaText.includes("\r\n") ? "\r\n" : "\n";
   const afterHeading = heading.index + heading[0].length;
   const unboundedTail = schemaText.slice(afterHeading);
   const nextHeading = /^#{1,2}[ \t]+/m.exec(unboundedTail);
@@ -57,6 +68,9 @@ export function parseTaxonomyDocument(schemaText: string): Result<TaxonomyDocume
   }
 
   const closingFenceStart = yamlStart + close.index;
+  const newline: "\n" | "\r\n" = schemaText.slice(closingFenceStart - 2, closingFenceStart) === "\r\n"
+    ? "\r\n"
+    : "\n";
   const yamlEnd = closingFenceStart - newline.length;
   const yamlText = schemaText.slice(yamlStart, yamlEnd);
 
@@ -75,8 +89,7 @@ export function parseTaxonomyDocument(schemaText: string): Result<TaxonomyDocume
     return err("INVALID_FRONTMATTER", { message: "taxonomy must be a list of strings" });
   }
 
-  const itemLine = yamlText.split(/\r?\n/).find((line) => /^\s+-\s+/.test(line));
-  const itemIndent = itemLine?.match(/^(\s*)-/)?.[1] ?? "  ";
+  const itemIndent = taxonomyItemIndent(yamlText) ?? "  ";
   return ok({ tags, yamlStart, yamlEnd, closingFenceStart, newline, itemIndent });
 }
 
@@ -141,7 +154,15 @@ export function reconcileTaxonomyDocument(
     });
   }
 
-  const { newline, itemIndent, closingFenceStart } = document.data;
+  const yamlText = schemaText.slice(document.data.yamlStart, document.data.yamlEnd);
+  const itemIndent = taxonomyItemIndent(yamlText);
+  if (!itemIndent) {
+    return err("SCHEME_REJECTED", {
+      message: "taxonomy reconciliation requires a block-style taxonomy list",
+    });
+  }
+
+  const { newline, closingFenceStart } = document.data;
   const comment = `${itemIndent}${input.comment}`;
   const items = missing.map((tag) => `${itemIndent}- ${renderTag(tag)}`);
   const block = `${comment}${newline}${items.join(newline)}${newline}`;

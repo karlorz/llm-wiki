@@ -164,6 +164,64 @@ describe("extractTaxonomy", () => {
     expect(result.data.text.endsWith("keep me byte-for-byte\r\n")).toBe(true);
   });
 
+  it("uses the taxonomy block newline when unrelated text uses CRLF", () => {
+    const schema = `${LF_SCHEMA}unrelated CRLF line\r\n`;
+    const parsed = parseTaxonomyDocument(schema);
+    expect(parsed).toMatchObject({
+      ok: true,
+      data: { tags: ["research"], newline: "\n" },
+    });
+
+    const result = reconcileTaxonomyDocument(schema, {
+      tags: ["alpha"],
+      comment: "# -- added 2026-07-13: taxonomy reconciliation --",
+    });
+    expect(result).toMatchObject({ ok: true, data: { changed: true } });
+    if (!result.ok) return;
+    expect(extractTaxonomy(result.data.text)).toEqual({
+      ok: true,
+      data: ["research", "alpha"],
+    });
+    expect(result.data.text).toContain("  - alpha\n```\n");
+    expect(result.data.text.endsWith("unrelated CRLF line\r\n")).toBe(true);
+  });
+
+  it("rejects inline taxonomy lists before constructing invalid YAML", () => {
+    const inline = LF_SCHEMA.replace("taxonomy:\n  - research", "taxonomy: [research]");
+    const result = reconcileTaxonomyDocument(inline, {
+      tags: ["alpha"],
+      comment: "# -- added 2026-07-13: taxonomy reconciliation --",
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: "SCHEME_REJECTED",
+      detail: { message: "taxonomy reconciliation requires a block-style taxonomy list" },
+    });
+  });
+
+  it("uses indentation from the taxonomy list instead of an earlier YAML list", () => {
+    const schema = LF_SCHEMA.replace(
+      "taxonomy:\n  - research",
+      "other:\n  - unrelated\ntaxonomy:\n    - research",
+    );
+    const first = reconcileTaxonomyDocument(schema, {
+      tags: ["alpha"],
+      comment: "# -- added 2026-07-13: taxonomy reconciliation --",
+    });
+    expect(first).toMatchObject({ ok: true, data: { added: ["alpha"] } });
+    if (!first.ok) return;
+    expect(first.data.text).toContain("    - alpha\n```");
+    expect(extractTaxonomy(first.data.text)).toEqual({
+      ok: true,
+      data: ["research", "alpha"],
+    });
+
+    expect(reconcileTaxonomyDocument(first.data.text, {
+      tags: ["alpha"],
+      comment: "# -- added 2026-07-13: taxonomy reconciliation --",
+    })).toMatchObject({ ok: true, data: { text: first.data.text, changed: false } });
+  });
+
   it("is byte-identical on the second pass", () => {
     const first = reconcileTaxonomyDocument(LF_SCHEMA, {
       tags: ["alpha"],
@@ -186,6 +244,23 @@ describe("extractTaxonomy", () => {
         changed: false,
       },
     });
+  });
+
+  it("deduplicates requested tags before rendering or reporting additions", () => {
+    const result = reconcileTaxonomyDocument(LF_SCHEMA, {
+      tags: ["alpha", "research", "alpha"],
+      comment: "# -- added 2026-07-13: taxonomy reconciliation --",
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        requested: ["alpha", "research"],
+        missing: ["alpha"],
+        added: ["alpha"],
+      },
+    });
+    if (!result.ok) return;
+    expect(result.data.text.match(/^  - alpha$/gm)).toHaveLength(1);
   });
 
   it("rejects invalid missing tags but permits legacy taxonomy values", () => {
