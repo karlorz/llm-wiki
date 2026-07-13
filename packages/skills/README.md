@@ -5,6 +5,12 @@ or the Claude/Codex/Antigravity plugin packaging paths.
 
 Current package inventory: **18 skills**.
 
+Publication policy: new or updated typed-knowledge and meta pages must use
+`skillwiki page publish` from a temporary draft, inspect its dry-run, and add
+`--write` only after the preview succeeds. Do not directly publish the final
+typed path or separately edit its index/log entries; immutable raw sources and
+non-typed project work retain their existing workflows.
+
 | Namespace | Skills |
 |---|---|
 | `wiki-*` | `wiki-init`, `wiki-ingest`, `wiki-query`, `wiki-lint`, `wiki-crystallize`, `wiki-audit`, `wiki-archive`, `wiki-reingest`, `wiki-adapter-prd`, `wiki-add-task`, `wiki-sync`, `wiki-canvas`, `wiki-gate-plan-mode` |

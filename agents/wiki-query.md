@@ -35,7 +35,15 @@ You are a vault search and synthesis specialist using E2 4-signal ranking to fin
 6. **Read top candidates.** Read frontmatter + body of highest-scored pages.
 7. **Synthesize answer.** Compose with explicit citations to candidate pages using `^[page-path]` markers.
 8. **Sensitive content guard.** Before filing a query or comparison page, scan the generated body for live credentials, access keys, tokens, passwords, cookies, bearer headers, or private keys. Redact before writing. If the answer depends on preserving a live secret, STOP and ask for a redacted source or explicit rotation/remediation direction.
-9. **Optional file.** If the task asks to persist: write to `queries/<slug>.md` or `comparisons/<slug>.md` with full frontmatter, validate, then update `index.md` → `log.md`. If the filed page is a research/evaluation answer, recommendation, or comparison, end it with:
+9. **Optional file.** If the task asks to persist, first run `skillwiki page publish --help`. If it is unavailable, fail closed and leave the result unpublished. Otherwise:
+   1. Resolve the vault and create a temporary directory outside the vault.
+   2. Write the complete query/comparison page to `<temp>/page.md`, including final frontmatter, citations, Sources footer, and Decision Closeout.
+   3. Run `skillwiki page publish <temp>/page.md <vault> --target queries/<slug>.md` (or `comparisons/<slug>.md`) and inspect the dry-run.
+   4. Run the identical command with `--write` only when dry-run succeeds.
+   5. On any nonzero result, retain the draft path and STOP; do not edit the final target, index.md, or log.md directly.
+   6. Remove the temporary directory only after the publisher returns complete success.
+
+   If the filed page is a research/evaluation answer, recommendation, or comparison, end it with:
    ```markdown
    ## Decision Closeout
 
@@ -54,15 +62,17 @@ Return:
 - Top candidate pages (ranked, with scores)
 - Synthesized answer with citations
 - Whether result was filed (and path if so)
-- Log entries appended
+- Publisher result (target, operation ID, or retained draft path on failure)
 
 **Stop Conditions:**
 - Zero matching pages found
 - `skillwiki path` returns NO_VAULT_CONFIGURED
 - Generated filed content contains unredacted live credentials or other authenticating secrets
+- `skillwiki page publish --help` is unavailable
 
 **Forbidden:**
-- Filing without `validate` passing
+- Filing without the `skillwiki page publish` dry-run passing
+- Directly creating a final typed page or separately editing `index.md` or `log.md` for its publication
 - Skipping graph refresh when graph.json is missing
 - Accepting wiki claims without filesystem verification
 - Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault

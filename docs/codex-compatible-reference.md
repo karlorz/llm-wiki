@@ -22,6 +22,15 @@ Official platform docs (accessed 2026-07-10):
 `packages/codex-skills/.codex-plugin/plugin.json` are kept byte-identical by the
 materialize pipeline. Prefer the materialized plugin root when installing.
 
+Canonical skill and agent changes require materialization before they are
+validated or released: edit `packages/skills/<skill>/SKILL.md` or
+`packages/skills/agents/*.md`, then run `npm run materialize:plugins` and
+`npm run materialize:plugins:check`. Do not hand-edit the downstream mirrors.
+Downstream prompts must feature-detect `skillwiki page publish --help` before
+using the transactional publisher and fail closed if it is unavailable; update
+the active SkillWiki CLI/plugin channel instead of restoring direct typed-page,
+index, or log writes.
+
 ## What is supported
 
 - Local marketplace source install
@@ -120,4 +129,3 @@ rg "marketplaces\\.llm-wiki" ~/.codex/config.toml
 - Publication and presync gate on `skillwiki sync lint-delta --base-ref origin/main`:
   block only when `new_errors > 0`; inherited full debt remains visible;
   malformed or missing delta evidence fails closed (never silent lint skip).
-

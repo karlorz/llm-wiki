@@ -59,6 +59,21 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 ## Sensitive Content Policy
 Vault content must not contain live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets. This includes development-only and local-only credentials. Redact values before filing using `[REDACTED:<kind>]` or `[REDACTED:<kind>:<fingerprint>]`. If a source contains live secrets, stop and ask for a redacted source or explicit rotation/remediation direction; do not preserve the secret in `raw/`.
 
+## Typed-Page Publication Contract
+
+All new or updated typed-knowledge and meta pages MUST be published through
+`skillwiki page publish`. Compose the complete page at an unpublished temporary
+path, run publisher dry-run, then run the same command with `--write`.
+
+- Do not directly create or edit the final typed-page path.
+- Do not directly update `index.md` or append the page's structural log entry.
+- If `skillwiki page publish --help` is unavailable, fail closed and leave the
+  result unpublished; update the active SkillWiki CLI/plugin channel first.
+- `skillwiki validate --apply` is a legacy repair/compatibility path, not the
+  new-page publication path.
+- Non-typed project work items and immutable raw sources keep their existing
+  workflows.
+
 ## Portable Source References
 The vault is shared across hosts, so host-local absolute paths are not durable source identity.
 
@@ -120,7 +135,7 @@ Use `prd_layer` + `prd_pipeline` from `.claude/dev-loop.config.md` as source of 
 
 ## CLI Backbone
 All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, health reporting, and linting. Skills invoke it via Bash for the mechanical parts and use Claude for the creative parts.
-Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `archive`, `drift`, `compound`, `tag-sync`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
+Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `archive`, `drift`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
 Run `skillwiki health <vault> --out /tmp/skillwiki-health.json --no-fail` for a bounded whole-system report that includes doctor, lint, vault-sync, query-readiness, source-freshness, risk flags, and self-check coverage. Run `skillwiki lint <vault> --summary` for lint-only bucket counts with capped examples and details commands. Run `skillwiki doctor` to diagnose setup/runtime issues only. Run `skillwiki config list` to see current configuration.
 
 ## Runtime Host Context and Fleet Freshness

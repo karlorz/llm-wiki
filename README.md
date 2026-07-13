@@ -61,9 +61,13 @@ npm run -w packages/cli build
 node packages/cli/dist/cli.js --help
 ```
 
-As of package version `0.9.56`, the built CLI advertises 47 public top-level
-subcommands plus `help` (48 including `help`). Nested groups include `graph`,
-`canvas`, `compound`, `config`, `sync`, `backup`, `memory`, and `fleet`.
+Use built `--help` as the authority for the current command surface rather
+than a hard-coded count. To calculate the listed top-level commands from that
+authority:
+
+```bash
+node packages/cli/dist/cli.js --help | awk '/^Commands:/{listed=1; next} listed && /^  [a-z]/{count++} END {print count}'
+```
 
 | Subcommand | Purpose |
 |---|---|
@@ -96,6 +100,8 @@ subcommands plus `help` (48 including `help`). Nested groups include `graph`,
 | `migrate-citations <vault>` | Convert legacy citation markers to current format. |
 | `frontmatter-fix <vault>` | Auto-fix common frontmatter issues. |
 | `tag-audit <vault>` | Audit tag taxonomy compliance. |
+| `tag reconcile [vault]` | Preview or add prospective typed-page tags to the taxonomy. |
+| `page publish <draft> [vault]` | New typed-page write path: publish schema, page, index, and log transactionally. |
 | `tag-sync <vault>` | Mirror frontmatter enum values to nested Obsidian tags. |
 | `topic-map-check <vault>` | Validate topic map consistency. |
 | `index-check <vault>` | Validate index.md entries. |
@@ -117,6 +123,9 @@ subcommands plus `help` (48 including `help`). Nested groups include `graph`,
 | `mcp` | Local experimental MCP server entry (unsupported; see below). |
 
 All subcommands emit JSON by default. Pass `--human` for terminal output.
+`tag reconcile` and `page publish` default to dry-run; add `--write` only after
+their preview succeeds. `page publish` is the required write path for new or
+updated typed knowledge pages.
 
 ## MCP Server (experimental, hidden)
 
