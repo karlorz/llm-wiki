@@ -240,7 +240,7 @@ export async function runTagReconcile(input: TagReconcileInput): Promise<TagReco
       result: err("WRITE_FAILED", { stage: "lock", page: page.data, message: String(error) }),
     };
   }
-  if (!lock.ok) return { exitCode: ExitCode.SYNC_LOCK_HELD, result: lock };
+  if (!lock.ok) return { exitCode: errorExitCode(lock.error), result: lock };
 
   let outcome: TagReconcileRun | undefined;
   let released: Result<{ released: boolean }> | undefined;

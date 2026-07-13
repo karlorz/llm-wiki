@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { ExitCode } from "@skillwiki/shared";
 import { runValidate } from "../../src/commands/validate.js";
 
 const F = (n: string) => join(__dirname, "..", "fixtures", n);
@@ -401,6 +402,20 @@ Access key: [REDACTED:access_key:abc123]
     expect(second.exitCode).toBe(0);
     expect(countIndexLinks(fixture.vault, "concepts/test")).toBe(1);
     expect(readFileSync(join(fixture.vault, "log.md"), "utf8").match(/validate \| added: concepts\/test\.md/g)).toHaveLength(1);
+  });
+
+  it("--apply returns WRITE_FAILED without updating index or log when .skillwiki is an ordinary file", async () => {
+    const fixture = makeValidateVault();
+    const indexBefore = readFileSync(join(fixture.vault, "index.md"), "utf8");
+    const logBefore = readFileSync(join(fixture.vault, "log.md"), "utf8");
+    writeFileSync(join(fixture.vault, ".skillwiki"), "not-a-directory\n");
+
+    const result = await runValidate({ file: fixture.page, vault: fixture.vault, apply: true });
+
+    expect(result.exitCode).toBe(ExitCode.WRITE_FAILED);
+    expect(result.result).toMatchObject({ ok: false, error: "WRITE_FAILED" });
+    expect(readFileSync(join(fixture.vault, "index.md"), "utf8")).toBe(indexBefore);
+    expect(readFileSync(join(fixture.vault, "log.md"), "utf8")).toBe(logBefore);
   });
 
   it("documents that --apply does not reconcile an already-visible page", async () => {

@@ -230,7 +230,11 @@ export function acquireOwnedSyncLock(
   };
   const path = lockPath(vault);
 
-  mkdirSync(join(vault, ".skillwiki"), { recursive: true });
+  try {
+    mkdirSync(join(vault, ".skillwiki"), { recursive: true });
+  } catch (error: unknown) {
+    return err("WRITE_FAILED", { path, message: String(error) });
+  }
   try {
     writeFileSync(path, JSON.stringify(lock, null, 2) + "\n", { flag: "wx" });
     return ok({ vault, path, sessionId, ownerToken, acquired: lock.acquired });

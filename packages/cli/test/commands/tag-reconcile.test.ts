@@ -1,8 +1,23 @@
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExitCode } from "@skillwiki/shared";
+
+const ownedLockFailure = vi.hoisted(() => ({ enabled: false }));
+
+vi.mock("../../src/utils/sync-lock.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/utils/sync-lock.js")>();
+  return {
+    ...actual,
+    acquireOwnedSyncLock: (...args: Parameters<typeof actual.acquireOwnedSyncLock>) => (
+      ownedLockFailure.enabled
+        ? { ok: false as const, error: "WRITE_FAILED" }
+        : actual.acquireOwnedSyncLock(...args)
+    ),
+  };
+});
+
 import { runTagReconcile } from "../../src/commands/tag-reconcile.js";
 import { lockPath } from "../../src/utils/sync-lock.js";
 
@@ -59,6 +74,10 @@ Existing page body.
 }
 
 describe("runTagReconcile", () => {
+  afterEach(() => {
+    ownedLockFailure.enabled = false;
+  });
+
   it("reports prospective missing tags without writing or locking", async () => {
     const vault = makeVault(["research"]);
     const before = readFileSync(join(vault, "SCHEMA.md"), "utf8");
@@ -264,5 +283,23 @@ describe("runTagReconcile", () => {
     expect(result.result).toMatchObject({ ok: false, error: "SYNC_LOCK_HELD" });
     expect(readFileSync(join(vault, "SCHEMA.md"), "utf8")).toBe(before);
     expect(readFileSync(lockPath(vault), "utf8")).toBe(held);
+  });
+
+  it("returns WRITE_FAILED when owned lock acquisition reports a write failure", async () => {
+    const vault = makeVault(["research"]);
+    const before = readFileSync(join(vault, "SCHEMA.md"), "utf8");
+    ownedLockFailure.enabled = true;
+
+    const result = await runTagReconcile({
+      vault,
+      page: "queries/prospective.md",
+      tags: ["alpha"],
+      write: true,
+      now: NOW,
+    });
+
+    expect(result.exitCode).toBe(ExitCode.WRITE_FAILED);
+    expect(result.result).toMatchObject({ ok: false, error: "WRITE_FAILED" });
+    expect(readFileSync(join(vault, "SCHEMA.md"), "utf8")).toBe(before);
   });
 });

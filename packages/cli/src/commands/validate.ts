@@ -113,12 +113,23 @@ export async function runValidate(input: ValidateInput): Promise<{ exitCode: num
       if (!prepared.ok) {
         return { exitCode: ExitCode.INVALID_FRONTMATTER, result: prepared };
       }
-      const lock = acquireOwnedSyncLock(input.vault, {
-        summary: `validate --apply ${relPath}`,
-        ttlMinutes: 1,
-      });
+      let lock: ReturnType<typeof acquireOwnedSyncLock>;
+      try {
+        lock = acquireOwnedSyncLock(input.vault, {
+          summary: `validate --apply ${relPath}`,
+          ttlMinutes: 1,
+        });
+      } catch (error: unknown) {
+        return {
+          exitCode: ExitCode.WRITE_FAILED,
+          result: err("WRITE_FAILED", { stage: "lock", message: String(error) }),
+        };
+      }
       if (!lock.ok) {
-        return { exitCode: ExitCode.SYNC_LOCK_HELD, result: lock };
+        return {
+          exitCode: lock.error === "SYNC_LOCK_HELD" ? ExitCode.SYNC_LOCK_HELD : ExitCode.WRITE_FAILED,
+          result: lock,
+        };
       }
 
       let index: Result<{ changed: boolean }> | undefined;

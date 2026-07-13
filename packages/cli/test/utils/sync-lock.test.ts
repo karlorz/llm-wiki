@@ -186,6 +186,15 @@ describe("acquireLock / releaseLock", () => {
 });
 
 describe("acquireOwnedSyncLock / releaseOwnedSyncLock", () => {
+  it("returns WRITE_FAILED when .skillwiki is an ordinary file", () => {
+    const dir = vault();
+    writeFileSync(join(dir, ".skillwiki"), "not-a-directory\n");
+
+    const result = acquireOwnedSyncLock(dir, { summary: "publisher", ttlMinutes: 1 });
+
+    expect(result).toMatchObject({ ok: false, error: "WRITE_FAILED" });
+  });
+
   it("does not let a same-CWD loser release the winner's publication lock", () => {
     const dir = vault();
     const winner = acquireOwnedSyncLock(dir, { summary: "winner", ttlMinutes: 1 });
