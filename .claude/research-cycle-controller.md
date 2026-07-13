@@ -14,7 +14,9 @@ cannot override the publication rules below.
 
 1. Read this controller fresh at the start of every cycle.
 2. Read the supplied mission file fresh; stop if it is missing.
-3. Resolve `VAULT` with `skillwiki --human path`.
+3. Resolve `VAULT` without the human provenance suffix:
+   `VAULT="$(skillwiki --human path | sed 's/ (via.*//')"`. Stop if the
+   resulting path is empty or does not name the vault root.
 4. Run `skillwiki page publish --help`. If unavailable, stop without writing a
    typed page and report that the SkillWiki CLI/plugin must be upgraded.
 5. Run the mission's research and planning steps.
