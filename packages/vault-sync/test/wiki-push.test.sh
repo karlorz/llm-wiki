@@ -67,6 +67,9 @@ make_script_dir() {
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/lockfile.sh" "$script_dir/lib/lockfile.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/git-case.sh" "$script_dir/lib/git-case.sh"
   cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/conflict-markers.sh" "$script_dir/lib/conflict-markers.sh"
+  if [ -f "$(dirname "$SCRIPT_UNDER_TEST")/lib/delete-intent.sh" ]; then
+    cp "$(dirname "$SCRIPT_UNDER_TEST")/lib/delete-intent.sh" "$script_dir/lib/delete-intent.sh"
+  fi
   chmod +x "$script_dir/wiki-push.sh"
   printf '%s\n' "$script_dir"
 }
@@ -608,7 +611,39 @@ test_dirty_local_files_trigger_rclone_copy
 test_git_remote_failure_does_not_block_s3_publish
 test_pull_helper_not_invoked_by_push
 test_sync_lock_is_pushed_to_s3_not_git
+test_tombstone_prunes_remote_path_after_copy() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone" "$vault/meta/delete-intents" "$vault/summaries"
+  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  # Path is gone locally but still on remote; tombstone marks intentional delete.
+  printf '{\n  "schema": "vault-delete-intent/v1",\n  "path": "summaries/gone.md",\n  "action": "remove",\n  "created": "2026-07-14T00:00:00.000Z",\n  "host": "test",\n  "actor": "test",\n  "source": "cli",\n  "expires": null\n}\n' \
+    > "$vault/meta/delete-intents/summaries__gone.md.json"
+  printf 'summaries/gone.md\n' > "$root/remote-files.txt"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_LSF_FILE="$root/remote-files.txt" \
+    RCLONE_CALLS_FILE="$root/rclone.calls" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_eq "rclone copy runs with tombstone present" "$(test -f "$root/rclone.calls" && echo called || echo skipped)" "called"
+  assert_file_contains "wiki-push prunes tombstoned remote path" "$root/rclone.calls" "deletefile stub:wiki/summaries/gone.md"
+  rm -rf "$root"
+}
+
 test_archive_move_prunes_stale_remote_source_path_after_copy
+test_tombstone_prunes_remote_path_after_copy
 test_memory_cache_dirty_does_not_block_s3_push
 test_case_only_collision_blocks_publish
 test_long_path_fix_runs_before_rclone

@@ -53,6 +53,14 @@ elif [ -f "$SCRIPT_DIR/../../scripts/lib/conflict-markers.sh" ]; then
     source "$SCRIPT_DIR/../../scripts/lib/conflict-markers.sh"
 fi
 
+if [ -f "$SCRIPT_DIR/lib/delete-intent.sh" ]; then
+    source "$SCRIPT_DIR/lib/delete-intent.sh"
+elif [ -f "$SCRIPT_DIR/scripts/lib/delete-intent.sh" ]; then
+    source "$SCRIPT_DIR/scripts/lib/delete-intent.sh"
+elif [ -f "$SCRIPT_DIR/../../scripts/lib/delete-intent.sh" ]; then
+    source "$SCRIPT_DIR/../../scripts/lib/delete-intent.sh"
+fi
+
 if ! command -v vault_sync_scan_conflict_markers >/dev/null 2>&1; then
     echo "[wiki-snapshot] ERROR: conflict-marker helper unavailable; refusing to run." >&2
     exit 1
@@ -346,6 +354,63 @@ if [ ! -f "$SNAPSHOT_WORKTREE/index.md" ]; then
     exit 1
 fi
 
+# --- Delete-intent no-resurrect ---
+# Git is SSOT for intentional absences. After S3→worktree sync, strip any path
+# that has an active tombstone on origin/main and optionally prune S3.
+snapshot_apply_delete_intents() {
+    if ! command -v delete_intent_list_active_paths_from_git >/dev/null 2>&1 \
+        && ! command -v delete_intent_list_active_paths >/dev/null 2>&1; then
+        log "WARNING: delete-intent helpers unavailable; skipping tombstone no-resurrect"
+        return 0
+    fi
+
+    # Re-materialize ledger from git so rclone sync cannot drop git-only intents.
+    (
+        cd "$SNAPSHOT_WORKTREE" || exit 0
+        fetch_origin_main_ref 2>/dev/null || true
+        if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+            git checkout origin/main -- meta/delete-intents/ 2>/dev/null || true
+        fi
+    )
+
+    local paths_file pruned=0
+    paths_file="$(mktemp)"
+    if command -v delete_intent_list_active_paths_from_git >/dev/null 2>&1; then
+        delete_intent_list_active_paths_from_git "$SNAPSHOT_WORKTREE" origin/main > "$paths_file" 2>/dev/null || true
+    fi
+    if [ ! -s "$paths_file" ] && command -v delete_intent_list_active_paths >/dev/null 2>&1; then
+        delete_intent_list_active_paths "$SNAPSHOT_WORKTREE" > "$paths_file" 2>/dev/null || true
+    fi
+
+    if [ ! -s "$paths_file" ]; then
+        rm -f "$paths_file"
+        log "delete-intent: no active tombstones"
+        return 0
+    fi
+
+    local rel_path
+    while IFS= read -r rel_path; do
+        [ -z "$rel_path" ] && continue
+        if [ -e "$SNAPSHOT_WORKTREE/$rel_path" ]; then
+            rm -f "$SNAPSHOT_WORKTREE/$rel_path"
+            log "delete-intent: stripped resurrected path from worktree: $rel_path"
+        fi
+        # Bounded S3 prune for tombstoned paths still present on remote.
+        if [ "$pruned" -lt 10 ]; then
+            if rclone deletefile "${CLOUD_REMOTE%/}/$rel_path" >>"$LOG_FILE" 2>&1; then
+                log "delete-intent: pruned S3 object $rel_path"
+                pruned=$((pruned + 1))
+            fi
+        fi
+    done < "$paths_file"
+
+    rm -f "$paths_file"
+    log "delete-intent: no-resurrect pass complete (s3_pruned=$pruned)"
+    return 0
+}
+
+snapshot_apply_delete_intents
+
 snapshot_direct_s3_preflight || true
 
 # Change to git dir for operations
@@ -414,6 +479,7 @@ if [ "$needs_repair" = true ]; then
         exit 1
     fi
     rm -f "$RCLONE_LOG"
+    snapshot_apply_delete_intents
 fi
 
 if ! raw_dedup_guard; then

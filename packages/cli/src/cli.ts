@@ -28,6 +28,7 @@ import { runHealth, type SyncMode } from "./commands/health.js";
 import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "./commands/config.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runArchive } from "./commands/archive.js";
+import { runRemove } from "./commands/remove.js";
 import { runDrift } from "./commands/drift.js";
 import { runDedup } from "./commands/dedup.js";
 import { runMigrateCitations } from "./commands/migrate-citations.js";
@@ -624,6 +625,32 @@ program
         remote: opts.remote,
         remoteDelete: !!opts.remoteDelete,
         maxRemoteDeletes: Number.parseInt(opts.maxRemoteDeletes, 10),
+      })
+    );
+  });
+
+// remove (hard delete + delete-intent tombstone)
+program
+  .command("remove <page> [vault]")
+  .description("remove a vault path and write a delete-intent tombstone")
+  .option("--wiki <name>", "wiki profile name")
+  .option("--remote <remote>", "rclone remote root to prune the live path, for example seaweed-wiki:cloud/wiki")
+  .option("--remote-delete", "delete the live path from the remote after local remove", false)
+  .option("--max-remote-deletes <n>", "maximum remote object deletes allowed", "1")
+  .option("--reason <text>", "stored on the delete-intent tombstone")
+  .action(async (page, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else return emitGuardedVaultWrite(
+      v.vault,
+      "remove",
+      () => runRemove({
+        vault: v.vault,
+        page,
+        remote: opts.remote,
+        remoteDelete: !!opts.remoteDelete,
+        maxRemoteDeletes: Number.parseInt(opts.maxRemoteDeletes, 10),
+        reason: opts.reason,
       })
     );
   });

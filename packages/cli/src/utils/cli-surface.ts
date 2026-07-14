@@ -55,6 +55,12 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--remote <remote>")
     .option("--remote-delete")
     .option("--max-remote-deletes <n>");
+  program.command("remove")
+    .option("--wiki <name>")
+    .option("--remote <remote>")
+    .option("--remote-delete")
+    .option("--max-remote-deletes <n>")
+    .option("--reason <text>");
   program.command("drift").option("--apply").option("--new <date>").option("--wiki <name>");
   program.command("dedup")
     .option("--apply")

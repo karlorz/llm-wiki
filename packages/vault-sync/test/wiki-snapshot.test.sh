@@ -43,6 +43,9 @@ assert_contains "snapshot calls raw dedup guard before commit" "if ! raw_dedup_g
 assert_contains "snapshot has conflict marker guard function" "conflict_marker_guard()"
 assert_contains "snapshot calls conflict marker guard before commit" "if ! conflict_marker_guard; then"
 assert_contains "snapshot gates post-repair path with conflict marker guard" "if ! raw_dedup_guard || ! conflict_marker_guard; then"
+assert_contains "snapshot has delete-intent no-resurrect" "snapshot_apply_delete_intents"
+assert_contains "snapshot sources delete-intent lib" "delete-intent.sh"
+assert_contains "snapshot strips resurrected tombstone paths" "stripped resurrected path"
 
 test_snapshot_dry_run_warns_on_direct_s3_note_not_in_git() {
   local root
