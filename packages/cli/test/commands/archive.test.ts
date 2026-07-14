@@ -36,6 +36,18 @@ function makeVault(withIndex = false): string {
 }
 
 describe("runArchive", () => {
+  it("writes a delete-intent tombstone for the live path on archive", async () => {
+    const dir = makeVault(false);
+    writeFileSync(join(dir, "concepts", "tomb.md"), FM);
+    const r = await runArchive({ vault: dir, page: "concepts/tomb.md" });
+    expect(r.exitCode).toBe(0);
+    expect(existsSync(join(dir, "meta/delete-intents/concepts__tomb.md.json"))).toBe(true);
+    const tomb = JSON.parse(readFileSync(join(dir, "meta/delete-intents/concepts__tomb.md.json"), "utf8"));
+    expect(tomb.action).toBe("archive");
+    expect(tomb.path).toBe("concepts/tomb.md");
+    expect(tomb.schema).toBe("vault-delete-intent/v1");
+  });
+
   it("archives a page and removes from index", async () => {
     const dir = makeVault(true);
     writeFileSync(join(dir, "concepts", "alpha.md"), FM);

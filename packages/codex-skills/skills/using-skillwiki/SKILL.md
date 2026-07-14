@@ -27,6 +27,7 @@ Invoke a skillwiki skill when the user:
 - Talks about project workspaces, ADRs, or distillation
 - Wants to quickly capture an idea, bug, task, or note without interrupting their workflow
 - Wants to archive or clean up old vault pages
+- Wants to hard-delete a vault path without snapshot resurrection (`wiki-remove`)
 - Needs to detect source drift or re-ingest updated content
 - Has a spec/plan in a non-skillwiki format (CodeStable, RFC, AIDE)
 - Asks about their skillwiki configuration or setup health
@@ -74,6 +75,18 @@ path, run publisher dry-run, then run the same command with `--write`.
 - Non-typed project work items and immutable raw sources keep their existing
   workflows.
 
+## CLI probe and failsafe (vault-mutating skills)
+
+Vault fleets that combine S3 + GitHub need an explicit delete-intent path. Prefer the skillwiki CLI; when it is missing, agents that still have **git/gh access to the private vault remote** use **FAILSAFE-GIT**.
+
+1. Prefer `skillwiki <subcommand> --help` when the skill requires the CLI.
+2. If skillwiki is missing/unusable but `git` (and optionally `gh`) can reach the private vault remote (`fleet.yaml` `vault_remote` / `origin` → `karlorz/wiki`):
+   - Use **FAILSAFE-GIT** documented in the skill (tombstone under `meta/delete-intents/` + commit + push). Applies to `wiki-remove` and intentional archive/delete paths.
+3. If neither skillwiki nor git/gh private-repo access works: **FAIL CLOSED**.
+   Never bare `rm` / bare `git rm` as a fleet delete (snapshot will resurrect from S3).
+4. Do not auto `npm install -g` skillwiki in headless/goal/satellite sessions.
+5. Delete-intent schema: `vault-delete-intent/v1` JSON under `meta/delete-intents/` (see `wiki-remove`). Git is SSOT for path absence; S3 is a working cache.
+
 ## Portable Source References
 The vault is shared across hosts, so host-local absolute paths are not durable source identity.
 
@@ -99,7 +112,8 @@ The vault is shared across hosts, so host-local absolute paths are not durable s
 | `wiki-lint` | Vault health and lint checks; use `health` for whole-system reports and `lint --summary` for bounded lint buckets |
 | `wiki-crystallize` | Distill the current working session into a typed-knowledge page |
 | `wiki-audit` | Verify raw provenance references and source frontmatter integrity |
-| `wiki-archive` | Archive a typed-knowledge page — move to `_archive/`, remove from index |
+| `wiki-archive` | Archive a typed-knowledge page — move to `_archive/`, remove from index (writes delete-intent) |
+| `wiki-remove` | Hard-delete a path with delete-intent tombstone; failsafe-git if CLI missing |
 | `wiki-reingest` | Detect drift in raw sources (sha256 comparison) and re-ingest updated content |
 | `wiki-add-task` | Quick-capture ideas, bugs, tasks, notes into `raw/transcripts/` without leaving the current workflow |
 | `wiki-adapter-prd` | Map foreign PRD formats (CodeStable, RFC, AIDE, Hermes) into vault pages |
@@ -135,7 +149,7 @@ Use `prd_layer` + `prd_pipeline` from `.claude/dev-loop.config.md` as source of 
 
 ## CLI Backbone
 All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, health reporting, and linting. Skills invoke it via Bash for the mechanical parts and use Claude for the creative parts.
-Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `archive`, `drift`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
+Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `archive`, `remove`, `drift`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
 Run `skillwiki health <vault> --out /tmp/skillwiki-health.json --no-fail` for a bounded whole-system report that includes doctor, lint, vault-sync, query-readiness, source-freshness, risk flags, and self-check coverage. Run `skillwiki lint <vault> --summary` for lint-only bucket counts with capped examples and details commands. Run `skillwiki doctor` to diagnose setup/runtime issues only. Run `skillwiki config list` to see current configuration.
 
 ## Runtime Host Context and Fleet Freshness

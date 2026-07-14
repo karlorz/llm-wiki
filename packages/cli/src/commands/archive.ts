@@ -12,6 +12,7 @@ import {
   type RcloneRunner,
   type RemotePruneResult,
 } from "../utils/rclone.js";
+import { buildDeleteIntent, writeDeleteIntent } from "../utils/delete-intent.js";
 
 export interface ArchiveInput {
   vault: string;
@@ -196,10 +197,20 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
 
   await rename(join(input.vault, relPath), join(input.vault, archivePath));
 
+  // Tombstone the live path so snapshot cannot resurrect it from S3 even when
+  // remote-delete is skipped or fails later.
+  const archiveIntent = buildDeleteIntent({
+    path: relPath,
+    action: "archive",
+    actor: "skillwiki-cli",
+    source: "cli",
+  });
+  const tombstonePath = await writeDeleteIntent(input.vault, archiveIntent);
+
   appendLastOp(input.vault, {
     operation: input.cascade ? "archive-cascade" : "archive",
-    summary: `moved ${relPath} to ${archivePath}${input.cascade ? ` (cascade: ${cascade?.source_array_refs.length ?? 0} source arrays updated)` : ""}`,
-    files: [relPath],
+    summary: `moved ${relPath} to ${archivePath}${input.cascade ? ` (cascade: ${cascade?.source_array_refs.length ?? 0} source arrays updated)` : ""}; tombstone ${tombstonePath}`,
+    files: [relPath, archivePath, tombstonePath],
     timestamp: new Date().toISOString(),
   });
 

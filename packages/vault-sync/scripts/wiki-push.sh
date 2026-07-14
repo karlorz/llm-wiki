@@ -23,6 +23,11 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/lockfile.sh"
 . "$SCRIPT_DIR/lib/git-case.sh"
 . "$SCRIPT_DIR/lib/conflict-markers.sh"
+# Optional: tombstone helpers (present in package installs after 2026-07-14)
+if [ -f "$SCRIPT_DIR/lib/delete-intent.sh" ]; then
+    # shellcheck source=lib/delete-intent.sh
+    . "$SCRIPT_DIR/lib/delete-intent.sh"
+fi
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
@@ -50,7 +55,8 @@ conflict_marker_guard() {
     return 0
 }
 
-remote_prune_archived_source_paths() {
+# Parse WIKI_PUSH_MAX_REMOTE_DELETES into global _VS_MAX_REMOTE_DELETES (echo for callers).
+remote_prune_resolve_max_deletes() {
     local max_remote_deletes="${WIKI_PUSH_MAX_REMOTE_DELETES:-10}"
     case "$max_remote_deletes" in
         ''|*[!0-9]*)
@@ -62,6 +68,12 @@ remote_prune_archived_source_paths() {
         log "FAIL remote prune invalid WIKI_PUSH_MAX_REMOTE_DELETES=$max_remote_deletes"
         return 1
     fi
+    printf '%s\n' "$max_remote_deletes"
+}
+
+remote_prune_archived_source_paths() {
+    local max_remote_deletes
+    max_remote_deletes="$(remote_prune_resolve_max_deletes)" || return 1
 
     local tmp_dir archive_pairs remote_paths plan_file
     tmp_dir="$(mktemp -d)"
@@ -127,6 +139,73 @@ remote_prune_archived_source_paths() {
             log "OK remote pruned archived source $remote_path"
         else
             log "FAIL remote prune deletefile failed for $remote_path"
+            rm -rf "$tmp_dir"
+            return 1
+        fi
+    done < "$plan_file"
+
+    rm -rf "$tmp_dir"
+    return 0
+}
+
+# Prune S3 objects listed in active meta/delete-intents tombstones.
+# Combined with archive prune under the same WIKI_PUSH_MAX_REMOTE_DELETES budget
+# only for this function's own plan (archive prune uses its own budget per call).
+remote_prune_tombstoned_paths() {
+    if ! command -v delete_intent_list_active_paths >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local max_remote_deletes
+    max_remote_deletes="$(remote_prune_resolve_max_deletes)" || return 1
+
+    local tmp_dir remote_paths plan_file intent_paths
+    tmp_dir="$(mktemp -d)"
+    remote_paths="$tmp_dir/remote-paths.txt"
+    plan_file="$tmp_dir/plan.txt"
+    intent_paths="$tmp_dir/intents.txt"
+
+    delete_intent_list_active_paths "$WIKI_DIR" > "$intent_paths" || true
+    if [ ! -s "$intent_paths" ]; then
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    if ! rclone lsf "$REMOTE" --recursive --files-only 2>>"$LOG_FILE" | LC_ALL=C sort -u > "$remote_paths"; then
+        log "FAIL tombstone prune could not list remote paths"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    : > "$plan_file"
+    while IFS= read -r rel_path; do
+        [ -z "$rel_path" ] && continue
+        if grep -Fxq -- "$rel_path" "$remote_paths"; then
+            printf '%s\n' "$rel_path" >> "$plan_file"
+        fi
+    done < "$intent_paths"
+
+    local planned_count
+    planned_count="$(wc -l < "$plan_file" | tr -d ' ')"
+    if [ "$planned_count" = "0" ]; then
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+    if [ "$planned_count" -gt "$max_remote_deletes" ]; then
+        log "FAIL tombstone prune cap exceeded: $planned_count > $max_remote_deletes"
+        sed 's/^/tombstone prune skipped: /' "$plan_file" >> "$LOG_FILE"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    local rel_path remote_path
+    while IFS= read -r rel_path; do
+        [ -z "$rel_path" ] && continue
+        remote_path="${REMOTE%/}/$rel_path"
+        if rclone deletefile "$remote_path" >>"$LOG_FILE" 2>&1; then
+            log "OK remote pruned tombstone $remote_path"
+        else
+            log "FAIL tombstone prune deletefile failed for $remote_path"
             rm -rf "$tmp_dir"
             return 1
         fi
@@ -271,6 +350,9 @@ fi
 if [ "$RC" -eq 0 ]; then
     if ! remote_prune_archived_source_paths; then
         log "FAIL remote prune failed after rclone copy"
+    fi
+    if ! remote_prune_tombstoned_paths; then
+        log "FAIL tombstone prune failed after rclone copy"
     fi
 fi
 
