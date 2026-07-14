@@ -364,7 +364,8 @@ snapshot_apply_delete_intents() {
         return 0
     fi
 
-    # Re-materialize ledger from git so rclone sync cannot drop git-only intents.
+    # Re-materialize ledger from git so rclone sync cannot drop git-only intents,
+    # then list from the worktree (single parse — avoid re-git-show of every blob).
     (
         cd "$SNAPSHOT_WORKTREE" || exit 0
         fetch_origin_main_ref 2>/dev/null || true
@@ -375,11 +376,10 @@ snapshot_apply_delete_intents() {
 
     local paths_file pruned=0
     paths_file="$(mktemp)"
-    if command -v delete_intent_list_active_paths_from_git >/dev/null 2>&1; then
-        delete_intent_list_active_paths_from_git "$SNAPSHOT_WORKTREE" origin/main > "$paths_file" 2>/dev/null || true
-    fi
-    if [ ! -s "$paths_file" ] && command -v delete_intent_list_active_paths >/dev/null 2>&1; then
+    if command -v delete_intent_list_active_paths >/dev/null 2>&1; then
         delete_intent_list_active_paths "$SNAPSHOT_WORKTREE" > "$paths_file" 2>/dev/null || true
+    elif command -v delete_intent_list_active_paths_from_git >/dev/null 2>&1; then
+        delete_intent_list_active_paths_from_git "$SNAPSHOT_WORKTREE" origin/main > "$paths_file" 2>/dev/null || true
     fi
 
     if [ ! -s "$paths_file" ]; then

@@ -32,10 +32,15 @@ export function pathToIntentFilename(path: string): string {
   return `${p.replace(/\//g, "__")}.json`;
 }
 
+/** Host id stamped on CLI-written intents (fleet env, then agent env, else unknown). */
+export function intentHostId(): string {
+  return process.env.SKILLWIKI_HOST_ID ?? process.env.AGENT_HOST_ID ?? "unknown";
+}
+
 export function buildDeleteIntent(input: {
   path: string;
   action: DeleteIntentAction;
-  host: string;
+  host?: string;
   actor: string;
   source: DeleteIntentSource;
   reason?: string;
@@ -47,7 +52,7 @@ export function buildDeleteIntent(input: {
     path: normalizeVaultRelPath(input.path),
     action: input.action,
     created: input.created ?? new Date().toISOString(),
-    host: input.host,
+    host: input.host ?? intentHostId(),
     actor: input.actor,
     reason: input.reason,
     source: input.source,

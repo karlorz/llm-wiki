@@ -55,7 +55,8 @@ conflict_marker_guard() {
     return 0
 }
 
-remote_prune_archived_source_paths() {
+# Parse WIKI_PUSH_MAX_REMOTE_DELETES into global _VS_MAX_REMOTE_DELETES (echo for callers).
+remote_prune_resolve_max_deletes() {
     local max_remote_deletes="${WIKI_PUSH_MAX_REMOTE_DELETES:-10}"
     case "$max_remote_deletes" in
         ''|*[!0-9]*)
@@ -67,6 +68,12 @@ remote_prune_archived_source_paths() {
         log "FAIL remote prune invalid WIKI_PUSH_MAX_REMOTE_DELETES=$max_remote_deletes"
         return 1
     fi
+    printf '%s\n' "$max_remote_deletes"
+}
+
+remote_prune_archived_source_paths() {
+    local max_remote_deletes
+    max_remote_deletes="$(remote_prune_resolve_max_deletes)" || return 1
 
     local tmp_dir archive_pairs remote_paths plan_file
     tmp_dir="$(mktemp -d)"
@@ -149,17 +156,8 @@ remote_prune_tombstoned_paths() {
         return 0
     fi
 
-    local max_remote_deletes="${WIKI_PUSH_MAX_REMOTE_DELETES:-10}"
-    case "$max_remote_deletes" in
-        ''|*[!0-9]*)
-            log "FAIL tombstone prune invalid WIKI_PUSH_MAX_REMOTE_DELETES=$max_remote_deletes"
-            return 1
-            ;;
-    esac
-    if [ "$max_remote_deletes" -lt 1 ]; then
-        log "FAIL tombstone prune invalid WIKI_PUSH_MAX_REMOTE_DELETES=$max_remote_deletes"
-        return 1
-    fi
+    local max_remote_deletes
+    max_remote_deletes="$(remote_prune_resolve_max_deletes)" || return 1
 
     local tmp_dir remote_paths plan_file intent_paths
     tmp_dir="$(mktemp -d)"

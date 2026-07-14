@@ -202,7 +202,6 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
   const archiveIntent = buildDeleteIntent({
     path: relPath,
     action: "archive",
-    host: process.env.SKILLWIKI_HOST_ID ?? process.env.AGENT_HOST_ID ?? "unknown",
     actor: "skillwiki-cli",
     source: "cli",
   });

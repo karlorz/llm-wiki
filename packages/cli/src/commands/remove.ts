@@ -87,22 +87,10 @@ export async function runRemove(input: RemoveInput): Promise<{ exitCode: number;
     };
   }
 
-  // Cap check before mutate when remote-delete requested
+  // Remote flags already validated; planAndMaybePruneRemoteObjects enforces the cap.
+  // Single-path remove never exceeds default cap 1 after isValidRemoteDeleteCap.
   const remoteRoot = normalizeRemoteRoot(input.remote);
   const remoteObjectPath = buildRemoteObjectPath(remoteRoot, relPath);
-  if (input.remoteDelete && remoteObjectPath) {
-    const planned = [remoteObjectPath];
-    const maxDeletes = input.maxRemoteDeletes ?? 1;
-    if (!Number.isInteger(maxDeletes) || maxDeletes < 1) {
-      return { exitCode: ExitCode.USAGE, result: err("USAGE", { message: "--max-remote-deletes must be a positive integer" }) };
-    }
-    if (planned.length > maxDeletes) {
-      return {
-        exitCode: ExitCode.USAGE,
-        result: err("USAGE", { message: `remote delete cap exceeded: ${planned.length} > ${maxDeletes}` }),
-      };
-    }
-  }
 
   const slug = relPath.replace(/\.md$/, "").split("/").pop() ?? relPath;
   let indexUpdated = false;
@@ -124,7 +112,6 @@ export async function runRemove(input: RemoveInput): Promise<{ exitCode: number;
   const intent = buildDeleteIntent({
     path: relPath,
     action: "remove",
-    host: process.env.SKILLWIKI_HOST_ID ?? process.env.AGENT_HOST_ID ?? "unknown",
     actor: "skillwiki-cli",
     source: "cli",
     reason: input.reason,
