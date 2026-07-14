@@ -1,7 +1,7 @@
 {
   "name": "skillwiki",
   "version": "0.9.62",
-  "description": "Project-aware Karpathy-style knowledge base for Codex with 18 prompt-only skills backed by the deterministic skillwiki CLI.",
+  "description": "Project-aware Karpathy-style knowledge base for Codex with 19 prompt-only skills backed by the deterministic skillwiki CLI.",
   "author": {
     "name": "karlorz",
     "url": "https://github.com/karlorz"
@@ -22,7 +22,7 @@
   "interface": {
     "displayName": "SkillWiki",
     "shortDescription": "Project-aware wiki skills for Codex agents",
-    "longDescription": "18 prompt-only skills (wiki-*, proj-*, using-skillwiki) for deterministic, project-aware knowledge workflows.",
+    "longDescription": "19 prompt-only skills (wiki-*, proj-*, using-skillwiki) for deterministic, project-aware knowledge workflows.",
     "developerName": "karlorz",
     "category": "Productivity",
     "capabilities": [
