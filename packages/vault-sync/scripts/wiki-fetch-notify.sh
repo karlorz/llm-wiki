@@ -18,6 +18,7 @@ set -u
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/platform.sh"
 . "$SCRIPT_DIR/lib/lockfile.sh"
+. "$SCRIPT_DIR/lib/git-operation-journal.sh"
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
@@ -26,6 +27,11 @@ STATE_DIR="$(platform_cache_dir)/wiki-fetch"
 STATE_FILE="$STATE_DIR/last-behind"
 STALE_STATE_FILE="$STATE_DIR/last-stale-notify"
 STALE_NOTIFY_AFTER_SECONDS="${WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS:-1800}"
+HANDOFF_STATE_FILE="$STATE_DIR/pending-handoff.env"
+HANDOFF_NOTIFY_AFTER_SECONDS="${WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS:-3600}"
+case "$HANDOFF_NOTIFY_AFTER_SECONDS" in
+  ''|*[!0-9]*) HANDOFF_NOTIFY_AFTER_SECONDS=3600 ;;
+esac
 # Opt-in: when enabled, a positive delta triggers `git pull --rebase` so the
 # local working tree consumes sg01 Snapshot commits automatically. This
 # replaces the git pull that was previously bundled inside wiki-push.sh's
@@ -41,11 +47,43 @@ log() {
   printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"
 }
 
+handle_existing_handoff() {
+  local blocker reason op identity previous_identity notified_at now
+  blocker="$(vault_sync_op_preflight_blocker "$WIKI_DIR" 2>/dev/null || true)"
+  [ -n "$blocker" ] || { rm -f "$HANDOFF_STATE_FILE" 2>/dev/null || true; return 1; }
+
+  reason="${blocker%%	*}"
+  op="${blocker#*	}"
+  [ "$op" = "$blocker" ] && op=""
+  identity="${reason}:${op:-none}"
+  previous_identity=""
+  notified_at=0
+  if [ -f "$HANDOFF_STATE_FILE" ]; then
+    previous_identity="$(awk -F= '$1=="identity"{print substr($0,index($0,"=")+1)}' "$HANDOFF_STATE_FILE")"
+    notified_at="$(awk -F= '$1=="notified_at"{print $2}' "$HANDOFF_STATE_FILE")"
+  fi
+  case "$notified_at" in ''|*[!0-9]*) notified_at=0 ;; esac
+  now="$(date +%s)"
+
+  if [ "$identity" != "$previous_identity" ] || [ $((now - notified_at)) -ge "$HANDOFF_NOTIFY_AFTER_SECONDS" ]; then
+    platform_notify "wiki" "review-required handoff ${op:-none} still blocks sync"
+    printf 'identity=%s\nnotified_at=%s\n' "$identity" "$now" > "$HANDOFF_STATE_FILE"
+    log "NOTIFY handoff identity=$identity"
+  else
+    log "SKIP PULL handoff identity=$identity reminder-backoff"
+  fi
+  return 0
+}
+
 attempt_pull_on_delta() {
   # Retry on every poll while we remain behind. This avoids the failed-pull
   # wedge where last-behind is advanced before the pull runs and DELTA stays 0
   # forever until a fresh upstream commit arrives.
   if [ "$PULL_ON_DELTA" != "1" ] || [ "$BEHIND" -le 0 ]; then
+    return 0
+  fi
+
+  if handle_existing_handoff; then
     return 0
   fi
 

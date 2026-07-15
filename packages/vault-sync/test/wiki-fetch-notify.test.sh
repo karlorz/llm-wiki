@@ -332,9 +332,73 @@ STUB
   rm -rf "$root"
 }
 
+test_existing_handoff_skips_pull_and_backs_off_notification() {
+  local root home remote vault script_dir notify_log helper_state head
+  root="$(mktemp -d)"
+  home="$root/home"
+  remote="$root/origin.git"
+  vault="$root/wiki"
+  script_dir="$root/scripts"
+  notify_log="$root/notify.log"
+  helper_state="$root/helper-state"
+
+  git init --bare "$remote" >/dev/null
+  mkdir -p "$vault" "$script_dir/lib"
+  git -C "$vault" init >/dev/null
+  git -C "$vault" branch -M main
+  git -C "$vault" remote add origin "$remote"
+  printf 'base\n' > "$vault/note.md"
+  git_commit "$vault" init
+  git -C "$vault" push -u origin main >/dev/null
+  head="$(git -C "$vault" rev-parse HEAD)"
+
+  git clone --branch main "$remote" "$root/remote-work" >/dev/null
+  printf 'remote\n' > "$root/remote-work/remote.md"
+  git_commit "$root/remote-work" "remote advance"
+  git -C "$root/remote-work" push origin main >/dev/null
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  cp "$(cd "$(dirname "$SOURCE_SCRIPT")" && pwd)/lib/git-operation-journal.sh" \
+    "$script_dir/lib/git-operation-journal.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"; }
+STUB
+  cat > "$script_dir/lib/lockfile.sh" <<'STUB'
+lockfile_acquire() { return 0; }
+STUB
+  cat > "$script_dir/wiki-pull-with-auto-resolve.sh" <<'STUB'
+#!/bin/bash
+printf 'called\n' >> "$HELPER_STATE_FILE"
+exit 1
+STUB
+  chmod +x "$script_dir/wiki-pull-with-auto-resolve.sh"
+
+  # shellcheck source=/dev/null
+  . "$script_dir/lib/git-operation-journal.sh"
+  vault_sync_op_begin "$vault" "op-pending" "main" "$head" "$head" "lock:test" "test" "hash"
+  vault_sync_op_mark_review_required "$vault" "op-pending" "semantic-conflict"
+
+  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+    WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 NOTIFY_LOG="$notify_log" \
+    HELPER_STATE_FILE="$helper_state" "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+    WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 NOTIFY_LOG="$notify_log" \
+    HELPER_STATE_FILE="$helper_state" "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+
+  assert_eq "handoff prevents pull helper calls" "$(cat "$helper_state" 2>/dev/null || true)" ""
+  assert_eq "same handoff notifies once inside backoff" \
+    "$(grep -c 'review-required' "$notify_log" 2>/dev/null | tr -d ' ')" "1"
+  rm -rf "$root"
+}
+
 test_failed_pull_is_retried_on_next_poll
 test_non_executable_pull_helper_runs_via_bash
 test_pull_on_delta_respects_existing_sync_lock
+test_existing_handoff_skips_pull_and_backs_off_notification
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
