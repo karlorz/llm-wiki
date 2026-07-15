@@ -721,8 +721,8 @@ EOF
   # Prove empty-base path was used (pull log)
   local pull_log
   pull_log="$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)"
-  assert_eq "pull log records empty-base AA union" \
-    "$( [ -n "$pull_log" ] && grep -c 'empty base for add/add' "$pull_log" | tr -d ' ' || echo 0 )" \
+  assert_eq "pull log records composite derived resolve" \
+    "$( [ -n "$pull_log" ] && grep -c 'AUTO-RESOLVE composite derived' "$pull_log" | tr -d ' ' || echo 0 )" \
     "1"
 
   rm -rf "$root"

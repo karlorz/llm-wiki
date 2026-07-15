@@ -19,6 +19,7 @@ import { runLinks } from "./commands/links.js";
 import { runTagAudit } from "./commands/tag-audit.js";
 import { runIndexCheck } from "./commands/index-check.js";
 import { runIndexRebuild } from "./commands/index-rebuild.js";
+import { runDerivedConflictResolution } from "./commands/derived-conflicts.js";
 import { runStale } from "./commands/stale.js";
 import { runClaim } from "./commands/claim.js";
 import { runPagesize } from "./commands/pagesize.js";
@@ -936,6 +937,23 @@ syncCmd
       "sync pull",
       () => runSyncPull({ vault: v.vault })
     );
+  });
+
+syncCmd
+  .command("resolve-derived [vault]")
+  .description("resolve mixed derived conflicts for an owned vault-sync operation (internal)")
+  .requiredOption("--operation-id <id>", "vault-sync operation journal id")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else {
+      return emitGuardedVaultWrite(
+        v.vault,
+        "sync resolve-derived",
+        () => runDerivedConflictResolution({ vault: v.vault, operationId: opts.operationId }),
+      );
+    }
   });
 
 syncCmd

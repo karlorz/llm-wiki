@@ -174,119 +174,34 @@ verify_no_tracked_conflict_markers() {
     return 0
 }
 
-try_auto_resolve_log_union_conflicts() {
-    local conflicts="$1"
-    local f tmpdir base ours theirs merged
-    local resolved=()
-
-    for f in $conflicts; do
-        if ! is_log_conflict_path "$f"; then
-            return 1
-        fi
-    done
-
-    for f in $conflicts; do
-        tmpdir="$(mktemp -d)" || { log "WARN mktemp failed for log union conflict: $f"; rollback_resolved resolved; return 1; }
-        base="$tmpdir/base"
-        ours="$tmpdir/ours"
-        theirs="$tmpdir/theirs"
-        merged="$tmpdir/merged"
-
-        # Stage 2 (ours) and 3 (theirs) are required. Stage 1 (base) is absent
-        # for add/add (AA) conflicts — treat missing base as empty so append-only
-        # logs can still union-merge. Never invent content for missing ours/theirs.
-        if ! git show ":2:$f" >"$ours" 2>/dev/null ||
-           ! git show ":3:$f" >"$theirs" 2>/dev/null; then
-            rm -rf "$tmpdir"
-            log "WARN cannot read ours/theirs index stages for log union conflict: $f"
-            rollback_resolved resolved
-            return 1
-        fi
-        if ! git show ":1:$f" >"$base" 2>/dev/null; then
-            : >"$base"
-            log "LOG-UNION empty base for add/add (AA) conflict: $f"
-        fi
-
-        if ! git merge-file --union -p "$ours" "$base" "$theirs" >"$merged"; then
-            rm -rf "$tmpdir"
-            log "WARN log union merge failed: $f"
-            rollback_resolved resolved
-            return 1
-        fi
-
-        if ! cp "$merged" "$f"; then
-            rm -rf "$tmpdir"
-            log "WARN cannot write union merge to worktree: $f"
-            rollback_resolved resolved
-            return 1
-        fi
-
-        if ! git add "$f"; then
-            rm -rf "$tmpdir"
-            log "WARN git add failed for union merge: $f"
-            rollback_resolved resolved
-            return 1
-        fi
-
-        resolved+=("$f")
-        rm -rf "$tmpdir"
-    done
-
-    log "AUTO-RESOLVE log union: $conflicts"
-    return 0
-}
-
-is_project_knowledge_conflict_path() {
-    [[ "$1" =~ ^projects/[^/]+/knowledge\.md$ ]]
-}
-
-project_slug_from_knowledge_path() {
-    local path="$1"
-    path="${path#projects/}"
-    printf '%s\n' "${path%%/*}"
-}
-
-try_auto_resolve_project_knowledge_conflicts() {
-    local conflicts="$1"
-    local f slug slugs rc
-
-    if ! command -v skillwiki >/dev/null 2>&1; then
+# Composite derived-artifact resolver (log, root index, project index, taxonomy).
+# Delegates the complete conflict set to skillwiki sync resolve-derived; no
+# blanket checkout --ours for archive/snapshot mixed sets.
+try_auto_resolve_derived_conflicts() {
+    local op_id="$1"
+    local cli_ts="${SCRIPT_DIR}/../../cli/src/cli.ts"
+    local cmd_rc=1
+    if [ -z "$op_id" ]; then
         return 1
     fi
-
-    for f in $conflicts; do
-        if ! is_project_knowledge_conflict_path "$f"; then
-            return 1
+    # Prefer monorepo CLI when present (packaged install uses adjacent dist later).
+    if [ -f "$cli_ts" ] && command -v npx >/dev/null 2>&1; then
+        if VAULT_SYNC_OPERATION_ID="$op_id" \
+          npx --yes tsx "$cli_ts" sync resolve-derived "$WIKI_DIR" --operation-id "$op_id" >>"$LOG_FILE" 2>&1; then
+            log "AUTO-RESOLVE composite derived artifacts op=$op_id"
+            return 0
         fi
-    done
-
-    slugs="$(mktemp)" || { log "WARN mktemp failed for project knowledge conflict"; return 1; }
-    for f in $conflicts; do
-        project_slug_from_knowledge_path "$f" >>"$slugs"
-    done
-
-    rc=0
-    while read -r slug; do
-        [ -n "$slug" ] || continue
-        if ! skillwiki project-index "$slug" "$WIKI_DIR" --apply >>"$LOG_FILE" 2>&1; then
-            rc=1
-        fi
-    done < <(sort -u "$slugs")
-    rm -f "$slugs"
-    if [ "$rc" -ne 0 ]; then
-        log "WARN project knowledge regeneration failed: $conflicts"
-        return 1
+        cmd_rc=$?
+        log "WARN monorepo resolve-derived failed rc=$cmd_rc op=$op_id"
     fi
-
-    for f in $conflicts; do
-        if ! git add "$f"; then
-            log "WARN git add failed for regenerated project knowledge: $f"
-            return 1
+    if command -v skillwiki >/dev/null 2>&1; then
+        if VAULT_SYNC_OPERATION_ID="$op_id" \
+          skillwiki sync resolve-derived "$WIKI_DIR" --operation-id "$op_id" >>"$LOG_FILE" 2>&1; then
+            log "AUTO-RESOLVE composite derived artifacts op=$op_id (skillwiki)"
+            return 0
         fi
-    done
-
-    log "AUTO-RESOLVE project knowledge regeneration: $conflicts"
-    return 0
+    fi
+    return 1
 }
 
 # Build a temporary sequence editor that drops fully materialized commits.
@@ -642,7 +557,7 @@ while [ $REBASE_RC -ne 0 ]; do
         continue
     fi
 
-    if try_auto_resolve_project_knowledge_conflicts "$CONFLICTS"; then
+    if try_auto_resolve_derived_conflicts "$OP_ID"; then
         if ! GIT_EDITOR=true git rebase --continue 2>>"$LOG_FILE"; then
             REBASE_RC=$?
         else
@@ -651,16 +566,8 @@ while [ $REBASE_RC -ne 0 ]; do
         continue
     fi
 
-    if try_auto_resolve_log_union_conflicts "$CONFLICTS"; then
-        if ! GIT_EDITOR=true git rebase --continue 2>>"$LOG_FILE"; then
-            REBASE_RC=$?
-        else
-            REBASE_RC=0
-        fi
-        continue
-    fi
-
-    # Detect if current commit is archive-only
+    # Composite resolver declined (unknown paths or failure). Manual path:
+    # one owned stale-target retry, else handoff — no blanket --ours.
     STOPPED_SHA=$(cat "$WIKI_DIR/.git/rebase-merge/stopped-sha" 2>/dev/null || echo "")
     if [ -z "$STOPPED_SHA" ]; then
         vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "missing-stopped-sha"
@@ -669,25 +576,8 @@ while [ $REBASE_RC -ne 0 ]; do
     fi
 
     COMMIT_MSG=$(git log --format=%s -1 "$STOPPED_SHA" 2>/dev/null || echo "")
-    if echo "$COMMIT_MSG" | grep -qE "^archive: moved|^Snapshot "; then
-        # Archive or snapshot commit — auto-resolve with --ours
-        log "AUTO-RESOLVE ($COMMIT_MSG): $CONFLICTS"
-        for f in $CONFLICTS; do
-            git checkout --ours "$f" 2>/dev/null && git add "$f"
-        done
-    else
-        # Non-archive conflict — one owned stale-target retry, else handoff.
-        # handle_manual_conflict exits 1 on handoff; returns 0 after starting a retry.
-        handle_manual_conflict "$COMMIT_MSG" "$CONFLICTS"
-        continue
-    fi
-
-    # Continue rebase
-    if ! GIT_EDITOR=true git rebase --continue 2>>"$LOG_FILE"; then
-        REBASE_RC=$?
-    else
-        REBASE_RC=0
-    fi
+    handle_manual_conflict "$COMMIT_MSG" "$CONFLICTS"
+    continue
 done
 
 if [ -n "$OWNED_STASH_OID" ]; then
@@ -704,25 +594,26 @@ if [ -n "$OWNED_STASH_OID" ]; then
     fi
   else
     CONFLICTS=$(git diff --name-only --diff-filter=U 2>/dev/null)
-    if [ -n "$CONFLICTS" ] && try_auto_resolve_project_knowledge_conflicts "$CONFLICTS"; then
+    vault_sync_op_set_phase "$WIKI_DIR" "$OP_ID" "restoring"
+    if [ -n "$CONFLICTS" ] && try_auto_resolve_derived_conflicts "$OP_ID"; then
       if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
         vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "stash-restore-conflicts"
-        log "FAIL stash apply project knowledge auto-resolve left conflicts"
+        log "FAIL stash apply derived auto-resolve left conflicts"
         exit 1
       fi
-      # Knowledge regeneration intentionally rewrites conflicted paths; verify
-      # presence for those paths and content for everything else.
+      # Derived regeneration rewrites conflicted paths; verify presence for those
+      # paths and content for everything else.
       SKIP_CONTENT="$(printf '%s\n' $CONFLICTS)"
       if ! vault_sync_op_verify_inventory "$WIKI_DIR" "$OP_ID" "$OWNED_STASH_OID" "$SKIP_CONTENT" 2>>"$LOG_FILE"; then
         vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "inventory-verify-failed"
-        log "FAIL inventory verification after knowledge auto-resolve oid=$OWNED_STASH_OID"
+        log "FAIL inventory verification after derived auto-resolve oid=$OWNED_STASH_OID"
         exit 1
       fi
 
       vault_sync_op_stash_drop_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE" || true
-      log "STASH apply project knowledge conflicts auto-resolved"
+      log "STASH apply derived conflicts auto-resolved"
     else
-      vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "stash-restore-failed"
+      vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "semantic-conflict"
       log "FAIL stash apply after rebase oid=$OWNED_STASH_OID"
       exit 1
     fi

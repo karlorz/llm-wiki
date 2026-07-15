@@ -1,7 +1,8 @@
-import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
+import { readdir, readFile, mkdir } from "node:fs/promises";
 import { join, dirname, basename } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
+import { atomicWriteText } from "../utils/atomic-write.js";
 
 export interface ProjectIndexInput {
   vault: string;
@@ -68,25 +69,30 @@ function projectLocalType(slug: string, page: string, data: Record<string, unkno
   return typeof data.type === "string" ? data.type : "project";
 }
 
-export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitCode: number; result: Result<ProjectIndexOutput> }> {
-  const slug = input.slug;
-  const projectDir = join(input.vault, "projects", slug);
+export interface ProjectIndexRender {
+  text: string;
+  entries: IndexEntry[];
+  index_path: string;
+}
 
-  // Check project exists
+/** Pure project knowledge.md renderer used by project-index and derived-conflict resolution. */
+export async function renderProjectIndex(
+  vault: string,
+  slug: string,
+  opts: { today?: string } = {},
+): Promise<Result<ProjectIndexRender>> {
+  const projectDir = join(vault, "projects", slug);
+
   try {
     await readdir(projectDir);
   } catch {
-    return {
-      exitCode: ExitCode.PROJECT_NOT_FOUND,
-      result: err("PROJECT_NOT_FOUND", { slug, path: projectDir })
-    };
+    return err("PROJECT_NOT_FOUND", { slug, path: projectDir });
   }
 
   const wikilinkPattern = `[[${slug}]]`;
   const entries: IndexEntry[] = [];
 
-  // Scan compound pages for this project
-  const compoundDir = join(input.vault, "projects", slug, "compound");
+  const compoundDir = join(vault, "projects", slug, "compound");
   try {
     const compoundFiles = await readdir(compoundDir, { withFileTypes: true });
     for (const entry of compoundFiles) {
@@ -101,48 +107,44 @@ export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitC
       entries.push({
         page: `projects/${slug}/compound/${entry.name}`,
         type: typeof fm.data.type === "string" ? fm.data.type : "compound",
-        title: typeof fm.data.title === "string" ? fm.data.title : entry.name.replace(/\.md$/, "")
+        title: typeof fm.data.title === "string" ? fm.data.title : entry.name.replace(/\.md$/, ""),
       });
     }
   } catch { /* no compound dir */ }
 
-  // Scan Layer 2 pages for provenance_projects referencing this slug
   for (const dir of LAYER2_DIRS) {
     let files: Array<{ name: string; isFile: () => boolean }>;
     try {
-      files = await readdir(join(input.vault, dir), { withFileTypes: true });
+      files = await readdir(join(vault, dir), { withFileTypes: true });
     } catch { continue; }
 
     for (const entry of files) {
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-      const filePath = join(input.vault, dir, entry.name);
+      const filePath = join(vault, dir, entry.name);
       let text: string;
       try { text = await readFile(filePath, "utf8"); } catch { continue; }
 
       const fm = extractFrontmatter(text);
       if (!fm.ok) continue;
 
-      // Check provenance_projects for [[slug]]
       const pp = fm.data.provenance_projects;
       if (!Array.isArray(pp) || !pp.some((p: unknown) => String(p) === wikilinkPattern)) continue;
 
       entries.push({
         page: `${dir}/${entry.name}`,
         type: typeof fm.data.type === "string" ? fm.data.type : dir.slice(0, -1),
-        title: typeof fm.data.title === "string" ? fm.data.title : entry.name.replace(/\.md$/, "")
+        title: typeof fm.data.title === "string" ? fm.data.title : entry.name.replace(/\.md$/, ""),
       });
     }
   }
 
-  // Scan project-local lifecycle pages. These live below the project workspace
-  // rather than Layer 2, but knowledge.md is the project entry point agents use.
   for (const dir of PROJECT_LOCAL_DIRS) {
     const rootAbs = join(projectDir, dir);
     const rootRel = `projects/${slug}/${dir}`;
     const pages = await scanMarkdownTree(rootAbs, rootRel);
 
     for (const page of pages) {
-      const filePath = join(input.vault, page);
+      const filePath = join(vault, page);
       let text: string;
       try { text = await readFile(filePath, "utf8"); } catch { continue; }
 
@@ -152,39 +154,23 @@ export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitC
       entries.push({
         page,
         type: projectLocalType(slug, page, fm.data),
-        title: typeof fm.data.title === "string" ? fm.data.title : basename(page, ".md")
+        title: typeof fm.data.title === "string" ? fm.data.title : basename(page, ".md"),
       });
     }
   }
 
-  // Sort: entities first, then concepts, then rest; within group by title
-  const typeOrder: Record<string, number> = { entity: 0, concept: 1, comparison: 2, query: 3, summary: 4, meta: 5, requirement: 6, spec: 7, plan: 8, retro: 9, architecture: 10, pattern: 11, gotcha: 12, lesson: 13, antipattern: 14, compound: 15, work: 16, history: 17 };
+  const typeOrder: Record<string, number> = {
+    entity: 0, concept: 1, comparison: 2, query: 3, summary: 4, meta: 5, requirement: 6,
+    spec: 7, plan: 8, retro: 9, architecture: 10, pattern: 11, gotcha: 12, lesson: 13,
+    antipattern: 14, compound: 15, work: 16, history: 17,
+  };
   entries.sort((a, b) => {
     const ta = typeOrder[a.type] ?? 99;
     const tb = typeOrder[b.type] ?? 99;
     return ta !== tb ? ta - tb : a.title.localeCompare(b.title);
   });
 
-  const indexPath = join(projectDir, "knowledge.md");
-
-  // Check if existing index is stale
-  let existing = false;
-  let stale = false;
-  try {
-    const existingText = await readFile(indexPath, "utf8");
-    existing = true;
-    // Compare entry count and page list
-    const existingEntries = existingText.split("\n").filter(l => l.startsWith("- [["));
-    const existingPages = new Set(existingEntries.map(l => {
-      const m = l.match(/\[\[([^\]]+)\]\]/);
-      return m ? m[1] : "";
-    }));
-    const currentPages = new Set(entries.map(e => e.page.replace(/\.md$/, "")));
-    stale = existingPages.size !== currentPages.size || [...currentPages].some(p => !existingPages.has(p));
-  } catch { /* no existing index */ }
-
-  // Generate index content
-  const today = new Date().toISOString().slice(0, 10);
+  const today = opts.today ?? new Date().toISOString().slice(0, 10);
   const grouped = new Map<string, IndexEntry[]>();
   for (const e of entries) {
     const group = e.type;
@@ -206,15 +192,53 @@ export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitC
     body += `No Layer 2 pages reference \`[[${slug}]]\` in provenance_projects.\n`;
   }
 
+  return ok({
+    text: body,
+    entries,
+    index_path: `projects/${slug}/knowledge.md`,
+  });
+}
+
+export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitCode: number; result: Result<ProjectIndexOutput> }> {
+  const slug = input.slug;
+  const projectDir = join(input.vault, "projects", slug);
+  const rendered = await renderProjectIndex(input.vault, slug);
+  if (!rendered.ok) {
+    return {
+      exitCode: rendered.error === "PROJECT_NOT_FOUND" ? ExitCode.PROJECT_NOT_FOUND : ExitCode.WRITE_FAILED,
+      result: rendered,
+    };
+  }
+
+  const indexPath = join(projectDir, "knowledge.md");
+  const entries = rendered.data.entries;
+
+  let existing = false;
+  let stale = false;
+  try {
+    const existingText = await readFile(indexPath, "utf8");
+    existing = true;
+    const existingEntries = existingText.split("\n").filter(l => l.startsWith("- [["));
+    const existingPages = new Set(existingEntries.map(l => {
+      const m = l.match(/\[\[([^\]]+)\]\]/);
+      return m ? m[1] : "";
+    }));
+    const currentPages = new Set(entries.map(e => e.page.replace(/\.md$/, "")));
+    stale = existingPages.size !== currentPages.size || [...currentPages].some(p => !existingPages.has(p));
+  } catch { /* no existing index */ }
+
   if (input.apply) {
     try {
       await mkdir(dirname(indexPath), { recursive: true });
-      await writeFile(indexPath, body, "utf8");
     } catch (e: unknown) {
       return {
         exitCode: ExitCode.WRITE_FAILED,
-        result: err("WRITE_FAILED", { file: indexPath, message: String(e) })
+        result: err("WRITE_FAILED", { file: indexPath, message: String(e) }),
       };
+    }
+    const written = await atomicWriteText(indexPath, rendered.data.text);
+    if (!written.ok) {
+      return { exitCode: ExitCode.WRITE_FAILED, result: written };
     }
   }
 
@@ -230,8 +254,8 @@ export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitC
       entries,
       existing,
       stale,
-      index_path: `projects/${slug}/knowledge.md`,
-      humanHint: `project: ${slug}\nentries: ${entries.length}${staleHint}\n${action}\n\n${entries.map(e => `  ${e.type}: [[${e.page.replace(/\.md$/, "")}]] — ${e.title}`).join("\n")}`
-    })
+      index_path: rendered.data.index_path,
+      humanHint: `project: ${slug}\nentries: ${entries.length}${staleHint}\n${action}\n\n${entries.map(e => `  ${e.type}: [[${e.page.replace(/\.md$/, "")}]] — ${e.title}`).join("\n")}`,
+    }),
   };
 }
