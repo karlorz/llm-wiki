@@ -172,12 +172,30 @@ test_inventory_verify_fails_when_tracked_missing() {
   rm -rf "$root"
 }
 
+test_find_review_required_is_worktree_aware() {
+  local root head git_dir found
+  root="$(mktemp -d)"
+  make_repo "$root"
+  head="$(git -C "$root" rev-parse HEAD)"
+  git_dir="$(git -C "$root" rev-parse --absolute-git-dir)"
+
+  vault_sync_op_begin "$root" "op-review" "main" "$head" "$head" "lock:review" "0.9.64" "hash"
+  vault_sync_op_mark_review_required "$root" "op-review" "semantic-conflict"
+
+  found="$(vault_sync_op_find_review_required "$root")"
+  assert_eq "review-required journal is discovered" "$found" "op-review"
+  assert_eq "journal records worktree git dir" \
+    "$(vault_sync_op_get_field "$root" "op-review" worktree_git_dir)" "$git_dir"
+  rm -rf "$root"
+}
+
 test_journal_dir_uses_git_path
 test_begin_creates_journal_and_recovery_refs
 test_recovery_ref_collision_fails
 test_may_retry_only_once_when_remote_advanced
 test_cas_recovery_target_requires_expected_old
 test_inventory_verify_fails_when_tracked_missing
+test_find_review_required_is_worktree_aware
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

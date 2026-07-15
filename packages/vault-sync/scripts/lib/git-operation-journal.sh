@@ -106,7 +106,7 @@ vault_sync_op_cas_recovery_target() {
 vault_sync_op_begin() {
   local repo="$1" op_id="$2" branch="$3" original_head="$4" target_oid="$5"
   local lock_identity="$6" helper_version="$7" runtime_hash="$8"
-  local dir file
+  local dir file worktree_path worktree_git_dir
   dir="$(vault_sync_op_journal_dir "$repo")" || return 1
   mkdir -p "$dir" || return 1
   file="$(vault_sync_op_journal_path "$repo" "$op_id")" || return 1
@@ -116,6 +116,8 @@ vault_sync_op_begin() {
   if ! vault_sync_op_create_recovery_refs "$repo" "$op_id" "$original_head" "$target_oid"; then
     return 1
   fi
+  worktree_path="$(cd "$repo" && pwd -P)" || return 1
+  worktree_git_dir="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
   cat >"$file" <<EOF
 operation_id=${op_id}
 phase=prepared
@@ -131,8 +133,54 @@ deployed_runtime_hash=${runtime_hash}
 conflict_identity=
 handoff=0
 reason=
+worktree_path=${worktree_path}
+worktree_git_dir=${worktree_git_dir}
 EOF
   return 0
+}
+
+vault_sync_op_find_review_required() {
+  local repo="$1" current_git_dir jdir jf op_id phase handoff journal_git_dir
+  current_git_dir="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  jdir="$(vault_sync_op_journal_dir "$repo")" || return 1
+  [ -d "$jdir" ] || return 1
+
+  for jf in "$jdir"/*.env; do
+    [ -f "$jf" ] || continue
+    op_id="$(basename "$jf" .env)"
+    phase="$(vault_sync_op_get_field "$repo" "$op_id" phase 2>/dev/null || true)"
+    handoff="$(vault_sync_op_get_field "$repo" "$op_id" handoff 2>/dev/null || true)"
+    [ "$phase" = "review-required" ] && [ "$handoff" = "1" ] || continue
+    journal_git_dir="$(vault_sync_op_get_field "$repo" "$op_id" worktree_git_dir 2>/dev/null || true)"
+    if [ -z "$journal_git_dir" ] || [ "$journal_git_dir" = "$current_git_dir" ]; then
+      printf '%s\n' "$op_id"
+      return 0
+    fi
+  done
+  return 1
+}
+
+vault_sync_op_preflight_blocker() {
+  local repo="$1" unmerged op_id git_dir
+  unmerged="$(git -C "$repo" diff --name-only --diff-filter=U 2>/dev/null || true)"
+  if [ -n "$unmerged" ]; then
+    op_id="$(vault_sync_op_find_review_required "$repo" 2>/dev/null || true)"
+    printf 'unmerged-paths\t%s\n' "$op_id"
+    return 0
+  fi
+
+  git_dir="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  if [ -f "$git_dir/MERGE_HEAD" ] || [ -f "$git_dir/CHERRY_PICK_HEAD" ] || [ -f "$git_dir/REVERT_HEAD" ]; then
+    printf 'git-operation-in-progress\t\n'
+    return 0
+  fi
+
+  op_id="$(vault_sync_op_find_review_required "$repo" 2>/dev/null || true)"
+  if [ -n "$op_id" ]; then
+    printf 'review-required\t%s\n' "$op_id"
+    return 0
+  fi
+  return 1
 }
 
 vault_sync_op_record_stash() {

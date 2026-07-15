@@ -443,10 +443,24 @@ log_review_required_handoff_if_present() {
 
 cd "$WIKI_DIR" || { log "ERROR: cd $WIKI_DIR failed"; exit 1; }
 
+# Stable handoff gate: never open a new journal/stash while unmerged paths,
+# an in-progress non-rebase Git operation, or a review-required journal exist.
+PREFLIGHT_BLOCKER="$(vault_sync_op_preflight_blocker "$WIKI_DIR" 2>/dev/null || true)"
+if [ -n "$PREFLIGHT_BLOCKER" ]; then
+    PREFLIGHT_REASON="${PREFLIGHT_BLOCKER%%	*}"
+    PREFLIGHT_OP="${PREFLIGHT_BLOCKER#*	}"
+    [ "$PREFLIGHT_OP" = "$PREFLIGHT_BLOCKER" ] && PREFLIGHT_OP=""
+    log "HANDOFF existing reason=$PREFLIGHT_REASON op=${PREFLIGHT_OP:-none}; no new operation"
+    printf 'VAULT_SYNC_HANDOFF reason=%s op=%s\n' "$PREFLIGHT_REASON" "${PREFLIGHT_OP:-none}"
+    exit 2
+fi
+
 # Classify leftover rebase state. Active rebases fail closed; stale-clean
 # state is cleared with recovery-ref + quit (never abort — abort would reset
 # the branch tip to orig-head and discard newer authored work).
 # Handoff immunity: never abort a rebase owned by a handoff journal.
+# Active rebase with unmerged paths is handled by the preflight gate above
+# (exit 2). Active rebase without unmerged paths still fails closed here.
 if [ -d "$WIKI_DIR/.git/rebase-merge" ] || [ -d "$WIKI_DIR/.git/rebase-apply" ]; then
     REBASE_STATE="$(vault_sync_rebase_state "$WIKI_DIR")"
     log "REBASE-STATE $REBASE_STATE"
