@@ -6,6 +6,41 @@ import { normalizeDistTag } from "../utils/update-consts.js";
 import { readCliPackageJson } from "../utils/package-info.js";
 import { runInstall } from "./install.js";
 
+function parseCoreSemver(version: string): { major: number; minor: number; patch: number } | null {
+  const m = version.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return null;
+  return { major: parseInt(m[1], 10), minor: parseInt(m[2], 10), patch: parseInt(m[3], 10) };
+}
+
+/** True when previous < 0.10.1 and new >= 0.10.1. */
+export function needs0101Migration(previousVersion: string, newVersion: string): boolean {
+  const p = parseCoreSemver(previousVersion);
+  const n = parseCoreSemver(newVersion);
+  if (!p || !n) return false;
+  const prevLt =
+    p.major < 0 ||
+    (p.major === 0 && p.minor < 10) ||
+    (p.major === 0 && p.minor === 10 && p.patch < 1);
+  const newGe =
+    n.major > 0 ||
+    (n.major === 0 && n.minor > 10) ||
+    (n.major === 0 && n.minor === 10 && n.patch >= 1);
+  return prevLt && newGe;
+}
+
+/** Migration notes when upgrading across the 0.10.1 managed-write helper fix. */
+export function migrationNotesForUpgrade(previousVersion: string, newVersion: string): string[] {
+  if (!needs0101Migration(previousVersion, newVersion)) return [];
+  return [
+    "Migration 0.10.1:",
+    "- pull helper resolves from dist/ + host vault-sync install",
+    "- run: skillwiki doctor",
+    "- if managed writes blocked: skillwiki sync journal list",
+    "- then: skillwiki sync journal clear-stale --dry-run",
+    "- legacy override: SKILLWIKI_VAULT_SYNC_PULL_HELPER=<path-to-wiki-pull-with-auto-resolve.sh>",
+  ];
+}
+
 export interface UpdateInput {
   home: string;
   distTag?: string;
@@ -139,6 +174,9 @@ export async function runUpdate(
   if (version_warnings.length > 0) {
     hintLines.push(`version warnings: ${version_warnings.length}`);
     for (const w of version_warnings) hintLines.push(`  ${w}`);
+  }
+  for (const line of migrationNotesForUpgrade(currentVersion, latest)) {
+    hintLines.push(line);
   }
 
   return {

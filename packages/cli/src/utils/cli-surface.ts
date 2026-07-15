@@ -128,6 +128,10 @@ export function buildCliSurface(): Map<string, Set<string>> {
   syncCmd.command("status").option("--wiki <name>").option("--include-stashes").option("--include-remote-health").option("--check-snapshotter");
   syncCmd.command("push").option("--wiki <name>");
   syncCmd.command("pull").option("--wiki <name>");
+  syncCmd.command("resolve-derived").option("--operation-id <id>").option("--wiki <name>");
+  const syncJournalCmd = syncCmd.command("journal");
+  syncJournalCmd.command("list").option("--wiki <name>");
+  syncJournalCmd.command("clear-stale").option("--dry-run").option("--wiki <name>");
   syncCmd.command("lock").option("--summary <text>").option("--ttl-minutes <n>").option("--force").option("--wiki <name>");
   syncCmd.command("unlock").option("--force").option("--wiki <name>");
   syncCmd.command("peers").option("--wiki <name>");

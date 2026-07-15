@@ -77,6 +77,7 @@ When wall-clock budget is tight on a snapshotter (FUSE + S3 probes), prefer:
 1. `systemctl is-active wiki-snapshot.timer wiki-fuse-refresh.timer`
 2. Tail `$(platform_log_dir)/wiki-snapshot.log` / `wiki-fuse-refresh.log`
 3. Read `$(platform_share_dir)/runtime-manifest.json` package_version / package_commit
+4. Prefer `skillwiki doctor` for managed-write prerequisites: pull-helper resolution (`vault_sync_pull_helper`) and review-required journal backlog (`vault_sync_review_required_journals`); use `skillwiki sync journal list` for detail.
 
 Then run full status when time allows.
 

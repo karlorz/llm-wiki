@@ -80,6 +80,17 @@ path, run publisher dry-run, then run the same command with `--write`.
 
 Before a managed vault mutation, invoke the managed SkillWiki command while the draft remains outside the authoritative target path. The command resolves fleet authority, refuses existing unmerged/review-required state, converges an authorized Git writer, freezes the base OID, and only then applies the write. Do not run `git pull --rebase --autostash` after placing the authoritative change in the live worktree. Do not edit root `index.md` or root `log.md` directly; projection and log commands own those compatibility files.
 
+### Managed write / 0.10.1 migration troubleshooting
+
+After upgrading to skillwiki **≥0.10.1** (or when managed write fails):
+
+1. Run `skillwiki doctor` — checks `vault_sync_pull_helper` and `vault_sync_review_required_journals`.
+2. If pull helper is missing: install `skillwiki@0.10.1+` (helper must resolve from `dist/vault-sync/scripts/`) and/or redeploy vault-sync host install. Last-resort override: `SKILLWIKI_VAULT_SYNC_PULL_HELPER` pointing at `wiki-pull-with-auto-resolve.sh` under host vault-sync `bin/` (macOS Application Support or Linux `~/.local/share/vault-sync/bin`).
+3. If preflight reports `review-required` on a **clean** worktree: `skillwiki sync journal list`, then `skillwiki sync journal clear-stale --dry-run`, then `clear-stale` without dry-run. Preflight also auto-supersedes stale handoffs when criteria match; do not force-clear during active rebase/unmerged state.
+4. After `skillwiki update` across 0.10.1, read the printed Migration 0.10.1 notes.
+
+Also mirror these pointers in vault-presync / vault-sync-status skills when operating pull/push.
+
 - typed pages: `skillwiki page publish <draft> <vault> --target <path>` then the same command with `--write`
 - archive: `skillwiki archive <path> <vault>`
 - ad-hoc structural log: `skillwiki log-append <vault> --content '<entry>'` (Release A dual-write) or event materialization (Release B)

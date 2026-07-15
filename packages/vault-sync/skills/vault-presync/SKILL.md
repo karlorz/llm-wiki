@@ -81,6 +81,8 @@ Convergence properties:
 
 Journal lifecycle (high level): begin → inventory → optional stash → rebasing → (optional retrying) → complete **or** review-required handoff.
 
+**Stale handoff cleanup (skillwiki ≥0.10.1):** If many `phase=review-required` journals remain while the worktree is clean and Git is idle, managed writes fail closed. Run `skillwiki doctor`, then `skillwiki sync journal list` and `skillwiki sync journal clear-stale --dry-run` (then without `--dry-run` when safe). Preflight auto-supersedes when target_oid is already an ancestor of HEAD.
+
 After install/rollout, confirm pull logs show `op=` journal lines and no legacy auto-stash wording before touching `$(platform_share_dir)/live-verify.ok` (see vault-sync-install attended checklist).
 
 ## Rebase-state classification (canonical pull helper)

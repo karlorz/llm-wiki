@@ -1,5 +1,3 @@
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { ExitCode, err, ok, type Result } from "@skillwiki/shared";
 import { loadFleetManifestAndHost } from "../commands/fleet.js";
 import { git } from "./git.js";
@@ -8,6 +6,12 @@ import {
   releaseManagedWriteLock,
   type ManagedWriteLockHandle,
 } from "./managed-write-lock.js";
+import {
+  findReviewRequiredOp,
+  hasActiveGitSequencer,
+  hasUnmergedPaths,
+  supersedeStaleReviewRequiredJournals,
+} from "./operation-journal.js";
 import {
   runVaultSyncPullHelper,
   type VaultSyncPullHelperInput,
@@ -55,52 +59,8 @@ const DEFAULT_DEPS: ManagedWritePreflightDeps = {
   converge: (input) => runVaultSyncPullHelper(input),
 };
 
-function journalDir(vault: string): string | null {
-  const gitPath = git(vault, ["rev-parse", "--git-path", "vault-sync/operations"]);
-  if (!gitPath) return null;
-  return gitPath.startsWith("/") ? gitPath : join(vault, gitPath);
-}
-
-function findReviewRequiredOp(vault: string): string | undefined {
-  const dir = journalDir(vault);
-  if (!dir) return undefined;
-  let files: string[];
-  try {
-    files = readdirSync(dir).filter((f) => f.endsWith(".env"));
-  } catch {
-    return undefined;
-  }
-  const currentGitDir = git(vault, ["rev-parse", "--absolute-git-dir"]);
-  for (const file of files) {
-    let text: string;
-    try {
-      text = readFileSync(join(dir, file), "utf8");
-    } catch {
-      continue;
-    }
-    const fields = Object.fromEntries(
-      text
-        .split("\n")
-        .filter((line) => line.includes("="))
-        .map((line) => {
-          const i = line.indexOf("=");
-          return [line.slice(0, i), line.slice(i + 1)] as const;
-        }),
-    );
-    if (fields.phase !== "review-required" || fields.handoff !== "1") continue;
-    const journalGitDir = fields.worktree_git_dir ?? "";
-    if (!journalGitDir || !currentGitDir || journalGitDir === currentGitDir) {
-      return file.replace(/\.env$/, "");
-    }
-  }
-  return undefined;
-}
-
 function preflightBlocker(vault: string): { reason: string; operation_id?: string; unmerged_paths?: string[] } | null {
-  const unmergedRaw = git(vault, ["diff", "--name-only", "--diff-filter=U"]);
-  const unmerged = unmergedRaw
-    ? unmergedRaw.split("\n").map((s) => s.trim()).filter(Boolean)
-    : [];
+  const unmerged = hasUnmergedPaths(vault);
   if (unmerged.length > 0) {
     return {
       reason: "unmerged-paths",
@@ -109,18 +69,12 @@ function preflightBlocker(vault: string): { reason: string; operation_id?: strin
     };
   }
 
-  const gitDir = git(vault, ["rev-parse", "--absolute-git-dir"]);
-  if (gitDir) {
-    const markers = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"];
-    for (const m of markers) {
-      try {
-        readFileSync(join(gitDir, m));
-        return { reason: "git-operation-in-progress" };
-      } catch {
-        /* absent */
-      }
-    }
+  if (hasActiveGitSequencer(vault)) {
+    return { reason: "git-operation-in-progress" };
   }
+
+  // Auto-supersede historical handoff journals when the worktree is clean and targets are past.
+  supersedeStaleReviewRequiredJournals(vault, { by: "skillwiki-managed-write-preflight" });
 
   const op = findReviewRequiredOp(vault);
   if (op) return { reason: "review-required", operation_id: op };
@@ -200,6 +154,7 @@ export async function runManagedWritePreflight(
     vault,
     lockToken: input.lockToken,
     env: input.env,
+    home: input.home,
   });
   if (!converge.ok) {
     const exitCode =

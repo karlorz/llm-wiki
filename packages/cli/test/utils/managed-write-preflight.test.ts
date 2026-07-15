@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -150,4 +150,130 @@ hosts:
     });
     expect(converge).not.toHaveBeenCalled();
   });
+
+  it("supersedes stale review-required journals when worktree is clean", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-preflight-rr-"));
+    git(vault, ["init"]);
+    git(vault, ["branch", "-M", "main"]);
+    git(vault, ["config", "user.email", "t@t"]);
+    git(vault, ["config", "user.name", "t"]);
+    writeFileSync(join(vault, "SCHEMA.md"), "# Schema\n");
+    mkdirSync(join(vault, "projects", "llm-wiki", "architecture"), { recursive: true });
+    writeFileSync(
+      join(vault, "projects", "llm-wiki", "architecture", "fleet.yaml"),
+      `schema_version: 1
+vault_remote: owner/wiki
+hosts:
+  macos-dev:
+    class: dev-macos
+    role: leaf
+    writes_to: [github]
+    identity:
+      hostnames: [test-host]
+  sg01:
+    class: prod-linux
+    role: snapshotter
+    writes_to: [github]
+    identity:
+      hostnames: [sg01]
+`,
+    );
+    git(vault, ["add", "."]);
+    git(vault, ["commit", "-m", "base"]);
+    const base = git(vault, ["rev-parse", "HEAD"]);
+    writeFileSync(join(vault, "SCHEMA.md"), "# Schema\nv2\n");
+    git(vault, ["commit", "-am", "advance"]);
+    const head = git(vault, ["rev-parse", "HEAD"]);
+    const gitDir = git(vault, ["rev-parse", "--absolute-git-dir"]);
+    const opDir = join(gitDir, "vault-sync", "operations");
+    mkdirSync(opDir, { recursive: true });
+    const opId = "pull-test-stale-rr";
+    writeFileSync(
+      join(opDir, `${opId}.env`),
+      [
+        `operation_id=${opId}`,
+        "phase=review-required",
+        "handoff=1",
+        `original_head=${base}`,
+        `target_oid=${base}`,
+        `worktree_git_dir=${gitDir}`,
+        "reason=stash-failed",
+      ].join("\n") + "\n",
+    );
+    const converge = vi.fn(async () =>
+      ok({ before_oid: head, after_oid: head, changed: false, helper_path: "/test/helper" }),
+    );
+    const run = await runManagedWritePreflight(
+      { vault, command: "page publish", hostId: "macos-dev" },
+      { converge },
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.result.ok).toBe(true);
+    expect(converge).toHaveBeenCalledTimes(1);
+    const journal = readFileSync(join(opDir, `${opId}.env`), "utf8");
+    expect(journal).toMatch(/phase=complete/);
+    expect(journal).toMatch(/superseded-stale-review-required/);
+  });
+
+  it("still blocks review-required when worktree is dirty", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-preflight-dirty-rr-"));
+    git(vault, ["init"]);
+    git(vault, ["branch", "-M", "main"]);
+    git(vault, ["config", "user.email", "t@t"]);
+    git(vault, ["config", "user.name", "t"]);
+    writeFileSync(join(vault, "SCHEMA.md"), "# Schema\n");
+    mkdirSync(join(vault, "projects", "llm-wiki", "architecture"), { recursive: true });
+    writeFileSync(
+      join(vault, "projects", "llm-wiki", "architecture", "fleet.yaml"),
+      `schema_version: 1
+vault_remote: owner/wiki
+hosts:
+  macos-dev:
+    class: dev-macos
+    role: leaf
+    writes_to: [github]
+    identity:
+      hostnames: [test-host]
+  sg01:
+    class: prod-linux
+    role: snapshotter
+    writes_to: [github]
+    identity:
+      hostnames: [sg01]
+`,
+    );
+    git(vault, ["add", "."]);
+    git(vault, ["commit", "-m", "base"]);
+    const base = git(vault, ["rev-parse", "HEAD"]);
+    const gitDir = git(vault, ["rev-parse", "--absolute-git-dir"]);
+    const opDir = join(gitDir, "vault-sync", "operations");
+    mkdirSync(opDir, { recursive: true });
+    const opId = "pull-test-dirty-rr";
+    writeFileSync(
+      join(opDir, `${opId}.env`),
+      [
+        `operation_id=${opId}`,
+        "phase=review-required",
+        "handoff=1",
+        `original_head=${base}`,
+        `target_oid=${base}`,
+        `worktree_git_dir=${gitDir}`,
+        "reason=stash-failed",
+      ].join("\n") + "\n",
+    );
+    // dirty worktree
+    writeFileSync(join(vault, "SCHEMA.md"), "# Schema\ndirty\n");
+    const converge = vi.fn();
+    const run = await runManagedWritePreflight(
+      { vault, command: "page publish", hostId: "macos-dev" },
+      { converge },
+    );
+    expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+    expect(run.result).toMatchObject({
+      ok: false,
+      detail: { reason: "review-required", operation_id: opId },
+    });
+    expect(converge).not.toHaveBeenCalled();
+  });
 });
+
