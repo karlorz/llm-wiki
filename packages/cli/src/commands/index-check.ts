@@ -11,6 +11,10 @@ export interface IndexCheckOutput {
   humanHint: string;
 }
 
+function normalizeIndexTarget(raw: string): string {
+  return raw.replace(/\.md$/, "").replace(/^\.?\//, "");
+}
+
 export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode: number; result: Result<IndexCheckOutput> }> {
   const scan = input.scan ? ok(input.scan) : await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
@@ -18,35 +22,56 @@ export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode:
   let indexText = "";
   try { indexText = await readFile(join(input.vault, "index.md"), "utf8"); } catch { /* empty */ }
 
-  const indexSlugsLower = new Map<string, string>(); // lowercase -> original
+  // Full canonical targets from index (path-aware). Basename-only links are
+  // retained as secondary keys only when unique among required pages.
+  const indexTargets = new Set<string>();
+  const indexBare = new Map<string, string[]>(); // lowercase basenames -> raw targets
   for (const s of extractBodyWikilinks(indexText)) {
-    const tail = s.split("/").pop()!;
-    indexSlugsLower.set(tail.toLowerCase(), tail);
+    const target = normalizeIndexTarget(s);
+    indexTargets.add(target);
+    const bare = target.split("/").pop()!.toLowerCase();
+    const list = indexBare.get(bare) ?? [];
+    list.push(target);
+    indexBare.set(bare, list);
   }
-  // fileSlugs: all known pages (typed + compound) — used for ghost_entry resolution
-  const fileSlugs = new Map<string, string>(); // slug -> relPath
-  // requiredSlugs: pages that MUST appear in root index.md — typed knowledge only;
-  // compound pages are indexed at the project level (knowledge.md), not root index.md
-  const requiredSlugs = new Map<string, string>(); // slug -> relPath
+
+  const required = new Map<string, string>(); // full target no-ext -> relPath
+  const known = new Set<string>(); // all known no-ext paths for ghost resolution
 
   for (const p of scan.data.typedKnowledge) {
-    const slug = p.relPath.replace(/\.md$/, "").split("/").pop()!;
-    fileSlugs.set(slug, p.relPath);
-    requiredSlugs.set(slug, p.relPath);
+    const target = p.relPath.replace(/\.md$/, "");
+    required.set(target, p.relPath);
+    known.add(target);
   }
   for (const p of scan.data.compound) {
-    const slug = p.relPath.replace(/\.md$/, "").split("/").pop()!;
-    fileSlugs.set(slug, p.relPath);
+    known.add(p.relPath.replace(/\.md$/, ""));
   }
 
   const missing_from_index: string[] = [];
-  for (const [slug, relPath] of requiredSlugs.entries()) {
-    if (!indexSlugsLower.has(slug.toLowerCase())) missing_from_index.push(relPath);
+  for (const [target, relPath] of required.entries()) {
+    if (indexTargets.has(target)) continue;
+    // Accept a unique basename-only index link for backward compatibility.
+    const bare = target.split("/").pop()!.toLowerCase();
+    const bareHits = indexBare.get(bare) ?? [];
+    const basenameOnly = bareHits.filter((t) => !t.includes("/"));
+    const sameNameRequired = [...required.keys()].filter(
+      (t) => t.split("/").pop()!.toLowerCase() === bare,
+    );
+    if (basenameOnly.length === 1 && sameNameRequired.length === 1) continue;
+    missing_from_index.push(relPath);
   }
-  const fileSlugsLower = new Set([...fileSlugs.keys()].map(s => s.toLowerCase()));
+
   const ghost_entries: string[] = [];
-  for (const [lower, orig] of indexSlugsLower) {
-    if (!fileSlugsLower.has(lower)) ghost_entries.push(orig);
+  for (const target of indexTargets) {
+    if (known.has(target)) continue;
+    if (!target.includes("/")) {
+      // basename-style: ghost only if no known page ends with that basename
+      const bare = target.toLowerCase();
+      const matches = [...known].filter((k) => k.split("/").pop()!.toLowerCase() === bare);
+      if (matches.length === 0) ghost_entries.push(target);
+      continue;
+    }
+    ghost_entries.push(target);
   }
 
   const hintLines: string[] = [];

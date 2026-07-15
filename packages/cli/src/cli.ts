@@ -18,6 +18,7 @@ import { runInit } from "./commands/init.js";
 import { runLinks } from "./commands/links.js";
 import { runTagAudit } from "./commands/tag-audit.js";
 import { runIndexCheck } from "./commands/index-check.js";
+import { runIndexRebuild } from "./commands/index-rebuild.js";
 import { runStale } from "./commands/stale.js";
 import { runClaim } from "./commands/claim.js";
 import { runPagesize } from "./commands/pagesize.js";
@@ -350,6 +351,18 @@ pageCmd
       () => runPagePublish(input),
       { postCommit: false },
     );
+  });
+
+const indexCmd = program.command("index").description("root index projection and checks");
+indexCmd
+  .command("rebuild [vault]")
+  .description("preview or write deterministic root index.md projection")
+  .option("--write", "write projected index.md", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runIndexRebuild({ vault: v.vault, write: Boolean(opts.write) }), v.vault);
   });
 
 program.command("index-check [vault]")
