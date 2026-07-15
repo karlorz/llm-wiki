@@ -14,6 +14,7 @@ import {
   probeRemoteHealth,
   type RemoteHealthSnapshot,
 } from "../utils/remote-health.js";
+import { runVaultSyncPullHelper } from "../utils/vault-sync-helper.js";
 
 export interface SyncStatusInput {
   vault: string;
@@ -488,109 +489,42 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
   }
   enableGitLongPathsOnWindows(vault);
 
-  // 2. Fetch
-  let fetched = false;
-  try {
-    gitStrict(vault, ["fetch", "origin"]);
-    fetched = true;
-  } catch (e: unknown) {
+  // Preserve fail-closed contract when origin is missing (helper treats failed
+  // fetch + zero behind as up-to-date; CLI must still surface a pull failure).
+  const remoteUrl = git(vault, ["remote", "get-url", "origin"]);
+  if (!remoteUrl) {
     return {
       exitCode: ExitCode.SYNC_PULL_FAILED,
-      result: err("GIT_FETCH_FAILED", { message: String(e) }),
+      result: err("GIT_PULL_FAILED", { message: "no remote configured (origin)" }),
     };
   }
 
-  // 3. Pull with rebase (auto-resolve conflict storms for archive/snapshot commits)
-  let pulled = false;
-  let conflicts = 0;
-  let filesUpdated = 0;
-  let autoResolved = 0;
-  try {
-    const pullOutput = gitStrict(vault, ["pull", "--rebase", "origin", "HEAD"]);
-    pulled = true;
-    // Count files changed from the pull output
-    const fileMatch = pullOutput.match(/(\d+) file[s]? changed/);
-    if (fileMatch) filesUpdated = parseInt(fileMatch[1]!, 10);
-  } catch (e: unknown) {
-    const errString = String(e);
-    if (errString.includes("conflict")) {
-      // Enter conflict-resolution loop for archive/snapshot conflict storms
-      let inConflict = true;
-      while (inConflict) {
-        // Detect if the current rebase commit is archive-only or a snapshot
-        const stoppedSha = git(vault, ["rev-parse", "--verify", "REBASE_HEAD"]);
-        let commitMsg = "";
-        if (stoppedSha) {
-          commitMsg = git(vault, ["log", "--format=%s", "-1", stoppedSha]);
-        }
-
-        const isArchiveOrSnapshot = commitMsg.startsWith("archive: moved") || commitMsg.startsWith("Snapshot ");
-
-        const conflictedFiles = git(vault, ["diff", "--name-only", "--diff-filter=U"]);
-        const conflictedList = conflictedFiles ? conflictedFiles.split("\n").filter((l) => l.trim().length > 0) : [];
-
-        if (conflictedList.length === 0) {
-          // No file-level conflicts — try to continue rebase
-          try {
-            gitStrict(vault, ["rebase", "--continue"]);
-            inConflict = true; // Check for next conflict in chain
-          } catch {
-            inConflict = false;
-          }
-          continue;
-        }
-
-        if (isArchiveOrSnapshot) {
-          // Auto-resolve: keep HEAD (origin/main + snapshots) for all conflicts
-          for (const f of conflictedList) {
-            try {
-              gitStrict(vault, ["checkout", "--ours", f]);
-              gitStrict(vault, ["add", f]);
-            } catch { /* skip files that can't be resolved */ }
-          }
-          autoResolved += conflictedList.length;
-
-          // Continue rebase to next commit
-          try {
-            gitStrict(vault, ["rebase", "--continue"]);
-          } catch (continueErr: unknown) {
-            // rebase --continue failed — might be another conflict or done
-            continue;
-          }
-        } else {
-          // Non-archive conflict — surface to user
-          conflicts = conflictedList.length;
-          return {
-            exitCode: ExitCode.SYNC_PULL_FAILED,
-            result: ok({
-              fetched,
-              pulled: false,
-              files_updated: 0,
-              conflicts,
-              auto_resolved: 0,
-              lint_errors: 0,
-              lint_warnings: 0,
-              humanHint: `pull failed with ${conflicts} conflict(s) on non-archive commit "${commitMsg}" — resolve manually`,
-            }),
-          };
-        }
-      }
-      // Rebase completed after auto-resolution
-      if (autoResolved > 0) {
-        // Count files updated from final diff
-        const diffOutput = git(vault, ["diff", "--stat", "HEAD@{1}..HEAD"]);
-        if (diffOutput) {
-          const fileMatch = diffOutput.match(/(\d+) file[s]? changed/);
-          if (fileMatch) filesUpdated = parseInt(fileMatch[1]!, 10);
-        }
-        pulled = true;
-        conflicts = 0;
-      }
-    } else {
+  // 2–3. Delegate fetch/rebase/conflict handling to the canonical vault-sync helper.
+  // No blanket checkout --ours lives in the CLI path.
+  const helper = await runVaultSyncPullHelper({ vault, remote: "origin", branch: "main" });
+  if (!helper.ok) {
+    if (helper.error === "PREFLIGHT_FAILED") {
       return {
-        exitCode: ExitCode.SYNC_PULL_FAILED,
-        result: err("GIT_PULL_FAILED", { message: errString }),
+        exitCode: ExitCode.PREFLIGHT_FAILED,
+        result: err("PREFLIGHT_FAILED", helper.detail),
       };
+    }
+    return {
+      exitCode: ExitCode.SYNC_PULL_FAILED,
+      result: err("GIT_PULL_FAILED", helper.detail),
+    };
+  }
+
+  const fetched = true;
+  const pulled = helper.data.changed;
+  const conflicts = 0;
+  const autoResolved = 0;
+  let filesUpdated = 0;
+  if (helper.data.changed) {
+    const diffOutput = git(vault, ["diff", "--stat", `${helper.data.before_oid}..${helper.data.after_oid}`]);
+    if (diffOutput) {
+      const fileMatch = diffOutput.match(/(\d+) file[s]? changed/);
+      if (fileMatch) filesUpdated = parseInt(fileMatch[1]!, 10);
     }
   }
 
@@ -609,8 +543,7 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
 
   const hintParts: string[] = [];
   if (filesUpdated > 0) hintParts.push(`updated ${filesUpdated} file(s)`);
-  else hintParts.push("already up to date");
-  if (autoResolved > 0) hintParts.push(`${autoResolved} conflict(s) auto-resolved`);
+  else hintParts.push(pulled ? "pulled via vault-sync helper" : "already up to date");
   if (pathFixCount > 0) hintParts.push(`${pathFixCount} long path(s) fixed`);
   if (lintErrors > 0) hintParts.push(`${lintErrors} lint error(s)`);
   if (lintWarnings > 0) hintParts.push(`${lintWarnings} lint warning(s)`);

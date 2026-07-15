@@ -44,6 +44,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/git-rebase-state.sh"
 . "$SCRIPT_DIR/lib/git-materialization.sh"
 . "$SCRIPT_DIR/lib/git-operation-journal.sh"
+. "$SCRIPT_DIR/lib/managed-write-lock.sh"
 platform_detect_os
 
 WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
@@ -69,8 +70,8 @@ release_pull_lock() {
   fi
 }
 
-# Always release cooperative lock on process exit (covers fail-closed paths).
-trap 'release_pull_lock' EXIT
+# Always release cooperative lock and owned managed-write lock on exit.
+trap 'release_pull_lock; vault_sync_managed_lock_release' EXIT
 
 acquire_pull_lock() {
   local lock_rc=0
@@ -442,6 +443,12 @@ log_review_required_handoff_if_present() {
 }
 
 cd "$WIKI_DIR" || { log "ERROR: cd $WIKI_DIR failed"; exit 1; }
+
+# Serialize with managed CLI writers (shared lock path). Fail closed on contention.
+if ! vault_sync_managed_lock_acquire "$WIKI_DIR" "wiki-pull"; then
+    log "FAIL managed-write lock held — refusing concurrent pull"
+    exit 1
+fi
 
 # Stable handoff gate: never open a new journal/stash while unmerged paths,
 # an in-progress non-rebase Git operation, or a review-required journal exist.

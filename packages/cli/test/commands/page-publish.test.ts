@@ -373,3 +373,50 @@ describe("page publish", () => {
     expect(readLock(vault)?.owner_token).toBe(successor.owner_token);
   });
 });
+
+describe("page publish managed write receipt", () => {
+  it("exposes frozen base_oid and write_mode on write", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { ok } = await import("@skillwiki/shared");
+    const { publishPreparedPage } = await import("../../src/commands/page-publish.js");
+
+    const vault = makeVault(["research"]);
+    execFileSync("git", ["init"], { cwd: vault });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: vault });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: vault });
+    execFileSync("git", ["add", "."], { cwd: vault });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: vault });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: vault, encoding: "utf8" }).trim();
+
+    const prepared = preparePagePublicationFromContent({
+      vault,
+      content: queryDraft(["research"], "Receipt Query"),
+      target: "queries/receipt-query.md",
+      now: NOW,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+
+    const deps = defaultPagePublishDeps({
+      preflight: async () => ({
+        exitCode: 0,
+        result: ok({
+          mode: "git-writer",
+          host_id: "macos-dev",
+          base_oid: head,
+          converged: true,
+        }),
+      }),
+    });
+    const run = await publishPreparedPage(prepared.data, vault, deps);
+    expect(run.result).toMatchObject({
+      ok: true,
+      data: {
+        base_oid: head,
+        write_mode: "git-writer",
+        host_id: "macos-dev",
+      },
+    });
+  });
+});
+
