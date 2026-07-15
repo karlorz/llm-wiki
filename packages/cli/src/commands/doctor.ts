@@ -29,6 +29,8 @@ import {
   evaluateSatelliteRunHealth,
   satelliteLatestRunPath,
 } from "../utils/satellite-run-health.js";
+import { resolveVaultSyncPullHelper } from "../utils/vault-sync-helper.js";
+import { listReviewRequiredOps } from "../utils/operation-journal.js";
 import {
   findRcloneMountPid,
   parseRcloneFlags,
@@ -1216,6 +1218,46 @@ function checkVfsCacheHealth(resolvedPath: string | undefined): CheckResult {
     `${stats.files} files, ${(stats.bytesUsed / 1024 / 1024).toFixed(1)}MB — clean (0 errored, 0 pending)`);
 }
 
+// ── Managed-write helper / journal checks (0.10.1+) ──────────
+
+function checkVaultSyncPullHelper(home: string, env: NodeJS.ProcessEnv): CheckResult {
+  const path = resolveVaultSyncPullHelper({
+    vault: "",
+    home,
+    env: env as Record<string, string | undefined>,
+  });
+  if (path) {
+    return check("pass", "vault_sync_pull_helper", "Vault-sync pull helper", `Resolved: ${path}`);
+  }
+  return check(
+    "error",
+    "vault_sync_pull_helper",
+    "Vault-sync pull helper",
+    "Not found — install skillwiki@0.10.1+, redeploy vault-sync, or set SKILLWIKI_VAULT_SYNC_PULL_HELPER",
+  );
+}
+
+function checkVaultSyncReviewRequiredJournals(vaultPath: string | undefined): CheckResult {
+  if (!vaultPath || !existsSync(join(vaultPath, ".git"))) {
+    return check("pass", "vault_sync_review_required_journals", "Review-required journals", "No git vault — check skipped");
+  }
+  try {
+    const ops = listReviewRequiredOps(vaultPath);
+    if (ops.length === 0) {
+      return check("pass", "vault_sync_review_required_journals", "Review-required journals", "None");
+    }
+    const sample = ops[0]?.opId ?? "?";
+    return check(
+      "warn",
+      "vault_sync_review_required_journals",
+      "Review-required journals",
+      `${ops.length} handoff(s); oldest/sample: ${sample} — if worktree clean: skillwiki sync journal clear-stale --dry-run`,
+    );
+  } catch {
+    return check("pass", "vault_sync_review_required_journals", "Review-required journals", "Could not read journals — check skipped");
+  }
+}
+
 // ── Vault sync health checks (6 checks) ──────────────────────
 
 interface VaultSyncRuntimeConfig {
@@ -1782,6 +1824,10 @@ export async function runDoctor(
     vaultSyncServiceScope: vsConfig.serviceScope,
     snapshotScriptPath: vsConfig.snapshotScript,
   }));
+
+  // Managed-write prerequisites (0.10.1+): pull helper + stale handoff journals
+  checks.push(checkVaultSyncPullHelper(input.home, input.env ?? process.env));
+  checks.push(checkVaultSyncReviewRequiredJournals(resolvedPath));
 
   const satelliteGate = satelliteGateFromFleetLoad(fleetLoad);
   checks.push(checkSatelliteLastRun(resolvedPath, satelliteGate.satelliteExpected));

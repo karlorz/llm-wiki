@@ -51,6 +51,7 @@ import { runTagSync } from "./commands/tag-sync.js";
 import { runTagReconcile } from "./commands/tag-reconcile.js";
 import { runPagePublish } from "./commands/page-publish.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers, runSyncLintDelta } from "./commands/sync.js";
+import { runSyncJournalList, runSyncJournalClearStale } from "./commands/sync-journal.js";
 import { getCliSessionId } from "./utils/sync-lock.js";
 import { runBackupSync, runBackupRestore } from "./commands/backup.js";
 import { runStatus } from "./commands/status.js";
@@ -1034,6 +1035,36 @@ syncCmd
         v.vault,
         "sync resolve-derived",
         () => runDerivedConflictResolution({ vault: v.vault, operationId: opts.operationId }),
+      );
+    }
+  });
+
+const syncJournalCmd = syncCmd.command("journal").description("inspect or clear vault-sync operation journals");
+
+syncJournalCmd
+  .command("list [vault]")
+  .description("list vault-sync operation journals and review-required handoffs")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(runSyncJournalList({ vault: v.vault }));
+  });
+
+syncJournalCmd
+  .command("clear-stale [vault]")
+  .description("supersede stale review-required journals when worktree is clean")
+  .option("--dry-run", "report what would be cleared without writing", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (opts.dryRun) emit(runSyncJournalClearStale({ vault: v.vault, dryRun: true }));
+    else {
+      return emitGuardedVaultWrite(
+        v.vault,
+        "sync journal clear-stale",
+        async () => runSyncJournalClearStale({ vault: v.vault, dryRun: false }),
       );
     }
   });

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { err, ok, type Result } from "@skillwiki/shared";
@@ -19,24 +20,62 @@ export interface VaultSyncPullHelperInput {
   lockToken?: string;
   helperPath?: string;
   env?: Record<string, string | undefined>;
+  /** Override dirname(import.meta.url) for packaged-layout tests. */
+  moduleDir?: string;
+  /** Override home directory for host-install fallback tests. */
+  home?: string;
 }
 
-function candidateHelperPaths(input: VaultSyncPullHelperInput): string[] {
+const HELPER_NAME = "wiki-pull-with-auto-resolve.sh";
+
+/**
+ * Build ordered candidate paths for the canonical vault-sync pull helper.
+ * Order: explicit arg → env override → dist-adjacent → relative layouts → host install.
+ */
+export function candidateHelperPaths(input: VaultSyncPullHelperInput = { vault: "" }): string[] {
   const env = input.env ?? process.env;
   const paths: string[] = [];
   if (input.helperPath) paths.push(input.helperPath);
   if (env.SKILLWIKI_VAULT_SYNC_PULL_HELPER) paths.push(env.SKILLWIKI_VAULT_SYNC_PULL_HELPER);
 
-  // Packaged CLI: dist/cli.js → dist/vault-sync/scripts/...
-  try {
-    const here = dirname(fileURLToPath(import.meta.url));
+  let here: string | undefined = input.moduleDir;
+  if (!here) {
+    try {
+      here = dirname(fileURLToPath(import.meta.url));
+    } catch {
+      here = undefined;
+    }
+  }
+
+  if (here) {
+    // Packaged npm: dist/cli.js or dist/chunk-*.js → dist/vault-sync/scripts/...
+    paths.push(join(here, "vault-sync", "scripts", HELPER_NAME));
     // When running from dist/utils or src/utils
-    paths.push(join(here, "..", "vault-sync", "scripts", "wiki-pull-with-auto-resolve.sh"));
-    paths.push(join(here, "..", "..", "vault-sync", "scripts", "wiki-pull-with-auto-resolve.sh"));
+    paths.push(join(here, "..", "vault-sync", "scripts", HELPER_NAME));
+    paths.push(join(here, "..", "..", "vault-sync", "scripts", HELPER_NAME));
     // Monorepo: packages/cli/src/utils → packages/vault-sync/scripts
-    paths.push(join(here, "..", "..", "..", "vault-sync", "scripts", "wiki-pull-with-auto-resolve.sh"));
-  } catch {
-    /* import.meta.url unavailable in some test harnesses */
+    paths.push(join(here, "..", "..", "..", "vault-sync", "scripts", HELPER_NAME));
+  }
+
+  const home = input.home ?? env.HOME ?? env.USERPROFILE ?? (() => {
+    try {
+      return homedir();
+    } catch {
+      return undefined;
+    }
+  })();
+
+  if (home) {
+    const xdg = env.XDG_DATA_HOME;
+    const isDarwin = platform() === "darwin";
+    if (isDarwin) {
+      paths.push(join(home, "Library", "Application Support", "vault-sync", "bin", HELPER_NAME));
+    }
+    paths.push(join(xdg || join(home, ".local", "share"), "vault-sync", "bin", HELPER_NAME));
+    // Also probe the non-native host layout so cross-platform tests and mixed installs work.
+    if (!isDarwin) {
+      paths.push(join(home, "Library", "Application Support", "vault-sync", "bin", HELPER_NAME));
+    }
   }
 
   return paths;
@@ -54,7 +93,14 @@ export async function runVaultSyncPullHelper(
 ): Promise<Result<VaultSyncPullReceipt>> {
   const helperPath = resolveVaultSyncPullHelper(input);
   if (!helperPath) {
-    return err("GIT_PULL_FAILED", { message: "canonical vault-sync pull helper not found" });
+    const tried = candidateHelperPaths(input).filter(Boolean);
+    return err("GIT_PULL_FAILED", {
+      message:
+        "canonical vault-sync pull helper not found; run skillwiki doctor; " +
+        "install skillwiki@0.10.1+ or set SKILLWIKI_VAULT_SYNC_PULL_HELPER; " +
+        "host install: ~/Library/Application Support/vault-sync/bin or ~/.local/share/vault-sync/bin",
+      tried_paths: tried.slice(0, 12),
+    });
   }
 
   const remote = input.remote ?? "origin";
