@@ -176,3 +176,54 @@ export function reconcileTaxonomyDocument(
     changed: true,
   });
 }
+
+export interface TaxonomyConflictMergeResult {
+  text: string;
+  tags: string[];
+  added_from_ours: string[];
+  added_from_theirs: string[];
+}
+
+/** Non-taxonomy bytes outside the fenced YAML range must match base exactly. */
+function taxonomyEnvelope(text: string, doc: TaxonomyDocument): string {
+  return text.slice(0, doc.yamlStart) + "<taxonomy-yaml>" + text.slice(doc.closingFenceStart);
+}
+
+/**
+ * Three-stage taxonomy merge: preserve base tag order, union sorted additions
+ * from ours/theirs, fail closed on any byte change outside the taxonomy fence.
+ */
+export function mergeTaxonomyConflict(
+  baseText: string,
+  oursText: string,
+  theirsText: string,
+): Result<TaxonomyConflictMergeResult> {
+  const base = parseTaxonomyDocument(baseText);
+  const ours = parseTaxonomyDocument(oursText);
+  const theirs = parseTaxonomyDocument(theirsText);
+  if (!base.ok) return base;
+  if (!ours.ok) return ours;
+  if (!theirs.ok) return theirs;
+  const envelope = taxonomyEnvelope(baseText, base.data);
+  if (
+    taxonomyEnvelope(oursText, ours.data) !== envelope ||
+    taxonomyEnvelope(theirsText, theirs.data) !== envelope
+  ) {
+    return err("SCHEME_REJECTED", { reason: "non-taxonomy-change" });
+  }
+  const baseTags = new Set(base.data.tags);
+  const addedFromOurs = ours.data.tags.filter((tag) => !baseTags.has(tag)).sort();
+  const addedFromTheirs = theirs.data.tags.filter((tag) => !baseTags.has(tag)).sort();
+  const tags = [...base.data.tags, ...new Set([...addedFromOurs, ...addedFromTheirs])];
+  const rendered = reconcileTaxonomyDocument(baseText, {
+    tags,
+    comment: "# -- reconciled: taxonomy-only three-stage merge --",
+  });
+  if (!rendered.ok) return rendered;
+  return ok({
+    text: rendered.data.text,
+    tags,
+    added_from_ours: addedFromOurs,
+    added_from_theirs: addedFromTheirs,
+  });
+}

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractTaxonomy,
+  mergeTaxonomyConflict,
   parseTaxonomyDocument,
   reconcileTaxonomyDocument,
   taxonomyCommentForPage,
@@ -290,6 +291,45 @@ describe("extractTaxonomy", () => {
     ).toEqual({
       ok: true,
       data: "# -- added 2026-07-13: research-cycle 325 taxonomy reconciliation --",
+    });
+  });
+});
+
+describe("mergeTaxonomyConflict", () => {
+  it("merges disjoint taxonomy-only additions deterministically", () => {
+    const base = LF_SCHEMA;
+    const ours = reconcileTaxonomyDocument(base, {
+      tags: ["alpha"],
+      comment: "# -- added 2026-07-15: ours --",
+    });
+    const theirs = reconcileTaxonomyDocument(base, {
+      tags: ["zeta"],
+      comment: "# -- added 2026-07-15: theirs --",
+    });
+    if (!ours.ok || !theirs.ok) throw new Error("fixture failed");
+    const merged = mergeTaxonomyConflict(base, ours.data.text, theirs.data.text);
+    expect(merged).toMatchObject({
+      ok: true,
+      data: {
+        tags: ["research", "alpha", "zeta"],
+        added_from_ours: ["alpha"],
+        added_from_theirs: ["zeta"],
+      },
+    });
+    if (merged.ok) {
+      expect(mergeTaxonomyConflict(base, merged.data.text, merged.data.text)).toMatchObject({
+        ok: true,
+        data: { text: merged.data.text },
+      });
+    }
+  });
+
+  it("rejects a conflict when either side edits bytes outside taxonomy", () => {
+    const ours = LF_SCHEMA.replace("keep me byte-for-byte", "ours semantic edit");
+    expect(mergeTaxonomyConflict(LF_SCHEMA, ours, LF_SCHEMA)).toMatchObject({
+      ok: false,
+      error: "SCHEME_REJECTED",
+      detail: { reason: "non-taxonomy-change" },
     });
   });
 });
