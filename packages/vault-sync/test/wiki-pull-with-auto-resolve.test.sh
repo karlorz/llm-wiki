@@ -464,7 +464,7 @@ test_active_rebase_is_refused() {
   rebase_head_after="$(git -C "$vault" rev-parse REBASE_HEAD 2>/dev/null || echo none)"
   unmerged_after="$(git -C "$vault" diff --name-only --diff-filter=U | tr '\n' ' ' | sed 's/ *$//')"
 
-  assert_eq "active rebase refusal exits nonzero" "$rc" "1"
+  assert_eq "active rebase refusal exits review-required" "$rc" "2"
   assert_eq "REBASE_HEAD unchanged" "$rebase_head_after" "$rebase_head_before"
   assert_eq "unmerged path unchanged" "$unmerged_after" "$unmerged_before"
   assert_eq "rebase-merge still present" "$(test -d "$vault/.git/rebase-merge" && echo present || echo absent)" "present"
@@ -721,8 +721,8 @@ EOF
   # Prove empty-base path was used (pull log)
   local pull_log
   pull_log="$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)"
-  assert_eq "pull log records empty-base AA union" \
-    "$( [ -n "$pull_log" ] && grep -c 'empty base for add/add' "$pull_log" | tr -d ' ' || echo 0 )" \
+  assert_eq "pull log records composite derived resolve" \
+    "$( [ -n "$pull_log" ] && grep -c 'AUTO-RESOLVE composite derived' "$pull_log" | tr -d ' ' || echo 0 )" \
     "1"
 
   rm -rf "$root"
@@ -994,20 +994,29 @@ test_later_run_refuses_handoff_rebase() {
   vault_sync_op_begin "$vault" "$op_id" "main" "$orig_head" "$target_oid" "lock:fixture" "test" "x" || true
   vault_sync_op_mark_review_required "$vault" "$op_id" "seeded-handoff"
 
+  local before_journals before_stashes after_journals after_stashes
+  before_journals="$(find "$(journal_dir "$vault")" -name '*.env' 2>/dev/null | wc -l | tr -d ' ')"
+  before_stashes="$(git -C "$vault" stash list --format='%H' | wc -l | tr -d ' ')"
+
   HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
   rc=$?
 
-  assert_eq "later run refuses handoff rebase" "$rc" "1"
+  after_journals="$(find "$(journal_dir "$vault")" -name '*.env' 2>/dev/null | wc -l | tr -d ' ')"
+  after_stashes="$(git -C "$vault" stash list --format='%H' | wc -l | tr -d ' ')"
+
+  assert_eq "later run refuses handoff rebase" "$rc" "2"
   assert_eq "REBASE_HEAD unchanged under handoff" \
     "$(git -C "$vault" rev-parse REBASE_HEAD 2>/dev/null || echo none)" \
     "$rebase_head_before"
   assert_eq "rebase-merge still present under handoff" \
     "$(test -d "$vault/.git/rebase-merge" && echo present || echo absent)" "present"
+  assert_eq "handoff preflight creates no extra journal" "$after_journals" "$before_journals"
+  assert_eq "handoff preflight creates no stash" "$after_stashes" "$before_stashes"
 
   local pull_log
   pull_log="$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)"
-  assert_eq "log notes handoff journal present" \
-    "$( [ -n "$pull_log" ] && grep -c 'handoff journal present' "$pull_log" | tr -d ' ' || echo 0 )" \
+  assert_eq "log notes stable handoff gate" \
+    "$( [ -n "$pull_log" ] && grep -c 'HANDOFF existing reason=' "$pull_log" | tr -d ' ' || echo 0 )" \
     "1"
 
   git -C "$vault" rebase --abort >/dev/null 2>&1 || true
@@ -1167,7 +1176,7 @@ test_complete_op_handoff_does_not_pollute_log() {
 
   HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
   rc=$?
-  assert_eq "active rebase still refused with complete journal" "$rc" "1"
+  assert_eq "active rebase still refused with complete journal" "$rc" "2"
 
   local pull_log
   pull_log="$(find "$home" -type f -name 'wiki-pull.log' 2>/dev/null | head -1)"
@@ -1226,10 +1235,45 @@ test_inventory_verify_failure_marks_review_required() {
   rm -rf "$root"
 }
 
+test_unmerged_tree_stops_before_new_journal_or_stash() {
+  local root home vault before_journals after_journals before_stashes after_stashes rc
+  root="$(mktemp -d)"
+  home="$root/home"
+  vault="$(make_repo "$root")"
+
+  printf 'base\n' > "$vault/conflict.md"
+  git_commit "$vault" "add conflict base"
+  git -C "$vault" push origin main >/dev/null
+
+  add_remote_commit "$root" "conflict.md" "remote\n" "remote-conflict"
+  printf 'local\n' > "$vault/conflict.md"
+  git_commit "$vault" "local-conflict"
+  git -C "$vault" fetch origin main >/dev/null 2>&1
+  git -C "$vault" rebase origin/main >/dev/null 2>&1 || true
+
+  before_journals="$(find "$(journal_dir "$vault")" -name '*.env' 2>/dev/null | wc -l | tr -d ' ')"
+  before_stashes="$(git -C "$vault" stash list --format='%H' | wc -l | tr -d ' ')"
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  after_journals="$(find "$(journal_dir "$vault")" -name '*.env' 2>/dev/null | wc -l | tr -d ' ')"
+  after_stashes="$(git -C "$vault" stash list --format='%H' | wc -l | tr -d ' ')"
+  assert_eq "unmerged preflight exits review-required" "$rc" "2"
+  assert_eq "unmerged preflight creates no journal" "$after_journals" "$before_journals"
+  assert_eq "unmerged preflight creates no stash" "$after_stashes" "$before_stashes"
+  assert_eq "existing conflict remains untouched" \
+    "$(git -C "$vault" status --short conflict.md | cut -c1-2)" "UU"
+
+  git -C "$vault" rebase --abort >/dev/null 2>&1 || true
+  rm -rf "$root"
+}
+
 test_dirty_tree_pull_restores_edit
 test_stale_rebase_state_is_cleaned_before_pull
 test_stale_sequencer_preserves_advanced_tip
 test_active_rebase_is_refused
+test_unmerged_tree_stops_before_new_journal_or_stash
 test_snapshot_materialized_commit_is_dropped_without_log_dup
 test_partial_match_commit_is_not_dropped
 test_raw_path_difference_is_not_dropped

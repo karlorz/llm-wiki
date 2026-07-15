@@ -98,4 +98,36 @@ sources: []
       expect(r.result.data.ghost_entries).toHaveLength(0);
     }
   });
+
+  it("same basename in different typed dirs requires path-qualified index links", async () => {
+    const dir = v();
+    writeFileSync(join(dir, "concepts", "alpha.md"), FM);
+    writeFileSync(join(dir, "entities", "alpha.md"), `---
+title: Alpha Entity
+type: entity
+tags: []
+sources: []
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+`);
+    // Basename-only link is ambiguous and must not cover both pages.
+    writeFileSync(join(dir, "index.md"), `# Index\n\n- [[alpha]]\n`);
+    const r = await runIndexCheck({ vault: dir });
+    expect(r.exitCode).toBe(18);
+    if (r.result.ok) {
+      expect(r.result.data.missing_from_index).toEqual(
+        expect.arrayContaining(["concepts/alpha.md", "entities/alpha.md"]),
+      );
+    }
+
+    writeFileSync(
+      join(dir, "index.md"),
+      `# Index\n\n- [[concepts/alpha]]\n- [[entities/alpha]]\n`,
+    );
+    const r2 = await runIndexCheck({ vault: dir });
+    expect(r2.exitCode).toBe(0);
+  });
 });

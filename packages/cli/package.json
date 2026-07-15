@@ -1,6 +1,6 @@
 {
   "name": "skillwiki",
-  "version": "0.9.63",
+  "version": "0.10.0",
   "type": "module",
   "bin": {
     "skillwiki": "dist/cli.js",
@@ -13,7 +13,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup && rm -rf ./skills && cp -r ../skills ./skills",
+    "build": "tsup && node ./scripts/copy-build-assets.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

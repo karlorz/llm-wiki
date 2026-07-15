@@ -76,6 +76,14 @@ test_pack_writes_to_artifacts_not_cli() {
   assert_true "tarball name matches skillwiki-VERSION.tgz" \
     bash -c 'basename "$1" | grep -Eq "^skillwiki-[0-9]+\.[0-9]+\.[0-9]+.*\.tgz$"' _ "$path"
 
+  # Packaged CLI must ship the canonical vault-sync pull helper + sourced libs.
+  helper_in_tgz="$(tar -tzf "$path" | grep -c 'package/dist/vault-sync/scripts/wiki-pull-with-auto-resolve.sh' || true)"
+  assert_eq "tarball includes vault-sync pull helper" "$helper_in_tgz" "1"
+  for lib in git-operation-journal.sh managed-write-lock.sh platform.sh lockfile.sh git-case.sh conflict-markers.sh git-rebase-state.sh git-materialization.sh; do
+    count="$(tar -tzf "$path" | grep -c "package/dist/vault-sync/scripts/lib/$lib" || true)"
+    assert_eq "tarball includes lib/$lib" "$count" "1"
+  done
+
   rm -rf "$dest"
 }
 

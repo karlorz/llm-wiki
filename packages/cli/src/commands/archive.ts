@@ -179,23 +179,24 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
   // ----- Standard archive flow (always runs unless dry-run gated above) -----
   await mkdir(dirname(join(input.vault, archivePath)), { recursive: true });
 
+  await rename(join(input.vault, relPath), join(input.vault, archivePath));
+
+  // Rebuild root index from the post-rename page tree (full-path projection).
   let indexUpdated = false;
   if (!isRaw) {
-    const indexPath = join(input.vault, "index.md");
-    try {
-      const idx = await readFile(indexPath, "utf8");
-      const originalLines = idx.split("\n");
-      const filtered = originalLines.filter(l => !l.includes(`[[${slug}]]`));
-      if (filtered.length !== originalLines.length) {
-        await writeFile(indexPath, filtered.join("\n"), "utf8");
-        indexUpdated = true;
-      }
-    } catch (e: unknown) {
-      if (e instanceof Error && "code" in e && e.code !== "ENOENT") throw e;
+    const { renderRootIndex, writeRootIndexProjection } = await import("../utils/index-projection.js");
+    const before = await readFile(join(input.vault, "index.md"), "utf8").catch(() => "");
+    const fullTarget = relPath.replace(/\.md$/, "");
+    const bare = fullTarget.split("/").pop() ?? fullTarget;
+    const hadIndexEntry =
+      before.includes(`[[${fullTarget}]]`) || before.includes(`[[${bare}]]`);
+    const projection = await renderRootIndex({ vault: input.vault, currentText: before });
+    if (projection.ok && projection.data.text !== before) {
+      const written = await writeRootIndexProjection(input.vault, projection.data);
+      // Report index_updated only when we removed a prior listing for this page.
+      if (written.ok && written.data.changed && hadIndexEntry) indexUpdated = true;
     }
   }
-
-  await rename(join(input.vault, relPath), join(input.vault, archivePath));
 
   // Tombstone the live path so snapshot cannot resurrect it from S3 even when
   // remote-delete is skipped or fails later.

@@ -18,6 +18,11 @@ import { runInit } from "./commands/init.js";
 import { runLinks } from "./commands/links.js";
 import { runTagAudit } from "./commands/tag-audit.js";
 import { runIndexCheck } from "./commands/index-check.js";
+import { runIndexRebuild } from "./commands/index-rebuild.js";
+import { runDerivedConflictResolution } from "./commands/derived-conflicts.js";
+import { runLogMaterialize } from "./commands/log-materialize.js";
+import { runLogMigrateLegacy } from "./commands/log-migrate-legacy.js";
+import { runProjectionsMaterialize } from "./commands/projections-materialize.js";
 import { runStale } from "./commands/stale.js";
 import { runClaim } from "./commands/claim.js";
 import { runPagesize } from "./commands/pagesize.js";
@@ -98,6 +103,39 @@ async function emitGuardedVaultWrite<T>(
   return emit(await run(), vault, opts);
 }
 
+/**
+ * Protected-vault guard + managed-write preflight/lock for mutating CLI writes.
+ * Rejects immutable-record mode in Release A via runManagedWriteTransaction.
+ */
+async function emitManagedVaultWrite<T>(
+  vault: string,
+  command: string,
+  mutate: (receipt: import("./utils/managed-write-preflight.js").ManagedWriteReceipt) =>
+    Promise<{ exitCode: number; result: Result<T> }> | { exitCode: number; result: Result<T> },
+  opts?: { postCommit?: boolean; allowImmutableRecord?: boolean },
+): Promise<never> {
+  const guard = await guardProtectedVaultWrite({
+    vault,
+    command,
+    env: process.env,
+    home: process.env.HOME ?? "",
+    cwd: process.cwd(),
+    osHostname: process.env.HOSTNAME,
+    user: process.env.USER,
+  });
+  if (guard.blocked) {
+    return emit({ exitCode: guard.exitCode, result: guard.result }, undefined, { postCommit: false });
+  }
+  const { runManagedWriteTransaction } = await import("./utils/managed-write-preflight.js");
+  const run = await runManagedWriteTransaction({
+    vault,
+    command,
+    allowImmutableRecord: opts?.allowImmutableRecord === true,
+    mutate: async (receipt) => await mutate(receipt),
+  });
+  return emit(run, vault, opts);
+}
+
 program.command("hash <file>").description("compute SHA-256 hash of a vault page body").action(async (file) => emit(await runHash({ file })));
 
 program.command("fetch-guard <url>").description("check if a URL passes fetch guard rules and sanitize secrets").action(async (url) => emit(await runFetchGuard({ url })));
@@ -116,7 +154,7 @@ program
       else vault = v.vault;
     }
     if (opts.apply && vault) {
-      return emitGuardedVaultWrite(vault, "validate --apply", () => runValidate({ file, apply: true, vault }), undefined);
+      return emitManagedVaultWrite(vault, "validate --apply", () => runValidate({ file, apply: true, vault }), undefined);
     }
     emit(await runValidate({ file, apply: !!opts.apply, vault }), vault);
   });
@@ -352,6 +390,18 @@ pageCmd
     );
   });
 
+const indexCmd = program.command("index").description("root index projection and checks");
+indexCmd
+  .command("rebuild [vault]")
+  .description("preview or write deterministic root index.md projection")
+  .option("--write", "write projected index.md", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runIndexRebuild({ vault: v.vault, write: Boolean(opts.write) }), v.vault);
+  });
+
 program.command("index-check [vault]")
   .description("verify index.md entries match actual vault pages")
   .option("--wiki <name>", "wiki profile name")
@@ -451,11 +501,57 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else return emitGuardedVaultWrite(
+    else return emitManagedVaultWrite(
       v.vault,
       "log-append",
       () => runLogAppend({ vault: v.vault, content: opts.content })
     );
+  });
+
+const logCmd = program.command("log").description("immutable log events and projections");
+logCmd
+  .command("materialize [vault]")
+  .description("preview or write root log.md from immutable events")
+  .option("--write", "write projected log.md", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (opts.write) {
+      return emitManagedVaultWrite(v.vault, "log materialize", () =>
+        runLogMaterialize({ vault: v.vault, write: true }),
+      );
+    } else emit(await runLogMaterialize({ vault: v.vault, write: false }), v.vault);
+  });
+logCmd
+  .command("migrate-legacy [vault]")
+  .description("backfill immutable events from historical root log.md blocks")
+  .option("--write", "write events", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (opts.write) {
+      return emitManagedVaultWrite(v.vault, "log migrate-legacy", () =>
+        runLogMigrateLegacy({ vault: v.vault, write: true }),
+      );
+    } else emit(await runLogMigrateLegacy({ vault: v.vault, write: false }), v.vault);
+  });
+
+const projectionsCmd = program.command("projections").description("root index/log projection materialization");
+projectionsCmd
+  .command("materialize [vault]")
+  .description("preview or write root index.md and log.md as a pair")
+  .option("--write", "write projections", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (opts.write) {
+      return emitManagedVaultWrite(v.vault, "projections materialize", () =>
+        runProjectionsMaterialize({ vault: v.vault, write: true }),
+      );
+    } else emit(await runProjectionsMaterialize({ vault: v.vault, write: false }), v.vault);
   });
 
 program
@@ -614,7 +710,7 @@ program
       remoteDelete: !!opts.remoteDelete,
       maxRemoteDeletes: Number.parseInt(opts.maxRemoteDeletes, 10),
     }), v.vault);
-    else return emitGuardedVaultWrite(
+    else return emitManagedVaultWrite(
       v.vault,
       "archive",
       () => runArchive({
@@ -641,7 +737,7 @@ program
   .action(async (page, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else return emitGuardedVaultWrite(
+    else return emitManagedVaultWrite(
       v.vault,
       "remove",
       () => runRemove({
@@ -926,6 +1022,23 @@ syncCmd
   });
 
 syncCmd
+  .command("resolve-derived [vault]")
+  .description("resolve mixed derived conflicts for an owned vault-sync operation (internal)")
+  .requiredOption("--operation-id <id>", "vault-sync operation journal id")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else {
+      return emitGuardedVaultWrite(
+        v.vault,
+        "sync resolve-derived",
+        () => runDerivedConflictResolution({ vault: v.vault, operationId: opts.operationId }),
+      );
+    }
+  });
+
+syncCmd
   .command("lock [vault]")
   .description("acquire advisory lock on vault")
   .option("--summary <text>", "lock description", "skillwiki sync")
@@ -1086,7 +1199,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else if (opts.write) return emitGuardedVaultWrite(
+    else if (opts.write) return emitManagedVaultWrite(
       v.vault,
       "session-brief --write",
       () => runSessionBrief({

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -6,7 +5,17 @@ import { err, ok, ExitCode, type ErrResult, type Result } from "@skillwiki/share
 import { runLogAppend } from "./log-append.js";
 import { extractTaxonomy, reconcileTaxonomyDocument, taxonomyCommentForPage } from "../parsers/taxonomy.js";
 import { atomicWriteText } from "../utils/atomic-write.js";
+import { git } from "../utils/git.js";
 import { upsertIndexEntry, renderIndexUpsert } from "../utils/index-entry.js";
+import {
+  runManagedWritePreflight,
+  type ManagedWritePreflightInput,
+  type ManagedWriteReceipt,
+  type ManagedWriteMode,
+} from "../utils/managed-write-preflight.js";
+import { acquireManagedWriteLock, releaseManagedWriteLock } from "../utils/managed-write-lock.js";
+import { operationId } from "../utils/operation-id.js";
+import { writeLogEvent } from "../utils/log-events.js";
 import { redactSensitiveContent, scanSensitiveContent } from "../utils/sensitive-content.js";
 import { safeWritePage } from "../utils/safe-write.js";
 import { acquireOwnedSyncLock, releaseOwnedSyncLock } from "../utils/sync-lock.js";
@@ -44,6 +53,9 @@ export interface PagePublishOutput {
   operation_id: string;
   dry_run: boolean;
   files_changed: string[];
+  base_oid: string | null;
+  write_mode: ManagedWriteMode | null;
+  host_id?: string;
   humanHint: string;
 }
 
@@ -59,15 +71,21 @@ export interface PreparedPagePublication {
   taxonomyComment: string;
 }
 
-export type PublishStage = "schema" | "page" | "verify" | "index" | "unlock" | "log";
+export type PublishStage = "schema" | "page" | "verify" | "event" | "index" | "unlock" | "log";
 
 export interface PagePublishDeps {
   afterStage(stage: PublishStage): Promise<void>;
+  preflight(
+    input: ManagedWritePreflightInput,
+  ): Promise<{ exitCode: number; result: Result<ManagedWriteReceipt> }>;
 }
 
 export type PagePublishRun = { exitCode: number; result: Result<PagePublishOutput> };
 
-const DEFAULT_DEPS: PagePublishDeps = { afterStage: async () => undefined };
+const DEFAULT_DEPS: PagePublishDeps = {
+  afterStage: async () => undefined,
+  preflight: (input) => runManagedWritePreflight(input),
+};
 
 /** Test-only hook factory; production callers use the immutable default dependency. */
 export function defaultPagePublishDeps(overrides: Partial<PagePublishDeps> = {}): PagePublishDeps {
@@ -89,6 +107,9 @@ function errorExitCode(error: string): number {
       return ExitCode.SENSITIVE_CONTENT_DETECTED;
     case "SYNC_LOCK_HELD":
       return ExitCode.SYNC_LOCK_HELD;
+    case "PREFLIGHT_FAILED":
+      return ExitCode.PREFLIGHT_FAILED;
+    case "EVENT_IDENTITY_COLLISION":
     case "WRITE_FAILED":
       return ExitCode.WRITE_FAILED;
     default:
@@ -97,14 +118,16 @@ function errorExitCode(error: string): number {
 }
 
 function publicationId(target: string, content: string, logNote = ""): string {
-  return createHash("sha256")
-    .update("skillwiki-page-publish-v1\0")
-    .update(target)
-    .update("\0")
-    .update(content)
-    .update("\0")
-    .update(logNote)
-    .digest("hex");
+  return operationId("skillwiki-page-publish-v1", [target, content, logNote]);
+}
+
+export type RootAggregateMode = "dual" | "source-only";
+
+export function resolveRootAggregateMode(env: Record<string, string | undefined> = process.env): RootAggregateMode {
+  // Explicit source-only for event-first hosts; dual remains the compatibility default
+  // until the attended canary cuts over via SKILLWIKI_ROOT_AGGREGATE_MODE=source-only.
+  if (env.SKILLWIKI_ROOT_AGGREGATE_MODE === "source-only") return "source-only";
+  return "dual";
 }
 
 function prepareFrozenPublication(
@@ -398,6 +421,7 @@ function successReceipt(
   logAppended: boolean,
   filesChanged: string[],
   dryRun = false,
+  receipt: Pick<ManagedWriteReceipt, "base_oid" | "mode" | "host_id"> | null = null,
 ): PagePublishRun {
   return {
     exitCode: ExitCode.OK,
@@ -412,6 +436,9 @@ function successReceipt(
       operation_id: input.operationId,
       dry_run: dryRun,
       files_changed: filesChanged,
+      base_oid: receipt?.base_oid ?? null,
+      write_mode: receipt?.mode ?? null,
+      ...(receipt?.host_id ? { host_id: receipt.host_id } : {}),
       humanHint: dryRun
         ? `dry run: would publish ${input.page.target} (${input.operationId.slice(0, 12)})`
         : `published ${input.page.target} (${input.operationId.slice(0, 12)})`,
@@ -512,100 +539,172 @@ export async function publishPreparedPage(
   vault: string,
   deps: PagePublishDeps = DEFAULT_DEPS,
 ): Promise<PagePublishRun> {
-  let lock: ReturnType<typeof acquireOwnedSyncLock>;
-  try {
-    lock = acquireOwnedSyncLock(vault, {
-      summary: `page publish ${input.page.target}`,
-      ttlMinutes: 1,
-    });
-  } catch (error: unknown) {
-    return {
-      exitCode: ExitCode.WRITE_FAILED,
-      result: err("WRITE_FAILED", { stage: "lock", message: String(error) }),
-    };
-  }
-  if (!lock.ok) return { exitCode: errorExitCode(lock.error), result: lock };
+  const managed = acquireManagedWriteLock(vault, `page publish ${input.page.target}`);
+  if (!managed.ok) return { exitCode: errorExitCode(managed.error), result: managed };
 
-  let primary: LockedPublicationOutcome | undefined;
-  let released: Result<{ released: boolean }> | undefined;
   try {
-    primary = await runLockedPrimaryStages(input, vault, deps);
-  } catch (error: unknown) {
-    primary = lockedFailure(
-      "schema",
-      emptyLockedState(),
-      err("WRITE_FAILED", { message: `unexpected primary-stage failure: ${String(error)}` }),
+    const preflight = await deps.preflight({
+      vault,
+      command: `page publish ${input.page.target}`,
+      lockToken: managed.data.ownerToken,
+    });
+    if (!preflight.result.ok) {
+      return { exitCode: preflight.exitCode, result: preflight.result };
+    }
+    const writeReceipt = preflight.result.data;
+    // Release B: immutable-record hosts may publish page + event without Git.
+    const aggregateMode = resolveRootAggregateMode();
+    if (writeReceipt.base_oid) {
+      const head = git(vault, ["rev-parse", "HEAD"]);
+      if (head !== writeReceipt.base_oid) {
+        return {
+          exitCode: ExitCode.PREFLIGHT_FAILED,
+          result: err("PREFLIGHT_FAILED", {
+            reason: "base-oid-drift",
+            expected: writeReceipt.base_oid,
+            actual: head,
+          }),
+        };
+      }
+    }
+
+    let lock: ReturnType<typeof acquireOwnedSyncLock>;
+    try {
+      lock = acquireOwnedSyncLock(vault, {
+        summary: `page publish ${input.page.target}`,
+        ttlMinutes: 1,
+      });
+    } catch (error: unknown) {
+      return {
+        exitCode: ExitCode.WRITE_FAILED,
+        result: err("WRITE_FAILED", { stage: "lock", message: String(error) }),
+      };
+    }
+    if (!lock.ok) return { exitCode: errorExitCode(lock.error), result: lock };
+
+    let primary: LockedPublicationOutcome | undefined;
+    let released: Result<{ released: boolean }> | undefined;
+    try {
+      primary = await runLockedPrimaryStages(input, vault, deps);
+    } catch (error: unknown) {
+      primary = lockedFailure(
+        "schema",
+        emptyLockedState(),
+        err("WRITE_FAILED", { message: `unexpected primary-stage failure: ${String(error)}` }),
+      );
+    } finally {
+      released = releaseOwnedSyncLock(lock.data);
+    }
+
+    const primaryState = primary?.ok ? primary.data : primary?.state;
+    if (released === undefined || !released.ok || !released.data.released) {
+      return phaseFailure(
+        "unlock",
+        input,
+        primaryState?.published ?? false,
+        released && !released.ok ? released : err("WRITE_FAILED", { message: "lock release did not run" }),
+        {
+          primary_stage: primary && !primary.ok ? primary.stage : "complete",
+          primary_error: primary && !primary.ok ? primary.cause.error : undefined,
+        },
+      );
+    }
+    const unlockHook = await observeStage(deps, "unlock");
+    if (unlockHook) return phaseFailure("unlock", input, primaryState?.published ?? false, unlockHook);
+
+    if (primary === undefined) {
+      return phaseFailure(
+        "schema",
+        input,
+        false,
+        err("WRITE_FAILED", { message: "locked publication produced no result" }),
+      );
+    }
+    if (!primary.ok) {
+      return phaseFailure(
+        primary.stage,
+        input,
+        primary.state.published,
+        primary.cause,
+        undefined,
+        primary.exitCode,
+      );
+    }
+
+    const state = primary.data;
+
+    // Event-first: immutable record before optional root aggregate dual-write.
+    const event = await writeLogEvent(vault, {
+      schema: "skillwiki-log-event/v1",
+      operation_id: input.operationId,
+      occurred_at: `${input.date}T00:00:00.000Z`,
+      host_id: writeReceipt.host_id ?? "standalone",
+      actor: "skillwiki-cli",
+      kind: "page-publish",
+      target: input.page.target,
+      note: input.logNote ?? `Published ${input.page.title}`,
+      metadata: {
+        page_type: input.page.type,
+        // Stable for replay: do not embed schema-delta taxonomy_added (varies after first write).
+        tags: [...input.page.tags].sort(),
+        base_oid: writeReceipt.base_oid,
+      },
+    });
+    if (!event.ok) {
+      return phaseFailure(
+        "event",
+        input,
+        true,
+        event,
+        undefined,
+        event.error === "EVENT_IDENTITY_COLLISION" ? ExitCode.WRITE_FAILED : errorExitCode(event.error),
+      );
+    }
+    if (event.data.created) state.changed.add(event.data.path);
+    const eventHook = await observeStage(deps, "event");
+    if (eventHook) return phaseFailure("event", input, true, eventHook);
+
+    let logAppended = false;
+    if (aggregateMode === "dual" || writeReceipt.mode !== "immutable-record") {
+      // dual always; git-writer/standalone dual-compat path still writes legacy log in dual mode only
+      if (aggregateMode === "dual") {
+        const log = await runLogAppend({
+          vault,
+          content: renderPublicationLog(input, state.taxonomyAdded),
+          operationId: input.operationId,
+          strictLock: true,
+          recordLastOp: false,
+        });
+        if (!log.result.ok) return phaseFailure("log", input, true, log.result);
+        if (log.exitCode !== ExitCode.OK) {
+          return phaseFailure(
+            "log",
+            input,
+            true,
+            err("WRITE_FAILED", { message: "log append returned inconsistent success state" }),
+          );
+        }
+        logAppended = log.result.data.appended;
+        if (logAppended) state.changed.add("log.md");
+        const logHook = await observeStage(deps, "log");
+        if (logHook) return phaseFailure("log", input, true, logHook);
+      }
+    }
+
+    return successReceipt(
+      input,
+      state.taxonomyAdded,
+      state.pageChanged,
+      state.indexUpdated,
+      logAppended,
+      [...state.changed],
+      false,
+      writeReceipt,
     );
   } finally {
-    released = releaseOwnedSyncLock(lock.data);
+    releaseManagedWriteLock(managed.data);
   }
-
-  const primaryState = primary?.ok ? primary.data : primary?.state;
-  if (released === undefined || !released.ok || !released.data.released) {
-    return phaseFailure(
-      "unlock",
-      input,
-      primaryState?.published ?? false,
-      released && !released.ok ? released : err("WRITE_FAILED", { message: "lock release did not run" }),
-      {
-        primary_stage: primary && !primary.ok ? primary.stage : "complete",
-        primary_error: primary && !primary.ok ? primary.cause.error : undefined,
-      },
-    );
-  }
-  const unlockHook = await observeStage(deps, "unlock");
-  if (unlockHook) return phaseFailure("unlock", input, primaryState?.published ?? false, unlockHook);
-
-  if (primary === undefined) {
-    return phaseFailure(
-      "schema",
-      input,
-      false,
-      err("WRITE_FAILED", { message: "locked publication produced no result" }),
-    );
-  }
-  if (!primary.ok) {
-    return phaseFailure(
-      primary.stage,
-      input,
-      primary.state.published,
-      primary.cause,
-      undefined,
-      primary.exitCode,
-    );
-  }
-
-  const state = primary.data;
-  const log = await runLogAppend({
-    vault,
-    content: renderPublicationLog(input, state.taxonomyAdded),
-    operationId: input.operationId,
-    strictLock: true,
-    recordLastOp: false,
-  });
-  if (!log.result.ok) return phaseFailure("log", input, true, log.result);
-  if (log.exitCode !== ExitCode.OK) {
-    return phaseFailure(
-      "log",
-      input,
-      true,
-      err("WRITE_FAILED", { message: "log append returned inconsistent success state" }),
-    );
-  }
-  if (log.result.data.appended) state.changed.add("log.md");
-  const logHook = await observeStage(deps, "log");
-  if (logHook) return phaseFailure("log", input, true, logHook);
-
-  return successReceipt(
-    input,
-    state.taxonomyAdded,
-    state.pageChanged,
-    state.indexUpdated,
-    log.result.data.appended,
-    [...state.changed],
-  );
 }
-
 /** File-based command entry point used by the grouped `page publish` CLI command. */
 export async function runPagePublish(
   input: PagePublishInput,

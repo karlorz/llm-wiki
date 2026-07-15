@@ -946,3 +946,14 @@ describe("runSyncStatus with includeStashes", () => {
     }
   });
 });
+
+describe("sync pull delegation", () => {
+  it("delegates pull to the canonical helper without blanket ours resolution", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("../../src/commands/sync.ts", import.meta.url), "utf8");
+    expect(source).toContain("runVaultSyncPullHelper");
+    expect(source).not.toContain('["checkout", "--ours"');
+    expect(source).not.toContain('["pull", "--rebase"');
+  });
+});
+

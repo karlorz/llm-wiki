@@ -220,6 +220,8 @@ export const FleetManifestSchema = z.object({
   schema_version: z.literal(1),
   vault_remote: z.string().min(1),
   s3_remote: z.string().min(1).optional(),
+  /** Optional host-id allowed to materialize root index.md/log.md projections. */
+  projection_authority: hostId.optional(),
   hosts: z.record(hostId, FleetHostSchema)
 }).strict().superRefine((v, ctx) => {
   const entries = Object.entries(v.hosts);
@@ -234,6 +236,22 @@ export const FleetManifestSchema = z.object({
       path: ["hosts"],
       message: `must contain exactly one snapshotter host, found ${snapshotters.length}`
     });
+  }
+
+  if (v.projection_authority) {
+    if (!v.hosts[v.projection_authority]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["projection_authority"],
+        message: `projection_authority host \`${v.projection_authority}\` is not in hosts`,
+      });
+    } else if (snapshotters.length === 1 && v.projection_authority !== snapshotters[0]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["projection_authority"],
+        message: "projection_authority must be the sole snapshotter host",
+      });
+    }
   }
 });
 

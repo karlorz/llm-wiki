@@ -308,6 +308,15 @@ fi
 
 refresh_git_baseline
 
+# Single-authority root projections before FUSE/S3 pull promotion.
+if command -v skillwiki >/dev/null 2>&1; then
+    if ! skillwiki projections materialize "$WIKI_DIR" --write >>"$LOG_FILE" 2>&1; then
+        log "FAIL root projection materialization; snapshot promotion refused"
+        exit 1
+    fi
+    log "OK projections materialize before snapshot sync"
+fi
+
 # Common rclone options
 # NOTE: rclone sync already deletes by default; exclusions prevent .git deletion
 RCLONE_OPTS=(

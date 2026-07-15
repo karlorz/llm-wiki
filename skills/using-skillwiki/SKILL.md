@@ -75,6 +75,19 @@ path, run publisher dry-run, then run the same command with `--write`.
 - Non-typed project work items and immutable raw sources keep their existing
   workflows.
 
+
+## Managed Vault Mutation Contract
+
+Before a managed vault mutation, invoke the managed SkillWiki command while the draft remains outside the authoritative target path. The command resolves fleet authority, refuses existing unmerged/review-required state, converges an authorized Git writer, freezes the base OID, and only then applies the write. Do not run `git pull --rebase --autostash` after placing the authoritative change in the live worktree. Do not edit root `index.md` or root `log.md` directly; projection and log commands own those compatibility files.
+
+- typed pages: `skillwiki page publish <draft> <vault> --target <path>` then the same command with `--write`
+- archive: `skillwiki archive <path> <vault>`
+- ad-hoc structural log: `skillwiki log-append <vault> --content '<entry>'` (Release A dual-write) or event materialization (Release B)
+- project/root index: `skillwiki project-index <slug> <vault> --apply` and `skillwiki index rebuild <vault> --write` only through managed commands
+- log projection: `skillwiki log materialize <vault> [--write]`
+- paired projections: `skillwiki projections materialize <vault> [--write]`
+
+
 ## CLI probe and failsafe (vault-mutating skills)
 
 Vault fleets that combine S3 + GitHub need an explicit delete-intent path. Prefer the skillwiki CLI; when it is missing, agents that still have **git/gh access to the private vault remote** use **FAILSAFE-GIT**.

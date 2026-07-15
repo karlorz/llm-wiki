@@ -1,6 +1,6 @@
 {
   "name": "vault-sync",
-  "version": "0.9.63",
+  "version": "0.10.0",
   "description": "Cross-platform vault sync infrastructure for skillwiki: rclone push, GitHub fetch-notify, presync, snapshot, and Linux FUSE freshness refresh.",
   "author": {
     "name": "karlorz",

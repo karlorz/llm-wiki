@@ -47,3 +47,6 @@
 - .pytest_cache/
 - .snapshots/
 - logs/
+# Root aggregates are projection-authority-only; non-authority leaves must not push them.
+- /index.md
+- /log.md

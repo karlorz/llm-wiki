@@ -67,3 +67,6 @@ Rules:
 - Writing spec/plan files outside the work folder.
 - Marking `status: completed` without a `completed:` date.
 - Accepting tasks.md status labels without independent disk verification.
+## Managed writes
+
+Use managed SkillWiki commands (`skillwiki page publish`, `skillwiki archive`) rather than editing root index.md/log.md directly.
