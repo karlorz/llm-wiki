@@ -100,6 +100,39 @@ async function emitGuardedVaultWrite<T>(
   return emit(await run(), vault, opts);
 }
 
+/**
+ * Protected-vault guard + managed-write preflight/lock for mutating CLI writes.
+ * Rejects immutable-record mode in Release A via runManagedWriteTransaction.
+ */
+async function emitManagedVaultWrite<T>(
+  vault: string,
+  command: string,
+  mutate: (receipt: import("./utils/managed-write-preflight.js").ManagedWriteReceipt) =>
+    Promise<{ exitCode: number; result: Result<T> }> | { exitCode: number; result: Result<T> },
+  opts?: { postCommit?: boolean; allowImmutableRecord?: boolean },
+): Promise<never> {
+  const guard = await guardProtectedVaultWrite({
+    vault,
+    command,
+    env: process.env,
+    home: process.env.HOME ?? "",
+    cwd: process.cwd(),
+    osHostname: process.env.HOSTNAME,
+    user: process.env.USER,
+  });
+  if (guard.blocked) {
+    return emit({ exitCode: guard.exitCode, result: guard.result }, undefined, { postCommit: false });
+  }
+  const { runManagedWriteTransaction } = await import("./utils/managed-write-preflight.js");
+  const run = await runManagedWriteTransaction({
+    vault,
+    command,
+    allowImmutableRecord: opts?.allowImmutableRecord === true,
+    mutate: async (receipt) => await mutate(receipt),
+  });
+  return emit(run, vault, opts);
+}
+
 program.command("hash <file>").description("compute SHA-256 hash of a vault page body").action(async (file) => emit(await runHash({ file })));
 
 program.command("fetch-guard <url>").description("check if a URL passes fetch guard rules and sanitize secrets").action(async (url) => emit(await runFetchGuard({ url })));
@@ -465,7 +498,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else return emitGuardedVaultWrite(
+    else return emitManagedVaultWrite(
       v.vault,
       "log-append",
       () => runLogAppend({ vault: v.vault, content: opts.content })
@@ -628,7 +661,7 @@ program
       remoteDelete: !!opts.remoteDelete,
       maxRemoteDeletes: Number.parseInt(opts.maxRemoteDeletes, 10),
     }), v.vault);
-    else return emitGuardedVaultWrite(
+    else return emitManagedVaultWrite(
       v.vault,
       "archive",
       () => runArchive({
@@ -655,7 +688,7 @@ program
   .action(async (page, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else return emitGuardedVaultWrite(
+    else return emitManagedVaultWrite(
       v.vault,
       "remove",
       () => runRemove({

@@ -92,22 +92,7 @@ export async function runRemove(input: RemoveInput): Promise<{ exitCode: number;
   const remoteRoot = normalizeRemoteRoot(input.remote);
   const remoteObjectPath = buildRemoteObjectPath(remoteRoot, relPath);
 
-  const slug = relPath.replace(/\.md$/, "").split("/").pop() ?? relPath;
   let indexUpdated = false;
-  if (relPath.endsWith(".md") && !relPath.startsWith("raw/")) {
-    const indexPath = join(input.vault, "index.md");
-    try {
-      const idx = await readFile(indexPath, "utf8");
-      const originalLines = idx.split("\n");
-      const filtered = originalLines.filter(l => !l.includes(`[[${slug}]]`));
-      if (filtered.length !== originalLines.length) {
-        await writeFile(indexPath, filtered.join("\n"), "utf8");
-        indexUpdated = true;
-      }
-    } catch (e: unknown) {
-      if (e instanceof Error && "code" in e && e.code !== "ENOENT") throw e;
-    }
-  }
 
   const intent = buildDeleteIntent({
     path: relPath,
@@ -119,6 +104,24 @@ export async function runRemove(input: RemoveInput): Promise<{ exitCode: number;
   const tombstonePath = await writeDeleteIntent(input.vault, intent);
 
   await unlink(join(input.vault, relPath));
+
+  // Rebuild root index after unlink so same-basename pages in other type dirs
+  // are preserved (full-path projection, not basename line filtering).
+  if (relPath.endsWith(".md") && !relPath.startsWith("raw/")) {
+    const { readFile } = await import("node:fs/promises");
+    const { join: pathJoin } = await import("node:path");
+    const { renderRootIndex, writeRootIndexProjection } = await import("../utils/index-projection.js");
+    const before = await readFile(pathJoin(input.vault, "index.md"), "utf8").catch(() => "");
+    const fullTarget = relPath.replace(/\.md$/, "");
+    const bare = fullTarget.split("/").pop() ?? fullTarget;
+    const hadIndexEntry =
+      before.includes(`[[${fullTarget}]]`) || before.includes(`[[${bare}]]`);
+    const projection = await renderRootIndex({ vault: input.vault, currentText: before });
+    if (projection.ok && projection.data.text !== before) {
+      const written = await writeRootIndexProjection(input.vault, projection.data);
+      if (written.ok && written.data.changed && hadIndexEntry) indexUpdated = true;
+    }
+  }
 
   appendLastOp(input.vault, {
     operation: "remove",

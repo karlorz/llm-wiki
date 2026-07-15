@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { err, ok, type Result } from "@skillwiki/shared";
-import { atomicWriteText } from "./atomic-write.js";
+import { renderRootIndex, writeRootIndexProjection } from "./index-projection.js";
 
 const TYPE_SECTION: Record<string, string> = {
   entity: "Entities",
@@ -18,7 +18,10 @@ export interface IndexEntryInput {
   type: string;
 }
 
-/** Render a minimal, line-ending-preserving insertion for one typed index entry. */
+/**
+ * @deprecated Prefer renderRootIndex + writeRootIndexProjection. Kept only for
+ * byte-oriented callers that still need a pure text transform preview.
+ */
 export function renderIndexUpsert(
   text: string,
   input: Omit<IndexEntryInput, "vault">,
@@ -64,20 +67,37 @@ export function renderIndexUpsert(
   });
 }
 
-/** Atomically insert a typed-page index link, preserving an existing link as a no-op. */
+/**
+ * Compatibility wrapper: rebuilds the entire root index projection after the
+ * page tree already contains the target page when the vault is scannable.
+ * Falls back to legacy incremental insertion only when scan/projection cannot
+ * run (e.g. missing SCHEMA.md fixtures).
+ */
 export async function upsertIndexEntry(input: IndexEntryInput): Promise<Result<{ changed: boolean }>> {
   const path = join(input.vault, "index.md");
-  let current: string;
+  let before = "";
   try {
-    current = await readFile(path, "utf8");
-  } catch (error: unknown) {
-    return err("FILE_NOT_FOUND", { path, message: String(error) });
+    before = await readFile(path, "utf8");
+  } catch {
+    before = "";
   }
-
-  const rendered = renderIndexUpsert(current, input);
+  const projection = await renderRootIndex({ vault: input.vault, currentText: before });
+  if (projection.ok) {
+    if (projection.data.text === before) return ok({ changed: false });
+    const written = await writeRootIndexProjection(input.vault, projection.data);
+    if (!written.ok) return written;
+    return ok({ changed: written.data.changed });
+  }
+  // Legacy fixture path: incremental insert when projection is unavailable.
+  const rendered = renderIndexUpsert(before, input);
   if (!rendered.ok) return rendered;
   if (!rendered.data.changed) return ok({ changed: false });
-
-  const written = await atomicWriteText(path, rendered.data.text);
-  return written.ok ? ok({ changed: written.data.changed }) : written;
+  const written = await writeRootIndexProjection(input.vault, {
+    text: rendered.data.text,
+    entries: [],
+    duplicates_removed: 0,
+    ghosts_removed: [],
+  });
+  if (!written.ok) return written;
+  return ok({ changed: written.data.changed });
 }
