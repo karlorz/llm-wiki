@@ -9,6 +9,9 @@ const REQUIRED = [
   "packages/skills/wiki-ingest/SKILL.md",
   "packages/skills/agents/wiki-query.md",
   "packages/skills/agents/wiki-ingest.md",
+  "packages/skills/wiki-archive/SKILL.md",
+  "packages/skills/wiki-crystallize/SKILL.md",
+  "packages/skills/proj-work/SKILL.md",
 ];
 const PASTED_TEXT_INGEST_SOURCES = [
   "packages/skills/wiki-ingest/SKILL.md",
@@ -17,9 +20,11 @@ const PASTED_TEXT_INGEST_SOURCES = [
 
 describe("managed writer publication contract", () => {
   for (const relative of REQUIRED) {
-    it(`${relative} requires the transactional page publisher`, () => {
+    it(`${relative} requires a managed SkillWiki write command`, () => {
       const text = readFileSync(resolve(ROOT, relative), "utf8");
-      expect(text).toContain("skillwiki page publish");
+      expect(
+        /skillwiki page publish|managed command|skillwiki archive|skillwiki log-append|skillwiki index rebuild/.test(text),
+      ).toBe(true);
     });
   }
 

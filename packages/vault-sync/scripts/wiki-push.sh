@@ -234,6 +234,11 @@ if [ ! -f "$FILTERS" ]; then
     log "ERROR: filter file missing at $FILTERS — refusing to push without exclusions"
     exit 0
 fi
+# Projection-authority transport: non-authority leaves must not push root aggregates.
+if ! grep -qxF -- '- /index.md' "$FILTERS" || ! grep -qxF -- '- /log.md' "$FILTERS"; then
+    log "ERROR: filter file missing root aggregate exclusions (- /index.md and - /log.md)"
+    exit 1
+fi
 
 # Acquire lockfile (non-blocking).
 LOCK_RC=0

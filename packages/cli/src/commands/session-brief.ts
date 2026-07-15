@@ -2,8 +2,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { err, ok, ExitCode, MetaSchema, type Result } from "@skillwiki/shared";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
+import { runLogAppend } from "./log-append.js";
 import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { appendLastOp } from "../utils/last-op.js";
+import { renderRootIndex, writeRootIndexProjection } from "../utils/index-projection.js";
 import { evaluateSatelliteRunHealth, satelliteLatestRunPath } from "../utils/satellite-run-health.js";
 
 export interface SessionBriefInput {
@@ -486,8 +488,17 @@ async function writeBriefArtifacts(vault: string, input: {
     memory_topics: input.memoryTopics,
   }, null, 2)}\n`, "utf8");
 
-  const indexUpdated = await ensureIndexEntry(vault);
-  const logUpdated = materialChange ? await appendMaterialLog(vault, input.today) : false;
+  const indexUpdated = await rebuildRootIndexProjection(vault);
+  let logUpdated = false;
+  if (materialChange) {
+    const log = await runLogAppend({
+      vault,
+      content: `## [${input.today}] session-brief | refreshed: meta/latest-session-brief.md`,
+      strictLock: true,
+      recordLastOp: false,
+    });
+    logUpdated = log.result.ok && log.result.data.appended;
+  }
 
   if (materialChange) {
     appendLastOp(vault, {
@@ -539,34 +550,14 @@ function renderCommittedBrief(input: {
   ].filter((line) => line !== "").join("\n");
 }
 
-async function ensureIndexEntry(vault: string): Promise<boolean> {
-  const indexPath = join(vault, "index.md");
-  let text = await readIfExists(indexPath);
-  if (!text) return false;
-  if (text.includes("[[meta/latest-session-brief]]")) return false;
-
-  const entry = "- [[meta/latest-session-brief]] — Latest Session Brief";
-  const lines = text.split(/\r?\n/);
-  const sectionIdx = lines.findIndex((line) => line.trim() === "## Meta");
-  if (sectionIdx === -1) {
-    while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
-    lines.push("", "## Meta", entry);
-  } else {
-    let insertAt = sectionIdx + 1;
-    while (insertAt < lines.length && !lines[insertAt].startsWith("## ")) insertAt++;
-    lines.splice(insertAt, 0, entry);
-  }
-  await writeFile(indexPath, lines.join("\n"), "utf8");
-  return true;
-}
-
-async function appendMaterialLog(vault: string, today: string): Promise<boolean> {
-  const logPath = join(vault, "log.md");
-  const text = await readIfExists(logPath);
-  if (!text) return false;
-  const entry = `\n## [${today}] session-brief | refreshed: meta/latest-session-brief.md`;
-  await writeFile(logPath, text.trimEnd() + entry + "\n", "utf8");
-  return true;
+async function rebuildRootIndexProjection(vault: string): Promise<boolean> {
+  const before = await readIfExists(join(vault, "index.md"));
+  if (!before) return false;
+  const projection = await renderRootIndex({ vault, currentText: before });
+  if (!projection.ok) return false;
+  if (projection.data.text === before) return false;
+  const written = await writeRootIndexProjection(vault, projection.data);
+  return written.ok && written.data.changed;
 }
 
 async function readIfExists(path: string): Promise<string> {

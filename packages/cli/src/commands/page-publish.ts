@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -15,6 +14,8 @@ import {
   type ManagedWriteMode,
 } from "../utils/managed-write-preflight.js";
 import { acquireManagedWriteLock, releaseManagedWriteLock } from "../utils/managed-write-lock.js";
+import { operationId } from "../utils/operation-id.js";
+import { writeLogEvent } from "../utils/log-events.js";
 import { redactSensitiveContent, scanSensitiveContent } from "../utils/sensitive-content.js";
 import { safeWritePage } from "../utils/safe-write.js";
 import { acquireOwnedSyncLock, releaseOwnedSyncLock } from "../utils/sync-lock.js";
@@ -70,7 +71,7 @@ export interface PreparedPagePublication {
   taxonomyComment: string;
 }
 
-export type PublishStage = "schema" | "page" | "verify" | "index" | "unlock" | "log";
+export type PublishStage = "schema" | "page" | "verify" | "event" | "index" | "unlock" | "log";
 
 export interface PagePublishDeps {
   afterStage(stage: PublishStage): Promise<void>;
@@ -108,6 +109,7 @@ function errorExitCode(error: string): number {
       return ExitCode.SYNC_LOCK_HELD;
     case "PREFLIGHT_FAILED":
       return ExitCode.PREFLIGHT_FAILED;
+    case "EVENT_IDENTITY_COLLISION":
     case "WRITE_FAILED":
       return ExitCode.WRITE_FAILED;
     default:
@@ -116,14 +118,16 @@ function errorExitCode(error: string): number {
 }
 
 function publicationId(target: string, content: string, logNote = ""): string {
-  return createHash("sha256")
-    .update("skillwiki-page-publish-v1\0")
-    .update(target)
-    .update("\0")
-    .update(content)
-    .update("\0")
-    .update(logNote)
-    .digest("hex");
+  return operationId("skillwiki-page-publish-v1", [target, content, logNote]);
+}
+
+export type RootAggregateMode = "dual" | "source-only";
+
+export function resolveRootAggregateMode(env: Record<string, string | undefined> = process.env): RootAggregateMode {
+  // Explicit source-only for event-first hosts; dual remains the compatibility default
+  // until the attended canary cuts over via SKILLWIKI_ROOT_AGGREGATE_MODE=source-only.
+  if (env.SKILLWIKI_ROOT_AGGREGATE_MODE === "source-only") return "source-only";
+  return "dual";
 }
 
 function prepareFrozenPublication(
@@ -548,16 +552,8 @@ export async function publishPreparedPage(
       return { exitCode: preflight.exitCode, result: preflight.result };
     }
     const writeReceipt = preflight.result.data;
-    if (writeReceipt.mode === "immutable-record") {
-      return {
-        exitCode: ExitCode.PREFLIGHT_FAILED,
-        result: err("PREFLIGHT_FAILED", {
-          reason: "immutable-record-not-enabled",
-          message: "Release A rejects immutable-record mode; event mode arrives in Release B",
-          host_id: writeReceipt.host_id,
-        }),
-      };
-    }
+    // Release B: immutable-record hosts may publish page + event without Git.
+    const aggregateMode = resolveRootAggregateMode();
     if (writeReceipt.base_oid) {
       const head = git(vault, ["rev-parse", "HEAD"]);
       if (head !== writeReceipt.base_oid) {
@@ -636,32 +632,71 @@ export async function publishPreparedPage(
     }
 
     const state = primary.data;
-    const log = await runLogAppend({
-      vault,
-      content: renderPublicationLog(input, state.taxonomyAdded),
-      operationId: input.operationId,
-      strictLock: true,
-      recordLastOp: false,
+
+    // Event-first: immutable record before optional root aggregate dual-write.
+    const event = await writeLogEvent(vault, {
+      schema: "skillwiki-log-event/v1",
+      operation_id: input.operationId,
+      occurred_at: `${input.date}T00:00:00.000Z`,
+      host_id: writeReceipt.host_id ?? "standalone",
+      actor: "skillwiki-cli",
+      kind: "page-publish",
+      target: input.page.target,
+      note: input.logNote ?? `Published ${input.page.title}`,
+      metadata: {
+        page_type: input.page.type,
+        // Stable for replay: do not embed schema-delta taxonomy_added (varies after first write).
+        tags: [...input.page.tags].sort(),
+        base_oid: writeReceipt.base_oid,
+      },
     });
-    if (!log.result.ok) return phaseFailure("log", input, true, log.result);
-    if (log.exitCode !== ExitCode.OK) {
+    if (!event.ok) {
       return phaseFailure(
-        "log",
+        "event",
         input,
         true,
-        err("WRITE_FAILED", { message: "log append returned inconsistent success state" }),
+        event,
+        undefined,
+        event.error === "EVENT_IDENTITY_COLLISION" ? ExitCode.WRITE_FAILED : errorExitCode(event.error),
       );
     }
-    if (log.result.data.appended) state.changed.add("log.md");
-    const logHook = await observeStage(deps, "log");
-    if (logHook) return phaseFailure("log", input, true, logHook);
+    if (event.data.created) state.changed.add(event.data.path);
+    const eventHook = await observeStage(deps, "event");
+    if (eventHook) return phaseFailure("event", input, true, eventHook);
+
+    let logAppended = false;
+    if (aggregateMode === "dual" || writeReceipt.mode !== "immutable-record") {
+      // dual always; git-writer/standalone dual-compat path still writes legacy log in dual mode only
+      if (aggregateMode === "dual") {
+        const log = await runLogAppend({
+          vault,
+          content: renderPublicationLog(input, state.taxonomyAdded),
+          operationId: input.operationId,
+          strictLock: true,
+          recordLastOp: false,
+        });
+        if (!log.result.ok) return phaseFailure("log", input, true, log.result);
+        if (log.exitCode !== ExitCode.OK) {
+          return phaseFailure(
+            "log",
+            input,
+            true,
+            err("WRITE_FAILED", { message: "log append returned inconsistent success state" }),
+          );
+        }
+        logAppended = log.result.data.appended;
+        if (logAppended) state.changed.add("log.md");
+        const logHook = await observeStage(deps, "log");
+        if (logHook) return phaseFailure("log", input, true, logHook);
+      }
+    }
 
     return successReceipt(
       input,
       state.taxonomyAdded,
       state.pageChanged,
       state.indexUpdated,
-      log.result.data.appended,
+      logAppended,
       [...state.changed],
       false,
       writeReceipt,

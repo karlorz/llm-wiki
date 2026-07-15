@@ -292,7 +292,7 @@ describe("page publish", () => {
     }, deps);
 
     expect(result.exitCode).toBe(ExitCode.OK);
-    expect(stages).toEqual(["schema", "page", "verify", "index", "unlock", "log"]);
+    expect(stages).toEqual(["schema", "page", "verify", "index", "unlock", "event", "log"]);
   });
 
   it("leaves a harmless schema superset when publication stops before the page stage", async () => {

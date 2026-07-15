@@ -20,6 +20,9 @@ import { runTagAudit } from "./commands/tag-audit.js";
 import { runIndexCheck } from "./commands/index-check.js";
 import { runIndexRebuild } from "./commands/index-rebuild.js";
 import { runDerivedConflictResolution } from "./commands/derived-conflicts.js";
+import { runLogMaterialize } from "./commands/log-materialize.js";
+import { runLogMigrateLegacy } from "./commands/log-migrate-legacy.js";
+import { runProjectionsMaterialize } from "./commands/projections-materialize.js";
 import { runStale } from "./commands/stale.js";
 import { runClaim } from "./commands/claim.js";
 import { runPagesize } from "./commands/pagesize.js";
@@ -151,7 +154,7 @@ program
       else vault = v.vault;
     }
     if (opts.apply && vault) {
-      return emitGuardedVaultWrite(vault, "validate --apply", () => runValidate({ file, apply: true, vault }), undefined);
+      return emitManagedVaultWrite(vault, "validate --apply", () => runValidate({ file, apply: true, vault }), undefined);
     }
     emit(await runValidate({ file, apply: !!opts.apply, vault }), vault);
   });
@@ -503,6 +506,52 @@ program
       "log-append",
       () => runLogAppend({ vault: v.vault, content: opts.content })
     );
+  });
+
+const logCmd = program.command("log").description("immutable log events and projections");
+logCmd
+  .command("materialize [vault]")
+  .description("preview or write root log.md from immutable events")
+  .option("--write", "write projected log.md", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (opts.write) {
+      return emitManagedVaultWrite(v.vault, "log materialize", () =>
+        runLogMaterialize({ vault: v.vault, write: true }),
+      );
+    } else emit(await runLogMaterialize({ vault: v.vault, write: false }), v.vault);
+  });
+logCmd
+  .command("migrate-legacy [vault]")
+  .description("backfill immutable events from historical root log.md blocks")
+  .option("--write", "write events", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (opts.write) {
+      return emitManagedVaultWrite(v.vault, "log migrate-legacy", () =>
+        runLogMigrateLegacy({ vault: v.vault, write: true }),
+      );
+    } else emit(await runLogMigrateLegacy({ vault: v.vault, write: false }), v.vault);
+  });
+
+const projectionsCmd = program.command("projections").description("root index/log projection materialization");
+projectionsCmd
+  .command("materialize [vault]")
+  .description("preview or write root index.md and log.md as a pair")
+  .option("--write", "write projections", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (opts.write) {
+      return emitManagedVaultWrite(v.vault, "projections materialize", () =>
+        runProjectionsMaterialize({ vault: v.vault, write: true }),
+      );
+    } else emit(await runProjectionsMaterialize({ vault: v.vault, write: false }), v.vault);
   });
 
 program
@@ -1150,7 +1199,7 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else if (opts.write) return emitGuardedVaultWrite(
+    else if (opts.write) return emitManagedVaultWrite(
       v.vault,
       "session-brief --write",
       () => runSessionBrief({
