@@ -40,3 +40,6 @@ Use exactly one disposition. Keep this as a prompt/template convention; do not a
 - Writing host-local absolute paths as canonical durable source references when a portable reference is available (see `using-skillwiki` → Portable Source References).
 - Writing `[[wikilinks]]` to pages that don't exist in the vault. Before linking, verify the target exists: check `index.md` or `ls` the target directory. If the target doesn't exist yet, use plain text instead of a wikilink.
 - Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault.
+## Managed writes
+
+Use managed SkillWiki commands (`skillwiki page publish`, `skillwiki archive`) rather than editing root index.md/log.md directly.

@@ -123,7 +123,7 @@ test_dirty_local_files_trigger_rclone_copy() {
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
   mkdir -p "$home/.config/rclone"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   printf 'local\n' > "$vault/local.md"
   local local_head
@@ -155,7 +155,7 @@ test_git_remote_failure_does_not_block_s3_publish() {
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
   mkdir -p "$home/.config/rclone"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   # Break the git remote — wiki-push must not care (it no longer touches git).
   rm -rf "$root/origin.git"
@@ -184,7 +184,7 @@ test_pull_helper_not_invoked_by_push() {
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
   mkdir -p "$home/.config/rclone"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   printf 'local dirty\n' > "$vault/note.md"
 
@@ -217,7 +217,7 @@ test_sync_lock_is_pushed_to_s3_not_git() {
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
   mkdir -p "$home/.config/rclone" "$vault/.skillwiki"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   printf 'local\n' > "$vault/local.md"
   printf 'lock\n' > "$vault/.skillwiki/sync.lock"
@@ -248,7 +248,7 @@ test_archive_move_prunes_stale_remote_source_path_after_copy() {
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
   mkdir -p "$home/.config/rclone" "$vault/raw/transcripts" "$vault/_archive/raw/transcripts"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   printf 'old\n' > "$vault/raw/transcripts/old.md"
   git_commit "$vault" "add old transcript"
@@ -282,7 +282,7 @@ test_memory_cache_dirty_does_not_block_s3_push() {
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
   mkdir -p "$home/.config/rclone" "$vault/.skillwiki/memory/llm-wiki"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   printf 'old-cache\n' > "$vault/.skillwiki/memory/llm-wiki/topics.json"
   git_commit "$vault" "track old memory cache"
@@ -314,7 +314,7 @@ test_case_only_collision_blocks_publish() {
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
   mkdir -p "$home/.config/rclone"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   local empty_blob
   empty_blob="$(git -C "$vault" hash-object -w --stdin </dev/null)"
@@ -348,7 +348,7 @@ test_long_path_fix_runs_before_rclone() {
   script_dir="$(make_script_dir "$root")"
   local bin_dir="$root/bin"
   mkdir -p "$bin_dir" "$home/.config/rclone"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   cat > "$bin_dir/skillwiki" <<'STUB'
 #!/bin/bash
@@ -398,7 +398,7 @@ test_long_path_fix_failure_blocks_publish() {
   script_dir="$(make_script_dir "$root")"
   local bin_dir="$root/bin"
   mkdir -p "$bin_dir" "$home/.config/rclone"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   cat > "$bin_dir/skillwiki" <<'STUB'
 #!/bin/bash
@@ -443,7 +443,7 @@ test_conflict_marker_blocks_s3_push() {
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
   mkdir -p "$home/.config/rclone" "$home/Library/Logs"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   {
     printf '%s\n' '<<<<<<< HEAD'
@@ -478,7 +478,7 @@ test_standalone_equals_line_does_not_block_push() {
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
   mkdir -p "$home/.config/rclone"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   printf '%s\n' 'some heading' '=======' 'more content' > "$vault/standalone.md"
 
@@ -520,7 +520,7 @@ exit 1
 STUB
   chmod +x "$bin_dir/skillwiki"
   mkdir -p "$home/.config/rclone" "$home/Library/Logs"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   HOME="$home" WIKI_DIR="$vault" WIKI_REMOTE="stub:wiki" \
     RCLONE_CALLED_FILE="$root/rclone-called" \
@@ -556,7 +556,7 @@ exit 1
 STUB
   chmod +x "$bin_dir/skillwiki"
   mkdir -p "$home/.config/rclone" "$home/Library/Logs"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   local rc=0
   HOME="$home" WIKI_DIR="$vault" WIKI_REMOTE="stub:wiki" \
@@ -593,7 +593,7 @@ exit 1
 STUB
   chmod +x "$bin_dir/skillwiki"
   mkdir -p "$home/.config/rclone" "$home/Library/Logs"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   local rc=0
   HOME="$home" WIKI_DIR="$vault" WIKI_REMOTE="stub:wiki" \
@@ -622,7 +622,7 @@ test_tombstone_prunes_remote_path_after_copy() {
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
   mkdir -p "$home/.config/rclone" "$vault/meta/delete-intents" "$vault/summaries"
-  printf '+ *\n' > "$home/.config/rclone/wiki-push-filters.txt"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   # Path is gone locally but still on remote; tombstone marks intentional delete.
   printf '{\n  "schema": "vault-delete-intent/v1",\n  "path": "summaries/gone.md",\n  "action": "remove",\n  "created": "2026-07-14T00:00:00.000Z",\n  "host": "test",\n  "actor": "test",\n  "source": "cli",\n  "expires": null\n}\n' \
