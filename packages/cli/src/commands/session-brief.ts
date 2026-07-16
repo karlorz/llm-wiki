@@ -7,6 +7,7 @@ import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { appendLastOp } from "../utils/last-op.js";
 import { renderRootIndex, writeRootIndexProjection } from "../utils/index-projection.js";
 import { evaluateSatelliteRunHealth, satelliteLatestRunPath } from "../utils/satellite-run-health.js";
+import { memoryAuthorityTiersRank, type MemoryAuthorityTier } from "../utils/memory-authority.js";
 
 export interface SessionBriefInput {
   vault: string;
@@ -42,6 +43,8 @@ export interface SessionBriefMemoryTopic {
   project?: string;
   updated: string;
   paths: string[];
+  authority_tier?: MemoryAuthorityTier;
+  lead_path?: string;
 }
 
 interface PageInfo {
@@ -441,17 +444,30 @@ async function loadMemoryTopics(vault: string, project: string): Promise<Session
     if (!Array.isArray(parsed.topics)) return [];
     return parsed.topics
       .filter((topic): topic is Record<string, unknown> => typeof topic === "object" && topic !== null && !Array.isArray(topic))
-      .map((topic) => ({
-        name: stringField(topic.name),
-        summary: stringField(topic.summary),
-        project: stringField(topic.project) || undefined,
-        updated: stringField(topic.updated),
-        paths: Array.isArray(topic.paths)
-          ? topic.paths.filter((path): path is string => typeof path === "string")
-          : [],
-      }))
+      .map((topic) => {
+        const authority_tier = stringField(topic.authority_tier);
+        const lead_path = stringField(topic.lead_path);
+        return {
+          name: stringField(topic.name),
+          summary: stringField(topic.summary),
+          project: stringField(topic.project) || undefined,
+          updated: stringField(topic.updated),
+          paths: Array.isArray(topic.paths)
+            ? topic.paths.filter((path): path is string => typeof path === "string")
+            : [],
+          ...(authority_tier
+            ? { authority_tier: authority_tier as MemoryAuthorityTier }
+            : {}),
+          ...(lead_path ? { lead_path } : {}),
+        };
+      })
       .filter((topic) => topic.name && topic.summary && topic.updated && topic.paths.length > 0)
-      .sort((a, b) => b.updated.localeCompare(a.updated) || a.name.localeCompare(b.name))
+      .sort(
+        (a, b) =>
+          memoryAuthorityTiersRank(a.authority_tier) - memoryAuthorityTiersRank(b.authority_tier) ||
+          b.updated.localeCompare(a.updated) ||
+          a.name.localeCompare(b.name),
+      )
       .slice(0, 5);
   } catch {
     return [];
