@@ -326,7 +326,14 @@ if [ "$1" = "sync" ]; then
 fi
 exit 99
 STUB
-  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/rclone"
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+# Accept dual-path projection/migration args; no-op success for preflight fixtures.
+if [ "$1" = "projections" ] && [ "$2" = "materialize" ]; then exit 0; fi
+if [ "$1" = "log" ] && [ "$2" = "migrate-legacy" ]; then exit 0; fi
+exit 0
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/rclone" "$bin_dir/skillwiki"
 
   local out_file="$root/out.txt"
   SNAPSHOT_TEST_ROOT="$root" \
@@ -398,7 +405,14 @@ if [ "$1" = "sync" ]; then
 fi
 exit 99
 STUB
-  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/rclone"
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+# Accept dual-path projection/migration args; no-op success for preflight fixtures.
+if [ "$1" = "projections" ] && [ "$2" = "materialize" ]; then exit 0; fi
+if [ "$1" = "log" ] && [ "$2" = "migrate-legacy" ]; then exit 0; fi
+exit 0
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/rclone" "$bin_dir/skillwiki"
 
   local out_file="$root/out.txt"
   SNAPSHOT_TEST_ROOT="$root" \
@@ -474,7 +488,14 @@ if [ "$1" = "sync" ]; then
 fi
 exit 99
 STUB
-  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/rclone"
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+# Accept dual-path projection/migration args; no-op success for preflight fixtures.
+if [ "$1" = "projections" ] && [ "$2" = "materialize" ]; then exit 0; fi
+if [ "$1" = "log" ] && [ "$2" = "migrate-legacy" ]; then exit 0; fi
+exit 0
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/rclone" "$bin_dir/skillwiki"
 
   local out_file="$root/out.txt"
   local log_file="$root/wiki-snapshot.log"
@@ -511,6 +532,180 @@ STUB
 }
 
 test_snapshot_live_allows_when_override_env_set
+
+
+test_dual_path_projection_uses_converge_vault_before_rclone() {
+  local root
+  root="$(mktemp -d)"
+  make_live_vault_fixture "$root"
+  local git_dir="$root/wiki-git"
+  local bin_dir="$root/bin"
+  local log_file="$root/wiki-snapshot.log"
+  local lock_file="$root/wiki-snapshot.lock"
+  mkdir -p "$git_dir" "$bin_dir"
+  : > "$root/rclone.calls"
+  : > "$root/skillwiki.calls"
+
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  printf '# Index\n' > "$git_dir/index.md"
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" add -A >/dev/null
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m init >/dev/null
+
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  cat > "$bin_dir/flock" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/skillwiki.calls"
+if [ "$1" = "projections" ] && [ "$2" = "materialize" ]; then
+  exit 0
+fi
+if [ "$1" = "log" ] && [ "$2" = "migrate-legacy" ]; then
+  exit 0
+fi
+exit 0
+STUB
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+# Fail first sync so we only prove ordering/args, not full snapshot success.
+exit 1
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/skillwiki" "$bin_dir/rclone"
+
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+
+  assert_file_contains "dual-path projection targets live vault with converge-vault" \
+    "$root/skillwiki.calls" \
+    "projections materialize $root/wiki --write --converge-vault $git_dir"
+  if ! grep -q 'log migrate-legacy' "$root/skillwiki.calls"; then
+    printf "PASS: dual-path default skips legacy migration\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: dual-path default unexpectedly ran legacy migration\n"
+    FAIL=$((FAIL + 1))
+  fi
+  if grep -q 'OK projections materialize before snapshot sync' "$log_file" \
+      && [ -s "$root/rclone.calls" ]; then
+    printf "PASS: dual-path projection runs before rclone sync\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: dual-path projection order not proved\n"
+    FAIL=$((FAIL + 1))
+  fi
+
+  rm -rf "$root"
+}
+
+test_dual_path_projection_uses_converge_vault_before_rclone
+
+test_dual_path_migrate_legacy_flag() {
+  local root
+  root="$(mktemp -d)"
+  make_live_vault_fixture "$root"
+  local git_dir="$root/wiki-git"
+  local bin_dir="$root/bin"
+  local log_file="$root/wiki-snapshot.log"
+  local lock_file="$root/wiki-snapshot.lock"
+  mkdir -p "$git_dir" "$bin_dir"
+  : > "$root/skillwiki.calls"
+
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" add -A >/dev/null
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m init >/dev/null
+
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  cat > "$bin_dir/flock" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/skillwiki.calls"
+exit 0
+STUB
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/skillwiki" "$bin_dir/rclone"
+
+  # Invalid flag value must fail closed before rclone.
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    WIKI_SNAPSHOT_MIGRATE_LEGACY=maybe \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+  local bad_rc=$?
+  assert_eq "invalid migrate-legacy flag exits nonzero" "$bad_rc" "1"
+  if grep -q 'WIKI_SNAPSHOT_MIGRATE_LEGACY must be 0 or 1' "$log_file"; then
+    printf "PASS: invalid migrate-legacy flag logs fail-closed\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: invalid migrate-legacy flag did not log fail-closed\n"
+    FAIL=$((FAIL + 1))
+  fi
+
+  : > "$root/skillwiki.calls"
+  : > "$log_file"
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    WIKI_SNAPSHOT_MIGRATE_LEGACY=1 \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+
+  assert_file_contains "attended migrate-legacy uses dual-path args" \
+    "$root/skillwiki.calls" \
+    "log migrate-legacy $root/wiki --write --converge-vault $git_dir"
+  assert_file_contains "projection still uses dual-path after migration" \
+    "$root/skillwiki.calls" \
+    "projections materialize $root/wiki --write --converge-vault $git_dir"
+  # Migration must appear before projection in the call log.
+  local mig_line proj_line
+  mig_line="$(grep -n 'log migrate-legacy' "$root/skillwiki.calls" | head -1 | cut -d: -f1)"
+  proj_line="$(grep -n 'projections materialize' "$root/skillwiki.calls" | head -1 | cut -d: -f1)"
+  if [ -n "$mig_line" ] && [ -n "$proj_line" ] && [ "$mig_line" -lt "$proj_line" ]; then
+    printf "PASS: legacy migration runs before projection\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: legacy migration order not proved (mig=%s proj=%s)\n" "$mig_line" "$proj_line"
+    FAIL=$((FAIL + 1))
+  fi
+
+  rm -rf "$root"
+}
+
+test_dual_path_migrate_legacy_flag
+
+assert_contains "snapshot supports attended legacy migration flag" "WIKI_SNAPSHOT_MIGRATE_LEGACY"
+assert_contains "snapshot passes converge-vault to projections" "--converge-vault"
 
 if [ "$(uname -s)" != "Linux" ]; then
   printf "SKIP: Linux-only runtime snapshot guard test\n"
@@ -804,6 +999,7 @@ STUB
 }
 
 test_conflict_marker_guard_allows_standalone_equals
+
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
