@@ -21,6 +21,8 @@ assert_eq() {
 
 git_commit() {
   local repo="$1" msg="$2"
+  git -C "$repo" config user.name test
+  git -C "$repo" config user.email test@test
   git -C "$repo" add -A >/dev/null
   git -C "$repo" -c user.name=test -c user.email=test@test commit -m "$msg" >/dev/null
 }
