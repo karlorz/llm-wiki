@@ -238,9 +238,13 @@ export async function runManagedWritePreflight(
     };
   }
 
+  // Dual-path: mutation lock lives on the live vault (often non-Git FUSE);
+  // the pull helper locks the Git convergence vault separately. Passing the
+  // mutation lock token would make the helper look for the same token under
+  // the Git lock path and fail closed with a false "lock held".
   const converge = await deps.converge({
     vault: gitVault,
-    lockToken: input.lockToken,
+    lockToken: convergenceVault ? undefined : input.lockToken,
     env: input.env,
     home: input.home,
   });

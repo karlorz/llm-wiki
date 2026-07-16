@@ -461,6 +461,73 @@ hosts:
     expect(converge).toHaveBeenCalledTimes(1);
   });
 
+  it("does not forward the mutation lock token into dual-path converge", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-lock-mut");
+    const { vault: convergenceVault, head } = makeGitConvergenceVault(
+      "managed-preflight-lock-git",
+    );
+    const converge = vi.fn(async (input: { vault: string; lockToken?: string }) => {
+      expect(input.lockToken).toBeUndefined();
+      return ok({
+        before_oid: head,
+        after_oid: head,
+        changed: false,
+        helper_path: "/test/helper",
+      });
+    });
+    const run = await runManagedWritePreflight(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+        lockToken: "mutation-lock-token",
+      },
+      { converge },
+    );
+    expect(run.exitCode).toBe(0);
+    expect(converge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        vault: resolve(convergenceVault),
+        lockToken: undefined,
+      }),
+    );
+  });
+
+  it("still forwards the lock token for single-path git-writer converge", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-preflight-single-lock-"));
+    git(vault, ["init"]);
+    git(vault, ["config", "user.email", "t@t"]);
+    git(vault, ["config", "user.name", "t"]);
+    writeFileSync(join(vault, "SCHEMA.md"), "# Schema\n");
+    writeFleet(vault);
+    git(vault, ["add", "."]);
+    git(vault, ["commit", "-m", "init"]);
+    const head = git(vault, ["rev-parse", "HEAD"]);
+    const converge = vi.fn(async (input: { vault: string; lockToken?: string }) => {
+      expect(input.lockToken).toBe("single-path-token");
+      return ok({
+        before_oid: head,
+        after_oid: head,
+        changed: false,
+        helper_path: "/test/helper",
+      });
+    });
+    const run = await runManagedWritePreflight(
+      {
+        vault,
+        command: "page publish",
+        hostId: "sg01",
+        lockToken: "single-path-token",
+      },
+      { converge },
+    );
+    expect(run.exitCode).toBe(0);
+    expect(converge).toHaveBeenCalledWith(
+      expect.objectContaining({ lockToken: "single-path-token" }),
+    );
+  });
+
   it("refuses missing HEAD after successful convergence pull", async () => {
     const mutationVault = makeNonGitMutationVault("managed-preflight-head-mut");
     // Convergence path that is a Git dir but has no commits/HEAD after "pull".
