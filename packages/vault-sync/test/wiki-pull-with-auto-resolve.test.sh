@@ -27,6 +27,8 @@ assert_eq() {
 
 git_commit() {
   local repo="$1" msg="$2"
+  git -C "$repo" config user.name test
+  git -C "$repo" config user.email test@test
   git -C "$repo" add -A >/dev/null
   git -C "$repo" -c user.name=test -c user.email=test@test commit -m "$msg" >/dev/null
 }
@@ -1095,9 +1097,13 @@ test_force_push_absent_from_pull_helper() {
 }
 
 test_pull_lock_contention_refuses() {
-  local root home vault lock_hash lock_file
+  local root home vault bin_dir lock_hash lock_file
   root="$(mktemp -d)"
   home="$root/home"
+  bin_dir="$root/bin"
+  mkdir -p "$bin_dir"
+  printf '#!/bin/sh\nexit 1\n' > "$bin_dir/flock"
+  chmod +x "$bin_dir/flock"
   vault="$(make_repo "$root")"
   add_remote_commit "$root" "remote.md" "remote" "remote-lock"
 
@@ -1126,7 +1132,7 @@ test_pull_lock_contention_refuses() {
   # Hold the mkdir-mutex form of the lock (macOS path)
   mkdir "${lock_file}.d" || true
 
-  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  PATH="$bin_dir:$PATH" HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
   rc=$?
   assert_eq "lock contention exits nonzero" "$rc" "1"
 
