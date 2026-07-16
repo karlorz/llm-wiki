@@ -520,6 +520,8 @@ fi
 
 git_commit() {
   local repo="$1" msg="$2"
+  git -C "$repo" config user.name test
+  git -C "$repo" config user.email test@test
   git -C "$repo" add -A >/dev/null
   git -C "$repo" -c user.name=test -c user.email=test@test commit -m "$msg" >/dev/null
 }
@@ -543,6 +545,7 @@ test_raw_dedup_guard_blocks_commit() {
   printf '# Index\n' > "$git_dir/index.md"
   git_commit "$git_dir" init
   git -C "$git_dir" push -u origin main >/dev/null
+  git --git-dir="$root/origin.git" symbolic-ref HEAD refs/heads/main
   local before_head
   before_head="$(git -C "$git_dir" rev-parse HEAD)"
 
@@ -634,6 +637,7 @@ test_conflict_marker_guard_blocks_commit() {
   printf '# Index\n' > "$git_dir/index.md"
   git_commit "$git_dir" init
   git -C "$git_dir" push -u origin main >/dev/null
+  git --git-dir="$root/origin.git" symbolic-ref HEAD refs/heads/main
   local before_head
   before_head="$(git -C "$git_dir" rev-parse HEAD)"
 
@@ -731,6 +735,7 @@ test_conflict_marker_guard_allows_standalone_equals() {
   printf '# Index\n' > "$git_dir/index.md"
   git_commit "$git_dir" init
   git -C "$git_dir" push -u origin main >/dev/null
+  git --git-dir="$root/origin.git" symbolic-ref HEAD refs/heads/main
 
   printf '# Vault Schema\n' > "$cloud_dir/SCHEMA.md"
   printf '# Index\n' > "$cloud_dir/index.md"
