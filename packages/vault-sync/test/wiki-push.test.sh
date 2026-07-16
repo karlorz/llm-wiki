@@ -10,6 +10,7 @@ set -u
 
 SCRIPT_UNDER_TEST="$(cd "$(dirname "$0")/.." && pwd)/scripts/wiki-push.sh"
 FILTER_UNDER_TEST="$(cd "$(dirname "$0")/.." && pwd)/filters/wiki-push-filters.txt"
+PLATFORM_UNDER_TEST="$(cd "$(dirname "$0")/.." && pwd)/scripts/lib/platform.sh"
 PASS=0
 FAIL=0
 
@@ -33,6 +34,15 @@ assert_file_contains() {
     printf "FAIL: %s — missing '%s'\n" "$label" "$needle"
     FAIL=$((FAIL + 1))
   fi
+}
+
+wiki_push_log_file() {
+  local home="$1"
+  HOME="$home" bash -c '
+    . "$1"
+    platform_detect_os
+    printf "%s/wiki-push.log\n" "$(platform_log_dir)"
+  ' _ "$PLATFORM_UNDER_TEST"
 }
 
 assert_file_contains "push filter excludes local logs directory" "$FILTER_UNDER_TEST" "- logs/"
@@ -442,7 +452,9 @@ test_conflict_marker_blocks_s3_push() {
   script_dir="$(make_script_dir "$root")"
   local bin_dir="$root/bin"
   write_stub_rclone "$bin_dir"
-  mkdir -p "$home/.config/rclone" "$home/Library/Logs"
+  local log_file
+  log_file="$(wiki_push_log_file "$home")"
+  mkdir -p "$home/.config/rclone" "$(dirname "$log_file")"
   printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   {
@@ -463,7 +475,7 @@ test_conflict_marker_blocks_s3_push() {
 
   assert_eq "push conflict marker guard exits nonzero" "$rc" "1"
   assert_eq "push conflict marker guard prevents rclone upload" "$(grep -c '^copy ' "$root/rclone.calls" 2>/dev/null || echo 0)" "0"
-  assert_file_contains "push conflict marker guard logs refusal" "$home/Library/Logs/wiki-push.log" "FAIL conflict marker blocks present; refusing S3 push"
+  assert_file_contains "push conflict marker guard logs refusal" "$log_file" "FAIL conflict marker blocks present; refusing S3 push"
   rm -rf "$root"
 }
 
@@ -519,7 +531,9 @@ fi
 exit 1
 STUB
   chmod +x "$bin_dir/skillwiki"
-  mkdir -p "$home/.config/rclone" "$home/Library/Logs"
+  local log_file
+  log_file="$(wiki_push_log_file "$home")"
+  mkdir -p "$home/.config/rclone" "$(dirname "$log_file")"
   printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   HOME="$home" WIKI_DIR="$vault" WIKI_REMOTE="stub:wiki" \
@@ -529,7 +543,7 @@ STUB
   rc=$?
 
   assert_eq "inherited lint debt allows push" "$(cat "$root/rclone-called" 2>/dev/null || true)" "called"
-  assert_file_contains "logs full/base/new/resolved" "$home/Library/Logs/wiki-push.log" "LINT-DELTA full=5 base=5 new=0 resolved=0"
+  assert_file_contains "logs full/base/new/resolved" "$log_file" "LINT-DELTA full=5 base=5 new=0 resolved=0"
   rm -rf "$root"
 }
 
@@ -555,7 +569,9 @@ fi
 exit 1
 STUB
   chmod +x "$bin_dir/skillwiki"
-  mkdir -p "$home/.config/rclone" "$home/Library/Logs"
+  local log_file
+  log_file="$(wiki_push_log_file "$home")"
+  mkdir -p "$home/.config/rclone" "$(dirname "$log_file")"
   printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   local rc=0
@@ -566,7 +582,7 @@ STUB
 
   assert_eq "new lint errors block push exit" "$rc" "1"
   assert_eq "new lint errors prevent rclone" "$(test -f "$root/rclone-called" && echo called || echo skipped)" "skipped"
-  assert_file_contains "logs new_errors block" "$home/Library/Logs/wiki-push.log" "new_errors=1 blocks S3 push"
+  assert_file_contains "logs new_errors block" "$log_file" "new_errors=1 blocks S3 push"
   rm -rf "$root"
 }
 
@@ -592,7 +608,9 @@ fi
 exit 1
 STUB
   chmod +x "$bin_dir/skillwiki"
-  mkdir -p "$home/.config/rclone" "$home/Library/Logs"
+  local log_file
+  log_file="$(wiki_push_log_file "$home")"
+  mkdir -p "$home/.config/rclone" "$(dirname "$log_file")"
   printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
 
   local rc=0
@@ -603,7 +621,7 @@ STUB
 
   assert_eq "malformed delta blocks push exit" "$rc" "1"
   assert_eq "malformed delta prevents rclone" "$(test -f "$root/rclone-called" && echo called || echo skipped)" "skipped"
-  assert_file_contains "logs malformed refusal" "$home/Library/Logs/wiki-push.log" "lint-delta evidence missing or malformed"
+  assert_file_contains "logs malformed refusal" "$log_file" "lint-delta evidence missing or malformed"
   rm -rf "$root"
 }
 
