@@ -5,6 +5,12 @@ import { err, ok, ExitCode, type Result } from "@skillwiki/shared";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { readPage, scanVault, type VaultPage } from "../utils/vault.js";
 import { redactSensitiveContent } from "../utils/sensitive-content.js";
+import {
+  classifyMemoryAuthority,
+  compareMemoryAuthority,
+  memoryAuthorityTiersRank,
+  type MemoryAuthorityTier,
+} from "../utils/memory-authority.js";
 import { runValidate } from "./validate.js";
 
 export interface MemoryTopicsInput {
@@ -51,6 +57,10 @@ export interface MemoryTopic {
   project?: string;
   updated: string;
   paths: string[];
+  /** Leading source authority tier when built by index (optional for legacy caches). */
+  authority_tier?: MemoryAuthorityTier;
+  /** Vault-relative path of the leading source when built by index. */
+  lead_path?: string;
 }
 
 export interface MemorySource {
@@ -1238,12 +1248,18 @@ function normalizeTopics(value: unknown): MemoryTopic[] {
     const paths = stringArray(item.paths);
     if (!name || !summary || !updated || paths.length === 0) continue;
     const project = stringField(item.project);
+    const authority_tier = stringField(item.authority_tier);
+    const lead_path = stringField(item.lead_path);
     topics.push({
       name,
       summary,
       ...(project ? { project } : {}),
       updated,
       paths,
+      ...(authority_tier
+        ? { authority_tier: authority_tier as MemoryAuthorityTier }
+        : {}),
+      ...(lead_path ? { lead_path } : {}),
     });
   }
   return topics;
@@ -1287,11 +1303,15 @@ function normalizeLimit(value: number | undefined): number {
 }
 
 function compareTopics(a: MemoryTopic, b: MemoryTopic): number {
+  if (a.authority_tier || b.authority_tier) {
+    const tr = memoryAuthorityTiersRank(a.authority_tier) - memoryAuthorityTiersRank(b.authority_tier);
+    if (tr !== 0) return tr;
+  }
   return b.updated.localeCompare(a.updated) || a.name.localeCompare(b.name);
 }
 
 function compareSources(a: MemorySource, b: MemorySource): number {
-  return b.updated.localeCompare(a.updated) || a.path.localeCompare(b.path);
+  return compareMemoryAuthority(a, b);
 }
 
 function normalizeRecallScope(value: string | undefined): MemoryRecallScope | undefined {
@@ -1319,10 +1339,13 @@ function compareRecallSources(
   project: string,
   scope: MemoryRecallScope | undefined
 ): number {
-  if (scope !== "all") return compareSources(a, b);
-  return b.updated.localeCompare(a.updated)
-    || Number(isProjectMemorySource(b, project)) - Number(isProjectMemorySource(a, project))
-    || a.path.localeCompare(b.path);
+  if (scope === "all") {
+    return compareMemoryAuthority(a, b, {
+      project,
+      preferProjectWithinTiers: true,
+    });
+  }
+  return compareSources(a, b);
 }
 
 function isProjectMemorySource(source: MemorySource, project: string): boolean {
@@ -1426,12 +1449,19 @@ function buildTopics(project: string, sources: MemorySource[]): MemoryTopic[] {
   return [...byTopic.entries()]
     .map(([name, topicSources]) => {
       const sorted = [...topicSources].sort(compareSources);
+      const lead = sorted[0];
       return {
         name,
         project,
-        summary: sorted[0]?.summary ?? "",
-        updated: sorted[0]?.updated ?? "",
+        summary: lead?.summary ?? "",
+        updated: lead?.updated ?? "",
         paths: sorted.map((source) => source.path),
+        ...(lead
+          ? {
+              authority_tier: classifyMemoryAuthority(lead),
+              lead_path: lead.path,
+            }
+          : {}),
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));

@@ -801,3 +801,133 @@ last_seen: 2026-06-27`, "A second project-local source for the same topic.");
     expect(result.result.data.manifest.entries[0].reason).toBe("oversized_source");
   });
 });
+
+describe("authority-first memory ordering", () => {
+  async function writeAuthorityFixture(vault: string): Promise<void> {
+    mkdirSync(join(vault, "projects", "llm-wiki", "architecture"), { recursive: true });
+    writeFileSync(join(vault, "projects", "llm-wiki", "architecture", "accepted-memory.md"), `---
+title: Accepted Memory Architecture
+created: 2026-06-19
+updated: 2026-06-19
+type: concept
+tags: [agent-memory]
+sources: []
+confidence: high
+provenance: project
+provenance_projects: ["[[llm-wiki]]"]
+memory_topics: [agent-memory]
+memory_kind: decision-context
+memory_policy: operational
+memory_status: active
+memory_scope: project
+memory_privacy: local
+---
+
+accepted authority for plane A memory.
+`);
+    writeFileSync(join(vault, "projects", "llm-wiki", "architecture", "proposed-memory.md"), `---
+title: Proposed Memory Expansion
+created: 2026-07-15
+updated: 2026-07-15
+type: concept
+tags: [agent-memory]
+sources: []
+confidence: medium
+provenance: project
+provenance_projects: ["[[llm-wiki]]"]
+memory_topics: [agent-memory]
+memory_kind: decision-context
+memory_policy: operational
+memory_status: proposed
+memory_scope: project
+memory_privacy: local
+---
+
+proposed authority not yet accepted.
+`);
+    writeFileSync(join(vault, "concepts", "exploratory-memory.md"), `---
+title: exploratory-memory
+created: 2026-07-16
+updated: 2026-07-16
+type: concept
+tags: [memory]
+sources: [raw/transcripts/2026-06-19-memory-source.md]
+confidence: high
+provenance: project
+provenance_projects: ["[[llm-wiki]]"]
+memory_topics: [agent-memory]
+memory_kind: workflow-pattern
+memory_policy: exploratory
+memory_status: active
+memory_scope: global
+memory_privacy: local
+---
+
+exploratory mimo-style pattern.
+`);
+  }
+
+  it("ranks accepted decisions first in topics and recall", async () => {
+    const vault = await makeVault();
+    await writeAuthorityFixture(vault);
+
+    const index = await runMemoryIndex({ vault, project: "llm-wiki" });
+    expect(index.exitCode).toBe(0);
+    expect(index.result.ok).toBe(true);
+    if (!index.result.ok) throw new Error("expected ok");
+    const topic = index.result.data.topics.find((t) => t.name === "agent-memory");
+    expect(topic).toMatchObject({
+      name: "agent-memory",
+      authority_tier: "accepted-decision",
+      lead_path: "projects/llm-wiki/architecture/accepted-memory.md",
+    });
+    expect(topic?.summary).toContain("accepted authority");
+    expect(topic?.paths[0]).toBe("projects/llm-wiki/architecture/accepted-memory.md");
+
+    const recall = await runMemoryRecall({
+      vault,
+      project: "llm-wiki",
+      topic: "agent-memory",
+      limit: 5,
+    });
+    expect(recall.exitCode).toBe(0);
+    expect(recall.result.ok).toBe(true);
+    if (!recall.result.ok) throw new Error("expected ok");
+    expect(recall.result.data.sources[0]?.path).toBe(
+      "projects/llm-wiki/architecture/accepted-memory.md",
+    );
+
+    const recallAll = await runMemoryRecall({
+      vault,
+      project: "llm-wiki",
+      topic: "agent-memory",
+      limit: 5,
+      scope: "all",
+    });
+    expect(recallAll.result.ok).toBe(true);
+    if (!recallAll.result.ok) throw new Error("expected ok");
+    expect(recallAll.result.data.sources[0]?.path).toBe(
+      "projects/llm-wiki/architecture/accepted-memory.md",
+    );
+  });
+
+  it("does not let lower-authority project sources outrank accepted decisions under scope all", async () => {
+    const vault = await makeVault();
+    await writeAuthorityFixture(vault);
+    await runMemoryIndex({ vault, project: "llm-wiki" });
+    const recall = await runMemoryRecall({
+      vault,
+      project: "llm-wiki",
+      topic: "agent-memory",
+      scope: "all",
+      limit: 10,
+    });
+    expect(recall.result.ok).toBe(true);
+    if (!recall.result.ok) throw new Error("expected ok");
+    const paths = recall.result.data.sources.map((s) => s.path);
+    expect(paths[0]).toBe("projects/llm-wiki/architecture/accepted-memory.md");
+    expect(paths.indexOf("projects/llm-wiki/architecture/proposed-memory.md")).toBeLessThan(
+      paths.indexOf("concepts/exploratory-memory.md"),
+    );
+  });
+});

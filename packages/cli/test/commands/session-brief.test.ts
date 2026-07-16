@@ -375,3 +375,76 @@ Review a new memory source candidate.
     expect(result.result.data.brief).not.toMatch(/agent-memory-trends: no run in/);
   });
 });
+
+describe("session-brief memory authority ordering", () => {
+  it("orders topics by authority_tier before updated", async () => {
+    const vault = await makeVault();
+    mkdirSync(join(vault, ".skillwiki", "memory", "llm-wiki"), { recursive: true });
+    writeFileSync(
+      join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json"),
+      JSON.stringify({
+        generated_at: "2026-07-16T00:00:00Z",
+        topics: [
+          {
+            name: "exploratory-topic",
+            summary: "newer exploratory lead",
+            project: "llm-wiki",
+            updated: "2026-07-16",
+            paths: ["concepts/exploratory.md"],
+            authority_tier: "exploratory",
+            lead_path: "concepts/exploratory.md",
+          },
+          {
+            name: "accepted-topic",
+            summary: "older accepted lead",
+            project: "llm-wiki",
+            updated: "2026-06-19",
+            paths: ["projects/llm-wiki/architecture/accepted.md"],
+            authority_tier: "accepted-decision",
+            lead_path: "projects/llm-wiki/architecture/accepted.md",
+          },
+        ],
+      }),
+    );
+
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: false });
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.memory_topics[0]?.name).toBe("accepted-topic");
+    expect(result.result.data.brief).toMatch(/Memory Topics[\s\S]*accepted-topic[\s\S]*exploratory-topic/);
+  });
+
+  it("loads legacy topic caches without authority fields", async () => {
+    const vault = await makeVault();
+    mkdirSync(join(vault, ".skillwiki", "memory", "llm-wiki"), { recursive: true });
+    writeFileSync(
+      join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json"),
+      JSON.stringify({
+        generated_at: "2026-06-19T00:00:00Z",
+        topics: [
+          {
+            name: "legacy-b",
+            summary: "legacy newer",
+            project: "llm-wiki",
+            updated: "2026-06-18",
+            paths: ["concepts/b.md"],
+          },
+          {
+            name: "legacy-a",
+            summary: "legacy older",
+            project: "llm-wiki",
+            updated: "2026-06-10",
+            paths: ["concepts/a.md"],
+          },
+        ],
+      }),
+    );
+
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: false });
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.memory_topics.map((t) => t.name)).toEqual(["legacy-b", "legacy-a"]);
+  });
+});
