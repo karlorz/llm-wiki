@@ -113,7 +113,7 @@ async function emitManagedVaultWrite<T>(
   command: string,
   mutate: (receipt: import("./utils/managed-write-preflight.js").ManagedWriteReceipt) =>
     Promise<{ exitCode: number; result: Result<T> }> | { exitCode: number; result: Result<T> },
-  opts?: { postCommit?: boolean; allowImmutableRecord?: boolean },
+  opts?: { postCommit?: boolean; allowImmutableRecord?: boolean; convergenceVault?: string },
 ): Promise<never> {
   const guard = await guardProtectedVaultWrite({
     vault,
@@ -132,6 +132,7 @@ async function emitManagedVaultWrite<T>(
     vault,
     command,
     allowImmutableRecord: opts?.allowImmutableRecord === true,
+    convergenceVault: opts?.convergenceVault,
     mutate: async (receipt) => await mutate(receipt),
   });
   return emit(run, vault, opts);
@@ -528,13 +529,17 @@ logCmd
   .command("migrate-legacy [vault]")
   .description("backfill immutable events from historical root log.md blocks")
   .option("--write", "write events", false)
+  .option("--converge-vault <dir>", "Git vault used for managed pull and base-OID proof")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else if (opts.write) {
-      return emitManagedVaultWrite(v.vault, "log migrate-legacy", () =>
-        runLogMigrateLegacy({ vault: v.vault, write: true }),
+      return emitManagedVaultWrite(
+        v.vault,
+        "log migrate-legacy",
+        () => runLogMigrateLegacy({ vault: v.vault, write: true }),
+        { convergenceVault: opts.convergeVault },
       );
     } else emit(await runLogMigrateLegacy({ vault: v.vault, write: false }), v.vault);
   });
@@ -544,13 +549,17 @@ projectionsCmd
   .command("materialize [vault]")
   .description("preview or write root index.md and log.md as a pair")
   .option("--write", "write projections", false)
+  .option("--converge-vault <dir>", "Git vault used for managed pull and base-OID proof")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else if (opts.write) {
-      return emitManagedVaultWrite(v.vault, "projections materialize", () =>
-        runProjectionsMaterialize({ vault: v.vault, write: true }),
+      return emitManagedVaultWrite(
+        v.vault,
+        "projections materialize",
+        () => runProjectionsMaterialize({ vault: v.vault, write: true }),
+        { convergenceVault: opts.convergeVault },
       );
     } else emit(await runProjectionsMaterialize({ vault: v.vault, write: false }), v.vault);
   });

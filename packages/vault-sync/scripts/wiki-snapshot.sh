@@ -308,9 +308,35 @@ fi
 
 refresh_git_baseline
 
+# Dual-path requires distinct live mutation vs Git convergence roots.
+# Same-path would materialize projections then immediately rclone-overwrite them.
+if [ "$(cd "$WIKI_DIR" 2>/dev/null && pwd -P)" = "$(cd "$SNAPSHOT_WORKTREE" 2>/dev/null && pwd -P)" ]; then
+    log "ERROR: WIKI_DIR and WIKI_GIT_WORKTREE must be distinct paths for dual-path projection (got: $WIKI_DIR)"
+    exit 1
+fi
+
 # Single-authority root projections before FUSE/S3 pull promotion.
-if command -v skillwiki >/dev/null 2>&1; then
-    if ! skillwiki projections materialize "$WIKI_DIR" --write >>"$LOG_FILE" 2>&1; then
+# Mutation target is the live vault ($WIKI_DIR); Git pull/base-OID use
+# $SNAPSHOT_WORKTREE so FUSE/S3 hosts without a local Git HEAD still work.
+SKILLWIKI_BIN="${WIKI_SNAPSHOT_SKILLWIKI_BIN:-skillwiki}"
+if command -v "$SKILLWIKI_BIN" >/dev/null 2>&1; then
+    case "${WIKI_SNAPSHOT_MIGRATE_LEGACY:-0}" in
+        0) ;;
+        1)
+            if ! "$SKILLWIKI_BIN" log migrate-legacy "$WIKI_DIR" --write \
+                --converge-vault "$SNAPSHOT_WORKTREE" >>"$LOG_FILE" 2>&1; then
+                log "FAIL legacy log migration; snapshot promotion refused"
+                exit 1
+            fi
+            log "OK legacy log migration before projection (attended one-run)"
+            ;;
+        *)
+            log "ERROR: WIKI_SNAPSHOT_MIGRATE_LEGACY must be 0 or 1 (got: ${WIKI_SNAPSHOT_MIGRATE_LEGACY})"
+            exit 1
+            ;;
+    esac
+    if ! "$SKILLWIKI_BIN" projections materialize "$WIKI_DIR" --write \
+        --converge-vault "$SNAPSHOT_WORKTREE" >>"$LOG_FILE" 2>&1; then
         log "FAIL root projection materialization; snapshot promotion refused"
         exit 1
     fi

@@ -1,10 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
-import { ExitCode, ok } from "@skillwiki/shared";
+import { ExitCode, err, ok } from "@skillwiki/shared";
 import { runManagedWritePreflight } from "../../src/utils/managed-write-preflight.js";
+
+const SG01_FLEET = `schema_version: 1
+vault_remote: owner/wiki
+hosts:
+  macos-dev:
+    class: dev-macos
+    role: leaf
+    writes_to: [github]
+    identity:
+      hostnames: [test-host]
+  sg01:
+    class: prod-linux
+    role: snapshotter
+    writes_to: [github]
+    protected: true
+    identity:
+      hostnames: [sg01]
+`;
+
+function writeFleet(vault: string, body: string = SG01_FLEET): void {
+  mkdirSync(join(vault, "projects", "llm-wiki", "architecture"), { recursive: true });
+  writeFileSync(join(vault, "projects", "llm-wiki", "architecture", "fleet.yaml"), body);
+}
+
+function makeGitConvergenceVault(label: string): { vault: string; head: string } {
+  const vault = mkdtempSync(join(tmpdir(), `${label}-`));
+  git(vault, ["init"]);
+  git(vault, ["config", "user.email", "t@t"]);
+  git(vault, ["config", "user.name", "t"]);
+  writeFileSync(join(vault, "SCHEMA.md"), "# Schema\n");
+  writeFleet(vault);
+  git(vault, ["add", "."]);
+  git(vault, ["commit", "-m", "init"]);
+  return { vault, head: git(vault, ["rev-parse", "HEAD"]) };
+}
+
+function makeNonGitMutationVault(label: string, fleetBody: string = SG01_FLEET): string {
+  const vault = mkdtempSync(join(tmpdir(), `${label}-`));
+  writeFileSync(join(vault, "SCHEMA.md"), "# Schema\n");
+  writeFleet(vault, fleetBody);
+  return vault;
+}
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -274,6 +316,175 @@ hosts:
       detail: { reason: "review-required", operation_id: opId },
     });
     expect(converge).not.toHaveBeenCalled();
+  });
+
+  it("converges a non-Git mutation target through an explicit Git convergence vault", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-fuse");
+    const { vault: convergenceVault, head } = makeGitConvergenceVault("managed-preflight-git");
+    const converge = vi.fn(async (input: { vault: string }) => {
+      expect(resolve(input.vault)).toBe(resolve(convergenceVault));
+      return ok({
+        before_oid: head,
+        after_oid: head,
+        changed: false,
+        helper_path: "/test/helper",
+      });
+    });
+    const run = await runManagedWritePreflight(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+      },
+      { converge },
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.result).toMatchObject({
+      ok: true,
+      data: {
+        mode: "git-writer",
+        host_id: "sg01",
+        convergence_vault: resolve(convergenceVault),
+        converged: true,
+        base_oid: head,
+      },
+    });
+    expect(converge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        vault: resolve(convergenceVault),
+      }),
+    );
+  });
+
+  it("refuses a missing Git checkout on the convergence vault", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-no-git-mut");
+    const convergenceVault = makeNonGitMutationVault("managed-preflight-no-git-conv");
+    const converge = vi.fn();
+    const run = await runManagedWritePreflight(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+      },
+      { converge },
+    );
+    expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+    expect(run.result).toMatchObject({
+      ok: false,
+      detail: { reason: "convergence-vault-not-git" },
+    });
+    expect(converge).not.toHaveBeenCalled();
+  });
+
+  it("allows fleet.yaml content drift when both paths resolve the same host id", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-fleet-drift-mut");
+    const { vault: convergenceVault, head } = makeGitConvergenceVault(
+      "managed-preflight-fleet-drift-git",
+    );
+    // S3-ahead fleet drift is normal before rclone; only host identity must match.
+    writeFleet(
+      mutationVault,
+      SG01_FLEET.replace("vault_remote: owner/wiki", "vault_remote: owner/wiki-s3-ahead"),
+    );
+    const converge = vi.fn(async () =>
+      ok({ before_oid: head, after_oid: head, changed: false, helper_path: "/test/helper" }),
+    );
+    const run = await runManagedWritePreflight(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+      },
+      { converge },
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.result).toMatchObject({
+      ok: true,
+      data: { mode: "git-writer", host_id: "sg01", converged: true },
+    });
+    expect(converge).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses convergence vault that cannot resolve the same host identity", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-id-mut");
+    const { vault: convergenceVault } = makeGitConvergenceVault("managed-preflight-id-git");
+    // Convergence fleet has no sg01 host — explicit hostId cannot resolve there.
+    writeFleet(
+      convergenceVault,
+      `schema_version: 1
+vault_remote: owner/wiki
+hosts:
+  macos-dev:
+    class: dev-macos
+    role: leaf
+    writes_to: [github]
+    identity:
+      hostnames: [test-host]
+`,
+    );
+    const converge = vi.fn();
+    const run = await runManagedWritePreflight(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+      },
+      { converge },
+    );
+    expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+    expect(run.result).toMatchObject({
+      ok: false,
+      detail: { reason: "convergence-vault-identity-mismatch" },
+    });
+    expect(converge).not.toHaveBeenCalled();
+  });
+
+  it("refuses convergence helper failure before mutation", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-helper-mut");
+    const { vault: convergenceVault } = makeGitConvergenceVault("managed-preflight-helper-git");
+    const converge = vi.fn(async () => err("GIT_PULL_FAILED", { reason: "helper-failed" }));
+    const run = await runManagedWritePreflight(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+      },
+      { converge },
+    );
+    expect(run.exitCode).toBe(ExitCode.SYNC_PULL_FAILED);
+    expect(run.result.ok).toBe(false);
+    expect(converge).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses missing HEAD after successful convergence pull", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-head-mut");
+    // Convergence path that is a Git dir but has no commits/HEAD after "pull".
+    const convergenceVault = mkdtempSync(join(tmpdir(), "managed-preflight-head-git-"));
+    git(convergenceVault, ["init"]);
+    writeFileSync(join(convergenceVault, "SCHEMA.md"), "# Schema\n");
+    writeFleet(convergenceVault);
+    const converge = vi.fn(async () =>
+      ok({ before_oid: null, after_oid: null, changed: false, helper_path: "/test/helper" }),
+    );
+    const run = await runManagedWritePreflight(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+      },
+      { converge },
+    );
+    expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+    expect(run.result).toMatchObject({
+      ok: false,
+      detail: { reason: "missing-head-after-converge" },
+    });
   });
 });
 
