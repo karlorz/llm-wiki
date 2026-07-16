@@ -1,6 +1,6 @@
 {
   "name": "skillwiki",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "description": "Project-aware Karpathy-style knowledge base for Codex with 19 prompt-only skills backed by the deterministic skillwiki CLI.",
   "author": {
     "name": "karlorz",
