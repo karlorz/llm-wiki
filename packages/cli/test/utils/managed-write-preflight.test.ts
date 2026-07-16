@@ -378,13 +378,52 @@ hosts:
     expect(converge).not.toHaveBeenCalled();
   });
 
-  it("refuses fleet-manifest byte mismatch between mutation and convergence vaults", async () => {
-    const mutationVault = makeNonGitMutationVault("managed-preflight-fleet-mut");
-    const { vault: convergenceVault } = makeGitConvergenceVault("managed-preflight-fleet-git");
-    // Drift only the convergence fleet after init so Git remains valid.
+  it("allows fleet.yaml content drift when both paths resolve the same host id", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-fleet-drift-mut");
+    const { vault: convergenceVault, head } = makeGitConvergenceVault(
+      "managed-preflight-fleet-drift-git",
+    );
+    // S3-ahead fleet drift is normal before rclone; only host identity must match.
+    writeFleet(
+      mutationVault,
+      SG01_FLEET.replace("vault_remote: owner/wiki", "vault_remote: owner/wiki-s3-ahead"),
+    );
+    const converge = vi.fn(async () =>
+      ok({ before_oid: head, after_oid: head, changed: false, helper_path: "/test/helper" }),
+    );
+    const run = await runManagedWritePreflight(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+      },
+      { converge },
+    );
+    expect(run.exitCode).toBe(0);
+    expect(run.result).toMatchObject({
+      ok: true,
+      data: { mode: "git-writer", host_id: "sg01", converged: true },
+    });
+    expect(converge).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses convergence vault that cannot resolve the same host identity", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-id-mut");
+    const { vault: convergenceVault } = makeGitConvergenceVault("managed-preflight-id-git");
+    // Convergence fleet has no sg01 host — explicit hostId cannot resolve there.
     writeFleet(
       convergenceVault,
-      SG01_FLEET.replace("vault_remote: owner/wiki", "vault_remote: owner/wiki-other"),
+      `schema_version: 1
+vault_remote: owner/wiki
+hosts:
+  macos-dev:
+    class: dev-macos
+    role: leaf
+    writes_to: [github]
+    identity:
+      hostnames: [test-host]
+`,
     );
     const converge = vi.fn();
     const run = await runManagedWritePreflight(
@@ -399,7 +438,7 @@ hosts:
     expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
     expect(run.result).toMatchObject({
       ok: false,
-      detail: { reason: "convergence-vault-fleet-mismatch" },
+      detail: { reason: "convergence-vault-identity-mismatch" },
     });
     expect(converge).not.toHaveBeenCalled();
   });

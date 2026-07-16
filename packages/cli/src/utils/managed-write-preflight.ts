@@ -126,6 +126,8 @@ export async function runManagedWritePreflight(
   }
 
   // Git sequencer / review-required that belong to the convergence repository.
+  // Do not require pre-pull fleet.yaml byte equality: snapshot deliberately
+  // reconciles S3↔Git drift, and fleet files can differ until rclone runs.
   if (convergenceVault) {
     if (!isGitVault(convergenceVault)) {
       return {
@@ -148,28 +150,9 @@ export async function runManagedWritePreflight(
         }),
       };
     }
-
-    // When either path carries a fleet manifest, both must present identical
-    // bytes. Fixtures without fleet stay dual-path-capable (standalone mode).
-    const targetFleet = fleetManifestBytes(vault);
-    const convergeFleet = fleetManifestBytes(convergenceVault);
-    if (targetFleet || convergeFleet) {
-      if (!targetFleet || !convergeFleet || !targetFleet.equals(convergeFleet)) {
-        return {
-          exitCode: ExitCode.PREFLIGHT_FAILED,
-          result: err("PREFLIGHT_FAILED", {
-            reason: "convergence-vault-fleet-mismatch",
-            detail:
-              !targetFleet || !convergeFleet
-                ? "fleet.yaml missing on mutation or convergence vault"
-                : "fleet.yaml bytes differ between mutation and convergence vault",
-            convergence_vault: convergenceVault,
-          }),
-        };
-      }
-    }
   }
 
+  // Fleet identity and write authority always come from the mutation target.
   const fleet = await loadFleetManifestAndHost({
     vault,
     hostId: input.hostId,
@@ -177,6 +160,8 @@ export async function runManagedWritePreflight(
     home: input.home,
     osHostname: input.osHostname,
   });
+
+  const dualPathMeta = convergenceVault ? { convergence_vault: convergenceVault } : {};
 
   if (!fleet) {
     const head = git(gitVault, ["rev-parse", "HEAD"]) || null;
@@ -186,7 +171,7 @@ export async function runManagedWritePreflight(
         mode: "standalone",
         base_oid: head,
         converged: false,
-        ...(convergenceVault ? { convergence_vault: convergenceVault } : {}),
+        ...dualPathMeta,
       }),
     };
   }
@@ -202,21 +187,29 @@ export async function runManagedWritePreflight(
     };
   }
 
-  if (convergenceVault) {
+  // When the convergence vault also carries a fleet, require the same resolved
+  // host id (not full-file byte equality) so dual-path cannot pair a leaf
+  // identity with a snapshotter mutation target.
+  if (convergenceVault && fleetManifestBytes(convergenceVault)) {
     const convergeFleetCtx = await loadFleetManifestAndHost({
       vault: convergenceVault,
-      hostId: input.hostId,
+      hostId: input.hostId ?? fleet.hostId,
       env: input.env as NodeJS.ProcessEnv | undefined,
       home: input.home,
       osHostname: input.osHostname,
     });
-    if (!convergeFleetCtx || convergeFleetCtx.hostId !== fleet.hostId) {
+    if (
+      !convergeFleetCtx ||
+      convergeFleetCtx.identityStatus !== "known" ||
+      convergeFleetCtx.hostId !== fleet.hostId
+    ) {
       return {
         exitCode: ExitCode.PREFLIGHT_FAILED,
         result: err("PREFLIGHT_FAILED", {
           reason: "convergence-vault-identity-mismatch",
           host_id: fleet.hostId,
           convergence_host_id: convergeFleetCtx?.hostId,
+          convergence_identity_status: convergeFleetCtx?.identityStatus,
           convergence_vault: convergenceVault,
         }),
       };
@@ -240,7 +233,7 @@ export async function runManagedWritePreflight(
         host_id: fleet.hostId,
         base_oid: null,
         converged: false,
-        ...(convergenceVault ? { convergence_vault: convergenceVault } : {}),
+        ...dualPathMeta,
       }),
     };
   }
@@ -263,7 +256,7 @@ export async function runManagedWritePreflight(
       exitCode: ExitCode.PREFLIGHT_FAILED,
       result: err("PREFLIGHT_FAILED", {
         reason: "missing-head-after-converge",
-        ...(convergenceVault ? { convergence_vault: convergenceVault } : {}),
+        ...dualPathMeta,
       }),
     };
   }
@@ -276,7 +269,7 @@ export async function runManagedWritePreflight(
       base_oid: baseOid,
       converged: true,
       helper_path: converge.data.helper_path,
-      ...(convergenceVault ? { convergence_vault: convergenceVault } : {}),
+      ...dualPathMeta,
     }),
   };
 }

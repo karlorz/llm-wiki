@@ -308,6 +308,13 @@ fi
 
 refresh_git_baseline
 
+# Dual-path requires distinct live mutation vs Git convergence roots.
+# Same-path would materialize projections then immediately rclone-overwrite them.
+if [ "$(cd "$WIKI_DIR" 2>/dev/null && pwd -P)" = "$(cd "$SNAPSHOT_WORKTREE" 2>/dev/null && pwd -P)" ]; then
+    log "ERROR: WIKI_DIR and WIKI_GIT_WORKTREE must be distinct paths for dual-path projection (got: $WIKI_DIR)"
+    exit 1
+fi
+
 # Single-authority root projections before FUSE/S3 pull promotion.
 # Mutation target is the live vault ($WIKI_DIR); Git pull/base-OID use
 # $SNAPSHOT_WORKTREE so FUSE/S3 hosts without a local Git HEAD still work.
