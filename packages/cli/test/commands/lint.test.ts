@@ -20,7 +20,7 @@ const FM = (tags: string[], updated = "2026-05-03") => `---
 title: t
 type: concept
 tags: [${tags.join(", ")}]
-sources: []
+sources: [fixture:seed]
 provenance: research
 created: ${updated}
 updated: ${updated}
@@ -88,7 +88,7 @@ describe("runLint", () => {
     const v = vault();
     mkdirSync(join(v, "raw", "articles"), { recursive: true });
     writeFileSync(join(v, "concepts", "bad-tag.md"), FM(["rogue"]) + "## Overview\n\nBad tag page [[bad-tag]].\n\n## Related\n\n- [[bad-tag]]\n");
-    writeFileSync(join(v, "concepts", "bad-source.md"), FM(["model"]).replace("sources: []", "sources: [raw/articles/missing.md]") + "## Overview\n\nBad source page [[bad-source]].\n\n## Related\n\n- [[bad-source]]\n");
+    writeFileSync(join(v, "concepts", "bad-source.md"), FM(["model"]).replace("sources: [fixture:seed]", "sources: [raw/articles/missing.md]") + "## Overview\n\nBad source page [[bad-source]].\n\n## Related\n\n- [[bad-source]]\n");
     writeFileSync(join(v, "concepts", "no-overview.md"), FM(["model"]) + "Body without overview [[no-overview]].\n");
     writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[bad-tag]]\n- [[bad-source]]\n- [[no-overview]]\n");
 
@@ -465,7 +465,7 @@ Use ^[raw/...] as the placeholder shape in examples.
   it("flags broken_sources with inline sources array format", async () => {
     const v = vault();
     mkdirSync(join(v, "raw", "articles"), { recursive: true });
-    writeFileSync(join(v, "concepts", "inlinesrc.md"), FM(["model"]).replace("sources: []", "sources: [raw/articles/gone.md]") + "## Overview\n\nContent.\n\n## Related\n\n- [[x]]\n");
+    writeFileSync(join(v, "concepts", "inlinesrc.md"), FM(["model"]).replace("sources: [fixture:seed]", "sources: [raw/articles/gone.md]") + "## Overview\n\nContent.\n\n## Related\n\n- [[x]]\n");
     writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[inlinesrc]]\n");
     const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
     expect(r.exitCode).toBe(23);

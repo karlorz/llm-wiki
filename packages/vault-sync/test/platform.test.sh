@@ -90,7 +90,10 @@ assert "lockfile_acquire separate path" "$RC2A" "0"
 lockfile_release "$LOCK_TEST2"
 
 # 7. lockfile_acquire reclaims after max_age exceeded
-# Strategy: create a stale lock dir, wait 2s, then acquire with max_age=1
+# Strategy: force the mkdir fallback, create a stale lock dir, wait 2s, then
+# acquire with max_age=1. Linux normally uses flock first, so without this
+# fixture-owned fallback the stale directory is never consulted.
+flock() { return 1; }
 LOCK_STALE=$(mktemp).stale
 LOCK_STALE_DIR="${LOCK_STALE}.d"
 mkdir -p "$LOCK_STALE_DIR"
@@ -100,6 +103,7 @@ RC3=$?
 assert "lockfile_acquire stale reclaim" "$RC3" "2"
 lockfile_release "$LOCK_STALE"
 rm -rf "$LOCK_STALE_DIR" "$LOCK_STALE" 2>/dev/null
+unset -f flock
 
 # 8. lockfile_release allows re-acquire
 LOCK_REL=$(mktemp).release

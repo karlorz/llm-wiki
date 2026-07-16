@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runIndexCheck } from "../../src/commands/index-check.js";
+import { renderRootIndex } from "../../src/utils/index-projection.js";
 
 function v(): string {
   const dir = mkdtempSync(join(tmpdir(), "vault-"));
@@ -15,7 +16,7 @@ const FM = `---
 title: t
 type: concept
 tags: []
-sources: []
+sources: [raw/articles/seed.md]
 provenance: research
 created: 2026-05-03
 updated: 2026-05-03
@@ -85,7 +86,7 @@ created: 2026-01-01
 updated: 2026-01-01
 type: entity
 tags: []
-sources: []
+sources: [raw/articles/seed.md]
 ---
 
 # C929
@@ -106,7 +107,7 @@ sources: []
 title: Alpha Entity
 type: entity
 tags: []
-sources: []
+sources: [raw/articles/seed.md]
 provenance: research
 created: 2026-05-03
 updated: 2026-05-03
@@ -129,5 +130,65 @@ updated: 2026-05-03
     );
     const r2 = await runIndexCheck({ vault: dir });
     expect(r2.exitCode).toBe(0);
+  });
+
+  it("accepts the canonical renderer output for valid pages and project READMEs", async () => {
+    const dir = v();
+    mkdirSync(join(dir, "meta"), { recursive: true });
+    mkdirSync(join(dir, "projects", "demo", "compound"), { recursive: true });
+    writeFileSync(join(dir, "concepts", "alpha.md"), FM);
+    writeFileSync(join(dir, "concepts", "shared.md"), FM.replace("title: t", "title: Shared Concept"));
+    writeFileSync(join(dir, "entities", "shared.md"), `---
+title: Shared Entity
+type: entity
+tags: []
+sources: [raw/articles/seed.md]
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+`);
+    writeFileSync(join(dir, "meta", "shared-meta.md"), `---
+title: Shared Meta Page
+type: meta
+tags: []
+provenance: mixed
+provenance_projects: ["[[alpha]]", "[[beta]]"]
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+`);
+    writeFileSync(join(dir, "concepts", "invalid-yaml.md"), "---\ntitle: [broken\n---\n");
+    writeFileSync(join(dir, "concepts", "wrong-directory.md"), `---
+title: Wrong Directory
+type: entity
+tags: []
+sources: [raw/articles/seed.md]
+provenance: research
+created: 2026-05-03
+updated: 2026-05-03
+---
+
+`);
+    writeFileSync(join(dir, "projects", "demo", "README.md"), "# Project: Demo Project\n");
+    writeFileSync(join(dir, "projects", "demo", "compound", "lesson.md"), "# Lesson\n");
+
+    const projection = await renderRootIndex({ vault: dir });
+    expect(projection.ok).toBe(true);
+    if (!projection.ok) return;
+    writeFileSync(join(dir, "index.md"), projection.data.text);
+
+    const checked = await runIndexCheck({ vault: dir });
+    expect(checked.exitCode).toBe(0);
+    if (!checked.result.ok) return;
+    expect(checked.result.data.missing_from_index).not.toEqual(
+      expect.arrayContaining(["concepts/invalid-yaml.md", "concepts/wrong-directory.md"]),
+    );
+    expect(checked.result.data.ghost_entries).not.toContain("projects/demo/README");
+    expect(projection.data.entries.map((entry) => entry.target)).toEqual(
+      expect.arrayContaining(["meta/shared-meta", "concepts/shared", "entities/shared"]),
+    );
   });
 });

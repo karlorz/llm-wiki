@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault, type VaultScan } from "../utils/vault.js";
+import { buildRootIndexUniverse } from "../utils/index-universe.js";
+import type { VaultScan } from "../utils/vault.js";
 import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 
 export interface IndexCheckInput { vault: string; scan?: VaultScan }
@@ -16,8 +17,13 @@ function normalizeIndexTarget(raw: string): string {
 }
 
 export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode: number; result: Result<IndexCheckOutput> }> {
-  const scan = input.scan ? ok(input.scan) : await scanVault(input.vault);
-  if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
+  const universe = await buildRootIndexUniverse({ vault: input.vault, scan: input.scan });
+  if (!universe.ok) {
+    const exitCode = universe.error === "VAULT_PATH_INVALID"
+      ? ExitCode.VAULT_PATH_INVALID
+      : ExitCode.SCHEME_REJECTED;
+    return { exitCode, result: universe };
+  }
 
   let indexText = "";
   try { indexText = await readFile(join(input.vault, "index.md"), "utf8"); } catch { /* empty */ }
@@ -36,16 +42,15 @@ export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode:
   }
 
   const required = new Map<string, string>(); // full target no-ext -> relPath
-  const known = new Set<string>(); // all known no-ext paths for ghost resolution
-
-  for (const p of scan.data.typedKnowledge) {
-    const target = p.relPath.replace(/\.md$/, "");
-    required.set(target, p.relPath);
-    known.add(target);
+  for (const entry of universe.data.required) {
+    required.set(entry.target, `${entry.target}.md`);
   }
-  for (const p of scan.data.compound) {
-    known.add(p.relPath.replace(/\.md$/, ""));
+  const requiredBasenameCounts = new Map<string, number>();
+  for (const target of required.keys()) {
+    const basename = target.split("/").pop()!.toLowerCase();
+    requiredBasenameCounts.set(basename, (requiredBasenameCounts.get(basename) ?? 0) + 1);
   }
+  const known = universe.data.knownTargets;
 
   const missing_from_index: string[] = [];
   for (const [target, relPath] of required.entries()) {
@@ -54,10 +59,7 @@ export async function runIndexCheck(input: IndexCheckInput): Promise<{ exitCode:
     const bare = target.split("/").pop()!.toLowerCase();
     const bareHits = indexBare.get(bare) ?? [];
     const basenameOnly = bareHits.filter((t) => !t.includes("/"));
-    const sameNameRequired = [...required.keys()].filter(
-      (t) => t.split("/").pop()!.toLowerCase() === bare,
-    );
-    if (basenameOnly.length === 1 && sameNameRequired.length === 1) continue;
+    if (basenameOnly.length === 1 && requiredBasenameCounts.get(bare) === 1) continue;
     missing_from_index.push(relPath);
   }
 

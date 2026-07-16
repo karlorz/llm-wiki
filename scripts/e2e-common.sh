@@ -157,7 +157,11 @@ FRONTMATTER
   cat > "$vault/concepts/valid-concept.md" <<'FRONTMATTER'
 ---
 title: "Valid Concept"
+type: concept
 tags: ["research"]
+sources: [fixture:seed]
+provenance: research
+created: "2026-05-03"
 updated: "2026-05-03"
 ---
 

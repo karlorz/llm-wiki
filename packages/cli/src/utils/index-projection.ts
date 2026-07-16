@@ -1,30 +1,17 @@
-import { readdirSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { err, ok, type Result } from "@skillwiki/shared";
 import { atomicWriteText } from "./atomic-write.js";
-import { prepareTypedPage } from "./typed-page.js";
-import { scanVault } from "./vault.js";
+import {
+  buildRootIndexUniverse,
+  ROOT_INDEX_SECTION_ORDER,
+  type RootIndexEntry,
+} from "./index-universe.js";
 
-const SECTION_ORDER = ["Entities", "Concepts", "Comparisons", "Queries", "Meta", "Projects"] as const;
-const TYPE_SECTION: Record<string, (typeof SECTION_ORDER)[number]> = {
-  entity: "Entities",
-  concept: "Concepts",
-  comparison: "Comparisons",
-  query: "Queries",
-  meta: "Meta",
-};
-const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+export type { RootIndexEntry } from "./index-universe.js";
 
 const UNMANAGED_START = "<!-- skillwiki:index-unmanaged:start -->";
 const UNMANAGED_END = "<!-- skillwiki:index-unmanaged:end -->";
-
-export interface RootIndexEntry {
-  section: (typeof SECTION_ORDER)[number];
-  target: string;
-  title: string;
-  source: "typed" | "project";
-}
 
 export interface RootIndexProjection {
   text: string;
@@ -68,11 +55,6 @@ function priorWikilinkTargets(text: string): string[] {
   return out;
 }
 
-function projectTitleFromReadme(text: string, slug: string): string {
-  const m = text.match(/^#\s+Project:\s+(.+)$/m);
-  return m?.[1]?.trim() || slug;
-}
-
 export async function renderRootIndex(
   input: RenderRootIndexInput,
 ): Promise<Result<RootIndexProjection>> {
@@ -89,85 +71,16 @@ export async function renderRootIndex(
   const unmanaged = extractUnmanaged(currentText);
   if (!unmanaged.ok) return unmanaged;
 
-  const scan = await scanVault(vault);
-  if (!scan.ok) return scan;
-
-  const entries: RootIndexEntry[] = [];
-  const seen = new Map<string, string>(); // target -> title
-  let duplicatesRemoved = 0;
-
-  for (const page of scan.data.typedKnowledge) {
-    let text: string;
-    try {
-      text = await readFile(join(vault, page.relPath), "utf8");
-    } catch {
-      continue;
-    }
-    const prepared = prepareTypedPage(text, page.relPath);
-    if (!prepared.ok) continue;
-    const section = TYPE_SECTION[prepared.data.type];
-    if (!section) continue;
-    const target = prepared.data.target.replace(/\.md$/, "");
-    const prev = seen.get(target);
-    if (prev !== undefined) {
-      if (prev !== prepared.data.title) {
-        return err("SCHEME_REJECTED", {
-          message: `duplicate index target ${target} with differing titles`,
-          titles: [prev, prepared.data.title],
-        });
-      }
-      duplicatesRemoved += 1;
-      continue;
-    }
-    seen.set(target, prepared.data.title);
-    entries.push({
-      section,
-      target,
-      title: prepared.data.title,
-      source: "typed",
-    });
-  }
-
-  // Immediate projects/<slug>/README.md only
-  try {
-    const projectsRoot = join(vault, "projects");
-    for (const slug of readdirSync(projectsRoot, { withFileTypes: true })) {
-      if (!slug.isDirectory()) continue;
-      const readmePath = join(projectsRoot, slug.name, "README.md");
-      let text: string;
-      try {
-        text = readFileSync(readmePath, "utf8");
-      } catch {
-        continue;
-      }
-      const target = `projects/${slug.name}/README`;
-      const title = projectTitleFromReadme(text, slug.name);
-      const prev = seen.get(target);
-      if (prev !== undefined) {
-        if (prev !== title) {
-          return err("SCHEME_REJECTED", {
-            message: `duplicate index target ${target} with differing titles`,
-          });
-        }
-        duplicatesRemoved += 1;
-        continue;
-      }
-      seen.set(target, title);
-      entries.push({ section: "Projects", target, title, source: "project" });
-    }
-  } catch {
-    /* no projects dir */
-  }
-
-  entries.sort((a, b) => {
-    const sa = SECTION_ORDER.indexOf(a.section);
-    const sb = SECTION_ORDER.indexOf(b.section);
-    if (sa !== sb) return sa - sb;
-    return compareText(a.target, b.target);
-  });
+  const universe = await buildRootIndexUniverse({ vault });
+  if (!universe.ok) return universe;
+  const entries: RootIndexEntry[] = universe.data.required;
+  let duplicatesRemoved = universe.data.duplicatesRemoved;
 
   const prior = priorWikilinkTargets(currentText);
-  const generatedTargets = new Set(entries.map((e) => e.target));
+  const knownTargets = universe.data.knownTargets;
+  const knownBasenames = new Set(
+    [...knownTargets].map((target) => target.split("/").pop()!.toLowerCase()),
+  );
   // Count prior generated-section duplicates (case-folded target collisions in prior index)
   const priorLower = new Map<string, number>();
   for (const t of prior) {
@@ -190,17 +103,10 @@ export async function renderRootIndex(
   const ghostsRemoved = [
     ...new Set(
       prior.filter((t) => {
-        const bare = t.includes("/") ? t : null;
-        if (bare && !generatedTargets.has(bare) && !generatedTargets.has(t)) {
-          // path-style prior link that is not regenerated
-          if (!seen.has(t)) return true;
-        }
-        // basename-style ghosts
         if (!t.includes("/")) {
-          const matches = [...generatedTargets].filter((g) => g.split("/").pop() === t);
-          return matches.length === 0;
+          return !knownBasenames.has(t.toLowerCase());
         }
-        return !generatedTargets.has(t);
+        return !knownTargets.has(t);
       }),
     ),
   ];
@@ -212,7 +118,7 @@ export async function renderRootIndex(
     "",
   ];
 
-  for (const section of SECTION_ORDER) {
+  for (const section of ROOT_INDEX_SECTION_ORDER) {
     lines.push(`## ${section}`, "");
     const sectionEntries = entries.filter((e) => e.section === section);
     for (const e of sectionEntries) {
