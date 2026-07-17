@@ -93,10 +93,72 @@ test_mismatched_inherited_token() {
   rm -rf "$root"
 }
 
+test_dead_owner_reclaim_preserves_recovery() {
+  local root path rec_count
+  root="$(mktemp -d)"
+  make_repo "$root"
+  path="$(vault_sync_managed_lock_path "$root")"
+  mkdir -p "$(dirname "$path")"
+  # Impossible PID on Unix — never a live process we own.
+  printf '{"pid":999999999,"owner_token":"deadtoken","acquired":"2026-07-17T00:00:00Z","command":"wiki-pull"}\n' >"$path"
+  vault_sync_managed_lock_acquire "$root" "reclaimer"
+  assert_eq "dead owner reclaimed" "$?" "0"
+  assert_eq "new lock present" "$( [ -f "$path" ] && echo yes || echo no )" "yes"
+  rec_count="$(find "$(dirname "$path")/recovery" -type f -name 'stale-managed-write-lock-*.json' 2>/dev/null | wc -l | tr -d ' ')"
+  assert_eq "recovery record written" "$rec_count" "1"
+  vault_sync_managed_lock_release
+  assert_eq "release clears reclaimed lock" "$( [ -f "$path" ] && echo yes || echo no )" "no"
+  rm -rf "$root"
+}
+
+test_live_owner_not_reclaimed() {
+  local root path
+  root="$(mktemp -d)"
+  make_repo "$root"
+  path="$(vault_sync_managed_lock_path "$root")"
+  mkdir -p "$(dirname "$path")"
+  printf '{"pid":%s,"owner_token":"livetoken","acquired":"2026-07-17T00:00:00Z","command":"wiki-pull"}\n' "$$" >"$path"
+  (
+    # shellcheck source=/dev/null
+    . "$LIB"
+    vault_sync_managed_lock_acquire "$root" "contender"
+  )
+  assert_eq "live owner not reclaimed" "$?" "1"
+  assert_eq "live lock still present" "$( [ -f "$path" ] && echo yes || echo no )" "yes"
+  rm -f "$path"
+  rm -rf "$root"
+}
+
+test_dead_owner_not_reclaimed_during_rebase() {
+  local root path git_dir
+  root="$(mktemp -d)"
+  make_repo "$root"
+  path="$(vault_sync_managed_lock_path "$root")"
+  mkdir -p "$(dirname "$path")"
+  printf '{"pid":999999999,"owner_token":"deadtoken","acquired":"2026-07-17T00:00:00Z","command":"wiki-pull"}\n' >"$path"
+  git_dir="$(git -C "$root" rev-parse --git-dir)"
+  case "$git_dir" in
+    /*) ;;
+    *) git_dir="$root/$git_dir" ;;
+  esac
+  mkdir -p "$git_dir/rebase-merge"
+  (
+    # shellcheck source=/dev/null
+    . "$LIB"
+    vault_sync_managed_lock_acquire "$root" "contender"
+  )
+  assert_eq "dead owner not reclaimed during rebase" "$?" "1"
+  assert_eq "lock remains during rebase" "$( [ -f "$path" ] && echo yes || echo no )" "yes"
+  rm -rf "$root"
+}
+
 test_fresh_acquire_and_release
 test_contention
 test_matching_inherited_token
 test_mismatched_inherited_token
+test_dead_owner_reclaim_preserves_recovery
+test_live_owner_not_reclaimed
+test_dead_owner_not_reclaimed_during_rebase
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

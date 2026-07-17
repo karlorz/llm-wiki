@@ -71,7 +71,16 @@ release_pull_lock() {
 }
 
 # Always release cooperative lock and owned managed-write lock on exit.
-trap 'release_pull_lock; vault_sync_managed_lock_release' EXIT
+# INT/TERM re-enter via EXIT so SIGKILL-only gaps are handled by dead-owner
+# reclaim on the next acquire (see managed-write-lock.sh).
+vault_sync_pull_cleanup() {
+  release_pull_lock
+  vault_sync_managed_lock_release || true
+}
+trap vault_sync_pull_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 acquire_pull_lock() {
   local lock_rc=0
