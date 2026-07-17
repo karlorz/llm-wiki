@@ -7,6 +7,7 @@ import {
   runDoctor,
   checkSatelliteLastRun,
   checkSatelliteTimer,
+  doctorReadOnlyScanRoot,
 } from "../../src/commands/doctor.js";
 
 function home(): string {
@@ -1424,6 +1425,25 @@ hosts:
       if (!r.result.ok) return;
       const lastRun = r.result.data.checks.find(c => c.id === "satellite_job_last_run");
       expect(lastRun?.status).toBe("error");
+    });
+  });
+
+  describe("doctorReadOnlyScanRoot", () => {
+    it("prefers SKILLWIKI_VAULT_READ_MIRROR for metrics/conflict walks", () => {
+      const parent = mkdtempSync(join(tmpdir(), "doctor-mirror-"));
+      const requested = join(parent, "wiki");
+      const mirror = join(parent, "wiki-git");
+      mkdirSync(requested, { recursive: true });
+      mkdirSync(mirror, { recursive: true });
+      writeFileSync(join(mirror, "SCHEMA.md"), "# schema\n");
+      const prior = process.env.SKILLWIKI_VAULT_READ_MIRROR;
+      process.env.SKILLWIKI_VAULT_READ_MIRROR = mirror;
+      try {
+        expect(doctorReadOnlyScanRoot(requested)).toBe(mirror);
+      } finally {
+        if (prior === undefined) delete process.env.SKILLWIKI_VAULT_READ_MIRROR;
+        else process.env.SKILLWIKI_VAULT_READ_MIRROR = prior;
+      }
     });
   });
 });

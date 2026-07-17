@@ -9,7 +9,7 @@ import { configPath } from "./config.js";
 import { latestFromCache } from "../utils/auto-update.js";
 import { semverGt } from "../utils/semver.js";
 import { findPlugin, findPluginInstallations, type PluginChannelInstall } from "../utils/plugin-registry.js";
-import { scanVault } from "../utils/vault.js";
+import { resolveReadOnlyVaultRoot, scanVault } from "../utils/vault.js";
 import { scanVaultConflictMarkers } from "../utils/conflict-markers.js";
 import { buildWikilinkAdjacency, toUndirectedWeighted, louvain, communityCohesion } from "../utils/community.js";
 import {
@@ -528,6 +528,7 @@ function hasOriginMain(resolvedPath: string): boolean {
       cwd: resolvedPath,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
+      timeout: 2000,
     });
     return true;
   } catch {
@@ -547,6 +548,7 @@ function checkVaultGitDirty(resolvedPath: string | undefined): CheckResult {
       cwd: resolvedPath,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
+      timeout: 5000,
     }).trim().split("\n").filter(Boolean);
     if (lines.length > 0) {
       return check("warn", "vault_git_dirty", "Vault git dirty state", `${lines.length} dirty file(s) in vault worktree`);
@@ -745,6 +747,7 @@ function checkVaultGitComparison(
       cwd: resolvedPath,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
+      timeout: 5000,
     }).trim(), 10);
     if (count > 0) {
       return check("warn", id, label, `${count} commit(s) ${nonZeroSuffix}`);
@@ -1680,6 +1683,14 @@ function findSkillNames(dir: string): string[] {
 const METRIC_TYPES = ["entities", "concepts", "comparisons", "queries", "meta"];
 
 /**
+ * Prefer the same read-only vault mirror lint uses (e.g. /root/wiki-git on sg01)
+ * so doctor metrics/conflict/dsstore walks do not amplify rclone FUSE latency.
+ */
+export function doctorReadOnlyScanRoot(resolvedPath: string): string {
+  return resolveReadOnlyVaultRoot(resolvedPath).root;
+}
+
+/**
  * Vault graph/health metrics (info severity — never affect exit code).
  * Always returns exactly 5 rows so the doctor check count stays stable;
  * when no vault is configured each row reports "no vault configured".
@@ -1696,7 +1707,10 @@ async function vaultMetrics(resolvedPath: string | undefined): Promise<CheckResu
   const noVault = (): CheckResult[] => ids.map(([id, label]) => check("info", id, label, "no vault configured"));
 
   if (!resolvedPath) return noVault();
-  const scan = await scanVault(resolvedPath);
+  // Full-tree graph metrics on a live FUSE vault regularly exceed operator budgets
+  // for `skillwiki health` (doctor then lint). Use the lint read-mirror when present.
+  const scanRoot = doctorReadOnlyScanRoot(resolvedPath);
+  const scan = await scanVault(scanRoot);
   if (!scan.ok) return noVault();
 
   const tk = scan.data.typedKnowledge;
@@ -1729,7 +1743,7 @@ async function vaultMetrics(resolvedPath: string | undefined): Promise<CheckResu
   }
 
   let logLines = 0;
-  try { logLines = readFileSync(join(resolvedPath, "log.md"), "utf8").split("\n").length; } catch { /* no log.md */ }
+  try { logLines = readFileSync(join(scanRoot, "log.md"), "utf8").split("\n").length; } catch { /* no log.md */ }
 
   return [
     check("info", "vault_metric_pages", "Vault pages by type", `${total} typed (${perType})`),
@@ -1803,8 +1817,10 @@ export async function runDoctor(
   checks.push(checkVaultS3Remote(input.home, input.execProbe, input.env ?? process.env));
   checks.push(checkVaultSnapshotterReachable(fleetLoad, input.checkSnapshotter, input.execProbe));
   checks.push(checkVaultPromotionLag(gitCheckPath));
-  checks.push(checkDotStoreClean(resolvedPath));
-  checks.push(checkVaultConflictMarkers(resolvedPath));
+  // Read-only tree walks: prefer git sibling mirror on rclone FUSE vaults.
+  const readOnlyScanRoot = resolvedPath ? doctorReadOnlyScanRoot(resolvedPath) : undefined;
+  checks.push(checkDotStoreClean(readOnlyScanRoot));
+  checks.push(checkVaultConflictMarkers(readOnlyScanRoot));
   checks.push(checkS3MountPerf(resolvedPath));
   checks.push(checkS3MountFreshness(resolvedPath));
   checks.push(checkRcloneFlagAudit(resolvedPath));
