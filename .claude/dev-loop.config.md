@@ -341,6 +341,20 @@ release_workflow: .github/workflows/publish.yml
 GitHub branch protection is the source of truth for required checks. The
 publish workflow fires on `v*` tag push via OIDC, with no `NPM_TOKEN` needed.
 
+## Merge Policy
+
+```yaml
+# CI discovery is observational and does not authorize merging.
+merge_policy:
+  strategy: repo-policy
+  auto_merge: false
+  merge_method: squash
+  require_work_item_approval: true
+```
+
+Auto-merge remains disabled for llm-wiki unless repository policy is changed
+and the active work-item spec separately records `merge_auto_approved: true`.
+
 ## Notes
 
 ```yaml
