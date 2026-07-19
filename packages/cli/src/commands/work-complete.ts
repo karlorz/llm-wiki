@@ -93,19 +93,22 @@ function phaseIndex(phase: string): number {
   return i < 0 ? 0 : i;
 }
 
-async function patchFrontmatterStatus(filePath: string, extraBody?: (body: string) => string): Promise<void> {
+async function patchFrontmatterStatus(
+  filePath: string,
+  extraBody?: (body: string) => string,
+): Promise<Result<{ changed: boolean; existed: boolean }>> {
   let text: string;
   try {
     text = readFileSync(filePath, "utf8");
-  } catch {
-    return;
+  } catch (error: unknown) {
+    return err("WRITE_FAILED", { path: filePath, stage: "read", message: String(error) });
   }
   const split = splitFrontmatter(text);
   if (!split.ok || !split.data.rawFrontmatter) {
     if (extraBody) {
-      await atomicWriteText(filePath, extraBody(text));
+      return atomicWriteText(filePath, extraBody(text));
     }
-    return;
+    return ok({ changed: false, existed: true });
   }
   let fm = split.data.rawFrontmatter;
   if (/^status:\s*/m.test(fm)) {
@@ -118,14 +121,18 @@ async function patchFrontmatterStatus(filePath: string, extraBody?: (body: strin
   }
   let body = split.data.body;
   if (extraBody) body = extraBody(body);
-  await atomicWriteText(filePath, `---\n${fm}\n---\n${body}`);
+  return atomicWriteText(filePath, `---\n${fm}\n---\n${body}`);
 }
 
-async function setStatusCompleted(filePath: string): Promise<void> {
-  await patchFrontmatterStatus(filePath);
+async function setStatusCompleted(filePath: string): Promise<Result<{ changed: boolean; existed: boolean }>> {
+  return patchFrontmatterStatus(filePath);
 }
 
-async function writeEvidence(workDir: string, opId: string, phases: string[]): Promise<void> {
+async function writeEvidence(
+  workDir: string,
+  opId: string,
+  phases: string[],
+): Promise<Result<{ changed: boolean; existed: boolean }>> {
   const path = join(workDir, "evidence.md");
   const body = [
     "---",
@@ -141,13 +148,22 @@ async function writeEvidence(workDir: string, opId: string, phases: string[]): P
     `- completed_at: ${new Date().toISOString()}`,
     "",
   ].join("\n");
-  await atomicWriteText(path, body);
+  return atomicWriteText(path, body);
 }
 
-async function markPlanComplete(workDir: string): Promise<void> {
+async function markPlanComplete(workDir: string): Promise<Result<{ changed: boolean; existed: boolean } | null>> {
   const planPath = join(workDir, "plan.md");
-  if (!existsSync(planPath)) return;
-  await patchFrontmatterStatus(planPath, (body) => body.replace(/- \[ \]/g, "- [x]"));
+  if (!existsSync(planPath)) return ok(null);
+  return patchFrontmatterStatus(planPath, (body) => body.replace(/- \[ \]/g, "- [x]"));
+}
+
+function writeFailure(stage: string, result: Result<unknown>): Run {
+  return {
+    exitCode: ExitCode.WRITE_FAILED,
+    result: result.ok
+      ? err("WRITE_FAILED", { stage, message: "unexpected ok" })
+      : result,
+  };
 }
 
 /**
@@ -237,9 +253,12 @@ export async function runWorkComplete(input: WorkCompleteInput): Promise<Run> {
     }
 
     if (phaseIndex(phase) <= phaseIndex("evidence")) {
-      await setStatusCompleted(join(workDir, "spec.md"));
-      await markPlanComplete(workDir);
-      await writeEvidence(workDir, opId, completedPhases);
+      const statusWrite = await setStatusCompleted(join(workDir, "spec.md"));
+      if (!statusWrite.ok) return writeFailure("evidence-spec", statusWrite);
+      const planWrite = await markPlanComplete(workDir);
+      if (!planWrite.ok) return writeFailure("evidence-plan", planWrite);
+      const evidenceWrite = await writeEvidence(workDir, opId, completedPhases);
+      if (!evidenceWrite.ok) return writeFailure("evidence", evidenceWrite);
       if (input.failAfter === "evidence") {
         throw new Error("simulated failure after evidence");
       }
@@ -270,7 +289,8 @@ export async function runWorkComplete(input: WorkCompleteInput): Promise<Run> {
     if (phaseIndex(phase) <= phaseIndex("projection")) {
       // Ensure evidence exists (resume safety) and cross-validate complete.
       if (!existsSync(join(workDir, "evidence.md"))) {
-        await writeEvidence(workDir, opId, completedPhases);
+        const evidenceWrite = await writeEvidence(workDir, opId, completedPhases);
+        if (!evidenceWrite.ok) return writeFailure("projection-evidence", evidenceWrite);
       }
       const finalCheck = await runWorkValidate({
         vault: input.vault,

@@ -130,6 +130,39 @@ describe("runWorkComplete", () => {
     ).toHaveLength(1);
   });
 
+  it("evidence write failure returns WRITE_FAILED and does not advance journal past evidence", async () => {
+    const vault = makeVault();
+    const workItem = makeWorkItem(vault, "projects/demo/work/2026-07-20-write-fail");
+    const abs = join(vault, workItem);
+    const opId = operationId("skillwiki-work-complete-v1", [vault, workItem, "write-fail"]);
+
+    // After validate, evidence phase must write. Make the work-item dir read-only
+    // so atomicWriteText fails (real shipped write path), without confusing validate.
+    const { chmodSync } = await import("node:fs");
+    chmodSync(abs, 0o555);
+
+    const failed = await runWorkComplete({
+      vault,
+      workItem,
+      operationId: opId,
+      noCommit: true,
+    });
+
+    chmodSync(abs, 0o755); // restore for cleanup
+
+    expect(failed.exitCode).toBe(10); // WRITE_FAILED
+    expect(failed.result.ok).toBe(false);
+    const journal = readFileSync(
+      join(vault, ".skillwiki", "work-complete", `${opId}.env`),
+      "utf8",
+    );
+    // Journal advanced into evidence but must not reach log/done on write failure
+    expect(journal).toMatch(/phase=evidence/);
+    expect(journal).not.toMatch(/phase=log/);
+    expect(journal).not.toMatch(/phase=done/);
+    expect(readFileSync(join(vault, "log.md"), "utf8")).not.toMatch(/skillwiki-log-op:/);
+  });
+
   it("CLI --no-commit does not create a git commit (shipped binary path)", () => {
     // Drive packages/cli/dist/cli.js so Commander flag binding is exercised.
     if (!existsSync(CLI_BIN)) {
