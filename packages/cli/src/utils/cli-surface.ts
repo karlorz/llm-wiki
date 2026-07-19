@@ -30,7 +30,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("orphans").option("--wiki <name>");
   program.command("audit");
   program.command("install").option("--target <dir>").option("--dry-run").option("--skills-root <dir>").option("--symlink");
-  program.command("path").option("--vault <dir>").option("--target <dir>").option("--wiki <name>").option("--init-time").option("--explain");
+  program.command("path").option("--vault <dir>").option("--target <dir>").option("--wiki <name>").option("--init-time").option("--explain").option("--plain");
   program.command("lang").option("--lang <code>").option("--explain");
   program.command("init").option("--target <dir>").requiredOption("--domain <text>").option("--taxonomy <csv>").option("--lang <code>").option("--force").option("--no-env").option("--profile <name>");
   program.command("links").option("--wiki <name>");
@@ -42,7 +42,9 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("claim").option("--project <slug>").option("--slug <slug>").option("--wiki <name>");
   program.command("pagesize").option("--lines <n>").option("--wiki <name>");
   program.command("log-rotate").option("--threshold <n>").option("--apply").option("--wiki <name>");
-  program.command("log-append").requiredOption("--content <text>").option("--wiki <name>");
+  program.command("log-append").requiredOption("--content <text>").option("--operation-id <id>").option("--write-event").option("--wiki <name>");
+  program.command("work-complete").requiredOption("--work-item <path>").option("--operation-id <id>").option("--no-commit").option("--wiki <name>");
+  program.command("work-validate").requiredOption("--work-item <path>").option("--require-complete").option("--wiki <name>");
   program.command("lint").option("--days <n>").option("--lines <n>").option("--log-threshold <n>").option("--fix").option("--only <bucket>").option("--summary").option("--examples <n>").option("--wiki <name>");
   program.command("config"); // has subcommands
   program.command("health").option("--wiki <name>").option("--sync <mode>").option("--no-fail").option("--out <path>").option("--examples <n>");

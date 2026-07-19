@@ -28,6 +28,8 @@ import { runClaim } from "./commands/claim.js";
 import { runPagesize } from "./commands/pagesize.js";
 import { runLogRotate } from "./commands/log-rotate.js";
 import { runLogAppend } from "./commands/log-append.js";
+import { runWorkComplete } from "./commands/work-complete.js";
+import { runWorkValidate } from "./commands/work-validate.js";
 import { runLint } from "./commands/lint.js";
 import { runHealth, type SyncMode } from "./commands/health.js";
 import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "./commands/config.js";
@@ -78,6 +80,18 @@ program.name("skillwiki").description("Deterministic helpers for CodeWiki skills
 program.option("--human", "render terminal-readable output instead of JSON");
 
 async function emit<T>(r: { exitCode: number; result: Result<T> }, vault?: string, opts?: { postCommit?: boolean }): Promise<never> {
+  // path --plain: stdout is exactly the vault path with no JSON wrapper.
+  if (
+    r.result.ok &&
+    typeof r.result.data === "object" &&
+    r.result.data !== null &&
+    "plain" in r.result.data &&
+    (r.result.data as { plain?: boolean }).plain === true &&
+    "path" in r.result.data
+  ) {
+    process.stdout.write(`${String((r.result.data as { path: string }).path)}\n`);
+    process.exit(r.exitCode);
+  }
   if (program.opts().human) printHuman(r.result); else printJson(r.result);
   if (vault && opts?.postCommit !== false) await postCommit(vault, r.exitCode);
   process.exit(r.exitCode);
@@ -241,6 +255,7 @@ program
   .option("--wiki <name>", "wiki profile name")
   .option("--init-time", "use init-time chain instead of runtime", false)
   .option("--explain", "include resolution chain in output", false)
+  .option("--plain", "print only the vault path (no JSON wrapper)", false)
   .action(async (opts) => {
     const initTime = !!opts.initTime;
     const flag = initTime ? opts.target : opts.vault;
@@ -251,7 +266,8 @@ program
       initTime,
       wiki: opts.wiki,
       cwd: process.cwd(),
-      explain: !!opts.explain
+      explain: !!opts.explain,
+      plain: !!opts.plain,
     }));
   });
 
@@ -499,6 +515,8 @@ program
   .command("log-append [vault]")
   .description("append a single entry to the vault log under a short advisory lock")
   .requiredOption("--content <text>", "log entry text to append")
+  .option("--operation-id <id>", "stable SHA-256 operation id for retry-safe append + immutable event")
+  .option("--write-event", "also write meta/log-events (requires --operation-id)", false)
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -506,8 +524,52 @@ program
     else return emitManagedVaultWrite(
       v.vault,
       "log-append",
-      () => runLogAppend({ vault: v.vault, content: opts.content })
+      () => runLogAppend({
+        vault: v.vault,
+        content: opts.content,
+        operationId: opts.operationId,
+        writeEvent: !!opts.writeEvent || !!opts.operationId,
+      })
     );
+  });
+
+program
+  .command("work-complete [vault]")
+  .description("atomically complete a work item (validate, evidence, log, projection, commit)")
+  .requiredOption("--work-item <path>", "work item directory relative to vault (e.g. projects/x/work/yyyy-mm-dd-slug)")
+  .option("--operation-id <id>", "stable SHA-256 operation id (derived when omitted)")
+  .option("--no-commit", "skip git commit", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else return emitManagedVaultWrite(
+      v.vault,
+      "work-complete",
+      () => runWorkComplete({
+        vault: v.vault,
+        workItem: opts.workItem,
+        operationId: opts.operationId,
+        noCommit: !!opts.noCommit,
+      }),
+      { postCommit: false },
+    );
+  });
+
+program
+  .command("work-validate [vault]")
+  .description("cross-check a work item for status, evidence, PR metadata, unchecked steps, and conflict markers")
+  .requiredOption("--work-item <path>", "work item directory relative to vault")
+  .option("--require-complete", "require completed status and evidence", false)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runWorkValidate({
+      vault: v.vault,
+      workItem: opts.workItem,
+      requireComplete: !!opts.requireComplete,
+    }), v.vault, { postCommit: false });
   });
 
 const logCmd = program.command("log").description("immutable log events and projections");

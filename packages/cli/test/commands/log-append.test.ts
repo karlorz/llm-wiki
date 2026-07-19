@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync, utimesSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runLogAppend } from "../../src/commands/log-append.js";
@@ -184,5 +184,42 @@ describe("runLogAppend", () => {
     expect(result.result).toMatchObject({ ok: true, data: { appended: true } });
     expect(readFileSync(join(dir, "log.md"), "utf8")).toContain("<!-- skillwiki-page-publish:");
     expect(existsSync(join(dir, ".skillwiki", "last-op.json"))).toBe(false);
+  });
+
+  it("retry with same operation id writes one immutable event and stable entry counts", async () => {
+    const dir = vault(2);
+    const opId = "c".repeat(64);
+    const content = "## [2026-07-20] work-complete | projects/demo/work/x";
+
+    const first = await runLogAppend({
+      vault: dir,
+      content,
+      operationId: opId,
+      writeEvent: true,
+      eventKind: "log-append",
+      recordLastOp: false,
+    });
+    const second = await runLogAppend({
+      vault: dir,
+      content,
+      operationId: opId,
+      writeEvent: true,
+      eventKind: "log-append",
+      recordLastOp: false,
+    });
+
+    expect(first.result).toMatchObject({
+      ok: true,
+      data: { appended: true, entries_before: 2, entries_after: 3, event_created: true },
+    });
+    expect(second.result).toMatchObject({
+      ok: true,
+      data: { appended: false, entries_before: 3, entries_after: 3, event_created: false },
+    });
+    const log = readFileSync(join(dir, "log.md"), "utf8");
+    expect(log.match(/skillwiki-log-op:/g)).toHaveLength(1);
+    const eventFiles = readdirSync(join(dir, "meta", "log-events"), { recursive: true })
+      .filter((f) => String(f).endsWith(".json"));
+    expect(eventFiles).toHaveLength(1);
   });
 });

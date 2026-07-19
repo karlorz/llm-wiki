@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 export type ConflictMarkerFinding = { path: string; line: number };
 
-function scanConflictMarkerBlocksInText(
+export function scanConflictMarkerBlocksInText(
   relPath: string,
   text: string,
 ): ConflictMarkerFinding[] {
