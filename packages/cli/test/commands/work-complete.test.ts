@@ -13,6 +13,36 @@ import { execFileSync } from "node:child_process";
 import { runWorkComplete } from "../../src/commands/work-complete.js";
 import { operationId } from "../../src/utils/operation-id.js";
 
+const CLI_BIN = join(__dirname, "..", "..", "dist", "cli.js");
+
+function runCli(
+  args: string[],
+  env: Record<string, string | undefined> = {},
+): { stdout: string; stderr: string; status: number } {
+  try {
+    const stdout = execFileSync(process.execPath, [CLI_BIN, ...args], {
+      encoding: "utf8",
+      env: { ...process.env, AUTO_COMMIT: "false", ...env },
+    });
+    return { stdout, stderr: "", status: 0 };
+  } catch (e: unknown) {
+    const err = e as { stdout?: string; stderr?: string; status?: number };
+    return {
+      stdout: err.stdout?.toString() ?? "",
+      stderr: err.stderr?.toString() ?? "",
+      status: err.status ?? 1,
+    };
+  }
+}
+
+function commitCount(repo: string): number {
+  const out = execFileSync("git", ["rev-list", "--count", "HEAD"], {
+    cwd: repo,
+    encoding: "utf8",
+  }).trim();
+  return Number(out);
+}
+
 function makeVault(): string {
   const dir = mkdtempSync(join(tmpdir(), "vault-wc-"));
   writeFileSync(join(dir, "SCHEMA.md"), "# Vault Schema\n");
@@ -98,6 +128,46 @@ describe("runWorkComplete", () => {
       readdirSync(join(vault, "meta", "log-events"), { recursive: true })
         .filter((f) => String(f).endsWith(".json")),
     ).toHaveLength(1);
+  });
+
+  it("CLI --no-commit does not create a git commit (shipped binary path)", () => {
+    // Drive packages/cli/dist/cli.js so Commander flag binding is exercised.
+    if (!existsSync(CLI_BIN)) {
+      throw new Error(`missing built CLI at ${CLI_BIN}; run npm run build in packages/cli`);
+    }
+
+    const vault = makeVault();
+    execFileSync("git", ["init", "-b", "main"], { cwd: vault });
+    execFileSync("git", ["config", "user.email", "t@e.com"], { cwd: vault });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: vault });
+    execFileSync("git", ["add", "-A"], { cwd: vault });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: vault });
+
+    const workItem = makeWorkItem(vault, "projects/demo/work/2026-07-20-cli-nocommit");
+    const before = commitCount(vault);
+    expect(before).toBe(1);
+
+    const opId = operationId("skillwiki-work-complete-v1", [vault, workItem, "cli-no-commit"]);
+    const result = runCli([
+      "work-complete",
+      vault,
+      "--work-item",
+      workItem,
+      "--operation-id",
+      opId,
+      "--no-commit",
+    ]);
+
+    expect(result.status, `cli failed: ${result.stdout}\n${result.stderr}`).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      ok: boolean;
+      data?: { committed?: boolean; completed?: boolean };
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.data?.completed).toBe(true);
+    expect(payload.data?.committed).toBe(false);
+    expect(commitCount(vault)).toBe(before);
+    expect(existsSync(join(vault, workItem, "evidence.md"))).toBe(true);
   });
 
   it("resumes after simulated mid-transaction failure without double commit", async () => {

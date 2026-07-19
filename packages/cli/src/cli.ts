@@ -538,7 +538,8 @@ program
   .description("atomically complete a work item (validate, evidence, log, projection, commit)")
   .requiredOption("--work-item <path>", "work item directory relative to vault (e.g. projects/x/work/yyyy-mm-dd-slug)")
   .option("--operation-id <id>", "stable SHA-256 operation id (derived when omitted)")
-  .option("--no-commit", "skip git commit", false)
+  // Commander maps --no-commit to opts.commit (default true; false when flag set).
+  .option("--no-commit", "skip git commit")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -550,7 +551,7 @@ program
         vault: v.vault,
         workItem: opts.workItem,
         operationId: opts.operationId,
-        noCommit: !!opts.noCommit,
+        noCommit: opts.commit === false,
       }),
       { postCommit: false },
     );
