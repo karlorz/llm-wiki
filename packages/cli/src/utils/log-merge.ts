@@ -16,8 +16,9 @@ export interface LogMergeStagesResult {
 }
 
 const ENTRY_RE = /^## \[/m;
-const PUBLISH_MARKER_RE =
-  /<!--\s*skillwiki-page-publish:([a-f0-9]{64})\s*-->/i;
+/** Matches page-publish and generic log-op markers for cross-host dedup. */
+const OPERATION_MARKER_RE =
+  /<!--\s*skillwiki-(?:page-publish|log-op):([a-f0-9]{64})\s*-->/i;
 
 function splitLog(text: string): { preamble: string; entries: string[] } {
   const normalized = text.replace(/\r\n/g, "\n");
@@ -33,7 +34,7 @@ function splitLog(text: string): { preamble: string; entries: string[] } {
 }
 
 function publishId(entry: string): string | undefined {
-  return PUBLISH_MARKER_RE.exec(entry)?.[1]?.toLowerCase();
+  return OPERATION_MARKER_RE.exec(entry)?.[1]?.toLowerCase();
 }
 
 /** Unstructured logs (no `## [` entries): use git merge-file --union. */

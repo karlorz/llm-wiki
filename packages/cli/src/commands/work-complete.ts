@@ -1,6 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
+import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { atomicWriteText } from "../utils/atomic-write.js";
 import { git, gitStrict } from "../utils/git.js";
 import { operationId } from "../utils/operation-id.js";
 import {
@@ -10,8 +12,7 @@ import {
 } from "../utils/operation-journal.js";
 import { appendLastOp } from "../utils/last-op.js";
 import { runLogAppend } from "./log-append.js";
-import { runValidate } from "./validate.js";
-import { runWorkValidate } from "./work-validate.js";
+import { normalizeWorkItemRel, runWorkValidate } from "./work-validate.js";
 
 /** Vault-local journal under .skillwiki so tests work without a git repo. */
 function workCompleteJournalPath(vault: string, opId: string): string {
@@ -30,15 +31,19 @@ function readWorkJournal(vault: string, opId: string): JournalFields | null {
 
 function writeWorkJournal(vault: string, opId: string, fields: JournalFields): void {
   const path = workCompleteJournalPath(vault, opId);
-  mkdirSync(join(vault, ".skillwiki", "work-complete"), { recursive: true });
-  writeFileSync(path, serializeJournalEnv(fields, [
+  const dir = join(vault, ".skillwiki", "work-complete");
+  mkdirSync(dir, { recursive: true });
+  const tmp = `${path}.tmp.${process.pid}`;
+  const body = serializeJournalEnv(fields, [
     "operation_id",
     "phase",
     "retry_count",
     "work_item",
     "committed",
     "reason",
-  ]), "utf8");
+  ]);
+  writeFileSync(tmp, body, "utf8");
+  renameSync(tmp, path);
 }
 
 export interface WorkCompleteInput {
@@ -50,8 +55,6 @@ export interface WorkCompleteInput {
   noCommit?: boolean;
   /** Test hook: fail after this phase name once (for retry fixtures). */
   failAfter?: "validate" | "evidence" | "log" | "projection" | "commit" | null;
-  /** Internal retry counter from journal. */
-  _retry?: boolean;
 }
 
 export interface WorkCompleteOutput {
@@ -70,7 +73,7 @@ const PHASE_ORDER = ["validate", "evidence", "log", "projection", "commit", "don
 type Phase = (typeof PHASE_ORDER)[number];
 
 function resolveWorkDir(vault: string, workItem: string): Result<string> {
-  const rel = workItem.replace(/\\/g, "/").replace(/^\.?\//, "");
+  const rel = normalizeWorkItemRel(workItem);
   const abs = join(vault, rel);
   if (!existsSync(abs)) {
     return err("FILE_NOT_FOUND", { path: rel });
@@ -90,25 +93,39 @@ function phaseIndex(phase: string): number {
   return i < 0 ? 0 : i;
 }
 
-function setStatusCompleted(filePath: string): void {
-  let text = readFileSync(filePath, "utf8");
-  if (!text.startsWith("---")) return;
-  const end = text.indexOf("\n---", 3);
-  if (end < 0) return;
-  let fm = text.slice(0, end + 4);
-  const body = text.slice(end + 4);
+async function patchFrontmatterStatus(filePath: string, extraBody?: (body: string) => string): Promise<void> {
+  let text: string;
+  try {
+    text = readFileSync(filePath, "utf8");
+  } catch {
+    return;
+  }
+  const split = splitFrontmatter(text);
+  if (!split.ok || !split.data.rawFrontmatter) {
+    if (extraBody) {
+      await atomicWriteText(filePath, extraBody(text));
+    }
+    return;
+  }
+  let fm = split.data.rawFrontmatter;
   if (/^status:\s*/m.test(fm)) {
     fm = fm.replace(/^status:\s*.*$/m, "status: completed");
   } else {
-    fm = fm.replace(/---\n/, "---\nstatus: completed\n");
+    fm = `status: completed\n${fm}`;
   }
   if (!/^completed:\s*/m.test(fm)) {
-    fm = fm.replace(/---\n/, `---\ncompleted: ${new Date().toISOString().slice(0, 10)}\n`);
+    fm = `completed: ${new Date().toISOString().slice(0, 10)}\n${fm}`;
   }
-  writeFileSync(filePath, `${fm}${body}`, "utf8");
+  let body = split.data.body;
+  if (extraBody) body = extraBody(body);
+  await atomicWriteText(filePath, `---\n${fm}\n---\n${body}`);
 }
 
-function writeEvidence(workDir: string, opId: string, phases: string[]): void {
+async function setStatusCompleted(filePath: string): Promise<void> {
+  await patchFrontmatterStatus(filePath);
+}
+
+async function writeEvidence(workDir: string, opId: string, phases: string[]): Promise<void> {
   const path = join(workDir, "evidence.md");
   const body = [
     "---",
@@ -124,19 +141,13 @@ function writeEvidence(workDir: string, opId: string, phases: string[]): void {
     `- completed_at: ${new Date().toISOString()}`,
     "",
   ].join("\n");
-  writeFileSync(path, body, "utf8");
+  await atomicWriteText(path, body);
 }
 
-function markPlanComplete(workDir: string): void {
+async function markPlanComplete(workDir: string): Promise<void> {
   const planPath = join(workDir, "plan.md");
   if (!existsSync(planPath)) return;
-  let text = readFileSync(planPath, "utf8");
-  // Check off remaining incomplete task boxes for completion evidence.
-  text = text.replace(/- \[ \]/g, "- [x]");
-  if (text.startsWith("---") && /^status:\s*/m.test(text.slice(0, text.indexOf("\n---", 3) + 4))) {
-    text = text.replace(/^status:\s*.*$/m, "status: completed");
-  }
-  writeFileSync(planPath, text, "utf8");
+  await patchFrontmatterStatus(planPath, (body) => body.replace(/- \[ \]/g, "- [x]"));
 }
 
 /**
@@ -181,7 +192,7 @@ export async function runWorkComplete(input: WorkCompleteInput): Promise<Run> {
 
   const completedPhases: string[] = [];
   let phase: Phase = PHASE_ORDER.includes(startPhase as Phase) ? (startPhase as Phase) : "validate";
-  const retried = Number(journal.retry_count || "0") > 0 || input._retry === true;
+  const retried = Number(journal.retry_count || "0") > 0;
 
   const advance = (next: Phase, extra: Record<string, string> = {}) => {
     phase = next;
@@ -197,13 +208,15 @@ export async function runWorkComplete(input: WorkCompleteInput): Promise<Run> {
     completedPhases.push(next);
   };
 
-  // Bump retry count when resuming past validate
   if (phaseIndex(startPhase) > 0) {
     journal.retry_count = String(Number(journal.retry_count || "0") + 1);
-    writeWorkJournal(input.vault, opId, { ...journal, operation_id: opId, phase: startPhase });
-  } else {
-    writeWorkJournal(input.vault, opId, { ...journal, operation_id: opId, phase: "validate" });
   }
+  writeWorkJournal(input.vault, opId, {
+    ...journal,
+    operation_id: opId,
+    phase: startPhase,
+    work_item: input.workItem,
+  });
 
   try {
     if (phaseIndex(phase) <= phaseIndex("validate")) {
@@ -217,14 +230,6 @@ export async function runWorkComplete(input: WorkCompleteInput): Promise<Run> {
           }),
         };
       }
-      const specPath = join(workDir, "spec.md");
-      const specVal = await runValidate({ file: specPath, vault: input.vault });
-      if (specVal.exitCode !== ExitCode.OK && specVal.exitCode !== ExitCode.SCHEMA_NOT_DETECTED) {
-        // allow incomplete frontmatter on in-progress items; still require readable file
-        if (!existsSync(specPath)) {
-          return { exitCode: ExitCode.FILE_NOT_FOUND, result: err("FILE_NOT_FOUND", { path: "spec.md" }) };
-        }
-      }
       if (input.failAfter === "validate") {
         throw new Error("simulated failure after validate");
       }
@@ -232,9 +237,9 @@ export async function runWorkComplete(input: WorkCompleteInput): Promise<Run> {
     }
 
     if (phaseIndex(phase) <= phaseIndex("evidence")) {
-      setStatusCompleted(join(workDir, "spec.md"));
-      if (existsSync(join(workDir, "plan.md"))) markPlanComplete(workDir);
-      writeEvidence(workDir, opId, completedPhases);
+      await setStatusCompleted(join(workDir, "spec.md"));
+      await markPlanComplete(workDir);
+      await writeEvidence(workDir, opId, completedPhases);
       if (input.failAfter === "evidence") {
         throw new Error("simulated failure after evidence");
       }
@@ -263,9 +268,9 @@ export async function runWorkComplete(input: WorkCompleteInput): Promise<Run> {
     }
 
     if (phaseIndex(phase) <= phaseIndex("projection")) {
-      // Lightweight projection: ensure evidence exists and cross-validate complete.
+      // Ensure evidence exists (resume safety) and cross-validate complete.
       if (!existsSync(join(workDir, "evidence.md"))) {
-        writeEvidence(workDir, opId, completedPhases);
+        await writeEvidence(workDir, opId, completedPhases);
       }
       const finalCheck = await runWorkValidate({
         vault: input.vault,

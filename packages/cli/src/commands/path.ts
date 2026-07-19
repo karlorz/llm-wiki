@@ -20,24 +20,42 @@ export interface PathOutput {
   humanHint: string;
 }
 
+function toPathOutput(
+  path: string,
+  source: string,
+  plain: boolean | undefined,
+  chain?: Array<{ source: string; matched: boolean; value?: string }>,
+): PathOutput {
+  return {
+    path,
+    source,
+    ...(chain ? { chain } : {}),
+    ...(plain ? { plain: true } : {}),
+    humanHint: plain ? path : `${path} (via ${source})`,
+  };
+}
+
 export async function runPath(input: PathInput): Promise<{ exitCode: number; result: Result<PathOutput> }> {
   if (input.initTime) {
     const r = await resolveInitTimePath({
-      flag: input.flag, envValue: input.envValue, home: input.home, cwd: input.cwd, explain: input.explain
+      flag: input.flag,
+      envValue: input.envValue,
+      home: input.home,
+      cwd: input.cwd,
+      explain: input.explain,
     });
     return {
       exitCode: ExitCode.OK,
-      result: ok({
-        path: r.path,
-        source: r.source,
-        ...(r.chain ? { chain: r.chain } : {}),
-        ...(input.plain ? { plain: true } : {}),
-        humanHint: input.plain ? r.path : `${r.path} (via ${r.source})`,
-      }),
+      result: ok(toPathOutput(r.path, r.source, input.plain, r.chain)),
     };
   }
   const r = await resolveRuntimePath({
-    flag: input.flag, envValue: input.envValue, home: input.home, wiki: input.wiki, cwd: input.cwd, explain: input.explain
+    flag: input.flag,
+    envValue: input.envValue,
+    home: input.home,
+    wiki: input.wiki,
+    cwd: input.cwd,
+    explain: input.explain,
   });
   if (!r.ok) {
     const exitCode = r.error === "UNKNOWN_WIKI_PROFILE" ? ExitCode.UNKNOWN_WIKI_PROFILE : ExitCode.NO_VAULT_CONFIGURED;
@@ -45,12 +63,6 @@ export async function runPath(input: PathInput): Promise<{ exitCode: number; res
   }
   return {
     exitCode: ExitCode.OK,
-    result: ok({
-      path: r.data.path,
-      source: r.data.source,
-      ...(r.data.chain ? { chain: r.data.chain } : {}),
-      ...(input.plain ? { plain: true } : {}),
-      humanHint: input.plain ? r.data.path : `${r.data.path} (via ${r.data.source})`,
-    }),
+    result: ok(toPathOutput(r.data.path, r.data.source, input.plain, r.data.chain)),
   };
 }

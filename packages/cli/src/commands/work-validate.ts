@@ -32,6 +32,11 @@ export interface WorkValidateOutput {
 
 type Run = { exitCode: number; result: Result<WorkValidateOutput> };
 
+/** Normalize work-item paths to vault-relative POSIX form. */
+export function normalizeWorkItemRel(workItem: string): string {
+  return workItem.replace(/\\/g, "/").replace(/^\.?\//, "");
+}
+
 function scanFileConflicts(relPath: string, text: string): number {
   return scanConflictMarkerBlocksInText(relPath, text).length;
 }
@@ -92,7 +97,7 @@ function validatePrMetadata(meta: Record<string, unknown> | null, findings: Work
  * PR metadata, unchecked completion steps, and conflict markers.
  */
 export async function runWorkValidate(input: WorkValidateInput): Promise<Run> {
-  const rel = input.workItem.replace(/\\/g, "/").replace(/^\.?\//, "");
+  const rel = normalizeWorkItemRel(input.workItem);
   const workDir = join(input.vault, rel);
   if (!existsSync(workDir)) {
     return {

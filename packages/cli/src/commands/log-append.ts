@@ -5,10 +5,16 @@ import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { appendLastOp } from "../utils/last-op.js";
 import { atomicWriteText } from "../utils/atomic-write.js";
 import { acquireLogLock, releaseLogLock } from "../utils/log-lock.js";
-import { writeLogEvent } from "../utils/log-events.js";
+import { eventPathFor, writeLogEvent } from "../utils/log-events.js";
 import { scanSensitiveContent } from "../utils/sensitive-content.js";
 
 const ENTRY_RE = /^## \[(\d{4})-\d{2}-\d{2}\]/gm;
+
+function countLogEntries(logText: string): number {
+  let count = 0;
+  for (const _ of logText.matchAll(ENTRY_RE)) count += 1;
+  return count;
+}
 
 export interface LogAppendInput {
   vault: string;
@@ -69,7 +75,7 @@ async function appendWhileLocked(
     return { exitCode: ExitCode.FILE_NOT_FOUND, result: err("FILE_NOT_FOUND", { path: logPath }) };
   }
 
-  const entriesBefore = [...logText.matchAll(ENTRY_RE)].length;
+  const entriesBefore = countLogEntries(logText);
   if (markers?.some((marker) => logText.includes(marker))) {
     return {
       exitCode: ExitCode.OK,
@@ -161,7 +167,17 @@ export async function runLogAppend(input: LogAppendInput): Promise<LogAppendRun>
       // Same operation id already stored with different payload — treat as applied.
       if (event.error === "EVENT_IDENTITY_COLLISION") {
         eventCreated = false;
-        eventPath = `meta/log-events/${day}/${input.operationId}.json`;
+        eventPath = eventPathFor({
+          schema: "skillwiki-log-event/v1",
+          operation_id: input.operationId,
+          occurred_at: `${day}T00:00:00.000Z`,
+          host_id: "localhost",
+          actor: "skillwiki-cli",
+          kind: input.eventKind || "log-append",
+          target: input.eventTarget || "log.md",
+          note: "collision",
+          metadata: {},
+        });
       } else {
         return {
           exitCode: event.error === "SENSITIVE_CONTENT_DETECTED"
@@ -186,7 +202,7 @@ export async function runLogAppend(input: LogAppendInput): Promise<LogAppendRun>
   const lockHandle = acquired.data;
 
   const logPath = join(input.vault, "log.md");
-  let outcome: LogAppendRun | undefined;
+  let outcome: LogAppendRun;
   let released: Result<{ released: boolean }> | undefined;
   try {
     outcome = await appendWhileLocked(logPath, content, markers, writeMarker);
@@ -205,25 +221,18 @@ export async function runLogAppend(input: LogAppendInput): Promise<LogAppendRun>
       result: err("WRITE_FAILED", { stage: "log-unlock" }),
     };
   }
-  if (outcome === undefined) {
-    return {
-      exitCode: ExitCode.WRITE_FAILED,
-      result: err("WRITE_FAILED", { stage: "log-append" }),
-    };
-  }
 
   if (outcome.result.ok) {
+    const alreadyApplied = !outcome.result.data.appended && eventCreated === false;
     outcome = {
       exitCode: outcome.exitCode,
       result: ok({
         ...outcome.result.data,
         ...(eventCreated !== undefined ? { event_created: eventCreated } : {}),
         ...(eventPath ? { event_path: eventPath } : {}),
-        humanHint: outcome.result.data.appended
-          ? outcome.result.data.humanHint
-          : eventCreated === false
-            ? `operation already applied (${outcome.result.data.entries_before} entries)`
-            : outcome.result.data.humanHint,
+        humanHint: alreadyApplied
+          ? `operation already applied (${outcome.result.data.entries_before} entries)`
+          : outcome.result.data.humanHint,
       }),
     };
   }

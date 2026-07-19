@@ -80,18 +80,6 @@ program.name("skillwiki").description("Deterministic helpers for CodeWiki skills
 program.option("--human", "render terminal-readable output instead of JSON");
 
 async function emit<T>(r: { exitCode: number; result: Result<T> }, vault?: string, opts?: { postCommit?: boolean }): Promise<never> {
-  // path --plain: stdout is exactly the vault path with no JSON wrapper.
-  if (
-    r.result.ok &&
-    typeof r.result.data === "object" &&
-    r.result.data !== null &&
-    "plain" in r.result.data &&
-    (r.result.data as { plain?: boolean }).plain === true &&
-    "path" in r.result.data
-  ) {
-    process.stdout.write(`${String((r.result.data as { path: string }).path)}\n`);
-    process.exit(r.exitCode);
-  }
   if (program.opts().human) printHuman(r.result); else printJson(r.result);
   if (vault && opts?.postCommit !== false) await postCommit(vault, r.exitCode);
   process.exit(r.exitCode);
@@ -259,7 +247,7 @@ program
   .action(async (opts) => {
     const initTime = !!opts.initTime;
     const flag = initTime ? opts.target : opts.vault;
-    emit(await runPath({
+    const r = await runPath({
       flag,
       envValue: process.env.WIKI_PATH,
       home: process.env.HOME ?? "",
@@ -268,7 +256,13 @@ program
       cwd: process.cwd(),
       explain: !!opts.explain,
       plain: !!opts.plain,
-    }));
+    });
+    // Presentation stays at the path command — stdout is exactly the path when --plain.
+    if (opts.plain && r.result.ok) {
+      process.stdout.write(`${r.result.data.path}\n`);
+      process.exit(r.exitCode);
+    }
+    emit(r);
   });
 
 program
