@@ -7,6 +7,7 @@
  * Pure decision helpers + thin git/fs scanners. Agents and CLI call these
  * before non-hygiene vault mutations so backlog cannot grow unbounded.
  */
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { err, ok, type Result } from "@skillwiki/shared";
@@ -143,8 +144,20 @@ export function measureDirtyVolume(vault: string): DirtyVolumeReport {
     return empty({ is_git_repo: false });
   }
 
-  const porcelain = git(vault, ["status", "--porcelain"]);
-  const lines = porcelain ? porcelain.split("\n").filter((l) => l.trim().length > 0) : [];
+  // Do not use git() here: its .trim() strips a leading space on the first
+  // porcelain line when XY is " M"/" A"/etc., corrupting path parse (index.md → ndex.md).
+  let porcelain = "";
+  try {
+    porcelain = execFileSync("git", ["status", "--porcelain"], {
+      cwd: vault,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch {
+    porcelain = "";
+  }
+  // Strip only trailing newlines; keep leading spaces on status codes.
+  const lines = porcelain.replace(/\n+$/, "").split("\n").filter((l) => l.length > 0);
   let modified = 0;
   let untracked = 0;
   let expanded = 0;
@@ -156,14 +169,16 @@ export function measureDirtyVolume(vault: string): DirtyVolumeReport {
   };
 
   for (const line of lines) {
-    // porcelain: XY PATH or XY ORIG -> PATH for renames; untracked: ?? path
-    const code = line.slice(0, 2);
-    let pathPart = line.slice(3);
+    // porcelain: "XY PATH", "XY ORIG -> PATH", or "?? path"
+    const match = line.match(/^(.{2}) (.*)$/);
+    if (!match) continue;
+    const code = match[1]!;
+    let pathPart = match[2] ?? "";
     if (pathPart.includes(" -> ")) {
       pathPart = pathPart.split(" -> ").pop() ?? pathPart;
     }
-    // unquoted paths; strip optional quotes
-    const rel = pathPart.replace(/^"|"$/g, "").trim();
+    // strip optional surrounding quotes from path
+    const rel = pathPart.replace(/^"(.*)"$/, "$1").trim();
     if (!rel) continue;
 
     if (code === "??") {

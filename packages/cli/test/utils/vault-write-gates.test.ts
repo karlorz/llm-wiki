@@ -92,6 +92,19 @@ describe("M1 dirty volume gate", () => {
     expect(report.porcelain_lines).toBeGreaterThanOrEqual(1);
     expect(report.expanded_files).toBeGreaterThanOrEqual(2);
   });
+
+  it("preserves leading space on first porcelain line (index.md not ndex.md)", () => {
+    const vault = makeGitVault("dirty-space-xy");
+    // Commit a file then modify it so status is " M path" (space in X column).
+    writeFileSync(join(vault, "index.md"), "v1\n");
+    git(vault, ["add", "index.md"]);
+    git(vault, ["commit", "-m", "add index"]);
+    writeFileSync(join(vault, "index.md"), "v2\n");
+    // Ensure index.md is the first porcelain line (no untracked before it).
+    const report = measureDirtyVolume(vault);
+    expect(report.buckets.some((b) => b.bucket === "index.md")).toBe(true);
+    expect(report.buckets.some((b) => b.bucket === "ndex.md")).toBe(false);
+  });
 });
 
 describe("M2 mission cycle / diminishing returns gate", () => {
