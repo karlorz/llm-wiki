@@ -4,6 +4,11 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { appendLastOp } from "../utils/last-op.js";
+import {
+  CAPTURE_HYGIENE_CONTRACT,
+  evaluateCaptureBudget,
+  GateError,
+} from "../utils/vault-write-gates.js";
 
 const ALLOWED_KINDS = new Set(["note", "bug", "task", "idea", "session-log"]);
 
@@ -12,6 +17,14 @@ export interface ObserveInput {
   text: string;
   project?: string;
   kind?: string;
+  /** severity=P0 escapes daily capture budget (M3). */
+  severity?: string;
+  /** Override capture budget threshold for tests. */
+  captureBudget?: number;
+  /** Calendar day YYYY-MM-DD for budget accounting (tests). */
+  captureDay?: string;
+  /** Skip capture budget (not recommended). */
+  skipCaptureBudget?: boolean;
 }
 
 export interface ObserveOutput {
@@ -59,6 +72,28 @@ export async function runObserve(
       exitCode: ExitCode.VAULT_PATH_INVALID,
       result: err("VAULT_PATH_INVALID", { path: input.vault })
     };
+  }
+
+  // M3: per-project daily capture budget (when project is set)
+  if (input.project && !input.skipCaptureBudget) {
+    const budget = evaluateCaptureBudget({
+      vault: input.vault,
+      project: input.project,
+      day: input.captureDay,
+      budget: input.captureBudget,
+      severity: input.severity,
+    });
+    if (!budget.allowed) {
+      return {
+        exitCode: ExitCode.PREFLIGHT_FAILED,
+        result: err(GateError.CAPTURE_BUDGET_EXHAUSTED, {
+          reason: budget.reason,
+          report: budget.report,
+          humanHint: budget.humanHint,
+          hygiene_contract: CAPTURE_HYGIENE_CONTRACT,
+        }),
+      };
+    }
   }
 
   const transcriptsDir = join(input.vault, "raw", "transcripts");

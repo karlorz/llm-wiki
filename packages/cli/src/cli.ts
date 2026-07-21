@@ -72,6 +72,8 @@ import { configPath } from "./commands/config.js";
 import { readCliPackageJson } from "./utils/package-info.js";
 import { runSkillwikiMcpStdio } from "./mcp/server.js";
 import { guardProtectedVaultWrite } from "./utils/protected-vault-write-guard.js";
+import { runWritePreflightCommand } from "./commands/write-preflight.js";
+import { evaluateDirtyVolumeGate } from "./utils/vault-write-gates.js";
 
 const pkg = readCliPackageJson();
 
@@ -83,6 +85,37 @@ async function emit<T>(r: { exitCode: number; result: Result<T> }, vault?: strin
   if (program.opts().human) printHuman(r.result); else printJson(r.result);
   if (vault && opts?.postCommit !== false) await postCommit(vault, r.exitCode);
   process.exit(r.exitCode);
+}
+
+/**
+ * M1 dirty-volume gate for non-hygiene mutations.
+ * Set SKILLWIKI_SKIP_DIRTY_GATE=1 or SKILLWIKI_DIRTY_THRESHOLD to override.
+ */
+function dirtyVolumeBlock(
+  vault: string,
+  command: string,
+): { exitCode: number; result: Result<unknown> } | null {
+  if (process.env.SKILLWIKI_SKIP_DIRTY_GATE === "1") return null;
+  const thrRaw = process.env.SKILLWIKI_DIRTY_THRESHOLD;
+  const threshold = thrRaw != null && thrRaw !== "" ? Number(thrRaw) : undefined;
+  const gate = evaluateDirtyVolumeGate({
+    vault,
+    command,
+    threshold: Number.isFinite(threshold as number) ? (threshold as number) : undefined,
+  });
+  if (gate.allowed) return null;
+  return {
+    exitCode: ExitCode.PREFLIGHT_FAILED,
+    result: {
+      ok: false,
+      error: gate.code,
+      detail: {
+        reason: gate.reason,
+        report: gate.report,
+        humanHint: gate.humanHint,
+      },
+    },
+  };
 }
 
 async function emitGuardedVaultWrite<T>(
@@ -103,12 +136,17 @@ async function emitGuardedVaultWrite<T>(
   if (guard.blocked) {
     return emit({ exitCode: guard.exitCode, result: guard.result }, undefined, { postCommit: false });
   }
+  const dirty = dirtyVolumeBlock(vault, command);
+  if (dirty) {
+    return emit(dirty as { exitCode: number; result: Result<T> }, undefined, { postCommit: false });
+  }
   return emit(await run(), vault, opts);
 }
 
 /**
  * Protected-vault guard + managed-write preflight/lock for mutating CLI writes.
  * Rejects immutable-record mode in Release A via runManagedWriteTransaction.
+ * Also enforces M1 dirty-volume write gate for non-hygiene commands.
  */
 async function emitManagedVaultWrite<T>(
   vault: string,
@@ -128,6 +166,10 @@ async function emitManagedVaultWrite<T>(
   });
   if (guard.blocked) {
     return emit({ exitCode: guard.exitCode, result: guard.result }, undefined, { postCommit: false });
+  }
+  const dirty = dirtyVolumeBlock(vault, command);
+  if (dirty) {
+    return emit(dirty as { exitCode: number; result: Result<T> }, undefined, { postCommit: false });
   }
   const { runManagedWriteTransaction } = await import("./utils/managed-write-preflight.js");
   const run = await runManagedWriteTransaction({
@@ -1270,6 +1312,8 @@ program
   .requiredOption("--text <text>", "observation text")
   .option("--kind <kind>", "observation kind (note|bug|task|idea|session-log)", "task")
   .option("--project <slug>", "associated project slug (required for task/bug claim detection)")
+  .option("--severity <level>", "severity (P0 escapes daily capture budget)")
+  .option("--capture-budget <n>", "override daily capture budget", (s) => parseInt(s, 10))
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -1281,7 +1325,9 @@ program
         vault: v.vault,
         text: opts.text,
         kind: opts.kind,
-        project: opts.project
+        project: opts.project,
+        severity: opts.severity,
+        captureBudget: opts.captureBudget,
       })
     );
   });
@@ -1522,6 +1568,51 @@ fleetCmd
       user: process.env.USER,
     });
     emit(r, vault);
+  });
+
+// write-preflight — M1 dirty volume + M2 mission stop + M3 capture budget
+program
+  .command("write-preflight [vault]")
+  .description("agent write gates: dirty volume, saturated mission stop, capture budget (analysis M1–M3)")
+  .option("--command <name>", "command name for hygiene classification", "agent-write")
+  .option("--dirty-threshold <n>", "expanded dirty-file threshold", (s) => parseInt(s, 10))
+  .option("--skip-dirty", "skip dirty-volume gate", false)
+  .option("--prior-artifact-file <path>", "prior cycle artifact path for saturation scan")
+  .option("--prior-artifact-text <text>", "prior cycle artifact text for saturation scan")
+  .option("--consecutive-no-decision <n>", "no-new-decision streak", (s) => parseInt(s, 10))
+  .option("--no-decision-threshold <n>", "streak threshold", (s) => parseInt(s, 10))
+  .option("--human-allow", "explicit human allow for saturated missions", false)
+  .option("--mission-kind <kind>", "mission kind label (pilot-q, research-cycle, …)")
+  .option("--skip-mission", "skip mission saturation gate", false)
+  .option("--project <slug>", "project slug for capture budget")
+  .option("--capture-day <date>", "YYYY-MM-DD for capture budget")
+  .option("--capture-budget <n>", "daily capture budget", (s) => parseInt(s, 10))
+  .option("--severity <level>", "severity (P0 escapes budget)")
+  .option("--skip-budget", "skip capture budget gate", false)
+  .option("--checks <list>", "comma list: dirty,mission,budget,all", "all")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runWritePreflightCommand({
+      vault: v.vault,
+      command: opts.command,
+      dirtyThreshold: opts.dirtyThreshold,
+      skipDirty: !!opts.skipDirty,
+      priorArtifactFile: opts.priorArtifactFile,
+      priorArtifactText: opts.priorArtifactText,
+      consecutiveNoNewDecision: opts.consecutiveNoDecision,
+      noDecisionThreshold: opts.noDecisionThreshold,
+      humanAllow: !!opts.humanAllow,
+      missionKind: opts.missionKind,
+      skipMission: !!opts.skipMission,
+      project: opts.project,
+      captureDay: opts.captureDay,
+      captureBudget: opts.captureBudget,
+      severity: opts.severity,
+      skipBudget: !!opts.skipBudget,
+      checks: opts.checks,
+    }), undefined, { postCommit: false });
   });
 
 // Emit deprecation warnings for any installed skills marked deprecated

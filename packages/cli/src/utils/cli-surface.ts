@@ -85,12 +85,30 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("sync"); // has subcommands
   program.command("backup"); // has subcommands
   program.command("seed").option("--wiki <name>");
-  program.command("observe").requiredOption("--text <text>").option("--kind <kind>").option("--project <slug>").option("--wiki <name>");
+  program.command("observe").requiredOption("--text <text>").option("--kind <kind>").option("--project <slug>").option("--severity <level>").option("--capture-budget <n>").option("--wiki <name>");
   program.command("session-brief").option("--project <slug>").option("--write").option("--wiki <name>");
   program.command("memory"); // has subcommands
   program.command("ingest").requiredOption("--vault <path>").requiredOption("--type <type>").requiredOption("--title <title>").option("--tags <csv>").option("--provenance <provenance>").option("--dry-run");
   program.command("fleet"); // has subcommands
   program.command("page"); // has subcommands
+  program.command("write-preflight")
+    .option("--command <name>")
+    .option("--dirty-threshold <n>")
+    .option("--skip-dirty")
+    .option("--prior-artifact-file <path>")
+    .option("--prior-artifact-text <text>")
+    .option("--consecutive-no-decision <n>")
+    .option("--no-decision-threshold <n>")
+    .option("--human-allow")
+    .option("--mission-kind <kind>")
+    .option("--skip-mission")
+    .option("--project <slug>")
+    .option("--capture-day <date>")
+    .option("--capture-budget <n>")
+    .option("--severity <level>")
+    .option("--skip-budget")
+    .option("--checks <list>")
+    .option("--wiki <name>");
 
   // Subcommands
   const graphCmd = program.commands.find(c => c.name() === "graph")!;
