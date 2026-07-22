@@ -10,8 +10,8 @@ import {
 
 export type { RootIndexEntry } from "./index-universe.js";
 
-const UNMANAGED_START = "<!-- skillwiki:index-unmanaged:start -->";
-const UNMANAGED_END = "<!-- skillwiki:index-unmanaged:end -->";
+export const UNMANAGED_START = "<!-- skillwiki:index-unmanaged:start -->";
+export const UNMANAGED_END = "<!-- skillwiki:index-unmanaged:end -->";
 
 export interface RootIndexProjection {
   text: string;

@@ -23,6 +23,7 @@ import { runDerivedConflictResolution } from "./commands/derived-conflicts.js";
 import { runLogMaterialize } from "./commands/log-materialize.js";
 import { runLogMigrateLegacy } from "./commands/log-migrate-legacy.js";
 import { runProjectionsMaterialize } from "./commands/projections-materialize.js";
+import { runProjectionsRepairLegacy } from "./commands/projections-repair-legacy.js";
 import { runStale } from "./commands/stale.js";
 import { runClaim } from "./commands/claim.js";
 import { runPagesize } from "./commands/pagesize.js";
@@ -661,6 +662,40 @@ projectionsCmd
         { convergenceVault: opts.convergeVault },
       );
     } else emit(await runProjectionsMaterialize({ vault: v.vault, write: false }), v.vault);
+  });
+projectionsCmd
+  .command("repair-legacy [vault]")
+  .description("repair one supported legacy root-index marker pair and log event")
+  .requiredOption("--event-operation-id <id>", "exact legacy event operation ID")
+  .option("--write", "write the bounded repairs", false)
+  .option("--converge-vault <dir>", "Git vault used for managed pull and base-OID proof")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (opts.write) {
+      return emitManagedVaultWrite(
+        v.vault,
+        "projections repair-legacy",
+        (receipt) => runProjectionsRepairLegacy({
+          vault: v.vault,
+          eventOperationId: opts.eventOperationId,
+          write: true,
+          hostId: receipt.host_id,
+        }),
+        { convergenceVault: opts.convergeVault, postCommit: false },
+      );
+    } else {
+      return emit(
+        await runProjectionsRepairLegacy({
+          vault: v.vault,
+          eventOperationId: opts.eventOperationId,
+          write: false,
+        }),
+        v.vault,
+        { postCommit: false },
+      );
+    }
   });
 
 program

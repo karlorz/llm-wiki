@@ -52,6 +52,7 @@ export const HYGIENE_COMMANDS = new Set([
   "log migrate-legacy",
   "index rebuild",
   "projections materialize",
+  "projections repair-legacy",
   "doctor",
   "health",
   "lint",
