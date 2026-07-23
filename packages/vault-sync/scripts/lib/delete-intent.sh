@@ -72,3 +72,30 @@ delete_intent_list_active_paths_from_git() {
     delete_intent_list_active_paths "$tmp"
     rm -rf "$tmp"
 }
+
+# Print the sorted unique exact intersection between active tombstone paths and
+# a successful remote inventory. Both inputs are newline-delimited
+# vault-relative path files. This helper is pure: no network, logging, or
+# mutation outside its temporary sort files.
+delete_intent_plan_remote_paths() {
+    local active_paths_file="${1:-}"
+    local remote_paths_file="${2:-}"
+    [ -f "$active_paths_file" ] || return 1
+    [ -f "$remote_paths_file" ] || return 1
+
+    local tmp_dir active_sorted remote_sorted rc
+    tmp_dir="$(mktemp -d)" || return 1
+    active_sorted="$tmp_dir/active.paths"
+    remote_sorted="$tmp_dir/remote.paths"
+
+    if ! LC_ALL=C sort -u "$active_paths_file" > "$active_sorted" \
+        || ! LC_ALL=C sort -u "$remote_paths_file" > "$remote_sorted"; then
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    LC_ALL=C comm -12 "$active_sorted" "$remote_sorted"
+    rc=$?
+    rm -rf "$tmp_dir"
+    return "$rc"
+}

@@ -707,6 +707,306 @@ test_dual_path_migrate_legacy_flag
 assert_contains "snapshot supports attended legacy migration flag" "WIKI_SNAPSHOT_MIGRATE_LEGACY"
 assert_contains "snapshot passes converge-vault to projections" "--converge-vault"
 
+make_delete_intent_snapshot_fixture() {
+  local root="$1" tombstone_count="$2" remote_count="$3"
+  local git_dir="$root/wiki-git"
+  local bin_dir="$root/bin"
+  local home_dir="$root/home"
+  mkdir -p "$git_dir/meta/delete-intents" "$bin_dir" "$home_dir"
+  make_live_vault_fixture "$root"
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  printf '# Index\n' > "$git_dir/index.md"
+  printf '# Log\n' > "$git_dir/log.md"
+  : > "$root/remote.paths"
+  : > "$root/rclone.calls"
+
+  git -C "$root" init --bare origin.git >/dev/null
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" remote add origin "$root/origin.git"
+
+  local i rel slug
+  i=1
+  while [ "$i" -le "$tombstone_count" ]; do
+    rel="raw/transcripts/tombstone-$(printf '%03d' "$i").md"
+    slug="raw__transcripts__tombstone-$(printf '%03d' "$i").md.json"
+    cat > "$git_dir/meta/delete-intents/$slug" <<EOF
+{
+  "schema": "vault-delete-intent/v1",
+  "path": "$rel",
+  "action": "remove",
+  "created": "2026-07-23T00:00:00.000Z",
+  "host": "test",
+  "actor": "test",
+  "source": "cli",
+  "expires": null
+}
+EOF
+    if [ "$i" -le "$remote_count" ]; then
+      printf '%s\n' "$rel" >> "$root/remote.paths"
+    fi
+    i=$((i + 1))
+  done
+  git -C "$git_dir" add -A >/dev/null
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m init >/dev/null
+  git -C "$git_dir" push -u origin main >/dev/null
+  git --git-dir="$root/origin.git" symbolic-ref HEAD refs/heads/main
+
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  cat > "$bin_dir/flock" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "projections" ] && [ "$2" = "materialize" ]; then exit 0; fi
+if [ "$1" = "lint" ]; then exit 0; fi
+exit 0
+STUB
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+cmd="$1"
+shift || true
+printf '%s %s\n' "$cmd" "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+case "$cmd" in
+  lsf)
+    if printf '%s\n' "$*" | grep -q -- '--recursive'; then
+      if [ "${RCLONE_INVENTORY_FAIL:-0}" = "1" ]; then
+        exit 9
+      fi
+      printf 'SCHEMA.md\nindex.md\nlog.md\n'
+      cat "$SNAPSHOT_TEST_ROOT/remote.paths"
+      exit 0
+    fi
+    if [ "${RCLONE_RECHECK_PRESENT:-0}" = "1" ]; then
+      printf '%s\n' "${RCLONE_RECHECK_BASENAME:-tombstone-001.md}"
+    fi
+    exit 0
+    ;;
+  sync)
+    if [ "${RCLONE_RESURRECT_FIRST:-0}" = "1" ]; then
+      mkdir -p "$2/raw/transcripts"
+      printf 'resurrected\n' > "$2/raw/transcripts/tombstone-001.md"
+    fi
+    exit 0
+    ;;
+  deletefile)
+    rel="${1#stub:cloud/wiki/}"
+    if [ "${RCLONE_FAIL_FIRST_DELETE:-0}" = "1" ] && [ ! -e "$SNAPSHOT_TEST_ROOT/failed-once" ]; then
+      : > "$SNAPSHOT_TEST_ROOT/failed-once"
+      exit 1
+    fi
+    if grep -Fxq "$rel" "$SNAPSHOT_TEST_ROOT/remote.paths"; then
+      exit 0
+    fi
+    exit 1
+    ;;
+esac
+exit 99
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/skillwiki" "$bin_dir/rclone"
+}
+
+run_delete_intent_snapshot_fixture() {
+  local root="$1"
+  HOME="$root/home" \
+    SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$root/wiki-git" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOCK="$root/wiki-snapshot.lock" \
+    WIKI_SNAPSHOT_LOG="$root/wiki-snapshot.log" \
+    WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES="${WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES:-10}" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$root/bin:$PATH" \
+    "$SCRIPT_UNDER_TEST" > "$root/out.txt" 2>&1
+}
+
+test_snapshot_skips_delete_calls_for_absent_remote_tombstones() {
+  local root calls rc
+  root="$(mktemp -d)"
+  make_delete_intent_snapshot_fixture "$root" 12 0
+
+  RCLONE_RESURRECT_FIRST=1 run_delete_intent_snapshot_fixture "$root"
+  rc=$?
+  calls="$(grep -c '^deletefile ' "$root/rclone.calls" 2>/dev/null || true)"
+
+  if [ "$rc" -eq 0 ] \
+      && [ "$calls" = "0" ] \
+      && grep -q 'active=12 inventory_ready=1 remote_present=0 attempted=0 pruned=0 already_absent=12 failed=0 deferred=0' "$root/wiki-snapshot.log" \
+      && [ ! -e "$root/wiki-git/raw/transcripts/tombstone-001.md" ]; then
+    printf 'PASS: snapshot skips absent tombstone deletes and still strips resurrection\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: snapshot absent-tombstone behavior (rc=%s calls=%s log=%s output=%s)\n' \
+      "$rc" "$calls" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)" \
+      "$(tr '\n' ' ' < "$root/out.txt" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_bounds_attempts_when_first_delete_fails() {
+  local root calls rc
+  root="$(mktemp -d)"
+  make_delete_intent_snapshot_fixture "$root" 12 12
+
+  RCLONE_FAIL_FIRST_DELETE=1 \
+    RCLONE_RECHECK_PRESENT=1 \
+    RCLONE_RECHECK_BASENAME=tombstone-001.md \
+    run_delete_intent_snapshot_fixture "$root"
+  rc=$?
+  calls="$(grep -c '^deletefile ' "$root/rclone.calls" 2>/dev/null || true)"
+
+  if [ "$rc" -eq 0 ] \
+      && [ "$calls" = "10" ] \
+      && grep -q 'active=12 inventory_ready=1 remote_present=12 attempted=10 pruned=9 already_absent=0 failed=1 deferred=2' "$root/wiki-snapshot.log" \
+      && ! grep -q 'direct-S3-not-git warning' "$root/out.txt"; then
+    printf 'PASS: snapshot caps attempts even when a delete fails\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: snapshot attempt cap (rc=%s calls=%s log=%s output=%s)\n' \
+      "$rc" "$calls" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)" \
+      "$(tr '\n' ' ' < "$root/out.txt" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_prunes_only_remote_present_tombstones() {
+  local root calls rc recursive_lists
+  root="$(mktemp -d)"
+  make_delete_intent_snapshot_fixture "$root" 5 3
+
+  run_delete_intent_snapshot_fixture "$root"
+  rc=$?
+  calls="$(grep '^deletefile ' "$root/rclone.calls" 2>/dev/null || true)"
+  recursive_lists="$(grep '^lsf ' "$root/rclone.calls" | grep -c -- '--recursive' || true)"
+
+  if [ "$rc" -eq 0 ] \
+      && [ "$(printf '%s\n' "$calls" | sed '/^$/d' | wc -l | tr -d ' ')" = "3" ] \
+      && printf '%s\n' "$calls" | grep -q 'tombstone-001.md' \
+      && printf '%s\n' "$calls" | grep -q 'tombstone-002.md' \
+      && printf '%s\n' "$calls" | grep -q 'tombstone-003.md' \
+      && ! printf '%s\n' "$calls" | grep -q 'tombstone-004.md' \
+      && grep -q 'active=5 inventory_ready=1 remote_present=3 attempted=3 pruned=3 already_absent=2 failed=0 deferred=0' "$root/wiki-snapshot.log" \
+      && [ "$recursive_lists" = "2" ]; then
+    printf 'PASS: snapshot prunes only exact remote-present tombstones with two inventories\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: snapshot exact remote-present plan (rc=%s lists=%s calls=%s log=%s)\n' \
+      "$rc" "$recursive_lists" "$(printf '%s' "$calls" | tr '\n' ';')" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_classifies_inventory_delete_race_as_absent() {
+  local root calls rc
+  root="$(mktemp -d)"
+  make_delete_intent_snapshot_fixture "$root" 1 1
+
+  RCLONE_FAIL_FIRST_DELETE=1 run_delete_intent_snapshot_fixture "$root"
+  rc=$?
+  calls="$(grep -c '^deletefile ' "$root/rclone.calls" 2>/dev/null || true)"
+
+  if [ "$rc" -eq 0 ] \
+      && [ "$calls" = "1" ] \
+      && grep -q 'delete race resolved as already absent' "$root/wiki-snapshot.log" \
+      && grep -q 'active=1 inventory_ready=1 remote_present=1 attempted=1 pruned=0 already_absent=1 failed=0 deferred=0' "$root/wiki-snapshot.log"; then
+    printf 'PASS: snapshot classifies delete race with one exact read-only recheck\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: snapshot race classification (rc=%s calls=%s log=%s)\n' \
+      "$rc" "$calls" "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_skips_optional_prune_when_inventory_fails() {
+  local root calls rc
+  root="$(mktemp -d)"
+  make_delete_intent_snapshot_fixture "$root" 3 3
+
+  RCLONE_INVENTORY_FAIL=1 run_delete_intent_snapshot_fixture "$root"
+  rc=$?
+  calls="$(grep -c '^deletefile ' "$root/rclone.calls" 2>/dev/null || true)"
+
+  if [ "$rc" -eq 0 ] \
+      && [ "$calls" = "0" ] \
+      && grep -q 'remote inventory unavailable; optional S3 pruning skipped' "$root/wiki-snapshot.log" \
+      && grep -q 'active=3 inventory_ready=0 remote_present=0 attempted=0 pruned=0 already_absent=0 failed=0 deferred=0' "$root/wiki-snapshot.log"; then
+    printf 'PASS: snapshot fails closed on unknown remote inventory without weakening no-resurrect\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: snapshot inventory failure handling (rc=%s calls=%s log=%s output=%s)\n' \
+      "$rc" "$calls" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)" \
+      "$(tr '\n' ' ' < "$root/out.txt" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_direct_s3_warning_excludes_tombstone_but_keeps_unexplained_path() {
+  local root rc
+  root="$(mktemp -d)"
+  make_delete_intent_snapshot_fixture "$root" 1 1
+  printf 'raw/transcripts/unexplained.md\n' >> "$root/remote.paths"
+
+  run_delete_intent_snapshot_fixture "$root"
+  rc=$?
+
+  if [ "$rc" -eq 0 ] \
+      && grep -q 'direct-S3-not-git warning: 1 note path' "$root/out.txt" \
+      && grep -q 'direct-S3-not-git: raw/transcripts/unexplained.md' "$root/out.txt" \
+      && ! grep -q 'direct-S3-not-git: raw/transcripts/tombstone-001.md' "$root/out.txt"; then
+    printf 'PASS: direct-S3 warning excludes tombstones and retains unexplained paths\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: direct-S3 tombstone exclusion (rc=%s output=%s)\n' \
+      "$rc" "$(tr '\n' ' ' < "$root/out.txt" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_rejects_invalid_tombstone_prune_cap() {
+  local root rc
+  root="$(mktemp -d)"
+  make_delete_intent_snapshot_fixture "$root" 1 1
+
+  WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES=invalid run_delete_intent_snapshot_fixture "$root"
+  rc=$?
+
+  if [ "$rc" -ne 0 ] \
+      && grep -q 'invalid WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES=invalid' "$root/wiki-snapshot.log" \
+      && ! grep -q '^sync ' "$root/rclone.calls"; then
+    printf 'PASS: snapshot rejects invalid tombstone prune cap before sync\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: invalid tombstone prune cap was not rejected (rc=%s calls=%s log=%s)\n' \
+      "$rc" "$(tr '\n' ';' < "$root/rclone.calls" 2>/dev/null)" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_skips_delete_calls_for_absent_remote_tombstones
+test_snapshot_bounds_attempts_when_first_delete_fails
+test_snapshot_prunes_only_remote_present_tombstones
+test_snapshot_classifies_inventory_delete_race_as_absent
+test_snapshot_skips_optional_prune_when_inventory_fails
+test_snapshot_direct_s3_warning_excludes_tombstone_but_keeps_unexplained_path
+test_snapshot_rejects_invalid_tombstone_prune_cap
+
 if [ "$(uname -s)" != "Linux" ]; then
   printf "SKIP: Linux-only runtime snapshot guard test\n"
   printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"

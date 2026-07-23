@@ -78,9 +78,11 @@ LOG_FILE="${WIKI_SNAPSHOT_LOG:-$DEFAULT_LOG_DIR/wiki-snapshot.log}"
 CLOUD_REMOTE="${CLOUD_REMOTE:-cloud:cloud/wiki}"
 REPAIR_SCRIPT="${WIKI_GIT_REPAIR_SCRIPT:-$SCRIPT_DIR/wiki-git-repair-v3.sh}"
 MAX_S3_ONLY_NOTES="${WIKI_SNAPSHOT_MAX_S3_ONLY_NOTES:-200}"
+MAX_TOMBSTONE_PRUNES="${WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES:-10}"
 DATE=$(date +%Y%m%d_%H%M%S)
 RCLONE_LOG="/tmp/rclone-${DATE}.log"
 SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT=0
+SNAPSHOT_REMOTE_INVENTORY_READY=0
 
 fetch_origin_main_ref() {
     # The snapshot guards read origin/main directly. Use an explicit destination
@@ -88,25 +90,63 @@ fetch_origin_main_ref() {
     git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main
 }
 
+snapshot_refresh_origin_main() {
+    (
+        cd "$SNAPSHOT_WORKTREE" || exit 1
+        fetch_origin_main_ref
+    )
+}
+
+snapshot_load_active_delete_intent_paths() {
+    local output_file="${1:-}"
+    [ -n "$output_file" ] || return 1
+    : > "$output_file" || return 1
+
+    if command -v delete_intent_list_active_paths_from_git >/dev/null 2>&1 \
+        && git -C "$SNAPSHOT_WORKTREE" rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+        delete_intent_list_active_paths_from_git "$SNAPSHOT_WORKTREE" origin/main > "$output_file"
+        return $?
+    fi
+    if command -v delete_intent_list_active_paths >/dev/null 2>&1; then
+        delete_intent_list_active_paths "$SNAPSHOT_WORKTREE" > "$output_file"
+        return $?
+    fi
+    return 1
+}
+
 snapshot_direct_s3_preflight() {
+    local inventory_output="${1:-}"
+    local active_paths_file="${2:-}"
     local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    # Ensure tmp_dir is cleaned up on any return path or interrupt.
-    trap 'rm -rf "$tmp_dir"' RETURN
-    local direct_paths="$tmp_dir/direct-s3.paths"
+    tmp_dir="$(mktemp -d)" || {
+        echo "[wiki-snapshot] WARN: direct-S3 preflight could not create temporary state"
+        SNAPSHOT_REMOTE_INVENTORY_READY=0
+        return 0
+    }
+    local direct_paths
+    if [ -n "$inventory_output" ]; then
+        direct_paths="$inventory_output"
+    else
+        direct_paths="$tmp_dir/direct-s3.paths"
+    fi
     local direct_notes="$tmp_dir/direct-s3-notes.paths"
     local git_paths="$tmp_dir/git.paths"
+    local direct_not_git_candidates="$tmp_dir/direct-s3-not-git-candidates.paths"
     local direct_not_git="$tmp_dir/direct-s3-not-git.paths"
+    local active_sorted="$tmp_dir/active.paths"
 
-    if ! rclone lsf "$CLOUD_REMOTE" --recursive --files-only 2>/dev/null | LC_ALL=C sort > "$direct_paths"; then
+    SNAPSHOT_REMOTE_INVENTORY_READY=0
+
+    if ! rclone lsf "$CLOUD_REMOTE" --recursive --files-only 2>/dev/null | LC_ALL=C sort -u > "$direct_paths"; then
         echo "[wiki-snapshot] WARN: direct-S3 preflight could not list $CLOUD_REMOTE"
+        rm -rf "$tmp_dir"
         return 0
     fi
+    SNAPSHOT_REMOTE_INVENTORY_READY=1
 
     grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|\.playwright-cli/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" | LC_ALL=C sort -u > "$direct_notes" || true
     (
         cd "$SNAPSHOT_WORKTREE" || exit 1
-        fetch_origin_main_ref 2>/dev/null || true
         if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
             git -c core.quotePath=false ls-tree -r --name-only origin/main
         else
@@ -114,23 +154,48 @@ snapshot_direct_s3_preflight() {
         fi | LC_ALL=C sort -u
     ) > "$git_paths" 2>/dev/null || {
         echo "[wiki-snapshot] WARN: direct-S3 preflight could not list tracked files in snapshot worktree $SNAPSHOT_WORKTREE"
+        rm -rf "$tmp_dir"
         return 0
     }
 
-    LC_ALL=C comm -23 "$direct_notes" "$git_paths" > "$direct_not_git"
+    LC_ALL=C comm -23 "$direct_notes" "$git_paths" > "$direct_not_git_candidates"
+    if [ -n "$active_paths_file" ] && [ -f "$active_paths_file" ]; then
+        LC_ALL=C sort -u "$active_paths_file" > "$active_sorted"
+        LC_ALL=C comm -23 "$direct_not_git_candidates" "$active_sorted" > "$direct_not_git"
+    else
+        LC_ALL=C sort -u "$direct_not_git_candidates" > "$direct_not_git"
+    fi
     SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT="$(wc -l < "$direct_not_git" | tr -d ' ')"
     if [ "$SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT" != "0" ]; then
         echo "[wiki-snapshot] WARN: direct-S3-not-git warning: $SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT note path(s) exist in direct S3 but not in $SNAPSHOT_WORKTREE"
         sed -n '1,20p' "$direct_not_git" | sed 's/^/[wiki-snapshot] WARN: direct-S3-not-git: /'
+        rm -rf "$tmp_dir"
         return 2
     fi
 
+    rm -rf "$tmp_dir"
     return 0
 }
 
 handle_direct_s3_preflight_before_sync() {
-    snapshot_direct_s3_preflight
+    local tmp_dir active_paths
+    tmp_dir="$(mktemp -d)" || {
+        log "ERROR: could not create direct-S3 preflight state"
+        return 1
+    }
+    active_paths="$tmp_dir/active.paths"
+    if ! snapshot_refresh_origin_main 2>/dev/null; then
+        log "WARNING: could not refresh origin/main before direct-S3 preflight; using the existing ref"
+    fi
+    if ! snapshot_load_active_delete_intent_paths "$active_paths"; then
+        rm -rf "$tmp_dir"
+        log "ERROR: active delete-intent inventory unavailable before direct-S3 preflight"
+        return 1
+    fi
+
+    snapshot_direct_s3_preflight "" "$active_paths"
     local rc=$?
+    rm -rf "$tmp_dir"
     if [ "$rc" -eq 0 ]; then
         return 0
     fi
@@ -197,7 +262,34 @@ if [ "$DRY_RUN" = true ]; then
     echo "  CLOUD_REMOTE      = $CLOUD_REMOTE"
     echo "  REPAIR_SCRIPT     = $REPAIR_SCRIPT"
     echo "[wiki-snapshot] DRY RUN: --max-delete guard verified (present in $0)"
-    snapshot_direct_s3_preflight || true
+    dry_run_tmp="$(mktemp -d)" || exit 1
+    dry_run_active="$dry_run_tmp/active.paths"
+    dry_run_remote="$dry_run_tmp/remote.paths"
+    dry_run_plan="$dry_run_tmp/remote-present.paths"
+    case "$MAX_TOMBSTONE_PRUNES" in
+        ''|*[!0-9]*)
+            echo "[wiki-snapshot] ERROR: invalid WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES=$MAX_TOMBSTONE_PRUNES; expected a non-negative integer" >&2
+            rm -rf "$dry_run_tmp"
+            exit 1
+            ;;
+    esac
+    snapshot_refresh_origin_main 2>/dev/null || true
+    snapshot_load_active_delete_intent_paths "$dry_run_active" || : > "$dry_run_active"
+    snapshot_direct_s3_preflight "$dry_run_remote" "$dry_run_active" || true
+    if [ "$SNAPSHOT_REMOTE_INVENTORY_READY" = "1" ] \
+        && delete_intent_plan_remote_paths "$dry_run_active" "$dry_run_remote" > "$dry_run_plan"; then
+        dry_run_active_count="$(wc -l < "$dry_run_active" | tr -d ' ')"
+        dry_run_remote_count="$(wc -l < "$dry_run_plan" | tr -d ' ')"
+        dry_run_absent_count=$((dry_run_active_count - dry_run_remote_count))
+        dry_run_deferred_count=0
+        if [ "$dry_run_remote_count" -gt "$MAX_TOMBSTONE_PRUNES" ] 2>/dev/null; then
+            dry_run_deferred_count=$((dry_run_remote_count - MAX_TOMBSTONE_PRUNES))
+        fi
+        echo "[wiki-snapshot] DRY RUN: delete-intent active=$dry_run_active_count remote_present=$dry_run_remote_count already_absent=$dry_run_absent_count deferred=$dry_run_deferred_count"
+    else
+        echo "[wiki-snapshot] DRY RUN: delete-intent remote inventory unavailable; optional pruning would be skipped"
+    fi
+    rm -rf "$dry_run_tmp"
     echo "[wiki-snapshot] DRY RUN: would acquire $LOCK_FILE, rclone sync, git commit, push."
     echo "[wiki-snapshot] DRY RUN: Complete. No changes made."
     exit 0
@@ -215,6 +307,16 @@ fi
 # Logging helper
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
+}
+
+validate_tombstone_prune_cap() {
+    case "$MAX_TOMBSTONE_PRUNES" in
+        ''|*[!0-9]*)
+            log "ERROR: invalid WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES=$MAX_TOMBSTONE_PRUNES; expected a non-negative integer"
+            return 1
+            ;;
+    esac
+    return 0
 }
 
 raw_dedup_guard() {
@@ -292,6 +394,10 @@ refresh_git_baseline() {
 }
 
 log "=== Wiki Snapshot: $DATE ==="
+
+if ! validate_tombstone_prune_cap; then
+    exit 1
+fi
 
 # Check disk space (need at least 100MB free)
 AVAILABLE_KB=$(df -k "$SNAPSHOT_WORKTREE" | awk 'NR==2 {print $4}')
@@ -392,61 +498,156 @@ fi
 # --- Delete-intent no-resurrect ---
 # Git is SSOT for intentional absences. After S3→worktree sync, strip any path
 # that has an active tombstone on origin/main and optionally prune S3.
-snapshot_apply_delete_intents() {
-    if ! command -v delete_intent_list_active_paths_from_git >/dev/null 2>&1 \
-        && ! command -v delete_intent_list_active_paths >/dev/null 2>&1; then
-        log "WARNING: delete-intent helpers unavailable; skipping tombstone no-resurrect"
-        return 0
+snapshot_remote_path_exists_exact() {
+    local rel_path="${1:-}"
+    local parent_path base_name remote_parent output_file rc
+    [ -n "$rel_path" ] || return 2
+
+    base_name="${rel_path##*/}"
+    if [ "$rel_path" = "$base_name" ]; then
+        remote_parent="${CLOUD_REMOTE%/}"
+    else
+        parent_path="${rel_path%/*}"
+        remote_parent="${CLOUD_REMOTE%/}/$parent_path"
     fi
 
-    # Re-materialize ledger from git so rclone sync cannot drop git-only intents,
-    # then list from the worktree (single parse — avoid re-git-show of every blob).
-    (
-        cd "$SNAPSHOT_WORKTREE" || exit 0
-        fetch_origin_main_ref 2>/dev/null || true
-        if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
-            git checkout origin/main -- meta/delete-intents/ 2>/dev/null || true
-        fi
-    )
+    output_file="$(mktemp)" || return 2
+    if ! rclone lsf "$remote_parent" --files-only --max-depth 1 --retries 1 > "$output_file" 2>>"$LOG_FILE"; then
+        rm -f "$output_file"
+        return 2
+    fi
+    if grep -Fxq -- "$base_name" "$output_file"; then
+        rc=0
+    else
+        rc=1
+    fi
+    rm -f "$output_file"
+    return "$rc"
+}
 
-    local paths_file pruned=0
-    paths_file="$(mktemp)"
-    if command -v delete_intent_list_active_paths >/dev/null 2>&1; then
-        delete_intent_list_active_paths "$SNAPSHOT_WORKTREE" > "$paths_file" 2>/dev/null || true
-    elif command -v delete_intent_list_active_paths_from_git >/dev/null 2>&1; then
-        delete_intent_list_active_paths_from_git "$SNAPSHOT_WORKTREE" origin/main > "$paths_file" 2>/dev/null || true
+snapshot_apply_delete_intents() {
+    local paths_file="${1:-}"
+    local remote_inventory_file="${2:-}"
+    local inventory_ready="${3:-0}"
+    if [ ! -f "$paths_file" ]; then
+        log "ERROR: active delete-intent inventory file missing; refusing snapshot promotion"
+        return 1
     fi
 
     if [ ! -s "$paths_file" ]; then
-        rm -f "$paths_file"
         log "delete-intent: no active tombstones"
         return 0
     fi
 
-    local rel_path
+    # Re-materialize ledger from git so rclone sync cannot drop git-only intents,
+    # and fail closed if the authoritative ledger cannot be restored.
+    if ! (
+        cd "$SNAPSHOT_WORKTREE" || exit 1
+        if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+            git checkout origin/main -- meta/delete-intents/
+        fi
+    ) 2>>"$LOG_FILE"; then
+        log "ERROR: could not restore authoritative delete-intent ledger from origin/main"
+        return 1
+    fi
+
+    local active_count remote_present_count attempted pruned already_absent failed deferred
+    local rel_path plan_file recheck_rc
+    active_count="$(wc -l < "$paths_file" | tr -d ' ')"
+    remote_present_count=0
+    attempted=0
+    pruned=0
+    already_absent=0
+    failed=0
+    deferred=0
+
     while IFS= read -r rel_path; do
         [ -z "$rel_path" ] && continue
         if [ -e "$SNAPSHOT_WORKTREE/$rel_path" ]; then
-            rm -f "$SNAPSHOT_WORKTREE/$rel_path"
+            rm -f -- "$SNAPSHOT_WORKTREE/$rel_path"
             log "delete-intent: stripped resurrected path from worktree: $rel_path"
-        fi
-        # Bounded S3 prune for tombstoned paths still present on remote.
-        if [ "$pruned" -lt 10 ]; then
-            if rclone deletefile "${CLOUD_REMOTE%/}/$rel_path" >>"$LOG_FILE" 2>&1; then
-                log "delete-intent: pruned S3 object $rel_path"
-                pruned=$((pruned + 1))
-            fi
         fi
     done < "$paths_file"
 
-    rm -f "$paths_file"
-    log "delete-intent: no-resurrect pass complete (s3_pruned=$pruned)"
+    if [ "$inventory_ready" != "1" ] || [ ! -f "$remote_inventory_file" ]; then
+        log "WARNING: delete-intent remote inventory unavailable; optional S3 pruning skipped"
+        log "delete-intent: no-resurrect pass complete active=$active_count inventory_ready=0 remote_present=0 attempted=0 pruned=0 already_absent=0 failed=0 deferred=0"
+        return 0
+    fi
+
+    plan_file="$(mktemp)" || {
+        log "WARNING: could not create delete-intent prune plan; optional S3 pruning skipped"
+        return 0
+    }
+    if ! delete_intent_plan_remote_paths "$paths_file" "$remote_inventory_file" > "$plan_file"; then
+        rm -f "$plan_file"
+        log "WARNING: could not plan delete-intent remote intersection; optional S3 pruning skipped"
+        return 0
+    fi
+
+    remote_present_count="$(wc -l < "$plan_file" | tr -d ' ')"
+    already_absent=$((active_count - remote_present_count))
+
+    while IFS= read -r rel_path; do
+        [ -z "$rel_path" ] && continue
+        if [ "$attempted" -ge "$MAX_TOMBSTONE_PRUNES" ]; then
+            break
+        fi
+        attempted=$((attempted + 1))
+        if rclone deletefile "${CLOUD_REMOTE%/}/$rel_path" --retries 1 >>"$LOG_FILE" 2>&1; then
+            pruned=$((pruned + 1))
+            log "delete-intent: pruned S3 object $rel_path"
+            continue
+        fi
+
+        snapshot_remote_path_exists_exact "$rel_path"
+        recheck_rc=$?
+        if [ "$recheck_rc" -eq 1 ]; then
+            already_absent=$((already_absent + 1))
+            log "delete-intent: delete race resolved as already absent: $rel_path"
+        elif [ "$recheck_rc" -eq 0 ]; then
+            failed=$((failed + 1))
+            log "WARNING: delete-intent prune failed and object remains present: $rel_path"
+        else
+            failed=$((failed + 1))
+            log "WARNING: delete-intent prune failed and exact recheck was unavailable: $rel_path"
+        fi
+    done < "$plan_file"
+
+    deferred=$((remote_present_count - attempted))
+    rm -f "$plan_file"
+    log "delete-intent: no-resurrect pass complete active=$active_count inventory_ready=1 remote_present=$remote_present_count attempted=$attempted pruned=$pruned already_absent=$already_absent failed=$failed deferred=$deferred"
     return 0
 }
 
-snapshot_apply_delete_intents
+snapshot_reconcile_delete_intents() {
+    local tmp_dir active_paths remote_inventory rc
+    tmp_dir="$(mktemp -d)" || {
+        log "ERROR: could not create delete-intent reconciliation state"
+        return 1
+    }
+    active_paths="$tmp_dir/active.paths"
+    remote_inventory="$tmp_dir/remote.paths"
 
-snapshot_direct_s3_preflight || true
+    if ! snapshot_refresh_origin_main 2>/dev/null; then
+        log "WARNING: could not refresh origin/main before delete-intent reconciliation; using the existing ref"
+    fi
+    if ! snapshot_load_active_delete_intent_paths "$active_paths"; then
+        rm -rf "$tmp_dir"
+        log "ERROR: could not load active delete-intent paths; refusing snapshot promotion"
+        return 1
+    fi
+
+    snapshot_direct_s3_preflight "$remote_inventory" "$active_paths" || true
+    snapshot_apply_delete_intents "$active_paths" "$remote_inventory" "$SNAPSHOT_REMOTE_INVENTORY_READY"
+    rc=$?
+    rm -rf "$tmp_dir"
+    return "$rc"
+}
+
+if ! snapshot_reconcile_delete_intents; then
+    exit 1
+fi
 
 # Change to git dir for operations
 cd "$SNAPSHOT_WORKTREE" || { log "ERROR: Failed to cd to $SNAPSHOT_WORKTREE"; exit 1; }
@@ -514,7 +715,9 @@ if [ "$needs_repair" = true ]; then
         exit 1
     fi
     rm -f "$RCLONE_LOG"
-    snapshot_apply_delete_intents
+    if ! snapshot_reconcile_delete_intents; then
+        exit 1
+    fi
 fi
 
 if ! raw_dedup_guard; then
