@@ -309,6 +309,18 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
 }
 
+# Emit the canonical snapshot-completion terminal record (v0.10.14).
+# One stable machine-parseable line written for both pushed and no-change
+# success outcomes. Failure paths must never call this.
+#   SNAPSHOT_COMPLETE schema=v1 outcome=<pushed|no-change> result=success ts=<ISO> head=<oid> origin=<oid|unknown>
+emit_snapshot_complete() {
+    local outcome="$1"
+    local head_oid origin_oid
+    head_oid="$(git -C "$SNAPSHOT_WORKTREE" rev-parse HEAD 2>/dev/null || echo unknown)"
+    origin_oid="$(git -C "$SNAPSHOT_WORKTREE" rev-parse --verify -q origin/main 2>/dev/null || echo unknown)"
+    log "SNAPSHOT_COMPLETE schema=v1 outcome=${outcome} result=success ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) head=${head_oid} origin=${origin_oid}"
+}
+
 validate_tombstone_prune_cap() {
     case "$MAX_TOMBSTONE_PRUNES" in
         ''|*[!0-9]*)
@@ -731,6 +743,7 @@ fi
 # Check for changes
 if [ -z "$(git status --porcelain)" ]; then
     log "No changes to commit"
+    emit_snapshot_complete "no-change"
     exit 0
 fi
 
@@ -807,6 +820,7 @@ done
 if [ "$PUSH_SUCCESS" = true ]; then
     log "Push successful"
     log "Status: complete"
+    emit_snapshot_complete "pushed"
     exit 0
 else
     log "ERROR: Push failed after $PUSH_RETRIES attempts"
