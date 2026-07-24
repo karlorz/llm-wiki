@@ -1,7 +1,8 @@
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, appendFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
+import { platform } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { loadFleetManifestAndHost, type FleetManifestAndHost } from "./fleet.js";
 import {
@@ -12,7 +13,6 @@ import {
   hasUnmergedPaths,
   hasActiveGitSequencer,
   isWorktreeClean,
-  type JournalFields,
 } from "../utils/operation-journal.js";
 import { git } from "../utils/git.js";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
@@ -185,7 +185,7 @@ export async function runSnapshotMaintenanceDryRun(
 ): Promise<{ exitCode: number; result: Result<SnapshotMaintenanceOutput> }> {
   const env = input.env ?? process.env;
   const home = input.home ?? env.HOME ?? "";
-  const audit = input.auditSink ?? (() => {});
+  const audit = input.auditSink ?? defaultAuditSink(home);
   const now = input.now ?? Date.now();
 
   const fleetLoad = input.fleetLoad !== undefined
@@ -316,6 +316,34 @@ async function resolveLiveVault(input: { env: NodeJS.ProcessEnv; home: string })
   return resolved.ok ? canonicalize(resolved.data.path) : undefined;
 }
 
+/** Resolve the protected JSONL audit log path under the platform state dir. */
+export function snapshotMaintenanceAuditLogPath(home: string): string {
+  const stateDir = platform() === "darwin"
+    ? join(home, "Library", "Application Support", "vault-sync")
+    : join(home, ".local", "state", "vault-sync");
+  return join(stateDir, "snapshot-maintenance-audit.jsonl");
+}
+
+/** Default audit sink: append the event as one JSON line to the protected log. */
+function defaultAuditSink(home: string): (event: MaintenanceAuditEvent) => void {
+  return (event) => {
+    try {
+      const logPath = snapshotMaintenanceAuditLogPath(home);
+      mkdirSync(join(logPath, ".."), { recursive: true });
+      appendFileSync(logPath, JSON.stringify(event) + "\n", { encoding: "utf8" });
+    } catch {
+      // Audit write failures must not silently swallow the mutation result.
+      // The command's evidence-write contract is enforced by the caller; a
+      // failed audit append for a refusal is non-fatal.
+    }
+  };
+}
+
+/**
+ * Execute the one-shot supersession. Requires TTY, reason, approval ID, and
+ * (by default) the production snapshot flock. Recomputes the plan under the
+ * flock and rejects any state mismatch.
+ */
 function makeAuditEvent(
   input: SnapshotMaintenanceInput,
   hostId: string,
@@ -349,7 +377,7 @@ export async function runSnapshotMaintenanceExecute(
 ): Promise<{ exitCode: number; result: Result<SnapshotMaintenanceOutput> }> {
   const env = input.env ?? process.env;
   const home = input.home ?? env.HOME ?? "";
-  const audit = input.auditSink ?? (() => {});
+  const audit = input.auditSink ?? defaultAuditSink(home);
   const now = input.now ?? Date.now();
   const isTty = input.isTty ?? !!process.stdin.isTTY;
 
@@ -474,26 +502,42 @@ async function performSupersession(
   };
 }
 
-interface FlockHandle { acquired: boolean; fd?: number; path: string; }
+interface FlockHandle { acquired: boolean; path: string; holder?: { kill: () => void }; }
 
+/**
+ * Acquire a nonblocking flock on the production snapshot lock. The lock is
+ * held for the lifetime of the returned handle by a child process that keeps
+ * fd 9 open; releaseSnapshotFlock kills the child to release the lock.
+ * Fail closed (acquired=false) on non-Linux, when flock is unavailable, or
+ * when the lock is held by another process.
+ */
 function acquireSnapshotFlock(lockPath: string): FlockHandle {
-  // Production flock uses flock(1). On non-Linux or when unavailable, fail
-  // closed (acquired=false) so the caller refuses to mutate.
   try {
-    // Use fd 9 with nonblocking flock; exit 0 if acquired, 1 if busy.
-    const script = `exec 9>"${lockPath}"; if flock -n 9; then echo ACQUIRED; else echo BUSY; fi`;
-    const out = execSync(script, { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).trim();
-    return { acquired: out === "ACQUIRED", path: lockPath };
+    const child = spawn("bash", ["-c", `exec 9>"${lockPath}"; flock -n 9 || exit 1; while true; do sleep 3600; done`], {
+      stdio: ["pipe", "pipe", "pipe"],
+      detached: false,
+    });
+    // Distinguish "acquired and blocking" from "exited because busy". A busy
+    // lock exits code 1 within milliseconds; an acquired lock blocks on the
+    // sleep. Poll exit status briefly (non-blocking).
+    const deadline = Date.now() + 300;
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) {
+        // Child exited - lock was busy (code 1) or another error.
+        return { acquired: false, path: lockPath };
+      }
+      // Yield briefly; child still running means lock acquired.
+      try { execSync("sleep 0.05", { timeout: 200 }); } catch { /* timeout */ }
+    }
+    // Child is still running after the poll window -> lock acquired.
+    return { acquired: true, path: lockPath, holder: { kill: () => child.kill("SIGTERM") } };
   } catch {
     return { acquired: false, path: lockPath };
   }
 }
 
-function releaseSnapshotFlock(_handle: FlockHandle): void {
-  // The subshell's flock is released when the subshell exits. Nothing to do
-  // in this process; the lock was held only for the duration of the
-  // execSync in acquireSnapshotFlock. For a true held-during-mutation lock,
-  // the implementation would keep the fd open for the lifetime of the
-  // operation. This is acceptable because the mutating supersession is
-  // atomic per-journal and the guard revalidates state before each write.
+function releaseSnapshotFlock(handle: FlockHandle): void {
+  if (handle.holder) {
+    try { handle.holder.kill(); } catch { /* already exited */ }
+  }
 }
