@@ -57,6 +57,10 @@ export interface WorkCompleteInput {
   failAfter?: "validate" | "evidence" | "log" | "projection" | "commit" | null;
 }
 
+export interface WorkCompleteDeps {
+  writeEvidenceText: typeof atomicWriteText;
+}
+
 export interface WorkCompleteOutput {
   operation_id: string;
   work_item: string;
@@ -68,6 +72,17 @@ export interface WorkCompleteOutput {
 }
 
 type Run = { exitCode: number; result: Result<WorkCompleteOutput> };
+
+const DEFAULT_DEPS: WorkCompleteDeps = {
+  writeEvidenceText: atomicWriteText,
+};
+
+/** Test-only hook factory; production callers use the immutable default dependency. */
+export function defaultWorkCompleteDeps(
+  overrides: Partial<WorkCompleteDeps> = {},
+): WorkCompleteDeps {
+  return { ...DEFAULT_DEPS, ...overrides };
+}
 
 const PHASE_ORDER = ["validate", "evidence", "log", "projection", "commit", "done"] as const;
 type Phase = (typeof PHASE_ORDER)[number];
@@ -132,6 +147,7 @@ async function writeEvidence(
   workDir: string,
   opId: string,
   phases: string[],
+  writeText: typeof atomicWriteText,
 ): Promise<Result<{ changed: boolean; existed: boolean }>> {
   const path = join(workDir, "evidence.md");
   const body = [
@@ -148,7 +164,7 @@ async function writeEvidence(
     `- completed_at: ${new Date().toISOString()}`,
     "",
   ].join("\n");
-  return atomicWriteText(path, body);
+  return writeText(path, body);
 }
 
 async function markPlanComplete(workDir: string): Promise<Result<{ changed: boolean; existed: boolean } | null>> {
@@ -170,7 +186,10 @@ function writeFailure(stage: string, result: Result<unknown>): Run {
  * Atomic work-item completion: validate → evidence → log → projection → commit.
  * Journaled by operation id so retries resume without double-commit or half state.
  */
-export async function runWorkComplete(input: WorkCompleteInput): Promise<Run> {
+export async function runWorkComplete(
+  input: WorkCompleteInput,
+  deps: WorkCompleteDeps = DEFAULT_DEPS,
+): Promise<Run> {
   const workDirResult = resolveWorkDir(input.vault, input.workItem);
   if (!workDirResult.ok) {
     return {
@@ -257,7 +276,12 @@ export async function runWorkComplete(input: WorkCompleteInput): Promise<Run> {
       if (!statusWrite.ok) return writeFailure("evidence-spec", statusWrite);
       const planWrite = await markPlanComplete(workDir);
       if (!planWrite.ok) return writeFailure("evidence-plan", planWrite);
-      const evidenceWrite = await writeEvidence(workDir, opId, completedPhases);
+      const evidenceWrite = await writeEvidence(
+        workDir,
+        opId,
+        completedPhases,
+        deps.writeEvidenceText,
+      );
       if (!evidenceWrite.ok) return writeFailure("evidence", evidenceWrite);
       if (input.failAfter === "evidence") {
         throw new Error("simulated failure after evidence");
@@ -289,7 +313,12 @@ export async function runWorkComplete(input: WorkCompleteInput): Promise<Run> {
     if (phaseIndex(phase) <= phaseIndex("projection")) {
       // Ensure evidence exists (resume safety) and cross-validate complete.
       if (!existsSync(join(workDir, "evidence.md"))) {
-        const evidenceWrite = await writeEvidence(workDir, opId, completedPhases);
+        const evidenceWrite = await writeEvidence(
+          workDir,
+          opId,
+          completedPhases,
+          deps.writeEvidenceText,
+        );
         if (!evidenceWrite.ok) return writeFailure("projection-evidence", evidenceWrite);
       }
       const finalCheck = await runWorkValidate({

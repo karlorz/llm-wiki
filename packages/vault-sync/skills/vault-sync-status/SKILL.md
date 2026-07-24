@@ -78,6 +78,7 @@ When wall-clock budget is tight on a snapshotter (FUSE + S3 probes), prefer:
 2. Tail `$(platform_log_dir)/wiki-snapshot.log` / `wiki-fuse-refresh.log`
 3. Read `$(platform_share_dir)/runtime-manifest.json` package_version / package_commit
 4. Prefer `skillwiki doctor` for managed-write prerequisites: pull-helper resolution (`vault_sync_pull_helper`) and review-required journal backlog (`vault_sync_review_required_journals`); use `skillwiki sync journal list` for detail.
+5. A resolved handoff (`target_oid` already in `HEAD`, no sequencer/unmerged paths) is auto-superseded by managed preflight even with unrelated dirty WIP; a paired dead-owner managed-write lock is recovery-preserved and reclaimed in that same invocation. Treat live owners, active Git operations, unmerged paths, and non-ancestor targets as intentional fail-closed blockers.
 
 Then run full status when time allows.
 

@@ -81,7 +81,7 @@ Convergence properties:
 
 Journal lifecycle (high level): begin → inventory → optional stash → rebasing → (optional retrying) → complete **or** review-required handoff.
 
-**Stale handoff cleanup (skillwiki ≥0.10.1):** If many `phase=review-required` journals remain while the worktree is clean and Git is idle, managed writes fail closed. Run `skillwiki doctor`, then `skillwiki sync journal list` and `skillwiki sync journal clear-stale --dry-run` (then without `--dry-run` when safe). Preflight auto-supersedes when target_oid is already an ancestor of HEAD.
+**Stale handoff cleanup (skillwiki ≥0.10.1):** If many `phase=review-required` journals remain while the worktree is clean and Git is idle, managed writes fail closed. Run `skillwiki doctor`, then `skillwiki sync journal list` and `skillwiki sync journal clear-stale --dry-run` (then without `--dry-run` when safe). Managed preflight auto-supersedes when `target_oid` is already an ancestor of `HEAD` and no sequencer/unmerged paths remain, even when unrelated WIP keeps the worktree dirty. If the former pull owner also left a dead managed-write lock, the same acquire preserves/reclaims that lock and continues. Live owners, active Git operations, unmerged paths, and unresolved/non-ancestor handoffs remain blocking.
 
 After install/rollout, confirm pull logs show `op=` journal lines and no legacy auto-stash wording before touching `$(platform_share_dir)/live-verify.ok` (see vault-sync-install attended checklist).
 

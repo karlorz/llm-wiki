@@ -83,8 +83,12 @@ function preflightBlocker(vault: string): { reason: string; operation_id?: strin
     return { reason: "git-operation-in-progress" };
   }
 
-  // Auto-supersede historical handoff journals when the worktree is clean and targets are past.
-  supersedeStaleReviewRequiredJournals(vault, { by: "skillwiki-managed-write-preflight" });
+  // target_oid ancestry proves the handoff is obsolete. Preserve unrelated dirty
+  // WIP; active sequencers and unmerged paths already failed closed above.
+  supersedeStaleReviewRequiredJournals(vault, {
+    by: "skillwiki-managed-write-preflight",
+    requireClean: false,
+  });
 
   const op = findReviewRequiredOp(vault);
   if (op) return { reason: "review-required", operation_id: op };

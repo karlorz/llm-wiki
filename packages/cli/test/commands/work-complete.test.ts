@@ -10,7 +10,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { runWorkComplete } from "../../src/commands/work-complete.js";
+import { err } from "@skillwiki/shared";
+import {
+  defaultWorkCompleteDeps,
+  runWorkComplete,
+} from "../../src/commands/work-complete.js";
 import { operationId } from "../../src/utils/operation-id.js";
 
 const CLI_BIN = join(__dirname, "..", "..", "dist", "cli.js");
@@ -133,22 +137,24 @@ describe("runWorkComplete", () => {
   it("evidence write failure returns WRITE_FAILED and does not advance journal past evidence", async () => {
     const vault = makeVault();
     const workItem = makeWorkItem(vault, "projects/demo/work/2026-07-20-write-fail");
-    const abs = join(vault, workItem);
     const opId = operationId("skillwiki-work-complete-v1", [vault, workItem, "write-fail"]);
 
-    // After validate, evidence phase must write. Make the work-item dir read-only
-    // so atomicWriteText fails (real shipped write path), without confusing validate.
-    const { chmodSync } = await import("node:fs");
-    chmodSync(abs, 0o555);
-
-    const failed = await runWorkComplete({
-      vault,
-      workItem,
-      operationId: opId,
-      noCommit: true,
-    });
-
-    chmodSync(abs, 0o755); // restore for cleanup
+    const failed = await runWorkComplete(
+      {
+        vault,
+        workItem,
+        operationId: opId,
+        noCommit: true,
+      },
+      defaultWorkCompleteDeps({
+        writeEvidenceText: async (path) =>
+          err("WRITE_FAILED", {
+            path,
+            phase: "atomic-write",
+            message: "simulated evidence write failure",
+          }),
+      }),
+    );
 
     expect(failed.exitCode).toBe(10); // WRITE_FAILED
     expect(failed.result.ok).toBe(false);

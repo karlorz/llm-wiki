@@ -62,7 +62,7 @@ vault_sync_managed_lock_safe_to_reclaim() {
 
   # Never reclaim during an active/leftover sequencer.
   if [ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ] \
-    || [ -d "$git_dir/MERGE_HEAD" ] || [ -f "$git_dir/CHERRY_PICK_HEAD" ] \
+    || [ -f "$git_dir/MERGE_HEAD" ] || [ -f "$git_dir/CHERRY_PICK_HEAD" ] \
     || [ -f "$git_dir/REVERT_HEAD" ]; then
     return 1
   fi
@@ -72,13 +72,16 @@ vault_sync_managed_lock_safe_to_reclaim() {
     return 1
   fi
 
-  # When journal helpers are loaded, refuse reclaim while review-required handoff
-  # journals exist. Standalone lock tests may not source the journal library.
-  if command -v vault_sync_op_find_review_required >/dev/null 2>&1; then
+  # When journal helpers are loaded, a dead owner may close handoffs whose
+  # target is already in HEAD, then continue reclaim in this same acquire.
+  # Live owners never reach this function; active sequencers/unmerged paths
+  # already failed closed above. Any unresolved handoff still blocks reclaim.
+  if command -v vault_sync_op_supersede_stale_review_required >/dev/null 2>&1; then
+    vault_sync_op_supersede_stale_review_required \
+      "$repo" "vault-sync-managed-lock-reclaim" 2>/dev/null || return 1
+  elif command -v vault_sync_op_find_review_required >/dev/null 2>&1; then
     review_op="$(vault_sync_op_find_review_required "$repo" 2>/dev/null || true)"
-    if [ -n "$review_op" ]; then
-      return 1
-    fi
+    [ -z "$review_op" ] || return 1
   fi
 
   return 0
