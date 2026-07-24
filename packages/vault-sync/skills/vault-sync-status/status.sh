@@ -53,6 +53,99 @@ json_escape() {
   python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
 }
 
+# ── Snapshot health fixture seam (v0.10.14) ──────────────────
+# When VS_SNAPSHOT_HEALTH_FIXTURE points at a scenario JSON, the snapshotter
+# health checks read timer/service properties and the bounded snapshot log
+# tail from the fixture instead of calling systemctl or reading the live log.
+# This lets the shared scenario corpus drive both shell and TS parity gates.
+snapshot_fixture_get() {
+  local path="$1"
+  [ -n "${VS_SNAPSHOT_HEALTH_FIXTURE:-}" ] || return 1
+  [ -f "$VS_SNAPSHOT_HEALTH_FIXTURE" ] || return 1
+  python3 -c "
+import json, sys
+with open('$VS_SNAPSHOT_HEALTH_FIXTURE') as fh:
+    d = json.load(fh)
+cur = d
+for part in '$path'.split('.'):
+    if cur is None:
+        break
+    cur = cur.get(part) if isinstance(cur, dict) else None
+if cur is None:
+    sys.exit(0)
+if isinstance(cur, bool):
+    print('true' if cur else 'false')
+elif isinstance(cur, (int, float)):
+    print(cur)
+else:
+    print(cur)
+" 2>/dev/null
+}
+
+snapshot_fixture_log_tail() {
+  [ -n "${VS_SNAPSHOT_HEALTH_FIXTURE:-}" ] || return 1
+  [ -f "$VS_SNAPSHOT_HEALTH_FIXTURE" ] || return 1
+  python3 -c "
+import json
+with open('$VS_SNAPSHOT_HEALTH_FIXTURE') as fh:
+    d = json.load(fh)
+for line in d.get('log_records', []):
+    print(line)
+" 2>/dev/null
+}
+
+snapshot_health_now() {
+  printf '%s\n' "${VS_SNAPSHOT_HEALTH_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+}
+
+snapshot_health_cadence_minutes() {
+  local v="${VS_SNAPSHOT_CADENCE_MINUTES:-30}"
+  case "$v" in
+    ''|*[!0-9]*) printf '30\n' ;;
+    *) printf '%s\n' "$v" ;;
+  esac
+}
+
+snapshot_health_timeout_seconds() {
+  local v="${VS_SNAPSHOT_SERVICE_TIMEOUT_SECONDS:-900}"
+  case "$v" in
+    ''|*[!0-9]*) printf '900\n' ;;
+    *) printf '%s\n' "$v" ;;
+  esac
+}
+
+# Read-only systemctl show wrapper. Prints the property value or empty.
+# Tolerates a missing systemctl binary (returns empty without aborting
+# under set -e). Usage: systemctl_show_property <scope> <unit> <Property>
+systemctl_show_property() {
+  local scope="$1" unit="$2" prop="$3"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$scope" = "system" ]; then
+    systemctl show "$unit" --property="$prop" --value 2>/dev/null || true
+  else
+    systemctl --user show "$unit" --property="$prop" --value 2>/dev/null || true
+  fi
+}
+
+# Resolve a systemctl property from fixture or live systemd.
+# Usage: snapshot_prop <timer|service> <property-name>
+snapshot_prop() {
+  local kind="$1" prop="$2"
+  if [ -n "${VS_SNAPSHOT_HEALTH_FIXTURE:-}" ]; then
+    snapshot_fixture_get "${kind}.${prop}"
+  else
+    local unit
+    if [ "$kind" = "timer" ]; then
+      unit="wiki-snapshot.timer"
+    else
+      unit="wiki-snapshot.service"
+    fi
+    systemctl_show_property "$SERVICE_SCOPE" "$unit" "$prop"
+  fi
+}
+
 # Portable short-timeout wrapper for network reachability probes.
 # Prefer GNU timeout, then Homebrew gtimeout, then a hard fallback so probes
 # never hang indefinitely (fleet hosts without coreutils timeout).
@@ -506,6 +599,7 @@ restart_jobs() {
 READ_ONLY=0
 JSON_OUT=0
 RESTART_JOBS=0
+FAIL_ON=""
 
 if is_true "${VS_READ_ONLY:-0}"; then
   READ_ONLY=1
@@ -525,6 +619,8 @@ Options:
   --read-only      Read-only safety mode (no state-changing operations)
   --json           Emit JSON output (doctor-like shape)
   --restart-jobs   Restart scheduler jobs (refused under --read-only)
+  --fail-on <lvl>  Exit nonzero when summary has errors (error) or
+                   warnings+errors (warn). Default: report-only (exit 0).
   --help           Show this help
 
 Environment overrides:
@@ -549,6 +645,13 @@ while [ "$#" -gt 0 ]; do
     --restart-jobs)
       RESTART_JOBS=1
       shift
+      ;;
+    --fail-on)
+      case "${2:-}" in
+        error|warn) FAIL_ON="$2" ;;
+        *) fatal "--fail-on requires 'error' or 'warn'" ;;
+      esac
+      shift 2
       ;;
     --help|-h)
       usage
@@ -616,6 +719,231 @@ else
   fi
 fi
 
+# Snapshotter scheduler + service-result + freshness + consecutive-failure
+# checks (v0.10.14). Combines read-only systemd properties with a bounded
+# parse of canonical SNAPSHOT_COMPLETE records. Strictly non-mutating.
+check_snapshotter_health() {
+  local cadence timeout now
+  cadence="$(snapshot_health_cadence_minutes)"
+  timeout="$(snapshot_health_timeout_seconds)"
+  now="$(snapshot_health_now)"
+
+  local warn_age error_age
+  warn_age=$((cadence * 2 + 15))
+  error_age=$((cadence * 4 + 15))
+
+  # ── vault_sync_jobs_enabled: timer installed, enabled, active, next-trigger ──
+  local t_load t_unitfile t_active t_next
+  t_load="$(snapshot_prop timer load_state)"
+  t_unitfile="$(snapshot_prop timer unit_file_state)"
+  t_active="$(snapshot_prop timer active_state)"
+  t_next="$(snapshot_prop timer next_elapse)"
+
+  if [ -z "$t_load" ] && [ -z "$t_unitfile" ] && [ -z "$t_active" ]; then
+    add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" \
+      "wiki-snapshot.timer properties unavailable (read-only)"
+  elif [ "$t_unitfile" = "enabled" ] && [ "$t_active" = "active" ] && [ -n "$t_next" ]; then
+    add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" \
+      "wiki-snapshot.timer enabled+active, next=$t_next ($SERVICE_SCOPE)"
+  else
+    add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "error" \
+      "wiki-snapshot.timer not eligible: unit_file_state=${t_unitfile:-missing} active_state=${t_active:-missing} next_elapse=${t_next:-missing} ($SERVICE_SCOPE)"
+  fi
+
+  # ── vault_sync_snapshot_service_result: latest oneshot result ──
+  local s_active s_result s_exec_main_status s_exec_main_code s_active_enter
+  s_active="$(snapshot_prop service active_state)"
+  s_result="$(snapshot_prop service result)"
+  s_exec_main_status="$(snapshot_prop service exec_main_status)"
+  s_exec_main_code="$(snapshot_prop service exec_main_code)"
+  s_active_enter="$(snapshot_prop service active_enter_timestamp)"
+
+  local service_result_status service_result_detail
+  if [ -z "$s_active" ] && [ -z "$s_result" ]; then
+    service_result_status="warn"
+    service_result_detail="wiki-snapshot.service properties unavailable (read-only)"
+  elif [ "$s_active" = "active" ] || [ "$s_active" = "activating" ]; then
+    # Currently running — check whether it has exceeded the timeout window.
+    if [ -n "$s_active_enter" ]; then
+      local run_seconds
+      run_seconds="$(python3 -c "
+import sys
+try:
+    from datetime import datetime, timezone
+    start = datetime.fromisoformat('$s_active_enter'.replace('Z','+00:00'))
+    now = datetime.fromisoformat('$now'.replace('Z','+00:00'))
+    print(int((now - start).total_seconds()))
+except Exception:
+    print(-1)
+" 2>/dev/null)"
+      if [ "$run_seconds" != "-1" ] && [ "$run_seconds" -gt "$timeout" ]; then
+        service_result_status="error"
+        service_result_detail="wiki-snapshot.service running ${run_seconds}s beyond timeout ${timeout}s"
+      else
+        service_result_status="pass"
+        service_result_detail="wiki-snapshot.service in progress (running ${run_seconds:-?}s)"
+      fi
+    else
+      service_result_status="pass"
+      service_result_detail="wiki-snapshot.service in progress (active)"
+    fi
+  elif [ "$s_result" = "success" ] && [ "${s_exec_main_status:-0}" = "0" ] && [ -n "$s_active_enter" ]; then
+    # A service that has never run (no active_enter_timestamp) is not a pass.
+    service_result_status="pass"
+    service_result_detail="wiki-snapshot.service result=success ExecMainStatus=0"
+  elif [ "$s_result" = "failed" ] || [ "${s_exec_main_status:-0}" != "0" ]; then
+    service_result_status="error"
+    service_result_detail="wiki-snapshot.service result=${s_result:-missing} ExecMainStatus=${s_exec_main_status:-missing}"
+  else
+    service_result_status="warn"
+    service_result_detail="wiki-snapshot.service result=${s_result:-missing} (never ran or unrecognized)"
+  fi
+  add_check "vault_sync_snapshot_service_result" "Vault sync snapshot service result" \
+    "$service_result_status" "$service_result_detail"
+
+  # ── vault_sync_last_push_age: freshness of latest canonical completion ──
+  # Role-aware: snapshotters report age of the latest SNAPSHOT_COMPLETE record.
+  local completion_ts completion_head completion_origin completion_outcome
+  completion_ts=""
+  completion_outcome=""
+  completion_head=""
+  completion_origin=""
+  if [ -n "${VS_SNAPSHOT_HEALTH_FIXTURE:-}" ]; then
+    snapshot_fixture_log_tail | tac | while IFS= read -r line; do
+      if printf '%s' "$line" | command grep -q 'SNAPSHOT_COMPLETE schema=v1'; then
+        printf '%s\n' "$line"
+        break
+      fi
+    done > /tmp/.snap_complete.$$ 2>/dev/null
+    local complete_line
+    complete_line="$(cat /tmp/.snap_complete.$$ 2>/dev/null)"
+    rm -f /tmp/.snap_complete.$$
+    completion_ts="$(printf '%s' "$complete_line" | sed -n 's/.* ts=\([^ ]*\).*/\1/p')"
+    completion_outcome="$(printf '%s' "$complete_line" | sed -n 's/.* outcome=\([^ ]*\).*/\1/p')"
+    completion_head="$(printf '%s' "$complete_line" | sed -n 's/.* head=\([^ ]*\).*/\1/p')"
+    completion_origin="$(printf '%s' "$complete_line" | sed -n 's/.* origin=\([^ ]*\).*/\1/p')"
+  else
+    local snapshot_log
+    snapshot_log="$LOG_DIR/wiki-snapshot.log"
+    if [ -f "$snapshot_log" ]; then
+      local complete_line
+      complete_line="$(tac "$snapshot_log" 2>/dev/null | command grep -m1 'SNAPSHOT_COMPLETE schema=v1' || true)"
+      completion_ts="$(printf '%s' "$complete_line" | sed -n 's/.* ts=\([^ ]*\).*/\1/p')"
+      completion_outcome="$(printf '%s' "$complete_line" | sed -n 's/.* outcome=\([^ ]*\).*/\1/p')"
+    fi
+  fi
+
+  local freshness_status freshness_detail
+  if [ -z "$completion_ts" ] || [ "$completion_ts" = "MISSING" ]; then
+    # No completion record. If the service is currently running, the snapshot
+    # is in progress (warn) — even if it has overrun its timeout, that is
+    # reported by vault_sync_snapshot_service_result, not freshness. Otherwise
+    # missing completion evidence is an error.
+    if [ "$s_active" = "active" ] || [ "$s_active" = "activating" ]; then
+      freshness_status="warn"
+      freshness_detail="snapshot in progress; no prior canonical completion record"
+    else
+      freshness_status="error"
+      freshness_detail="no canonical SNAPSHOT_COMPLETE record found"
+    fi
+  else
+    local age_min
+    age_min="$(python3 -c "
+try:
+    from datetime import datetime
+    start = datetime.fromisoformat('$completion_ts'.replace('Z','+00:00'))
+    now = datetime.fromisoformat('$now'.replace('Z','+00:00'))
+    print(int((now - start).total_seconds() // 60))
+except Exception:
+    print(-1)
+" 2>/dev/null)"
+    if [ "$age_min" = "-1" ]; then
+      freshness_status="error"
+      freshness_detail="unparseable completion timestamp: $completion_ts"
+    elif [ "$age_min" -le "$warn_age" ]; then
+      freshness_status="pass"
+      freshness_detail="last snapshot ${age_min}m ago (outcome=${completion_outcome:-unknown}, <=${warn_age}m)"
+    elif [ "$age_min" -le "$error_age" ]; then
+      freshness_status="warn"
+      freshness_detail="last snapshot ${age_min}m ago (outcome=${completion_outcome:-unknown}, >${warn_age}m)"
+    else
+      freshness_status="error"
+      freshness_detail="last snapshot ${age_min}m ago (outcome=${completion_outcome:-unknown}, >${error_age}m)"
+    fi
+  fi
+  # A latest completed failed systemd service result overrides an older
+  # success record. A service currently running (even if it has overrun its
+  # timeout) does not override freshness — the overrun is reported by the
+  # service-result check, and freshness stays 'warn' (in progress).
+  if [ "$service_result_status" = "error" ] \
+    && [ "$s_active" != "active" ] && [ "$s_active" != "activating" ]; then
+    freshness_status="error"
+    freshness_detail="latest service result failed: $service_result_detail"
+  fi
+  add_check "vault_sync_last_push_age" "Vault sync last snapshot recency" \
+    "$freshness_status" "$freshness_detail"
+
+  # ── vault_sync_snapshot_consecutive_failures: bounded recent-run window ──
+  local fail_count most_recent_fail
+  fail_count=0
+  most_recent_fail=""
+  if [ -n "${VS_SNAPSHOT_HEALTH_FIXTURE:-}" ]; then
+    snapshot_fixture_log_tail | tac | while IFS= read -r line; do
+      if printf '%s' "$line" | command grep -qE 'ERROR|SNAPSHOT_COMPLETE schema=v1'; then
+        printf '%s\n' "$line"
+      fi
+    done > /tmp/.snap_recent.$$ 2>/dev/null
+    # Count leading ERROR lines (most-recent first) until a success record.
+    while IFS= read -r line; do
+      if printf '%s' "$line" | command grep -q 'SNAPSHOT_COMPLETE schema=v1'; then
+        break
+      fi
+      if printf '%s' "$line" | command grep -q 'ERROR'; then
+        fail_count=$((fail_count + 1))
+        if [ -z "$most_recent_fail" ]; then
+          most_recent_fail="$(printf '%s' "$line" | sed -n 's/^\([0-9-]* [0-9:]*\).*/\1/p')"
+        fi
+      fi
+    done < /tmp/.snap_recent.$$
+    rm -f /tmp/.snap_recent.$$
+  else
+    local snapshot_log
+    snapshot_log="$LOG_DIR/wiki-snapshot.log"
+    if [ -f "$snapshot_log" ]; then
+      local recent_lines
+      recent_lines="$(tac "$snapshot_log" 2>/dev/null | head -n 60 || true)"
+      while IFS= read -r line; do
+        if printf '%s' "$line" | command grep -q 'SNAPSHOT_COMPLETE schema=v1'; then
+          break
+        fi
+        if printf '%s' "$line" | command grep -q 'ERROR'; then
+          fail_count=$((fail_count + 1))
+          if [ -z "$most_recent_fail" ]; then
+            most_recent_fail="$(printf '%s' "$line" | sed -n 's/^\([0-9-]* [0-9:]*\).*/\1/p')"
+          fi
+        fi
+      done <<EOF
+$recent_lines
+EOF
+    fi
+  fi
+
+  local cf_status cf_detail
+  if [ "$fail_count" -ge 2 ]; then
+    cf_status="error"
+    cf_detail="${fail_count} consecutive snapshot failure(s); most recent: ${most_recent_fail:-unknown}"
+  else
+    cf_status="pass"
+    cf_detail="${fail_count} consecutive failure(s) in recent window (recurrence threshold: 2)"
+  fi
+  add_check "vault_sync_snapshot_consecutive_failures" "Vault sync snapshot consecutive failures" \
+    "$cf_status" "$cf_detail"
+}
+
+if [ "$ROLE" = "snapshotter" ]; then
+  check_snapshotter_health
+fi
+
 # Check 1b: presync terminal helper
 PRESYNC_HELPER="$SHARE_BIN/wiki-sync.sh"
 HOME_PRESYNC_HELPER="$HOME/bin/wiki-sync.sh"
@@ -671,64 +999,42 @@ add_check "vault_sync_presync_helper" "Vault sync presync helper" "$presync_stat
 # jobs until vault-sync-install is rerun.
 check_installed_script_drift
 
-# Check 2: scheduler enabled
-if [ "$ROLE" = "snapshotter" ]; then
+# Check 2: scheduler enabled (leaf hosts only; snapshotters are handled by
+# check_snapshotter_health above which produces vault_sync_jobs_enabled plus
+# the service-result, freshness, and consecutive-failure checks).
+if [ "$ROLE" != "snapshotter" ]; then
   if [ "$READ_ONLY" -eq 1 ]; then
-    snapshot_user_timer="$HOME/.config/systemd/user/wiki-snapshot.timer"
-    snapshot_system_timer="/etc/systemd/system/wiki-snapshot.timer"
-    if [ -f "$snapshot_user_timer" ]; then
-      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "wiki-snapshot.timer unit file present (user scope, read-only mode)"
-    elif [ -f "$snapshot_system_timer" ]; then
-      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "wiki-snapshot.timer unit file present (system scope, read-only mode)"
-    else
-      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "wiki-snapshot.timer unit file missing (read-only mode)"
-    fi
-  else
-    if [ "$VS_OS" != "linux" ]; then
-      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "snapshotter scheduler requires Linux"
-    elif [ "$SERVICE_SCOPE" = "system" ]; then
-      if systemctl is-enabled wiki-snapshot.timer >/dev/null 2>&1; then
-        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "systemd: wiki-snapshot.timer enabled (system)"
+    if [ "$VS_OS" = "macos" ]; then
+      push_plist="$HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist"
+      fetch_plist="$HOME/Library/LaunchAgents/com.karlchow.wiki-fetch.plist"
+      if [ -f "$push_plist" ] && [ -f "$fetch_plist" ]; then
+        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "launchd unit files present (read-only mode)"
       else
-        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "systemd: wiki-snapshot.timer disabled or unavailable (system)"
+        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "launchd unit files missing (read-only mode)"
       fi
-    elif systemctl --user is-enabled wiki-snapshot.timer >/dev/null 2>&1; then
-      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "systemd: wiki-snapshot.timer enabled (user)"
     else
-      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "systemd: wiki-snapshot.timer disabled or unavailable (user)"
-    fi
-  fi
-elif [ "$READ_ONLY" -eq 1 ]; then
-  if [ "$VS_OS" = "macos" ]; then
-    push_plist="$HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist"
-    fetch_plist="$HOME/Library/LaunchAgents/com.karlchow.wiki-fetch.plist"
-    if [ -f "$push_plist" ] && [ -f "$fetch_plist" ]; then
-      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "launchd unit files present (read-only mode)"
-    else
-      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "launchd unit files missing (read-only mode)"
+      push_timer="$HOME/.config/systemd/user/wiki-push.timer"
+      fetch_timer="$HOME/.config/systemd/user/wiki-fetch.timer"
+      if [ -f "$push_timer" ] && [ -f "$fetch_timer" ]; then
+        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "systemd timer unit files present (read-only mode)"
+      else
+        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "systemd timer unit files missing (read-only mode)"
+      fi
     fi
   else
-    push_timer="$HOME/.config/systemd/user/wiki-push.timer"
-    fetch_timer="$HOME/.config/systemd/user/wiki-fetch.timer"
-    if [ -f "$push_timer" ] && [ -f "$fetch_timer" ]; then
-      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "systemd timer unit files present (read-only mode)"
+    if [ "$VS_OS" = "macos" ]; then
+      push_job_json=$(platform_job_status "com.karlchow.wiki-push")
+      fetch_job_json=$(platform_job_status "com.karlchow.wiki-fetch")
     else
-      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "systemd timer unit files missing (read-only mode)"
+      push_job_json=$(platform_job_status "wiki-push")
+      fetch_job_json=$(platform_job_status "wiki-fetch")
     fi
-  fi
-else
-  if [ "$VS_OS" = "macos" ]; then
-    push_job_json=$(platform_job_status "com.karlchow.wiki-push")
-    fetch_job_json=$(platform_job_status "com.karlchow.wiki-fetch")
-  else
-    push_job_json=$(platform_job_status "wiki-push")
-    fetch_job_json=$(platform_job_status "wiki-fetch")
-  fi
 
-  if printf '%s' "$push_job_json" | grep -q '"enabled": true' && printf '%s' "$fetch_job_json" | grep -q '"enabled": true'; then
-    add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "Scheduler reports push+fetch enabled"
-  else
-    add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "Scheduler reports one or more jobs disabled"
+    if printf '%s' "$push_job_json" | grep -q '"enabled": true' && printf '%s' "$fetch_job_json" | grep -q '"enabled": true'; then
+      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "Scheduler reports push+fetch enabled"
+    else
+      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "Scheduler reports one or more jobs disabled"
+    fi
   fi
 fi
 
@@ -762,7 +1068,8 @@ else
 fi
 
 if [ "$ROLE" = "snapshotter" ]; then
-  add_check "vault_sync_last_push_age" "Vault sync last push recency" "pass" "Snapshotter host — leaf wiki-push log not applicable"
+  # vault_sync_last_push_age is produced by check_snapshotter_health above
+  # (role-aware snapshot freshness). Leaf-only fetch/filter are not applicable.
   add_check "vault_sync_last_fetch_status" "Vault sync last fetch status" "pass" "Snapshotter host — leaf wiki-fetch-notify log not applicable"
   add_check "vault_sync_filter_present" "Vault sync filter file present" "pass" "Snapshotter host — leaf wiki-push filter not applicable"
 else
@@ -961,3 +1268,16 @@ else
   done
   printf 'summary: pass=%d info=%d warn=%d error=%d\n' "$pass_count" "$info_count" "$warn_count" "$error_count"
 fi
+
+# Default standalone behavior is report-only (exit 0). Strict automation modes:
+#   --fail-on error -> nonzero when summary.error > 0
+#   --fail-on warn  -> nonzero when summary.warn > 0 or summary.error > 0
+if [ -n "$FAIL_ON" ]; then
+  if [ "$FAIL_ON" = "error" ] && [ "$error_count" -gt 0 ]; then
+    exit 1
+  fi
+  if [ "$FAIL_ON" = "warn" ] && { [ "$warn_count" -gt 0 ] || [ "$error_count" -gt 0 ]; }; then
+    exit 1
+  fi
+fi
+exit 0
