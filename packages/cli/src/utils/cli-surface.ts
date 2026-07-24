@@ -83,6 +83,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("tag"); // has subcommands
   program.command("tag-sync").option("--dry-run").option("--wiki <name>");
   program.command("sync"); // has subcommands
+  program.command("snapshot-maintenance"); // has subcommands (v0.10.14)
   program.command("backup"); // has subcommands
   program.command("seed").option("--wiki <name>");
   program.command("observe").requiredOption("--text <text>").option("--kind <kind>").option("--project <slug>").option("--severity <level>").option("--capture-budget <n>").option("--wiki <name>");
@@ -160,6 +161,10 @@ export function buildCliSurface(): Map<string, Set<string>> {
   const backupCmd = program.commands.find(c => c.name() === "backup")!;
   backupCmd.command("sync").option("--dry-run").option("--bucket <name>").option("--endpoint <url>").option("--region <region>").option("--prune").option("--wiki <name>");
   backupCmd.command("restore").option("--bucket <name>").option("--endpoint <url>").option("--region <region>").option("--target <dir>").option("--wiki <name>");
+
+  const snapshotMaintenanceCmd = program.commands.find(c => c.name() === "snapshot-maintenance")!;
+  const snapMaintJournalCmd = snapshotMaintenanceCmd.command("journal");
+  snapMaintJournalCmd.command("clear-stale").option("--dry-run").option("--approve <id>").option("--reason <text>").option("--wiki <name>");
 
   const memoryCmd = program.commands.find(c => c.name() === "memory")!;
   memoryCmd.command("topics").option("--project <slug>").option("--limit <n>").option("--wiki <name>");
