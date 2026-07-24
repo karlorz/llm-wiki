@@ -86,7 +86,7 @@ After upgrading to skillwiki **≥0.10.1** (or when managed write fails):
 
 1. Run `skillwiki doctor` — checks `vault_sync_pull_helper` and `vault_sync_review_required_journals`.
 2. If pull helper is missing: install `skillwiki@0.10.1+` (helper must resolve from `dist/vault-sync/scripts/`) and/or redeploy vault-sync host install. Last-resort override: `SKILLWIKI_VAULT_SYNC_PULL_HELPER` pointing at `wiki-pull-with-auto-resolve.sh` under host vault-sync `bin/` (macOS Application Support or Linux `~/.local/share/vault-sync/bin`).
-3. If preflight reports `review-required` on a **clean** worktree: `skillwiki sync journal list`, then `skillwiki sync journal clear-stale --dry-run`, then `clear-stale` without dry-run. Preflight also auto-supersedes stale handoffs when criteria match; do not force-clear during active rebase/unmerged state.
+3. If preflight reports `review-required` on a **clean** worktree: `skillwiki sync journal list`, then `skillwiki sync journal clear-stale --dry-run`, then `clear-stale` without dry-run. Managed preflight automatically supersedes a handoff when its `target_oid` is already an ancestor of `HEAD` and Git has no active sequencer or unmerged paths; unrelated dirty WIP is preserved. When the same incident also left a dead-owner managed-write lock, that preflight reclaims it with a recovery record in the same invocation. Live owners, active sequencers/unmerged paths, missing/non-ancestor targets, and remaining review-required journals still fail closed.
 4. After `skillwiki update` across 0.10.1, read the printed Migration 0.10.1 notes.
 
 Also mirror these pointers in vault-presync / vault-sync-status skills when operating pull/push.

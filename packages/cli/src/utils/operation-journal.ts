@@ -149,21 +149,49 @@ export function isWorktreeClean(vault: string): boolean {
   return !porcelain || porcelain.trim() === "";
 }
 
-/**
- * Whether a single review-required journal is safe to supersede.
- * Criteria: clean worktree, idle sequencer, and target_oid is ancestor of HEAD
- * (or missing target treated as supersedable only when clean+idle — we require target).
- */
-export function canSupersedeJournal(vault: string, fields: JournalFields): boolean {
-  if (hasUnmergedPaths(vault).length > 0) return false;
-  if (hasActiveGitSequencer(vault)) return false;
-  if (!isWorktreeClean(vault)) return false;
+export interface JournalSupersedeOptions {
+  dryRun?: boolean;
+  by?: string;
+  /** Operator cleanup defaults to clean; managed preflight may preserve unrelated WIP. */
+  requireClean?: boolean;
+}
+
+function journalSupersedeHead(vault: string, requireClean: boolean): string | null {
+  if (
+    hasUnmergedPaths(vault).length > 0 ||
+    hasActiveGitSequencer(vault) ||
+    (requireClean && !isWorktreeClean(vault))
+  ) {
+    return null;
+  }
+  const head = git(vault, ["rev-parse", "HEAD"]);
+  return head || null;
+}
+
+function canSupersedeJournalInContext(
+  vault: string,
+  fields: JournalFields,
+  head: string | null,
+): boolean {
+  if (!head) return false;
   const target = fields.target_oid?.trim();
   if (!target) return false;
-  const head = git(vault, ["rev-parse", "HEAD"]);
-  if (!head) return false;
-  // git() collapses exit codes: use merge-base equality (ancestor of tip ⇒ merge-base === ancestor).
   return gitMergeBaseIsAncestor(vault, target, head);
+}
+
+/**
+ * Whether a single review-required journal is safe to supersede.
+ * The durable proof is an idle index/sequencer plus target_oid already in HEAD.
+ * Operator cleanup additionally requires a clean worktree by default; managed
+ * preflight can preserve unrelated dirty WIP by setting requireClean=false.
+ */
+export function canSupersedeJournal(
+  vault: string,
+  fields: JournalFields,
+  opts: Pick<JournalSupersedeOptions, "requireClean"> = {},
+): boolean {
+  const head = journalSupersedeHead(vault, opts.requireClean !== false);
+  return canSupersedeJournalInContext(vault, fields, head);
 }
 
 function gitMergeBaseIsAncestor(vault: string, ancestor: string, tip: string): boolean {
@@ -194,22 +222,20 @@ export function markJournalSuperseded(
 }
 
 /**
- * Supersede all review-required journals that meet clean-worktree criteria.
+ * Supersede all review-required journals that meet the requested safety criteria.
  * Returns list of superseded operation ids.
  */
 export function supersedeStaleReviewRequiredJournals(
   vault: string,
-  opts: { dryRun?: boolean; by?: string } = {},
+  opts: JournalSupersedeOptions = {},
 ): { superseded: string[]; skipped: string[] } {
   const by = opts.by ?? "skillwiki-preflight";
+  const requireClean = opts.requireClean !== false;
   const superseded: string[] = [];
   const skipped: string[] = [];
-  if (hasUnmergedPaths(vault).length > 0 || hasActiveGitSequencer(vault) || !isWorktreeClean(vault)) {
-    for (const { opId } of listReviewRequiredOps(vault)) skipped.push(opId);
-    return { superseded, skipped };
-  }
+  const head = journalSupersedeHead(vault, requireClean);
   for (const { opId, fields } of listReviewRequiredOps(vault)) {
-    if (!canSupersedeJournal(vault, fields)) {
+    if (!canSupersedeJournalInContext(vault, fields, head)) {
       skipped.push(opId);
       continue;
     }

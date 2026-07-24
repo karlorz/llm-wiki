@@ -74,6 +74,17 @@ describe("sync journal", () => {
     expect(text).toMatch(/phase=complete/);
     expect(text).toMatch(/superseded-stale-review-required/);
   });
+
+  it("operator clear-stale still skips a dirty worktree", () => {
+    const { vault, opPath } = makeVaultWithReviewJournal();
+    writeFileSync(join(vault, "README.md"), "dirty\n");
+    const r = runSyncJournalClearStale({ vault, dryRun: false });
+    expect(r.result).toMatchObject({
+      ok: true,
+      data: { superseded: [], skipped: ["pull-test-journal-1"] },
+    });
+    expect(readFileSync(opPath, "utf8")).toMatch(/phase=review-required/);
+  });
 });
 
 describe("0.10.1 migration notes", () => {

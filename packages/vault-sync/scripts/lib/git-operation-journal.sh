@@ -38,24 +38,40 @@ vault_sync_op_set_field() {
 vault_sync_op_set_fields() {
   local repo="$1" op_id="$2"
   shift 2
-  local file tmp
+  local file tmp updates source
   file="$(vault_sync_op_journal_path "$repo" "$op_id")" || return 1
   tmp="$(mktemp)" || return 1
-  if [ -f "$file" ]; then
-    cp "$file" "$tmp" || { rm -f "$tmp"; return 1; }
-  else
-    : >"$tmp"
-  fi
+  updates="$(mktemp)" || { rm -f "$tmp"; return 1; }
   while [ "$#" -ge 2 ]; do
-    awk -F= -v k="$1" -v v="$2" '
-      BEGIN{found=0}
-      $1==k {print k"="v; found=1; next}
-      {print}
-      END{if(!found) print k"="v}
-    ' "$tmp" >"${tmp}.new" || { rm -f "$tmp" "${tmp}.new"; return 1; }
-    mv "${tmp}.new" "$tmp"
+    printf '%s=%s\n' "$1" "$2" >>"$updates" || { rm -f "$tmp" "$updates"; return 1; }
     shift 2
   done
+  source="$file"
+  [ -f "$source" ] || source=/dev/null
+  awk -F= '
+    FNR==NR {
+      key=$1
+      if (!(key in replacement)) order[++count]=key
+      replacement[key]=substr($0, index($0,"=")+1)
+      next
+    }
+    {
+      key=$1
+      if (key in replacement) {
+        print key"="replacement[key]
+        seen[key]=1
+        next
+      }
+      print
+    }
+    END {
+      for (i=1; i<=count; i++) {
+        key=order[i]
+        if (!(key in seen)) print key"="replacement[key]
+      }
+    }
+  ' "$updates" "$source" >"$tmp" || { rm -f "$tmp" "$updates"; return 1; }
+  rm -f "$updates"
   mv "$tmp" "$file"
 }
 
@@ -158,6 +174,83 @@ vault_sync_op_find_review_required() {
     fi
   done
   return 1
+}
+
+# Mark one obsolete review-required handoff complete while preserving its audit
+# trail. Caller must establish that no live owner is mutating the journal.
+vault_sync_op_mark_superseded_stale_review_required() {
+  local repo="$1" op_id="$2" by="${3:-vault-sync-managed-preflight}"
+  local reason="$4" prior_reason="$5" now
+  if [ -z "$prior_reason" ] && [ -n "$reason" ] && [ "$reason" != "superseded-stale-review-required" ]; then
+    prior_reason="$reason"
+  fi
+  now="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%S)"
+  vault_sync_op_set_fields "$repo" "$op_id" \
+    "phase" "complete" \
+    "handoff" "1" \
+    "reason" "superseded-stale-review-required" \
+    "prior_reason" "$prior_reason" \
+    "superseded_at" "$now" \
+    "cleared_by" "$by" \
+    "cleared_reason" "operator-or-preflight $now"
+}
+
+# Auto-supersede review-required handoffs whose target is already an ancestor
+# of HEAD. Unrelated dirty WIP is preserved; active sequencers and unmerged
+# paths fail closed. Returns nonzero while any applicable handoff remains open.
+vault_sync_op_supersede_stale_review_required() {
+  local repo="$1" by="${2:-vault-sync-managed-preflight}"
+  local current_git_dir git_dir unmerged jdir jf op_id phase handoff journal_git_dir target unresolved
+  local reason prior_reason key value
+
+  current_git_dir="$(git -C "$repo" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  git_dir="$current_git_dir"
+  if [ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ] \
+    || [ -f "$git_dir/MERGE_HEAD" ] || [ -f "$git_dir/CHERRY_PICK_HEAD" ] \
+    || [ -f "$git_dir/REVERT_HEAD" ]; then
+    return 1
+  fi
+  unmerged="$(git -C "$repo" ls-files -u 2>/dev/null | head -1 || true)"
+  [ -z "$unmerged" ] || return 1
+
+  jdir="$(vault_sync_op_journal_dir "$repo")" || return 1
+  [ -d "$jdir" ] || return 0
+  unresolved=""
+  for jf in "$jdir"/*.env; do
+    [ -f "$jf" ] || continue
+    op_id="$(basename "$jf" .env)"
+    phase=""
+    handoff=""
+    journal_git_dir=""
+    target=""
+    reason=""
+    prior_reason=""
+    while IFS='=' read -r key value; do
+      case "$key" in
+        phase) phase="$value" ;;
+        handoff) handoff="$value" ;;
+        worktree_git_dir) journal_git_dir="$value" ;;
+        target_oid) target="$value" ;;
+        reason) reason="$value" ;;
+        prior_reason) prior_reason="$value" ;;
+      esac
+    done <"$jf"
+    [ "$phase" = "review-required" ] && [ "$handoff" = "1" ] || continue
+    if [ -n "$journal_git_dir" ] && [ "$journal_git_dir" != "$current_git_dir" ]; then
+      continue
+    fi
+    if [ -z "$target" ]; then
+      [ -n "$unresolved" ] || unresolved="$op_id"
+      continue
+    fi
+    if git -C "$repo" merge-base --is-ancestor "$target" HEAD 2>/dev/null; then
+      vault_sync_op_mark_superseded_stale_review_required \
+        "$repo" "$op_id" "$by" "$reason" "$prior_reason" || return 1
+    else
+      [ -n "$unresolved" ] || unresolved="$op_id"
+    fi
+  done
+  [ -z "$unresolved" ]
 }
 
 vault_sync_op_preflight_blocker() {
