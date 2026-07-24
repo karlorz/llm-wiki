@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "scenario_id": "13-no-service-run-ever-completed",
+  "description": "No service run has ever completed (scenario 13) - service_result not a pass",
+  "now": "2026-07-25T12:00:00Z",
+  "cadence_minutes": 30,
+  "service_timeout_seconds": 900,
+  "service_scope": "user",
+  "timer": {
+    "load_state": "loaded",
+    "unit_file_state": "enabled",
+    "active_state": "active",
+    "sub_state": "waiting",
+    "next_elapse": "2026-07-25T12:32:00Z",
+    "result": "success"
+  },
+  "service": {
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "result": "success",
+    "exec_main_status": 0,
+    "exec_main_code": 0,
+    "active_enter_timestamp": null,
+    "inactive_enter_timestamp": null
+  },
+  "log_records": [],
+  "expected": {
+    "vault_sync_jobs_enabled": { "status": "pass" },
+    "vault_sync_snapshot_service_result": { "status": "warn" },
+    "vault_sync_last_push_age": { "status": "error" },
+    "vault_sync_snapshot_consecutive_failures": { "status": "pass", "facts": { "count": 0 } }
+  }
+}

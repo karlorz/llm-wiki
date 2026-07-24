@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "scenario_id": "07-successful-completion-older-than-135-min",
+  "description": "Successful completion older than 135 minutes (scenario 7) - error",
+  "now": "2026-07-25T12:00:00Z",
+  "cadence_minutes": 30,
+  "service_timeout_seconds": 900,
+  "service_scope": "user",
+  "timer": {
+    "load_state": "loaded",
+    "unit_file_state": "enabled",
+    "active_state": "active",
+    "sub_state": "waiting",
+    "next_elapse": "2026-07-25T12:32:00Z",
+    "result": "success"
+  },
+  "service": {
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "result": "success",
+    "exec_main_status": 0,
+    "exec_main_code": 1,
+    "active_enter_timestamp": "2026-07-25T09:32:10Z",
+    "inactive_enter_timestamp": "2026-07-25T09:33:40Z"
+  },
+  "log_records": [
+    "2026-07-25 09:32:10 === Wiki Snapshot: 20260725_093210 ===",
+    "2026-07-25 09:33:40 Push successful",
+    "2026-07-25 09:33:42 Status: complete",
+    "2026-07-25T09:33:42Z SNAPSHOT_COMPLETE schema=v1 outcome=pushed result=success ts=2026-07-25T09:33:42Z head=aaa1bbbb2ccc3ddd4eee5fff6aaa7bbb8ccc9ddd0 origin=fff6eee5ddd4ccc3bbb2aaa1fff6eee5ddd4ccc3"
+  ],
+  "expected": {
+    "vault_sync_jobs_enabled": { "status": "pass" },
+    "vault_sync_snapshot_service_result": { "status": "pass" },
+    "vault_sync_last_push_age": { "status": "error" },
+    "vault_sync_snapshot_consecutive_failures": { "status": "pass", "facts": { "count": 0 } }
+  }
+}
