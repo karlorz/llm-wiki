@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { readdirSync, readFileSync, mkdirSync, writeFileSync, mkdtempSync } from "node:fs";
+import { readdirSync, readFileSync, mkdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { execSync } from "node:child_process";
 import { runDoctor } from "../../src/commands/doctor.js";
 
 // Resolve the shared fixture corpus from the vault-sync package so both the
@@ -53,14 +54,17 @@ interface ScenarioFixture {
   expected: Record<string, { status: "pass" | "warn" | "error"; facts?: Record<string, unknown> }>;
 }
 
-function loadFixtures(): ScenarioFixture[] {
+function loadFixtures(): Array<{ fixture: ScenarioFixture; path: string }> {
   const files = readdirSync(FIXTURE_DIR)
     .filter(f => f.endsWith(".json"))
     .sort();
   if (files.length < 18) {
     throw new Error(`expected at least 18 fixtures, found ${files.length}`);
   }
-  return files.map(f => JSON.parse(readFileSync(join(FIXTURE_DIR, f), "utf8")) as ScenarioFixture);
+  return files.map(f => ({
+    fixture: JSON.parse(readFileSync(join(FIXTURE_DIR, f), "utf8")) as ScenarioFixture,
+    path: join(FIXTURE_DIR, f),
+  }));
 }
 
 /**
@@ -71,7 +75,7 @@ function loadFixtures(): ScenarioFixture[] {
  * reads timer/service properties + the bounded log tail from the fixture
  * instead of calling systemctl or reading the live snapshot log.
  */
-async function runFixture(fixture: ScenarioFixture): Promise<Map<string, { status: string; detail: string }>> {
+async function runFixture(fixture: ScenarioFixture, fixturePath: string): Promise<Map<string, { status: string; detail: string }>> {
   const h = mkdtempSync(join(tmpdir(), "snap-health-"));
   mkdirSync(join(h, ".skillwiki"), { recursive: true });
   mkdirSync(join(h, ".claude", "skills", "example"), { recursive: true });
@@ -86,9 +90,7 @@ async function runFixture(fixture: ScenarioFixture): Promise<Map<string, { statu
   writeFileSync(join(h, ".skillwiki", ".env"), envLines.join("\n") + "\n");
 
   // Provide a snapshot script with the --max-delete guard so the guard check passes.
-  const shareDir = fixture.service_scope === "system"
-    ? join(h, ".local", "share", "vault-sync", "bin")
-    : join(h, ".local", "share", "vault-sync", "bin");
+  const shareDir = join(h, ".local", "share", "vault-sync", "bin");
   mkdirSync(shareDir, { recursive: true });
   writeFileSync(join(shareDir, "wiki-snapshot.sh"), "#!/usr/bin/env bash\n# --max-delete 10\n");
 
@@ -98,7 +100,7 @@ async function runFixture(fixture: ScenarioFixture): Promise<Map<string, { statu
     argv: ["node", "skillwiki", "doctor"],
     currentVersion: "0.10.14",
     env: {
-      VS_SNAPSHOT_HEALTH_FIXTURE: fixture.scenario_id,
+      VS_SNAPSHOT_HEALTH_FIXTURE: fixturePath,
       VS_SNAPSHOT_HEALTH_NOW: fixture.now,
       VS_SNAPSHOT_CADENCE_MINUTES: String(fixture.cadence_minutes),
       VS_SNAPSHOT_SERVICE_TIMEOUT_SECONDS: String(fixture.service_timeout_seconds),
@@ -121,9 +123,9 @@ describe("snapshot-health scenario parity (TypeScript doctor)", () => {
     expect(fixtures.length).toBeGreaterThanOrEqual(18);
   });
 
-  for (const fixture of fixtures) {
+  for (const { fixture, path } of fixtures) {
     it(`scenario ${fixture.scenario_id}: ${fixture.description}`, async () => {
-      const checks = await runFixture(fixture);
+      const checks = await runFixture(fixture, path);
       for (const [id, expected] of Object.entries(fixture.expected)) {
         const actual = checks.get(id);
         expect(actual, `check '${id}' missing for ${fixture.scenario_id}`).toBeDefined();
@@ -133,9 +135,65 @@ describe("snapshot-health scenario parity (TypeScript doctor)", () => {
   }
 
   it("produces the new check IDs for a healthy snapshotter fixture", async () => {
-    const healthy = fixtures.find(f => f.scenario_id === "01-enabled-timer-successful-service-fresh-pushed")!;
-    const checks = await runFixture(healthy);
+    const healthy = fixtures.find(f => f.fixture.scenario_id === "01-enabled-timer-successful-service-fresh-pushed")!;
+    const checks = await runFixture(healthy.fixture, healthy.path);
     expect(checks.has("vault_sync_snapshot_service_result")).toBe(true);
     expect(checks.has("vault_sync_snapshot_consecutive_failures")).toBe(true);
   });
+});
+
+// ── Cross-surface parity: shell status.sh vs TypeScript doctor ──
+// Both implementations consume the same fixture corpus. For each scenario,
+// assert the shell and TS produce identical check IDs + severities for the
+// snapshotter health checks. This is the explicit parity gate required by
+// the v0.10.14 plan (Phase 4 step 10).
+const STATUS_SH = join(REPO_ROOT, "vault-sync", "skills", "vault-sync-status", "status.sh");
+
+function runShellStatusFixture(fixturePath: string, fixture: ScenarioFixture): Map<string, string> {
+  const home = mkdtempSync(join(tmpdir(), "snap-shell-"));
+  try {
+    mkdirSync(join(home, "wiki"), { recursive: true });
+    const json = execSync(
+      `env -u WIKI_REMOTE HOME="${home}" WIKI_PATH="${home}/wiki" VS_ROLE=snapshotter VS_OS=linux ` +
+      `VS_SERVICE_SCOPE="${fixture.service_scope}" VS_SNAPSHOT_HEALTH_FIXTURE="${fixturePath}" ` +
+      `VS_SNAPSHOT_HEALTH_NOW="${fixture.now}" VS_SNAPSHOT_CADENCE_MINUTES="${fixture.cadence_minutes}" ` +
+      `VS_SNAPSHOT_SERVICE_TIMEOUT_SECONDS="${fixture.service_timeout_seconds}" ` +
+      `bash "${STATUS_SH}" --read-only --json`,
+      { encoding: "utf8", timeout: 15000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const map = new Map<string, string>();
+    try {
+      const d = JSON.parse(json);
+      for (const c of d.checks ?? []) {
+        map.set(c.id, c.status);
+      }
+    } catch { /* empty */ }
+    return map;
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+describe("snapshot-health cross-surface parity (shell status.sh === TypeScript doctor)", () => {
+  const fixtures = loadFixtures();
+  const parityIds = [
+    "vault_sync_jobs_enabled",
+    "vault_sync_snapshot_service_result",
+    "vault_sync_last_push_age",
+    "vault_sync_snapshot_consecutive_failures",
+  ];
+
+  for (const { fixture, path } of fixtures) {
+    it(`shell and TS agree on ${fixture.scenario_id}`, async () => {
+      const tsChecks = await runFixture(fixture, path);
+      const shellChecks = runShellStatusFixture(path, fixture);
+      for (const id of parityIds) {
+        const ts = tsChecks.get(id)?.status;
+        const shell = shellChecks.get(id);
+        expect(shell, `shell missing '${id}' for ${fixture.scenario_id}`).toBeDefined();
+        expect(ts, `TS missing '${id}' for ${fixture.scenario_id}`).toBeDefined();
+        expect(ts, `parity mismatch '${id}' for ${fixture.scenario_id}: shell=${shell} ts=${ts}`).toBe(shell);
+      }
+    });
+  }
 });
