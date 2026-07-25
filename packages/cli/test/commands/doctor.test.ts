@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import {
   runDoctor,
@@ -9,6 +10,13 @@ import {
   checkSatelliteTimer,
   doctorReadOnlyScanRoot,
 } from "../../src/commands/doctor.js";
+
+// This file lives at packages/cli/test/commands/ -> up 3 dirnames reaches
+// packages/cli, then ../.. reaches the repo root. Be careful not to double
+// the "packages" segment when joining vault-sync paths.
+const THIS_DIR = dirname(fileURLToPath(import.meta.url));
+const CLI_PKG = join(THIS_DIR, "..", "..");
+const REPO_ROOT = join(CLI_PKG, "..");
 
 function home(): string {
   const h = mkdtempSync(join(tmpdir(), "home-"));
@@ -288,12 +296,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 48 checks", async () => {
+  it("always returns exactly 50 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(48);
+      expect(r.result.data.checks).toHaveLength(50);
       const freshness = r.result.data.checks.find(c => c.id === "s3_mount_freshness");
       expect(freshness).toBeDefined();
       expect(freshness?.status).toBe("pass");
@@ -1062,14 +1070,17 @@ describe("runDoctor", () => {
   }
 
   describe("vault-sync checks", () => {
-    it("all 6 vault-sync checks skip when vault_sync.installed is false", async () => {
+    it("all vault-sync checks skip when vault_sync.installed is false", async () => {
       const h = home();
       const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
       expect(r.result.ok).toBe(true);
       if (!r.result.ok) return;
       const vsIds = [
         "vault_sync_installed", "vault_sync_jobs_enabled",
-        "vault_sync_last_push_age", "vault_sync_last_fetch_status",
+        "vault_sync_snapshot_service_result",
+        "vault_sync_last_push_age",
+        "vault_sync_snapshot_consecutive_failures",
+        "vault_sync_last_fetch_status",
         "vault_sync_filter_present", "vault_sync_snapshot_guard",
       ];
       for (const id of vsIds) {
@@ -1178,22 +1189,25 @@ describe("runDoctor", () => {
       expect(guard!.detail).toContain("not found");
     });
 
-    it("snapshotter role uses configured snapshot script, reports snapshot status, and skips leaf-only checks", async () => {
+    it("snapshotter role uses configured snapshot script, reports snapshot freshness, and skips leaf-only checks", async () => {
       const h = home();
       const shareDir = createVaultSyncShareDir(h);
       const snapshotScript = join(shareDir, "wiki-snapshot.sh");
       writeFileSync(snapshotScript, "#!/usr/bin/env bash\n# --max-delete 10\n");
-      mkdirSync(join(h, ".config", "systemd", "user"), { recursive: true });
-      writeFileSync(join(h, ".config", "systemd", "user", "wiki-snapshot.timer"), "[Timer]\n");
-      createVaultSyncSnapshotLog(h, [
-        "2026-06-26 10:02:25 No changes to commit",
-      ]);
+      // Use the fixture seam for deterministic systemd properties + log so
+      // the test is hermetic on non-Linux hosts. Scenario 02 = fresh no-change.
+      const fixturePath = join(REPO_ROOT, "vault-sync", "test", "fixtures", "snapshot-health", "02-enabled-timer-successful-service-fresh-no-change.json");
       vaultSyncConfig(h, true, "snapshotter", {
         snapshot_script: snapshotScript,
         service_scope: "user",
       });
 
-      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      const r = await runDoctor({
+        home: h, envValue: undefined,
+        argv: ["node", "skillwiki", "doctor"],
+        currentVersion: "0.2.0-beta.15",
+        env: { VS_SNAPSHOT_HEALTH_FIXTURE: fixturePath } as NodeJS.ProcessEnv,
+      });
       expect(r.result.ok).toBe(true);
       if (!r.result.ok) return;
 
@@ -1203,12 +1217,17 @@ describe("runDoctor", () => {
 
       const jobs = r.result.data.checks.find(c => c.id === "vault_sync_jobs_enabled");
       expect(jobs?.status).toBe("pass");
-      expect(jobs?.detail).toContain("wiki-snapshot.timer");
 
       const snapshotStatus = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
       expect(snapshotStatus?.status).toBe("pass");
-      expect(snapshotStatus?.label).toBe("Vault sync last snapshot status");
-      expect(snapshotStatus?.detail).toContain("No changes to commit");
+      expect(snapshotStatus?.label).toBe("Vault sync last snapshot recency");
+      expect(snapshotStatus?.detail).toContain("no-change");
+
+      const serviceResult = r.result.data.checks.find(c => c.id === "vault_sync_snapshot_service_result");
+      expect(serviceResult?.status).toBe("pass");
+
+      const consecutive = r.result.data.checks.find(c => c.id === "vault_sync_snapshot_consecutive_failures");
+      expect(consecutive?.status).toBe("pass");
 
       for (const id of ["vault_sync_last_fetch_status", "vault_sync_filter_present"]) {
         const roleSkipped = r.result.data.checks.find(c => c.id === id);
@@ -1221,30 +1240,35 @@ describe("runDoctor", () => {
       expect(guard?.detail).toContain("--max-delete");
     });
 
-    it("snapshotter role reports the latest snapshot log failure", async () => {
+    it("snapshotter role reports the latest snapshot service failure", async () => {
       const h = home();
       const shareDir = createVaultSyncShareDir(h);
       const snapshotScript = join(shareDir, "wiki-snapshot.sh");
       writeFileSync(snapshotScript, "#!/usr/bin/env bash\n# --max-delete 10\n");
-      mkdirSync(join(h, ".config", "systemd", "user"), { recursive: true });
-      writeFileSync(join(h, ".config", "systemd", "user", "wiki-snapshot.timer"), "[Timer]\n");
-      createVaultSyncSnapshotLog(h, [
-        "2026-06-26 14:02:03 === Wiki Snapshot: 20260626_140203 ===",
-        "2026-06-26 14:02:07 ERROR: direct-S3 preflight found note paths missing from Git; refusing live snapshot before rclone sync",
-      ]);
+      // Scenario 03 = enabled timer + latest service failure (immediate error).
+      const fixturePath = join(REPO_ROOT, "vault-sync", "test", "fixtures", "snapshot-health", "03-enabled-timer-latest-service-failure.json");
       vaultSyncConfig(h, true, "snapshotter", {
         snapshot_script: snapshotScript,
         service_scope: "user",
       });
 
-      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      const r = await runDoctor({
+        home: h, envValue: undefined,
+        argv: ["node", "skillwiki", "doctor"],
+        currentVersion: "0.2.0-beta.15",
+        env: { VS_SNAPSHOT_HEALTH_FIXTURE: fixturePath } as NodeJS.ProcessEnv,
+      });
       expect(r.result.ok).toBe(true);
       if (!r.result.ok) return;
 
+      const serviceResult = r.result.data.checks.find(c => c.id === "vault_sync_snapshot_service_result");
+      expect(serviceResult?.status).toBe("error");
+      expect(serviceResult?.detail).toContain("result=exit-code");
+
       const snapshotStatus = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
       expect(snapshotStatus?.status).toBe("error");
-      expect(snapshotStatus?.label).toBe("Vault sync last snapshot status");
-      expect(snapshotStatus?.detail).toContain("direct-S3 preflight");
+      expect(snapshotStatus?.label).toBe("Vault sync last snapshot recency");
+      expect(snapshotStatus?.detail).toContain("latest service result failed");
     });
 
     it("snapshotter git checks use configured snapshot worktree when WIKI_PATH is a non-git mount", async () => {

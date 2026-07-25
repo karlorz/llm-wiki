@@ -1007,6 +1007,174 @@ test_snapshot_skips_optional_prune_when_inventory_fails
 test_snapshot_direct_s3_warning_excludes_tombstone_but_keeps_unexplained_path
 test_snapshot_rejects_invalid_tombstone_prune_cap
 
+# ── Canonical completion record (v0.10.14) ────────────────────
+# wiki-snapshot.sh must emit one stable machine-parseable terminal record
+#   SNAPSHOT_COMPLETE schema=v1 outcome=<pushed|no-change> result=success ...
+# on both the pushed-success and no-change-success paths, and must NOT emit
+# it on any failure path. These tests use a stubbed uname (Linux) so they
+# run on macOS hosts too.
+
+setup_completion_record_fixture() {
+  local root="$1" outcome="$2"
+  local git_dir="$root/wiki-git" bin_dir="$root/bin"
+  local log_file="$root/wiki-snapshot.log" lock_file="$root/wiki-snapshot.lock"
+  local origin_dir="$root/origin.git"
+  mkdir -p "$git_dir" "$bin_dir" "$root/home"
+
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  printf '# Index\n' > "$git_dir/index.md"
+  printf '# Log\n' > "$git_dir/log.md"
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" add -A >/dev/null
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m init >/dev/null
+  # Bare origin so wiki-snapshot.sh can fetch origin/main and fast-forward.
+  git -C "$git_dir" clone --bare . "$origin_dir" >/dev/null 2>&1
+  git -C "$git_dir" remote add origin "$origin_dir" >/dev/null 2>&1
+  git -C "$git_dir" fetch origin main >/dev/null 2>&1 || true
+  git -C "$git_dir" branch --set-upstream-to=origin/main main >/dev/null 2>&1 || true
+
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  cat > "$bin_dir/flock" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  # rclone stub: lsf lists existing files; sync is a no-op (no changes) for
+  # the no-change case, or writes one new file for the pushed case.
+  cat > "$bin_dir/rclone" <<STUB
+#!/bin/bash
+if [ "\$1" = "lsf" ]; then
+  printf 'SCHEMA.md\nindex.md\nlog.md\n'
+  exit 0
+fi
+if [ "\$1" = "sync" ]; then
+  if [ "$outcome" = "pushed" ]; then
+    printf 'new note\n' > "$git_dir/new-note.md"
+  fi
+  exit 0
+fi
+exit 0
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/skillwiki" "$bin_dir/rclone"
+
+  printf '%s\n' "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+}
+
+test_snapshot_emits_canonical_completion_record_on_pushed_success() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir log_file lock_file
+  setup="$(setup_completion_record_fixture "$root" pushed)"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
+  lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
+
+  WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+  local rc=$?
+
+  if [ "$rc" -eq 0 ] \
+      && grep -q 'SNAPSHOT_COMPLETE schema=v1 outcome=pushed result=success' "$log_file"; then
+    printf 'PASS: pushed success emits canonical completion record\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: pushed success canonical record (rc=%s log=%s)\n' \
+      "$rc" "$(tr '\n' ' ' < "$log_file" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_emits_canonical_completion_record_on_no_change_success() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir log_file lock_file
+  setup="$(setup_completion_record_fixture "$root" no-change)"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
+  lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
+
+  WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+  local rc=$?
+
+  if [ "$rc" -eq 0 ] \
+      && grep -q 'SNAPSHOT_COMPLETE schema=v1 outcome=no-change result=success' "$log_file"; then
+    printf 'PASS: no-change success emits canonical completion record\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: no-change success canonical record (rc=%s log=%s)\n' \
+      "$rc" "$(tr '\n' ' ' < "$log_file" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_does_not_emit_completion_record_on_failure() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir log_file lock_file
+  setup="$(setup_completion_record_fixture "$root" no-change)"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
+  lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
+  # Override rclone to fail the sync so the snapshot exits non-zero before
+  # any completion record could be emitted.
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+if [ "$1" = "lsf" ]; then
+  printf 'SCHEMA.md\nindex.md\nlog.md\n'
+  exit 0
+fi
+exit 1
+STUB
+  chmod +x "$bin_dir/rclone"
+
+  WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+  local rc=$?
+
+  if [ "$rc" -ne 0 ] \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$log_file"; then
+    printf 'PASS: failure path does not emit canonical completion record\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: failure path emitted completion record (rc=%s log=%s)\n' \
+      "$rc" "$(tr '\n' ' ' < "$log_file" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_emits_canonical_completion_record_on_pushed_success
+test_snapshot_emits_canonical_completion_record_on_no_change_success
+test_snapshot_does_not_emit_completion_record_on_failure
+
 if [ "$(uname -s)" != "Linux" ]; then
   printf "SKIP: Linux-only runtime snapshot guard test\n"
   printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"

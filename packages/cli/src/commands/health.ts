@@ -2,7 +2,7 @@ import { ok, ExitCode, type ExitCodeValue, type Result } from "@skillwiki/shared
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { platform } from "node:os";
-import { runDoctor, type CheckResult, type DoctorOutput } from "./doctor.js";
+import { runDoctor, snapshotterHealthChecks, type CheckResult, type DoctorOutput } from "./doctor.js";
 import { runLint, type LintBucketSummary, type LintSummaryOutput, type LintSeverity } from "./lint.js";
 
 export type HealthStatus = "pass" | "info" | "warn" | "error" | "unknown";
@@ -236,7 +236,36 @@ function classifyLog(path: string, id: string, label: string, okPattern: RegExp)
   return { id, label, status: "warn", detail: last.slice(0, 120) };
 }
 
-function runVaultSyncHealth(home: string, syncMode: SyncMode): VaultSyncComponent {
+/** Read vault_sync.role + service_scope + snapshot_script from ~/.skillwiki/.env. */
+function readVaultSyncRoleAndScope(home: string): {
+  role?: string;
+  serviceScope?: string;
+  snapshotScript?: string;
+} {
+  try {
+    const content = readFileSync(join(home, ".skillwiki", ".env"), "utf8");
+    let role: string | undefined;
+    let serviceScope: string | undefined;
+    let snapshotScript: string | undefined;
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      const k = trimmed.slice(0, eq).trim();
+      const v = trimmed.slice(eq + 1).trim();
+      if (v.length === 0) continue;
+      if (k === "vault_sync.role") role = v;
+      if (k === "vault_sync.service_scope") serviceScope = v;
+      if (k === "vault_sync.snapshot_script") snapshotScript = v;
+    }
+    return { role, serviceScope, snapshotScript };
+  } catch {
+    return {};
+  }
+}
+
+function runVaultSyncHealth(home: string, syncMode: SyncMode, env: NodeJS.ProcessEnv = process.env): VaultSyncComponent {
   if (syncMode === "off") {
     return {
       status: "pass",
@@ -269,6 +298,38 @@ function runVaultSyncHealth(home: string, syncMode: SyncMode): VaultSyncComponen
         status: "pass",
         detail: `vault-sync not installed at ${pushScript}; optional check skipped`,
       }],
+    };
+  }
+
+  // Snapshotter role: produce the same snapshotter health checks as doctor so
+  // status, doctor, and health agree (v0.10.14). Reads vault_sync.role +
+  // service_scope from ~/.skillwiki/.env (bypassing the CLI whitelist).
+  const vsConfig = readVaultSyncRoleAndScope(home);
+  if (vsConfig.role === "snapshotter") {
+    const snapshotScript = vsConfig.snapshotScript ?? join(shareDir, "wiki-snapshot.sh");
+    const installed: CheckResult = existsSync(snapshotScript)
+      ? { id: "vault_sync_installed", label: "Vault sync installed", status: "pass", detail: `Found snapshot script: ${snapshotScript}` }
+      : { id: "vault_sync_installed", label: "Vault sync installed", status: "error", detail: `Snapshot script not found at ${snapshotScript}` };
+    const healthChecks = snapshotterHealthChecks(vsConfig.serviceScope ?? "user", logDir, env);
+    const fetchNA: CheckResult = { id: "vault_sync_last_fetch_status", label: "Vault sync last fetch status", status: "pass", detail: "Snapshotter host — leaf wiki-fetch-notify log not applicable" };
+    const filterNA: CheckResult = { id: "vault_sync_filter_present", label: "Vault sync filter file present", status: "pass", detail: "Snapshotter host — leaf wiki-push filter not applicable" };
+    let guard: CheckResult;
+    if (!existsSync(snapshotScript)) {
+      guard = { id: "vault_sync_snapshot_guard", label: "Snapshot script guard", status: "error", detail: `Snapshot script not found at ${snapshotScript}` };
+    } else {
+      const content = readFileSync(snapshotScript, "utf8");
+      guard = content.includes("--max-delete")
+        ? { id: "vault_sync_snapshot_guard", label: "Snapshot script guard", status: "pass", detail: `--max-delete present in ${snapshotScript}` }
+        : { id: "vault_sync_snapshot_guard", label: "Snapshot script guard", status: "error", detail: `${snapshotScript} is missing --max-delete guard` };
+    }
+    const allChecks = [installed, ...healthChecks, fetchNA, filterNA, guard];
+    const summary = summarizeChecks(allChecks);
+    return {
+      status: statusFromCounts(summary),
+      blocking: syncMode === "required",
+      installed: installed.status === "pass",
+      summary,
+      checks: allChecks.map(c => ({ id: c.id, status: c.status, detail: c.detail })),
     };
   }
 

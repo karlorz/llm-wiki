@@ -1330,6 +1330,205 @@ function resolveSnapshotGitWorktree(config: VaultSyncRuntimeConfig): string | un
   return existsSync(defaultPath) ? defaultPath : undefined;
 }
 
+// ── Snapshotter scheduler health (v0.10.14) ──────────────────
+// Combines read-only systemd properties with a bounded parse of canonical
+// SNAPSHOT_COMPLETE records. Mirrors the shell status.sh logic so both
+// implementations pass the shared scenario corpus with exact parity.
+
+interface SnapshotTimerProps {
+  load_state: string | null;
+  unit_file_state: string | null;
+  active_state: string | null;
+  sub_state: string | null;
+  next_elapse: string | null;
+  result: string | null;
+}
+
+interface SnapshotServiceProps {
+  load_state: string | null;
+  active_state: string | null;
+  sub_state: string | null;
+  result: string | null;
+  exec_main_status: number | null;
+  exec_main_code: number | null;
+  active_enter_timestamp: string | null;
+  inactive_enter_timestamp: string | null;
+}
+
+interface SnapshotFixture {
+  schema_version: number;
+  scenario_id: string;
+  now: string;
+  cadence_minutes: number;
+  service_timeout_seconds: number;
+  service_scope: "user" | "system";
+  timer: SnapshotTimerProps;
+  service: SnapshotServiceProps;
+  log_records: string[];
+}
+
+function loadSnapshotFixture(env: NodeJS.ProcessEnv): SnapshotFixture | null {
+  const path = env.VS_SNAPSHOT_HEALTH_FIXTURE;
+  if (!path || !existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as SnapshotFixture;
+  } catch {
+    return null;
+  }
+}
+
+function systemctlShowProperty(scope: string, unit: string, prop: string): string | undefined {
+  try {
+    const cmd = scope === "system"
+      ? `systemctl show ${unit} --property=${prop} --value`
+      : `systemctl --user show ${unit} --property=${prop} --value`;
+    const out = execSync(cmd, {
+      encoding: "utf8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    return out || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function snapshotProp(
+  kind: "timer" | "service",
+  prop: string,
+  fixture: SnapshotFixture | null,
+  scope: string,
+): string | undefined {
+  if (fixture) {
+    const v = fixture[kind][prop as keyof typeof fixture[typeof kind]];
+    return v == null ? undefined : String(v);
+  }
+  const unit = kind === "timer" ? "wiki-snapshot.timer" : "wiki-snapshot.service";
+  return systemctlShowProperty(scope, unit, prop);
+}
+
+function parseIsoToMs(ts: string | undefined | null): number | null {
+  if (!ts || ts === "MISSING") return null;
+  const ms = Date.parse(ts);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function ageMinutes(nowMs: number, tsMs: number | null): number | null {
+  if (tsMs == null) return null;
+  return Math.floor((nowMs - tsMs) / 60000);
+}
+
+/** Snapshotter scheduler + service-result + freshness + consecutive-failure checks. */
+export function snapshotterHealthChecks(
+  scope: string,
+  logDir: string,
+  env: NodeJS.ProcessEnv,
+): CheckResult[] {
+  const fixture = loadSnapshotFixture(env);
+  const cadence = fixture ? fixture.cadence_minutes : parseInt(env.VS_SNAPSHOT_CADENCE_MINUTES ?? "30", 10) || 30;
+  const timeout = fixture ? fixture.service_timeout_seconds : parseInt(env.VS_SNAPSHOT_SERVICE_TIMEOUT_SECONDS ?? "900", 10) || 900;
+  const nowMs = fixture ? Date.parse(fixture.now) : Date.now();
+  const warnAge = cadence * 2 + 15;
+  const errorAge = cadence * 4 + 15;
+
+  // vault_sync_jobs_enabled: timer installed, enabled, active, next-trigger
+  const tUnitfile = snapshotProp("timer", "unit_file_state", fixture, scope);
+  const tActive = snapshotProp("timer", "active_state", fixture, scope);
+  const tNext = snapshotProp("timer", "next_elapse", fixture, scope);
+  let jobs: CheckResult;
+  if (tUnitfile == null && tActive == null) {
+    jobs = check("warn", "vault_sync_jobs_enabled", "Vault sync jobs enabled", "wiki-snapshot.timer properties unavailable (read-only)");
+  } else if (tUnitfile === "enabled" && tActive === "active" && tNext) {
+    jobs = check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `wiki-snapshot.timer enabled+active, next=${tNext} (${scope})`);
+  } else {
+    jobs = check("error", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `wiki-snapshot.timer not eligible: unit_file_state=${tUnitfile ?? "missing"} active_state=${tActive ?? "missing"} next_elapse=${tNext ?? "missing"} (${scope})`);
+  }
+
+  // vault_sync_snapshot_service_result: latest oneshot result
+  const sActive = snapshotProp("service", "active_state", fixture, scope) ?? null;
+  const sResult = snapshotProp("service", "result", fixture, scope) ?? null;
+  const sExecMainStatus = snapshotProp("service", "exec_main_status", fixture, scope);
+  const sActiveEnter = snapshotProp("service", "active_enter_timestamp", fixture, scope) ?? null;
+  let serviceResult: CheckResult;
+  if (sActive == null && sResult == null) {
+    serviceResult = check("warn", "vault_sync_snapshot_service_result", "Vault sync snapshot service result", "wiki-snapshot.service properties unavailable (read-only)");
+  } else if (sActive === "active" || sActive === "activating") {
+    const startMs = parseIsoToMs(sActiveEnter);
+    const runSec = startMs == null ? null : Math.floor((nowMs - startMs) / 1000);
+    if (runSec != null && runSec > timeout) {
+      serviceResult = check("error", "vault_sync_snapshot_service_result", "Vault sync snapshot service result", `wiki-snapshot.service running ${runSec}s beyond timeout ${timeout}s`);
+    } else {
+      serviceResult = check("pass", "vault_sync_snapshot_service_result", "Vault sync snapshot service result", `wiki-snapshot.service in progress (running ${runSec ?? "?"}s)`);
+    }
+  } else if (sResult === "success" && (sExecMainStatus ?? "0") === "0" && sActiveEnter != null) {
+    serviceResult = check("pass", "vault_sync_snapshot_service_result", "Vault sync snapshot service result", "wiki-snapshot.service result=success ExecMainStatus=0");
+  } else if (sResult === "failed" || (sExecMainStatus != null && sExecMainStatus !== "0")) {
+    serviceResult = check("error", "vault_sync_snapshot_service_result", "Vault sync snapshot service result", `wiki-snapshot.service result=${sResult ?? "missing"} ExecMainStatus=${sExecMainStatus ?? "missing"}`);
+  } else {
+    serviceResult = check("warn", "vault_sync_snapshot_service_result", "Vault sync snapshot service result", `wiki-snapshot.service result=${sResult ?? "missing"} (never ran or unrecognized)`);
+  }
+
+  // vault_sync_last_push_age: freshness of latest canonical completion
+  let completionTs: string | null = null;
+  let completionOutcome = "unknown";
+  const logRecords = fixture ? fixture.log_records : (() => {
+    try {
+      const content = readFileSync(join(logDir, "wiki-snapshot.log"), "utf8");
+      return content.split(/\r?\n/).filter(Boolean);
+    } catch { return []; }
+  })();
+  for (let i = logRecords.length - 1; i >= 0; i--) {
+    const m = logRecords[i]!.match(/SNAPSHOT_COMPLETE schema=v1 .*ts=(\S+)/);
+    if (m) {
+      completionTs = m[1]!;
+      const om = logRecords[i]!.match(/outcome=(\S+)/);
+      if (om) completionOutcome = om[1]!;
+      break;
+    }
+  }
+  let freshness: CheckResult;
+  if (!completionTs || completionTs === "MISSING") {
+    if (sActive === "active" || sActive === "activating") {
+      freshness = check("warn", "vault_sync_last_push_age", "Vault sync last snapshot recency", "snapshot in progress; no prior canonical completion record");
+    } else {
+      freshness = check("error", "vault_sync_last_push_age", "Vault sync last snapshot recency", "no canonical SNAPSHOT_COMPLETE record found");
+    }
+  } else {
+    const ageMin = ageMinutes(nowMs, parseIsoToMs(completionTs));
+    if (ageMin == null) {
+      freshness = check("error", "vault_sync_last_push_age", "Vault sync last snapshot recency", `unparseable completion timestamp: ${completionTs}`);
+    } else if (ageMin <= warnAge) {
+      freshness = check("pass", "vault_sync_last_push_age", "Vault sync last snapshot recency", `last snapshot ${ageMin}m ago (outcome=${completionOutcome}, <=${warnAge}m)`);
+    } else if (ageMin <= errorAge) {
+      freshness = check("warn", "vault_sync_last_push_age", "Vault sync last snapshot recency", `last snapshot ${ageMin}m ago (outcome=${completionOutcome}, >${warnAge}m)`);
+    } else {
+      freshness = check("error", "vault_sync_last_push_age", "Vault sync last snapshot recency", `last snapshot ${ageMin}m ago (outcome=${completionOutcome}, >${errorAge}m)`);
+    }
+  }
+  // A completed failed service result overrides an older success record.
+  if (serviceResult.status === "error" && sActive !== "active" && sActive !== "activating") {
+    freshness = check("error", "vault_sync_last_push_age", "Vault sync last snapshot recency", `latest service result failed: ${serviceResult.detail}`);
+  }
+
+  // vault_sync_snapshot_consecutive_failures: bounded recent-run window
+  let failCount = 0;
+  let mostRecentFail = "";
+  for (let i = logRecords.length - 1; i >= 0 && i >= logRecords.length - 60; i--) {
+    const line = logRecords[i]!;
+    if (/SNAPSHOT_COMPLETE schema=v1/.test(line)) break;
+    if (/ERROR/.test(line)) {
+      failCount++;
+      if (!mostRecentFail) {
+        const m = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
+        mostRecentFail = m ? m[1]! : "unknown";
+      }
+    }
+  }
+  const consecutiveFailures: CheckResult = failCount >= 2
+    ? check("error", "vault_sync_snapshot_consecutive_failures", "Vault sync snapshot consecutive failures", `${failCount} consecutive snapshot failure(s); most recent: ${mostRecentFail || "unknown"}`)
+    : check("pass", "vault_sync_snapshot_consecutive_failures", "Vault sync snapshot consecutive failures", `${failCount} consecutive failure(s) in recent window (recurrence threshold: 2)`);
+
+  return [jobs, serviceResult, freshness, consecutiveFailures];
+}
+
 interface VaultSyncInput {
   home: string;
   vaultSyncInstalled: boolean;
@@ -1340,13 +1539,17 @@ interface VaultSyncInput {
   shareDir?: string;
   filterPath?: string;
   snapshotScriptPath?: string;
+  env?: NodeJS.ProcessEnv;
 }
 
 /**
- * Six vault-sync health checks.
+ * Vault-sync health checks.
  *
- * Top-level skip: if vault_sync.installed is not true, all 6 return
- * pass-with-skip-detail.
+ * Top-level skip: if vault_sync.installed is not true, all checks return
+ * pass-with-skip-detail. On snapshotters the set is: installed, jobs_enabled,
+ * snapshot_service_result, last_push_age (snapshot freshness),
+ * snapshot_consecutive_failures, last_fetch_status (n/a), filter_present
+ * (n/a), snapshot_guard. Leaf hosts retain the 6 legacy checks.
  */
 function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
   const os = input.os ?? platform();
@@ -1359,7 +1562,9 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
     return [
       skip("vault_sync_installed", "Vault sync installed"),
       skip("vault_sync_jobs_enabled", "Vault sync jobs enabled"),
+      skip("vault_sync_snapshot_service_result", "Vault sync snapshot service result"),
       skip("vault_sync_last_push_age", "Vault sync last push recency"),
+      skip("vault_sync_snapshot_consecutive_failures", "Vault sync snapshot consecutive failures"),
       skip("vault_sync_last_fetch_status", "Vault sync last fetch status"),
       skip("vault_sync_filter_present", "Vault sync filter file present"),
       skip("vault_sync_snapshot_guard", "Snapshot script guard"),
@@ -1386,66 +1591,16 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
     input.snapshotScriptPath ??
     (existsSync(packagedSnapshotPath) ? packagedSnapshotPath : legacySnapshotPath);
 
-  function snapshotLastStatusCheck(): CheckResult {
-    const snapshotLog = join(logDir, "wiki-snapshot.log");
-    try {
-      const logContent = readFileSync(snapshotLog, "utf8");
-      const lines = logContent.trim().split("\n").filter(Boolean);
-      if (lines.length === 0) {
-        return check("warn", "vault_sync_last_push_age", "Vault sync last snapshot status",
-          "Snapshot log file is empty");
-      }
-      const lastLine = [...lines].reverse().find(line =>
-        /ERROR|Status: complete|Push successful|No changes to commit/.test(line)
-      ) ?? lines[lines.length - 1];
-      if (/ERROR/.test(lastLine)) {
-        return check("error", "vault_sync_last_push_age", "Vault sync last snapshot status",
-          `Last snapshot failed: ${lastLine.slice(0, 160)}`);
-      }
-      if (/Status: complete|Push successful|No changes to commit/.test(lastLine)) {
-        return check("pass", "vault_sync_last_push_age", "Vault sync last snapshot status",
-          lastLine.slice(0, 160));
-      }
-      return check("warn", "vault_sync_last_push_age", "Vault sync last snapshot status",
-        `Last snapshot log entry: ${lastLine.slice(0, 160)}`);
-    } catch {
-      return check("warn", "vault_sync_last_push_age", "Vault sync last snapshot status",
-        `Snapshot log not found at ${snapshotLog}`);
-    }
-  }
-
   if (input.vaultSyncRole === "snapshotter") {
     const c1 = existsSync(snapshotPath)
       ? check("pass", "vault_sync_installed", "Vault sync installed", `Found snapshot script: ${snapshotPath}`)
       : check("error", "vault_sync_installed", "Vault sync installed", `Snapshot script not found at ${snapshotPath}`);
 
     const serviceScope = input.vaultSyncServiceScope ?? "user";
-    const userTimerPath = join(home, ".config", "systemd", "user", "wiki-snapshot.timer");
-    const systemTimerPath = "/etc/systemd/system/wiki-snapshot.timer";
-    let c2: CheckResult;
-    if (serviceScope === "user" && existsSync(userTimerPath)) {
-      c2 = check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `Found: ${userTimerPath}`);
-    } else if (serviceScope === "system" && existsSync(systemTimerPath)) {
-      c2 = check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `Found: ${systemTimerPath}`);
-    } else if (os !== "linux") {
-      c2 = check("warn", "vault_sync_jobs_enabled", "Vault sync jobs enabled", "Snapshotter scheduler is Linux-only and no wiki-snapshot.timer file was found");
-    } else {
-      try {
-        const command = serviceScope === "system"
-          ? "systemctl is-enabled wiki-snapshot.timer"
-          : "systemctl --user is-enabled wiki-snapshot.timer";
-        const out = execSync(command, {
-          encoding: "utf8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"],
-        }).trim();
-        c2 = out === "enabled"
-          ? check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `systemd: wiki-snapshot.timer enabled (${serviceScope})`)
-          : check("error", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `systemd: wiki-snapshot.timer is ${out || "not enabled"} (${serviceScope})`);
-      } catch {
-        c2 = check("error", "vault_sync_jobs_enabled", "Vault sync jobs enabled", `wiki-snapshot.timer check failed (${serviceScope})`);
-      }
-    }
+    // Snapshotter scheduler + service-result + freshness + consecutive-failure
+    // checks (v0.10.14). Reads fixture seam or live systemd read-only.
+    const healthChecks = snapshotterHealthChecks(serviceScope, logDir, input.env ?? process.env);
 
-    const c3 = snapshotLastStatusCheck();
     const cFetch = check("pass", "vault_sync_last_fetch_status", "Vault sync last fetch status",
       "Snapshotter host — leaf wiki-fetch-notify log not applicable");
     const c4 = check("pass", "vault_sync_filter_present", "Vault sync filter file present",
@@ -1471,7 +1626,9 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
         `Cannot read ${snapshotPath}`);
     }
 
-    return [c1, c2, c3, cFetch, c4, c5];
+    // [installed, jobs_enabled, service_result, last_push_age, consecutive_failures,
+    //  fetch, filter, guard]
+    return [c1, ...healthChecks, cFetch, c4, c5];
   }
 
   // ── Check 1: vault_sync_installed ──────────────────────────────
@@ -1839,6 +1996,7 @@ export async function runDoctor(
     vaultSyncRole: vsConfig.role,
     vaultSyncServiceScope: vsConfig.serviceScope,
     snapshotScriptPath: vsConfig.snapshotScript,
+    env: input.env ?? process.env,
   }));
 
   // Managed-write prerequisites (0.10.1+): pull helper + stale handoff journals

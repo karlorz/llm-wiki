@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { Command } from "commander";
 import type { Result, ErrResult } from "@skillwiki/shared";
-import { ExitCode } from "@skillwiki/shared";
+import { ExitCode, err } from "@skillwiki/shared";
 import { printJson, printHuman } from "./utils/output.js";
 import { getDeprecatedWarnings } from "./utils/deprecation.js";
 import { runHash } from "./commands/hash.js";
@@ -55,6 +55,7 @@ import { runTagReconcile } from "./commands/tag-reconcile.js";
 import { runPagePublish } from "./commands/page-publish.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers, runSyncLintDelta } from "./commands/sync.js";
 import { runSyncJournalList, runSyncJournalClearStale } from "./commands/sync-journal.js";
+import { runSnapshotMaintenanceDryRun, runSnapshotMaintenanceExecute } from "./commands/snapshot-maintenance.js";
 import { getCliSessionId } from "./utils/sync-lock.js";
 import { runBackupSync, runBackupRestore } from "./commands/backup.js";
 import { runStatus } from "./commands/status.js";
@@ -1209,6 +1210,33 @@ syncJournalCmd
         "sync journal clear-stale",
         async () => runSyncJournalClearStale({ vault: v.vault, dryRun: false }),
       );
+    }
+  });
+
+// snapshot-maintenance journal clear-stale (v0.10.14): the one allowlisted
+// protected-snapshotter mutation. Requires --dry-run to produce an approval
+// ID, then --approve <id> + --reason <text> on an attended TTY to execute.
+const snapshotMaintenanceCmd = program.command("snapshot-maintenance").description("attended protected-snapshotter maintenance operations");
+const snapMaintJournalCmd = snapshotMaintenanceCmd.command("journal").description("snapshot operation journal maintenance");
+
+snapMaintJournalCmd
+  .command("clear-stale [snapshot-worktree]")
+  .description("supersede safe stale review-required journals on a protected snapshotter (attended, one-shot)")
+  .option("--dry-run", "non-mutating plan + approval ID (no execution)", false)
+  .option("--approve <id>", "state-bound approval ID from a prior --dry-run")
+  .option("--reason <text>", "non-empty operator reason for the maintenance")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (snapshotWorktree, opts) => {
+    if (!snapshotWorktree) {
+      emit({ exitCode: ExitCode.USAGE, result: err("USAGE", "snapshot-maintenance journal clear-stale requires a snapshot-worktree path argument") });
+      return;
+    }
+    if (opts.dryRun) {
+      emit(await runSnapshotMaintenanceDryRun({ snapshotWorktree, dryRun: true, reason: opts.reason }));
+    } else if (opts.approve) {
+      emit(await runSnapshotMaintenanceExecute({ snapshotWorktree, dryRun: false, approvalId: opts.approve, reason: opts.reason }));
+    } else {
+      emit({ exitCode: ExitCode.USAGE, result: err("USAGE", "provide --dry-run for a plan, or --approve <id> --reason <text> to execute") });
     }
   });
 

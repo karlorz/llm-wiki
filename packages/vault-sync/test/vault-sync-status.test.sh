@@ -740,5 +740,67 @@ test_status_warns_runtime_hash_mismatch
 test_status_reports_runtime_match_when_hashes_equal
 test_status_runtime_registration_warns_when_jobs_enabled_and_mismatch
 
+# ── --fail-on modes (v0.10.14) ────────────────────────────────
+# Default standalone status is report-only (exit 0). --fail-on error exits
+# nonzero when summary.error > 0; --fail-on warn exits nonzero when
+# summary.warn > 0 or summary.error > 0. Uses the fixture seam so the
+# snapshotter health checks produce a deterministic error/warn.
+
+test_fail_on_error_exits_nonzero_with_errors() {
+  local home
+  home="$(mktemp -d)"
+  mkdir -p "$home/wiki"
+  if env -u WIKI_REMOTE HOME="$home" WIKI_PATH="$home/wiki" VS_ROLE=snapshotter VS_OS=linux \
+      VS_SERVICE_SCOPE=user \
+      VS_SNAPSHOT_HEALTH_FIXTURE="$VAULT_SYNC_ROOT/test/fixtures/snapshot-health/14-consecutive-failures.json" \
+      bash "$STATUS_SH" --read-only --json --fail-on error >/dev/null 2>&1; then
+    printf "FAIL: --fail-on error should exit nonzero when errors present\n"
+    FAIL=$((FAIL + 1))
+  else
+    printf "PASS: --fail-on error exits nonzero when errors present\n"
+    PASS=$((PASS + 1))
+  fi
+  rm -rf "$home"
+}
+
+test_fail_on_warn_exits_nonzero_with_warns() {
+  local home
+  home="$(mktemp -d)"
+  mkdir -p "$home/wiki"
+  # Scenario 16 (unavailable props) produces warn-level snapshot checks.
+  if env -u WIKI_REMOTE HOME="$home" WIKI_PATH="$home/wiki" VS_ROLE=snapshotter VS_OS=linux \
+      VS_SERVICE_SCOPE=user \
+      VS_SNAPSHOT_HEALTH_FIXTURE="$VAULT_SYNC_ROOT/test/fixtures/snapshot-health/16-unavailable-systemd-properties.json" \
+      bash "$STATUS_SH" --read-only --json --fail-on warn >/dev/null 2>&1; then
+    printf "FAIL: --fail-on warn should exit nonzero when warns present\n"
+    FAIL=$((FAIL + 1))
+  else
+    printf "PASS: --fail-on warn exits nonzero when warns present\n"
+    PASS=$((PASS + 1))
+  fi
+  rm -rf "$home"
+}
+
+test_default_status_exits_zero_even_with_errors() {
+  local home
+  home="$(mktemp -d)"
+  mkdir -p "$home/wiki"
+  if env -u WIKI_REMOTE HOME="$home" WIKI_PATH="$home/wiki" VS_ROLE=snapshotter VS_OS=linux \
+      VS_SERVICE_SCOPE=user \
+      VS_SNAPSHOT_HEALTH_FIXTURE="$VAULT_SYNC_ROOT/test/fixtures/snapshot-health/14-consecutive-failures.json" \
+      bash "$STATUS_SH" --read-only --json >/dev/null 2>&1; then
+    printf "PASS: default status is report-only (exit 0) even with errors\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: default status should exit 0 even when errors present\n"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$home"
+}
+
+test_fail_on_error_exits_nonzero_with_errors
+test_fail_on_warn_exits_nonzero_with_warns
+test_default_status_exits_zero_even_with_errors
+
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
