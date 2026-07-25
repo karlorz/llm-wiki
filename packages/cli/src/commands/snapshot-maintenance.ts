@@ -188,10 +188,17 @@ export async function runSnapshotMaintenanceDryRun(
   const audit = input.auditSink ?? defaultAuditSink(home);
   const now = input.now ?? Date.now();
 
+  // Resolve live vault first so fleet.yaml is loaded from the real vault.
+  // Never pass vault:"" — empty string is not nullish and would suppress
+  // WIKI_PATH / home-dotenv resolution (v0.10.16 fix).
+  const liveVaultPath = input.liveVaultPath
+    ? canonicalize(input.liveVaultPath)
+    : (await resolveLiveVault({ env, home }));
+
   const fleetLoad = input.fleetLoad !== undefined
     ? input.fleetLoad
     : await loadFleetManifestAndHost({
-        vault: input.liveVaultPath ?? "",
+        vault: liveVaultPath,
         env,
         home,
         cwd: process.cwd(),
@@ -227,9 +234,6 @@ export async function runSnapshotMaintenanceDryRun(
     return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_MISSING_GIT_REPO", `snapshot worktree is not a git repository: ${requested}`) };
   }
 
-  const liveVaultPath = input.liveVaultPath
-    ? canonicalize(input.liveVaultPath)
-    : (await resolveLiveVault({ env, home })) ;
   if (liveVaultPath && requested === canonicalize(liveVaultPath)) {
     audit(makeAuditEvent(input, fleetLoad.hostId, now, "refusal", "MAINTENANCE_LIVE_VAULT_TARGET"));
     return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_LIVE_VAULT_TARGET", "requested path is the live vault, not the snapshot worktree") };
