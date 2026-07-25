@@ -1,7 +1,7 @@
 ---
 name: vault-sync-status
 description: Health snapshot of vault-sync — scheduler health, push/fetch recency, filter integrity, snapshot guard, runtime manifest proof, and Linux fuse-refresh timer status. JSON + human output. Use after install, for CI read-only checks on protected hosts, when status hangs on S3/GitHub probes, or to prove runtime-manifest hashes match package sources.
-argument-hint: "[--read-only] [--json]"
+argument-hint: "[--read-only] [--json] [--fail-on error|warn]"
 ---
 
 # vault-sync-status
@@ -55,6 +55,7 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
    - Default: human-readable two-column table.
    - `--json`: machine-readable record matching the doctor JSON shape.
 9. **`--read-only` flag**: explicitly forbid any state-changing call. Used by sg01 e2e leg. The skill MUST honor this — no `touch`, no `launchctl print` (which on some platforms can spawn helpers), no service restart.
+10. **`--fail-on <lvl>` flag**: exit nonzero when the summary has `error` (`--fail-on error`) or `warning`+`error` (`--fail-on warn`). Default is report-only (exit 0). Used by CI to gate on health without parsing JSON.
 
 ## Package root for drift checks
 

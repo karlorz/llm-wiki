@@ -308,7 +308,7 @@ describe("snapshot-health live systemctl adapter (TypeScript doctor)", () => {
   const isWindows = process.platform === "win32";
   const maybeIt = isWindows ? it.skip : it;
 
-  maybeIt("completed oneshot with empty ActiveEnterTimestamp is pass (system)", () => {
+  maybeIt("oneshot-empty-active-enter: completed oneshot with empty ActiveEnterTimestamp is pass (H2 invariant, system)", () => {
     const { checks, requests } = runLiveAdapter("system", "completed");
     expect(checks.get("vault_sync_jobs_enabled")).toBe("pass");
     expect(checks.get("vault_sync_snapshot_service_result")).toBe("pass");

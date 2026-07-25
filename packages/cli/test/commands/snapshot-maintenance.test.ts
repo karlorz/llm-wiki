@@ -125,6 +125,25 @@ function makeFixture(opts: {
   return { home, worktree, liveVault, lockPath, fleetLoad, targetOid };
 }
 
+/** Write a minimal protected-snapshotter fleet.yaml under the live vault. */
+function writeFleetYaml(liveVault: string): void {
+  const fleetDir = join(liveVault, "projects", "llm-wiki", "architecture");
+  mkdirSync(fleetDir, { recursive: true });
+  writeFileSync(join(fleetDir, "fleet.yaml"), [
+    "schema_version: 1",
+    "vault_remote: git@example.com:org/wiki.git",
+    "hosts:",
+    "  sg01:",
+    "    class: prod-linux",
+    "    role: snapshotter",
+    "    writes_to: [github]",
+    "    protected: true",
+    "    identity:",
+    "      hostnames: [sg01]",
+    "",
+  ].join("\n"));
+}
+
 describe("snapshot-maintenance journal clear-stale", () => {
   describe("dry-run negative cases (fail closed)", () => {
     it("refuses unknown fleet identity", async () => {
@@ -266,21 +285,7 @@ describe("snapshot-maintenance journal clear-stale", () => {
     it("resolves fleet identity from live vault path without injected fleetLoad (v0.10.16)", async () => {
       // Regression: vault:"" suppressed WIKI_PATH and always yielded UNKNOWN_IDENTITY.
       const f = makeFixture({ withJournal: true, journalTargetAncestor: true });
-      const fleetDir = join(f.liveVault, "projects", "llm-wiki", "architecture");
-      mkdirSync(fleetDir, { recursive: true });
-      writeFileSync(join(fleetDir, "fleet.yaml"), [
-        "schema_version: 1",
-        "vault_remote: git@example.com:org/wiki.git",
-        "hosts:",
-        "  sg01:",
-        "    class: prod-linux",
-        "    role: snapshotter",
-        "    writes_to: [github]",
-        "    protected: true",
-        "    identity:",
-        "      hostnames: [sg01]",
-        "",
-      ].join("\n"));
+      writeFleetYaml(f.liveVault);
       const r = await runSnapshotMaintenanceDryRun({
         snapshotWorktree: f.worktree,
         dryRun: true,
@@ -300,6 +305,34 @@ describe("snapshot-maintenance journal clear-stale", () => {
       if (r.result.ok) {
         expect(r.result.data.plan!.host_id).toBe("sg01");
         expect(r.result.data.plan!.approval_id).toMatch(/^smap1-[0-9a-f]{32}$/);
+      }
+      rmSync(f.home, { recursive: true, force: true });
+    });
+
+    it("empty-vault-fleet-load: omits liveVaultPath so fleet resolves from WIKI_PATH (H4 invariant)", async () => {
+      // H4: never pass vault:"" - empty string suppresses WIKI_PATH and yields
+      // UNKNOWN_IDENTITY. When liveVaultPath is unset, the dry-run must resolve
+      // the live vault from WIKI_PATH/home-dotenv before loading fleet.yaml.
+      const f = makeFixture({ withJournal: true, journalTargetAncestor: true });
+      writeFleetYaml(f.liveVault);
+      const r = await runSnapshotMaintenanceDryRun({
+        snapshotWorktree: f.worktree,
+        dryRun: true,
+        reason: "fleet from WIKI_PATH",
+        // intentionally omit both fleetLoad AND liveVaultPath - must resolve
+        // the live vault from WIKI_PATH before fleet load (H4 invariant).
+        home: f.home,
+        isTty: true,
+        env: {
+          ...process.env,
+          HOME: f.home,
+          WIKI_PATH: f.liveVault,
+          SKILLWIKI_HOST_ID: "sg01",
+        } as NodeJS.ProcessEnv,
+      });
+      expect(r.result.ok).toBe(true);
+      if (r.result.ok) {
+        expect(r.result.data.plan!.host_id).toBe("sg01");
       }
       rmSync(f.home, { recursive: true, force: true });
     });
