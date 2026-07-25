@@ -16,6 +16,11 @@ phase: 3
 slug: llm-wiki
 vault: auto
 release_branch: main
+branch_policy:
+  # Stable releases are deliberately prepared and tagged from clean main by
+  # scripts/release.sh. Record that existing repository authority explicitly
+  # so deterministic write preflight agrees with the release controller.
+  direct_push_to_release_branch: true
 knowledge_layer: skillwiki
 
 # Knowledge backend registry — explicit declaration for BACKEND_CAPS resolution
