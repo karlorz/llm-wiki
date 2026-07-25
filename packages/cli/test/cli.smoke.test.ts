@@ -490,7 +490,7 @@ describe("cli smoke", () => {
       [
         "#!/bin/bash",
         "set -eu",
-        'printf "%s\\n" "$PWD" >> "$PULL_HELPER_CWD_LOG"',
+        'node -p "process.cwd()" >> "$PULL_HELPER_CWD_LOG"',
         "exit 0",
         "",
       ].join("\n"),

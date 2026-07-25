@@ -272,9 +272,9 @@ run_cli ssh "$SSH_HOST" "HOME=$TEMP_HOME_REMOTE NO_UPDATE_NOTIFIER=1 WIKI_PATH=$
 assert_exit 28 "$RUN_RC" "remote doctor exits 28 (warn from temp vault)"
 assert_json_contains "$RUN_OUTPUT" "ok"                "true" "remote doctor returns ok"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0"   "remote doctor reports 0 errors"
-assert_json_contains "$RUN_OUTPUT" "data.summary.warn"  "1"   "remote doctor reports 1 warn (temp vault)"
 
-# Verify exactly 9 checks
+# Verify the doctor surface remains populated. Warning counts are intentionally
+# not a contract because host capabilities add informational diagnostics.
 checks_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
@@ -288,8 +288,10 @@ fi
 
 # doctor with bad WIKI_PATH — should report errors
 ERR_HOME_REMOTE="/tmp/sw-err-home-$(date +%s)"
-ssh "$SSH_HOST" "mkdir -p $ERR_HOME_REMOTE/.skillwiki && echo 'WIKI_PATH=/no/such/path' > $ERR_HOME_REMOTE/.skillwiki/.env" 2>/dev/null
-run_cli ssh "$SSH_HOST" "NO_UPDATE_NOTIFIER=1 HOME=$ERR_HOME_REMOTE $REMOTE_CLI doctor"
+ssh "$SSH_HOST" "mkdir -p $ERR_HOME_REMOTE/.skillwiki" 2>/dev/null
+# Set WIKI_PATH explicitly so a project-local skillwiki/.env on the remote
+# checkout cannot override this negative fixture.
+run_cli ssh "$SSH_HOST" "NO_UPDATE_NOTIFIER=1 HOME=$ERR_HOME_REMOTE WIKI_PATH=/no/such/path $REMOTE_CLI doctor"
 assert_exit 29 "$RUN_RC" "remote doctor exits 29 (errors)"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "2" "remote doctor reports 2 errors"
 ssh "$SSH_HOST" "rm -rf $ERR_HOME_REMOTE" 2>/dev/null
