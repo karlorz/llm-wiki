@@ -202,3 +202,94 @@ describe("runConfigPath", () => {
     }
   });
 });
+
+describe("runConfigSet vault_sync.* typed validation (A1)", () => {
+  it("accepts a valid vault_sync.role value", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "vault_sync.role", value: "snapshotter", home: h });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) expect(r.result.data.value).toBe("snapshotter");
+    const text = readFileSync(join(h, ".skillwiki", ".env"), "utf8");
+    expect(text).toContain("vault_sync.role=snapshotter");
+  });
+
+  it("rejects an invalid role with exit 54 (INVALID_CONFIG_VALUE)", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "vault_sync.role", value: "master", home: h });
+    expect(r.exitCode).toBe(54);
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toBe("INVALID_CONFIG_VALUE");
+    // Must not write the invalid value.
+    expect(existsSync(join(h, ".skillwiki", ".env"))).toBe(false);
+  });
+
+  it("rejects a relative path for vault_sync.snapshot_profile", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "vault_sync.snapshot_profile", value: "relative/path.env", home: h });
+    expect(r.exitCode).toBe(54);
+    expect(r.result.ok).toBe(false);
+  });
+
+  it("accepts none sentinel for path keys", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "vault_sync.snapshot_worktree", value: "none", home: h });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+  });
+
+  it("rejects a bare number for duration keys", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "vault_sync.fuse_refresh_interval", value: "300", home: h });
+    expect(r.exitCode).toBe(54);
+    expect(r.result.ok).toBe(false);
+  });
+
+  it("accepts a valid duration 15m", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "vault_sync.fuse_max_dir_cache", value: "15m", home: h });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+  });
+
+  it("rejects unknown vault_sync.* keys with exit 26 (INVALID_CONFIG_KEY)", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "vault_sync.bogus", value: "value", home: h });
+    expect(r.exitCode).toBe(26);
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toBe("INVALID_CONFIG_KEY");
+  });
+});
+
+describe("runConfigGet/runConfigList vault_sync.* surface (A1)", () => {
+  it("runConfigGet reads a vault_sync key written by set", async () => {
+    const h = home();
+    await runConfigSet({ key: "vault_sync.role", value: "leaf", home: h });
+    const r = await runConfigGet({ key: "vault_sync.role", home: h });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) expect(r.result.data.value).toBe("leaf");
+  });
+
+  it("runConfigList surfaces vault_sync keys (not silently dropped)", async () => {
+    const h = home();
+    writeFileSync(join(h, ".skillwiki", ".env"),
+      "WIKI_PATH=/vault\nvault_sync.installed=true\nvault_sync.role=snapshotter\n");
+    const r = await runConfigList({ home: h });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const keys = r.result.data.entries.map(e => e.key);
+      expect(keys).toContain("WIKI_PATH");
+      expect(keys).toContain("vault_sync.installed");
+      expect(keys).toContain("vault_sync.role");
+    }
+  });
+
+  it("runConfigGet rejects unknown vault_sync key with exit 26", async () => {
+    const h = home();
+    const r = await runConfigGet({ key: "vault_sync.bogus", home: h });
+    expect(r.exitCode).toBe(26);
+    expect(r.result.ok).toBe(false);
+  });
+});

@@ -257,6 +257,69 @@ export const FleetManifestSchema = z.object({
 
 export type FleetManifest = z.infer<typeof FleetManifestSchema>;
 
+// ── vault_sync.* typed configuration (A1) ──────────────────────────────────
+//
+// The installer writes these keys via `skillwiki config set`. This schema is
+// the single source of truth for value validation on set and on doctor read.
+// Keys not listed here are rejected. See
+// packages/vault-sync/docs/health-invariants.md for the house rules.
+
+const vaultSyncRole = z.enum(["leaf", "snapshotter", "none"]);
+const vaultSyncScheduler = z.enum(["systemd", "launchd", "none"]);
+const vaultSyncScope = z.enum(["user", "system", "none"]);
+const vaultSyncBool = z.enum(["true", "false"]);
+// Duration: Nm / Nh / Ns (positive integer + unit) or the sentinel "none".
+const vaultSyncDuration = z.union([
+  z.string().regex(/^[1-9][0-9]*[mhs]$/, "must be <positive-int>m|h|s (e.g. 15m, 300s) or none"),
+  z.literal("none"),
+]);
+// Absolute path or the sentinel "none" (unset/tombstone). No "~", no relative.
+const vaultSyncPathOrNone = z.union([
+  absolutePath,
+  z.literal("none"),
+]);
+
+export const VaultSyncConfigSchema = z.object({
+  "vault_sync.installed": vaultSyncBool,
+  "vault_sync.role": vaultSyncRole,
+  "vault_sync.scheduler": vaultSyncScheduler,
+  "vault_sync.service_scope": vaultSyncScope,
+  "vault_sync.snapshot_profile": vaultSyncPathOrNone,
+  "vault_sync.snapshot_script": vaultSyncPathOrNone,
+  "vault_sync.snapshot_worktree": vaultSyncPathOrNone,
+  "vault_sync.fuse_refresh_enabled": vaultSyncBool,
+  "vault_sync.fuse_refresh_interval": vaultSyncDuration,
+  "vault_sync.fuse_max_dir_cache": vaultSyncDuration,
+  "vault_sync.fuse_service_scope": vaultSyncScope,
+}).strict();
+
+export type VaultSyncConfig = z.infer<typeof VaultSyncConfigSchema>;
+
+export const VAULT_SYNC_KEYS = Object.keys(VaultSyncConfigSchema.shape) as readonly string[];
+
+export function isVaultSyncKey(key: string): boolean {
+  return VAULT_SYNC_KEYS.includes(key);
+}
+
+/**
+ * Validate a single `vault_sync.*` key/value pair as written by
+ * `skillwiki config set vault_sync.<key> <value>`. Returns ok on success or
+ * the first Zod issue message on failure.
+ */
+export function parseVaultSyncKeyValue(key: string, value: string):
+  { ok: true } | { ok: false; message: string } {
+  if (!isVaultSyncKey(key)) {
+    return { ok: false, message: `unknown vault_sync key: ${key}` };
+  }
+  const fieldSchema = (VaultSyncConfigSchema.shape as Record<string, z.ZodType>)[key];
+  const parsed = fieldSchema.safeParse(value);
+  if (parsed.success) {
+    return { ok: true };
+  }
+  const first = parsed.error.issues[0];
+  return { ok: false, message: first?.message ?? "invalid value" };
+}
+
 export type SchemaName = "typed-knowledge" | "raw" | "work-item" | "compound" | "meta";
 
 export function detectSchema(fm: Record<string, unknown>): { schema: SchemaName | null } {

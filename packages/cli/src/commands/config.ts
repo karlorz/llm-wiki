@@ -1,11 +1,12 @@
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
+import { isVaultSyncKey, parseVaultSyncKeyValue } from "@skillwiki/shared";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { parseDotenvFile, parseDotenvText, writeDotenv, type DotenvMap, CONFIG_KEYS, type ConfigKey, isValidWikiProfileKey } from "../utils/dotenv.js";
 
-function validateKey(key: string): key is ConfigKey {
-  return (CONFIG_KEYS as readonly string[]).includes(key) || isValidWikiProfileKey(key);
+function validateKey(key: string): boolean {
+  return (CONFIG_KEYS as readonly string[]).includes(key) || isValidWikiProfileKey(key) || isVaultSyncKey(key);
 }
 
 export function configPath(home: string): string {
@@ -50,6 +51,12 @@ export async function runConfigSet(
 ): Promise<{ exitCode: number; result: Result<ConfigSetOutput> }> {
   if (!validateKey(input.key)) {
     return { exitCode: ExitCode.INVALID_CONFIG_KEY, result: err("INVALID_CONFIG_KEY", { key: input.key }) };
+  }
+  if (isVaultSyncKey(input.key)) {
+    const parsed = parseVaultSyncKeyValue(input.key, input.value);
+    if (!parsed.ok) {
+      return { exitCode: ExitCode.INVALID_CONFIG_VALUE, result: err("INVALID_CONFIG_VALUE", { key: input.key, value: input.value, message: parsed.message }) };
+    }
   }
   const filePath = configPath(input.home);
   try {
