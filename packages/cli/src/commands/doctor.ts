@@ -1673,6 +1673,9 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
     : check("error", "vault_sync_installed", "Vault sync installed", `Script not found at ${pushScriptPath} — run vault-sync-install`);
 
   // ── Check 2: vault_sync_jobs_enabled ───────────────────────────
+  // A3 guardrail: `launchctl print` dumps the full service environment
+  // (including any inherited credentials). Only the exit status is needed
+  // here, so stdout is discarded - never captured into a string.
   let c2: CheckResult;
   try {
     if (isMac) {
@@ -1681,7 +1684,7 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
       }).trim();
       const uid = parseInt(uidStr, 10);
       execSync(`launchctl print gui/${uid}/com.karlchow.wiki-push`, {
-        encoding: "utf8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"],
+        encoding: "utf8", timeout: 2000, stdio: ["pipe", "ignore", "ignore"],
       });
       c2 = check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
         "launchd: com.karlchow.wiki-push loaded");

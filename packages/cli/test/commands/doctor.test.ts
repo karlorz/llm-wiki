@@ -1297,6 +1297,27 @@ describe("runDoctor", () => {
       expect(gitDirty?.status).toBe("pass");
       expect(gitDirty?.detail).toContain("Clean worktree");
     });
+
+    it("launchctl-env-guard: leaf doctor output never contains service environment blocks (A3)", async () => {
+      // A3 guardrail: the leaf-path vault_sync_jobs_enabled check runs
+      // `launchctl print` on macOS, which dumps the service environment.
+      // Doctor must discard that stdout so no Environment= / EnvironmentVariables
+      // / secret patterns leak into check details or JSON output.
+      const h = home();
+      vaultSyncConfig(h, true);
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const json = JSON.stringify(r.result.data);
+      // No env-dump signatures should appear anywhere in doctor output.
+      expect(json).not.toMatch(/Environment=/);
+      expect(json).not.toMatch(/EnvironmentVariables/);
+      expect(json).not.toMatch(/EnvironmentFile=/);
+      // No plausible live key patterns (redaction filter sanity).
+      expect(json).not.toMatch(/AKIA[0-9A-Z]{16}/);
+      expect(json).not.toMatch(/ghp_[A-Za-z0-9]{36}/);
+      expect(json).not.toMatch(/-----BEGIN [A-Z ]*PRIVATE KEY-----/);
+    });
   });
 
   // ── Satellite job doctor checks ─────────────────────────────────
