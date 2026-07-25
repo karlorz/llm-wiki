@@ -64,8 +64,8 @@ while IFS= read -r f; do
   fixtures+=("$f")
 done < <(ls -1 "$FIXTURE_DIR"/*.json 2>/dev/null | sort)
 
-if [ "${#fixtures[@]}" -lt 18 ]; then
-  echo "FATAL: expected at least 18 fixtures, found ${#fixtures[@]}" >&2
+if [ "${#fixtures[@]}" -lt 19 ]; then
+  echo "FATAL: expected at least 19 fixtures, found ${#fixtures[@]}" >&2
   exit 1
 fi
 

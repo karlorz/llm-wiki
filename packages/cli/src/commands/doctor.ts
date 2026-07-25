@@ -1353,6 +1353,49 @@ interface SnapshotServiceProps {
   exec_main_code: number | null;
   active_enter_timestamp: string | null;
   inactive_enter_timestamp: string | null;
+  /** Optional; used for live oneshot start/elapsed. Fixtures may omit. */
+  exec_main_start_timestamp?: string | null;
+  /** Optional; preferred completed-run evidence for live oneshots. */
+  exec_main_exit_timestamp?: string | null;
+}
+
+/**
+ * Map fixture/semantic snake_case keys to live systemd property names.
+ * systemctl property names are case-sensitive; snake_case keys must never
+ * be passed through on the live path (v0.10.15 adapter fix).
+ */
+const SNAPSHOT_SEMANTIC_TO_SYSTEMD: Record<string, string> = {
+  load_state: "LoadState",
+  unit_file_state: "UnitFileState",
+  active_state: "ActiveState",
+  sub_state: "SubState",
+  next_elapse: "NextElapseUSecRealtime",
+  result: "Result",
+  exec_main_status: "ExecMainStatus",
+  exec_main_code: "ExecMainCode",
+  active_enter_timestamp: "ActiveEnterTimestamp",
+  inactive_enter_timestamp: "InactiveEnterTimestamp",
+  exec_main_start_timestamp: "ExecMainStartTimestamp",
+  exec_main_exit_timestamp: "ExecMainExitTimestamp",
+  invocation_id: "InvocationID",
+};
+
+/** Closed map: unknown semantic keys must not pass through as snake_case. */
+function semanticToSystemdProp(semantic: string): string | undefined {
+  return SNAPSHOT_SEMANTIC_TO_SYSTEMD[semantic];
+}
+
+/** Normalize empty / systemd "n/a" property values to undefined. */
+function normalizeSystemdValue(raw: string | undefined | null): string | undefined {
+  if (raw == null) return undefined;
+  const v = raw.trim();
+  if (!v || v === "n/a" || v === "N/A") return undefined;
+  return v;
+}
+
+/** Non-empty completed-run evidence (exit, inactive enter, or active enter). */
+function hasCompletedRunEvidence(...timestamps: Array<string | undefined | null>): boolean {
+  return timestamps.some(t => normalizeSystemdValue(t ?? undefined) != null);
 }
 
 interface SnapshotFixture {
@@ -1379,13 +1422,14 @@ function loadSnapshotFixture(env: NodeJS.ProcessEnv): SnapshotFixture | null {
 
 function systemctlShowProperty(scope: string, unit: string, prop: string): string | undefined {
   try {
+    // `prop` must already be a live systemd property name (PascalCase).
     const cmd = scope === "system"
       ? `systemctl show ${unit} --property=${prop} --value`
       : `systemctl --user show ${unit} --property=${prop} --value`;
     const out = execSync(cmd, {
       encoding: "utf8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-    return out || undefined;
+    });
+    return normalizeSystemdValue(out);
   } catch {
     return undefined;
   }
@@ -1398,11 +1442,16 @@ function snapshotProp(
   scope: string,
 ): string | undefined {
   if (fixture) {
-    const v = fixture[kind][prop as keyof typeof fixture[typeof kind]];
+    // Fixture path keeps semantic snake_case keys for corpus parity.
+    const bag = fixture[kind] as Record<string, unknown>;
+    const v = bag[prop];
     return v == null ? undefined : String(v);
   }
   const unit = kind === "timer" ? "wiki-snapshot.timer" : "wiki-snapshot.service";
-  return systemctlShowProperty(scope, unit, prop);
+  // Live path: translate semantic keys → case-sensitive systemd names.
+  const liveProp = semanticToSystemdProp(prop);
+  if (!liveProp) return undefined;
+  return systemctlShowProperty(scope, unit, liveProp);
 }
 
 function parseIsoToMs(ts: string | undefined | null): number | null {
@@ -1443,22 +1492,29 @@ export function snapshotterHealthChecks(
   }
 
   // vault_sync_snapshot_service_result: latest oneshot result
+  // Live completed oneshots often leave ActiveEnterTimestamp empty; durable
+  // evidence is ExecMainExitTimestamp or InactiveEnterTimestamp (v0.10.15).
   const sActive = snapshotProp("service", "active_state", fixture, scope) ?? null;
   const sResult = snapshotProp("service", "result", fixture, scope) ?? null;
   const sExecMainStatus = snapshotProp("service", "exec_main_status", fixture, scope);
   const sActiveEnter = snapshotProp("service", "active_enter_timestamp", fixture, scope) ?? null;
+  const sInactiveEnter = snapshotProp("service", "inactive_enter_timestamp", fixture, scope) ?? null;
+  const sExecMainStart = snapshotProp("service", "exec_main_start_timestamp", fixture, scope) ?? null;
+  const sExecMainExit = snapshotProp("service", "exec_main_exit_timestamp", fixture, scope) ?? null;
+  const completedEvidence = hasCompletedRunEvidence(sExecMainExit, sInactiveEnter, sActiveEnter);
   let serviceResult: CheckResult;
   if (sActive == null && sResult == null) {
     serviceResult = check("warn", "vault_sync_snapshot_service_result", "Vault sync snapshot service result", "wiki-snapshot.service properties unavailable (read-only)");
   } else if (sActive === "active" || sActive === "activating") {
-    const startMs = parseIsoToMs(sActiveEnter);
+    // Prefer ExecMainStartTimestamp; fall back to ActiveEnterTimestamp.
+    const startMs = parseIsoToMs(sExecMainStart) ?? parseIsoToMs(sActiveEnter);
     const runSec = startMs == null ? null : Math.floor((nowMs - startMs) / 1000);
     if (runSec != null && runSec > timeout) {
       serviceResult = check("error", "vault_sync_snapshot_service_result", "Vault sync snapshot service result", `wiki-snapshot.service running ${runSec}s beyond timeout ${timeout}s`);
     } else {
       serviceResult = check("pass", "vault_sync_snapshot_service_result", "Vault sync snapshot service result", `wiki-snapshot.service in progress (running ${runSec ?? "?"}s)`);
     }
-  } else if (sResult === "success" && (sExecMainStatus ?? "0") === "0" && sActiveEnter != null) {
+  } else if (sResult === "success" && (sExecMainStatus ?? "0") === "0" && completedEvidence) {
     serviceResult = check("pass", "vault_sync_snapshot_service_result", "Vault sync snapshot service result", "wiki-snapshot.service result=success ExecMainStatus=0");
   } else if (sResult === "failed" || (sExecMainStatus != null && sExecMainStatus !== "0")) {
     serviceResult = check("error", "vault_sync_snapshot_service_result", "Vault sync snapshot service result", `wiki-snapshot.service result=${sResult ?? "missing"} ExecMainStatus=${sExecMainStatus ?? "missing"}`);

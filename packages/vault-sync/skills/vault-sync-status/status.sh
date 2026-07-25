@@ -138,36 +138,79 @@ snapshot_health_timeout_seconds() {
   esac
 }
 
+# Map fixture/semantic snake_case keys to live systemd property names.
+# systemctl property names are case-sensitive; snake_case keys must never
+# be passed through on the live path (v0.10.15 adapter fix).
+# Usage: snapshot_semantic_to_systemd_prop <semantic-key> -> PascalCase name
+snapshot_semantic_to_systemd_prop() {
+  case "$1" in
+    load_state) printf 'LoadState\n' ;;
+    unit_file_state) printf 'UnitFileState\n' ;;
+    active_state) printf 'ActiveState\n' ;;
+    sub_state) printf 'SubState\n' ;;
+    next_elapse) printf 'NextElapseUSecRealtime\n' ;;
+    result) printf 'Result\n' ;;
+    exec_main_status) printf 'ExecMainStatus\n' ;;
+    exec_main_code) printf 'ExecMainCode\n' ;;
+    active_enter_timestamp) printf 'ActiveEnterTimestamp\n' ;;
+    inactive_enter_timestamp) printf 'InactiveEnterTimestamp\n' ;;
+    exec_main_start_timestamp) printf 'ExecMainStartTimestamp\n' ;;
+    exec_main_exit_timestamp) printf 'ExecMainExitTimestamp\n' ;;
+    invocation_id) printf 'InvocationID\n' ;;
+    # Closed map: never pass unknown/snake_case keys through to systemctl.
+    *) return 1 ;;
+  esac
+}
+
+# Normalize empty / systemd "n/a" property values to empty string.
+snapshot_normalize_systemd_value() {
+  local v="$1"
+  case "$v" in
+    ''|n/a|N/A) printf '\n' ;;
+    *) printf '%s\n' "$v" ;;
+  esac
+}
+
 # Read-only systemctl show wrapper. Prints the property value or empty.
 # Tolerates a missing systemctl binary (returns empty without aborting
 # under set -e). Usage: systemctl_show_property <scope> <unit> <Property>
+# <Property> must already be a live systemd property name (PascalCase).
 systemctl_show_property() {
   local scope="$1" unit="$2" prop="$3"
+  local raw=""
   if ! command -v systemctl >/dev/null 2>&1; then
     return 0
   fi
   if [ "$scope" = "system" ]; then
-    systemctl show "$unit" --property="$prop" --value 2>/dev/null || true
+    raw="$(systemctl show "$unit" --property="$prop" --value 2>/dev/null || true)"
   else
-    systemctl --user show "$unit" --property="$prop" --value 2>/dev/null || true
+    raw="$(systemctl --user show "$unit" --property="$prop" --value 2>/dev/null || true)"
   fi
+  snapshot_normalize_systemd_value "$raw"
 }
 
 # Resolve a systemctl property from fixture or live systemd.
-# Usage: snapshot_prop <timer|service> <property-name>
+# Usage: snapshot_prop <timer|service> <semantic-property-name>
+# Fixture path keeps semantic snake_case keys; live path maps to systemd names.
 snapshot_prop() {
   local kind="$1" prop="$2"
   if [ -n "${VS_SNAPSHOT_HEALTH_FIXTURE:-}" ]; then
     snapshot_fixture_get "${kind}.${prop}"
   else
-    local unit
+    local unit live_prop
     if [ "$kind" = "timer" ]; then
       unit="wiki-snapshot.timer"
     else
       unit="wiki-snapshot.service"
     fi
-    systemctl_show_property "$SERVICE_SCOPE" "$unit" "$prop"
+    live_prop="$(snapshot_semantic_to_systemd_prop "$prop")" || return 0
+    systemctl_show_property "$SERVICE_SCOPE" "$unit" "$live_prop"
   fi
+}
+
+# True when any completed-run timestamp is non-empty (exit, inactive, active).
+snapshot_has_completed_run_evidence() {
+  [ -n "${1:-}" ] || [ -n "${2:-}" ] || [ -n "${3:-}" ]
 }
 
 # Portable short-timeout wrapper for network reachability probes.
@@ -775,26 +818,42 @@ check_snapshotter_health() {
   fi
 
   # ── vault_sync_snapshot_service_result: latest oneshot result ──
-  local s_active s_result s_exec_main_status s_exec_main_code s_active_enter
+  # Live completed oneshots often leave ActiveEnterTimestamp empty; durable
+  # evidence is ExecMainExitTimestamp or InactiveEnterTimestamp (v0.10.15).
+  local s_active s_result s_exec_main_status
+  local s_active_enter s_inactive_enter s_exec_main_start s_exec_main_exit
   s_active="$(snapshot_prop service active_state)"
   s_result="$(snapshot_prop service result)"
   s_exec_main_status="$(snapshot_prop service exec_main_status)"
-  s_exec_main_code="$(snapshot_prop service exec_main_code)"
   s_active_enter="$(snapshot_prop service active_enter_timestamp)"
+  s_inactive_enter="$(snapshot_prop service inactive_enter_timestamp)"
+  s_exec_main_start="$(snapshot_prop service exec_main_start_timestamp)"
+  s_exec_main_exit="$(snapshot_prop service exec_main_exit_timestamp)"
+
+  local completed_evidence=0
+  if snapshot_has_completed_run_evidence "$s_exec_main_exit" "$s_inactive_enter" "$s_active_enter"; then
+    completed_evidence=1
+  fi
 
   local service_result_status service_result_detail
   if [ -z "$s_active" ] && [ -z "$s_result" ]; then
     service_result_status="warn"
     service_result_detail="wiki-snapshot.service properties unavailable (read-only)"
   elif [ "$s_active" = "active" ] || [ "$s_active" = "activating" ]; then
-    # Currently running — check whether it has exceeded the timeout window.
-    if [ -n "$s_active_enter" ]; then
+    # Prefer ExecMainStartTimestamp; fall back to ActiveEnterTimestamp.
+    local start_ts=""
+    if [ -n "$s_exec_main_start" ]; then
+      start_ts="$s_exec_main_start"
+    elif [ -n "$s_active_enter" ]; then
+      start_ts="$s_active_enter"
+    fi
+    if [ -n "$start_ts" ]; then
       local run_seconds
       run_seconds="$(python3 -c "
 import sys
 try:
     from datetime import datetime, timezone
-    start = datetime.fromisoformat('$s_active_enter'.replace('Z','+00:00'))
+    start = datetime.fromisoformat('$start_ts'.replace('Z','+00:00'))
     now = datetime.fromisoformat('$now'.replace('Z','+00:00'))
     print(int((now - start).total_seconds()))
 except Exception:
@@ -811,11 +870,11 @@ except Exception:
       service_result_status="pass"
       service_result_detail="wiki-snapshot.service in progress (active)"
     fi
-  elif [ "$s_result" = "success" ] && [ "${s_exec_main_status:-0}" = "0" ] && [ -n "$s_active_enter" ]; then
-    # A service that has never run (no active_enter_timestamp) is not a pass.
+  elif [ "$s_result" = "success" ] && [ "${s_exec_main_status:-0}" = "0" ] && [ "$completed_evidence" -eq 1 ]; then
+    # Never-run (no exit/inactive/active timestamps) is not a pass.
     service_result_status="pass"
     service_result_detail="wiki-snapshot.service result=success ExecMainStatus=0"
-  elif [ "$s_result" = "failed" ] || [ "${s_exec_main_status:-0}" != "0" ]; then
+  elif [ "$s_result" = "failed" ] || { [ -n "$s_exec_main_status" ] && [ "$s_exec_main_status" != "0" ]; }; then
     service_result_status="error"
     service_result_detail="wiki-snapshot.service result=${s_result:-missing} ExecMainStatus=${s_exec_main_status:-missing}"
   else

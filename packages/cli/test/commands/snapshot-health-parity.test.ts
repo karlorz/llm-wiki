@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
-import { runDoctor } from "../../src/commands/doctor.js";
+import { runDoctor, snapshotterHealthChecks } from "../../src/commands/doctor.js";
 
 // Resolve the shared fixture corpus from the vault-sync package so both the
 // shell and TypeScript parity gates consume identical scenarios.
@@ -116,11 +116,14 @@ async function runFixture(fixture: ScenarioFixture, fixturePath: string): Promis
   return map;
 }
 
-describe("snapshot-health scenario parity (TypeScript doctor)", () => {
-  const fixtures = loadFixtures();
+// Load once for all suites in this file (fixture + cross-surface + live).
+const ALL_FIXTURES = loadFixtures();
 
-  it("loaded all 18 required scenarios", () => {
-    expect(fixtures.length).toBeGreaterThanOrEqual(18);
+describe("snapshot-health scenario parity (TypeScript doctor)", () => {
+  const fixtures = ALL_FIXTURES;
+
+  it("loaded all required scenarios (18+ including empty-ActiveEnter)", () => {
+    expect(fixtures.length).toBeGreaterThanOrEqual(19);
   });
 
   for (const { fixture, path } of fixtures) {
@@ -178,7 +181,7 @@ describe("snapshot-health cross-surface parity (shell status.sh === TypeScript d
   // status.sh uses platform_detect_os which only supports Linux and macOS.
   // Skip the shell half on Windows (MSYS) where the script cannot run.
   const isWindows = process.platform === "win32";
-  const fixtures = loadFixtures();
+  const fixtures = ALL_FIXTURES;
   const parityIds = [
     "vault_sync_jobs_enabled",
     "vault_sync_snapshot_service_result",
@@ -200,4 +203,124 @@ describe("snapshot-health cross-surface parity (shell status.sh === TypeScript d
       }
     });
   }
+});
+
+// ── Live systemctl adapter gates (v0.10.15) ──────────────────
+// Fixture parity does not prove live property names. These tests put the
+// shared fake-systemctl first on PATH and assert case-sensitive requests
+// plus completed-oneshot semantics when ActiveEnterTimestamp is empty.
+
+const FAKE_SYSTEMCTL = join(FIXTURE_DIR, "fake-systemctl.sh");
+
+/** Core live systemd names the health decision path must request. */
+const LIVE_CORE_PROPS = [
+  "UnitFileState",
+  "ActiveState",
+  "NextElapseUSecRealtime",
+  "Result",
+  "ExecMainStatus",
+  "ActiveEnterTimestamp",
+  "InactiveEnterTimestamp",
+  "ExecMainStartTimestamp",
+  "ExecMainExitTimestamp",
+] as const;
+
+type LiveProfile = "completed" | "never-run" | "running" | "unavailable";
+
+function installFakeSystemctl(
+  binDir: string,
+  requestLog: string,
+  profile: LiveProfile,
+): void {
+  mkdirSync(binDir, { recursive: true });
+  // Thin wrapper: shared script selected via env (same as shell live-adapter).
+  writeFileSync(
+    join(binDir, "systemctl"),
+    `#!/usr/bin/env bash\nexport FAKE_SYSTEMCTL_LOG=${JSON.stringify(requestLog)}\nexport FAKE_SYSTEMCTL_PROFILE=${JSON.stringify(profile)}\nexec bash ${JSON.stringify(FAKE_SYSTEMCTL)} "$@"\n`,
+    { mode: 0o755 },
+  );
+}
+
+function runLiveAdapter(
+  scope: "system" | "user",
+  profile: LiveProfile,
+): { checks: Map<string, string>; requests: string } {
+  const root = mkdtempSync(join(tmpdir(), "snap-live-"));
+  try {
+    const binDir = join(root, "bin");
+    const requestLog = join(root, "requests.log");
+    writeFileSync(requestLog, "");
+    installFakeSystemctl(binDir, requestLog, profile);
+
+    const logDir = join(root, "log");
+    mkdirSync(logDir, { recursive: true });
+    if (profile === "completed") {
+      writeFileSync(
+        join(logDir, "wiki-snapshot.log"),
+        [
+          "2026-07-25 11:32:10 === Wiki Snapshot: 20260725_113210 ===",
+          "2026-07-25T11:33:40Z SNAPSHOT_COMPLETE schema=v1 outcome=pushed result=success ts=2026-07-25T11:33:40Z head=aaa origin=bbb",
+          "",
+        ].join("\n"),
+      );
+    }
+
+    const prevPath = process.env.PATH ?? "";
+    process.env.PATH = `${binDir}${prevPath ? `:${prevPath}` : ""}`;
+    try {
+      const results = snapshotterHealthChecks(scope, logDir, {
+        VS_SNAPSHOT_HEALTH_NOW: "2026-07-25T12:00:00Z",
+        VS_SNAPSHOT_CADENCE_MINUTES: "30",
+        VS_SNAPSHOT_SERVICE_TIMEOUT_SECONDS: "900",
+        PATH: process.env.PATH,
+      } as NodeJS.ProcessEnv);
+      const map = new Map<string, string>();
+      for (const c of results) map.set(c.id, c.status);
+      return { checks: map, requests: readFileSync(requestLog, "utf8") };
+    } finally {
+      process.env.PATH = prevPath;
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("snapshot-health live systemctl adapter (TypeScript doctor)", () => {
+  const isWindows = process.platform === "win32";
+  const maybeIt = isWindows ? it.skip : it;
+
+  maybeIt("completed oneshot with empty ActiveEnterTimestamp is pass (system)", () => {
+    const { checks, requests } = runLiveAdapter("system", "completed");
+    expect(checks.get("vault_sync_jobs_enabled")).toBe("pass");
+    expect(checks.get("vault_sync_snapshot_service_result")).toBe("pass");
+    expect(checks.get("vault_sync_last_push_age")).toBe("pass");
+    expect(requests).not.toMatch(/REFUSED_SNAKE_CASE/);
+    expect(requests).not.toMatch(/unit_file_state|exec_main_status|active_enter_timestamp/);
+    for (const prop of LIVE_CORE_PROPS) {
+      expect(requests, `missing live property request: ${prop}`).toContain(prop);
+    }
+    expect(requests).toMatch(/^system\t/m);
+  });
+
+  maybeIt("completed oneshot works for user scope", () => {
+    const { checks, requests } = runLiveAdapter("user", "completed");
+    expect(checks.get("vault_sync_snapshot_service_result")).toBe("pass");
+    expect(requests).toMatch(/^user\t/m);
+  });
+
+  maybeIt("never-run service with Result=success remains warn", () => {
+    const { checks } = runLiveAdapter("system", "never-run");
+    expect(checks.get("vault_sync_snapshot_service_result")).toBe("warn");
+  });
+
+  maybeIt("running service uses ExecMainStartTimestamp when ActiveEnterTimestamp empty", () => {
+    const { checks } = runLiveAdapter("system", "running");
+    expect(checks.get("vault_sync_snapshot_service_result")).toBe("pass");
+  });
+
+  maybeIt("unavailable properties yield warn", () => {
+    const { checks } = runLiveAdapter("system", "unavailable");
+    expect(checks.get("vault_sync_jobs_enabled")).toBe("warn");
+    expect(checks.get("vault_sync_snapshot_service_result")).toBe("warn");
+  });
 });
