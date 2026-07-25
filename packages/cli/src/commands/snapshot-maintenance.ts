@@ -15,6 +15,7 @@ import {
   isWorktreeClean,
 } from "../utils/operation-journal.js";
 import { git } from "../utils/git.js";
+import { resolveConfiguredSnapshotWorktree } from "../utils/snapshot-worktree.js";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 
 /**
@@ -115,37 +116,7 @@ export interface SnapshotMaintenanceOutput {
 
 const MAINTENANCE_COMMAND = "snapshot-maintenance journal clear-stale";
 
-/** Resolve the configured snapshot worktree from vault_sync config or profile. */
-export function resolveConfiguredSnapshotWorktree(home: string): string | undefined {
-  const skillwikiEnv = join(home, ".skillwiki", ".env");
-  const explicit = readEnvKey(skillwikiEnv, ["vault_sync.snapshot_worktree"]);
-  if (explicit) return resolvePath(explicit);
-  const snapshotProfile = readEnvKey(skillwikiEnv, ["vault_sync.snapshot_profile"]);
-  if (snapshotProfile) {
-    const fromProfile = readEnvKey(snapshotProfile, ["WIKI_GIT_WORKTREE", "SNAPSHOT_WORKTREE", "GIT_DIR"]);
-    if (fromProfile) return resolvePath(fromProfile);
-  }
-  return undefined;
-}
-
-function readEnvKey(path: string, keys: string[]): string | undefined {
-  try {
-    const content = readFileSync(path, "utf8");
-    for (const line of content.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
-      const eq = trimmed.indexOf("=");
-      if (eq <= 0) continue;
-      const key = trimmed.slice(0, eq).trim();
-      if (!keys.includes(key)) continue;
-      const value = trimmed.slice(eq + 1).trim();
-      if (value.length > 0) return value;
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
-}
+export { resolveConfiguredSnapshotWorktree };
 
 function canonicalize(p: string): string {
   return resolvePath(p);

@@ -375,6 +375,78 @@ hosts:
     );
   });
 
+  it("auto-resolves the configured snapshot worktree for a protected snapshotter write", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-auto-fuse");
+    const { vault: convergenceVault, head } = makeGitConvergenceVault(
+      "managed-preflight-auto-git",
+    );
+    const converge = vi.fn(async (input: { vault: string }) => {
+      expect(resolve(input.vault)).toBe(resolve(convergenceVault));
+      return ok({
+        before_oid: head,
+        after_oid: head,
+        changed: false,
+        helper_path: "/test/helper",
+      });
+    });
+
+    const run = await runManagedWritePreflight(
+      {
+        vault: mutationVault,
+        command: "log-append",
+        hostId: "sg01",
+      },
+      {
+        converge,
+        resolveConfiguredSnapshotWorktree: () => convergenceVault,
+      },
+    );
+
+    expect(run.exitCode).toBe(ExitCode.OK);
+    expect(run.result).toMatchObject({
+      ok: true,
+      data: {
+        mode: "git-writer",
+        host_id: "sg01",
+        mutation_vault: resolve(mutationVault),
+        convergence_vault: resolve(convergenceVault),
+        git_vault: resolve(convergenceVault),
+        convergence_source: "configured",
+        base_oid: head,
+        converged: true,
+      },
+    });
+    expect(converge).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails before mutation when a protected snapshotter has no configured convergence worktree", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-auto-missing");
+    const converge = vi.fn();
+
+    const run = await runManagedWritePreflight(
+      {
+        vault: mutationVault,
+        command: "log-append",
+        hostId: "sg01",
+      },
+      {
+        converge,
+        resolveConfiguredSnapshotWorktree: () => undefined,
+      },
+    );
+
+    expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+    expect(run.result).toMatchObject({
+      ok: false,
+      error: "PREFLIGHT_FAILED",
+      detail: {
+        reason: "convergence-vault-not-configured",
+        host_id: "sg01",
+      },
+    });
+    expect(converge).not.toHaveBeenCalled();
+  });
+
   it("refuses a missing Git checkout on the convergence vault", async () => {
     const mutationVault = makeNonGitMutationVault("managed-preflight-no-git-mut");
     const convergenceVault = makeNonGitMutationVault("managed-preflight-no-git-conv");
@@ -535,7 +607,7 @@ hosts:
       {
         vault,
         command: "page publish",
-        hostId: "sg01",
+        hostId: "macos-dev",
         lockToken: "single-path-token",
       },
       { converge },

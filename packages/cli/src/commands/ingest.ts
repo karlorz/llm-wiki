@@ -8,13 +8,16 @@ import { appendLastOp } from "../utils/last-op.js";
 import { assessSourceIdentity } from "../utils/source-identity.js";
 import { scanSensitiveContent } from "../utils/sensitive-content.js";
 import {
+  defaultPagePublishDeps,
   preparePagePublicationFromContent,
   previewPreparedPagePublication,
-  publishPreparedPage,
+  publishPreparedPageWithReceipt,
+  type PagePublishDeps,
   type PagePublishOutput,
 } from "./page-publish.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { atomicWriteText } from "../utils/atomic-write.js";
+import { runManagedWriteTransaction } from "../utils/managed-write-preflight.js";
 
 const ALLOWED_TYPES = new Set(["entity", "concept", "comparison", "query"]);
 const TYPE_DIR: Record<string, string> = {
@@ -252,7 +255,8 @@ async function acquireRawCaptureLock(
 }
 
 export async function runIngest(
-  input: IngestInput
+  input: IngestInput,
+  pagePublishDeps: PagePublishDeps = defaultPagePublishDeps(),
 ): Promise<{ exitCode: number; result: Result<IngestOutput> }> {
   // Validate required args
   if (!input.source || input.source.trim().length === 0) {
@@ -468,93 +472,108 @@ export async function runIngest(
     };
   }
 
-  try {
-    await mkdir(join(input.vault, "raw", "articles"), { recursive: true });
-  } catch (error: unknown) {
-    return {
-      exitCode: ExitCode.WRITE_FAILED,
-      result: err("WRITE_FAILED", { path: join(input.vault, "raw", "articles"), message: String(error) }),
-    };
-  }
-  const rawWrite = await writeResolvedRaw({
-    path: rawAbsPath,
-    sourceUrl,
-    sourceContent,
-    sha256,
-    today,
-    capture: resolvedRaw.data,
-  });
-  if (!rawWrite.ok) {
-    return {
-      exitCode: rawWrite.error === "INGEST_VALIDATION_FAILED"
-        ? ExitCode.INGEST_VALIDATION_FAILED
-        : ExitCode.WRITE_FAILED,
-      result: rawWrite,
-    };
-  }
+  let preparedPublication = publication.data;
+  return runManagedWriteTransaction<IngestOutput>({
+    vault: input.vault,
+    command: `page publish ${preparedPublication.page.target}`,
+    allowImmutableRecord: true,
+    preflight: pagePublishDeps.preflight,
+    mutate: async (receipt) => {
+      try {
+        await mkdir(join(input.vault, "raw", "articles"), { recursive: true });
+      } catch (error: unknown) {
+        return {
+          exitCode: ExitCode.WRITE_FAILED,
+          result: err("WRITE_FAILED", { path: join(input.vault, "raw", "articles"), message: String(error) }),
+        };
+      }
+      const rawWrite = await writeResolvedRaw({
+        path: rawAbsPath,
+        sourceUrl,
+        sourceContent,
+        sha256,
+        today,
+        capture: resolvedRaw.data,
+      });
+      if (!rawWrite.ok) {
+        return {
+          exitCode: rawWrite.error === "INGEST_VALIDATION_FAILED"
+            ? ExitCode.INGEST_VALIDATION_FAILED
+            : ExitCode.WRITE_FAILED,
+          result: rawWrite,
+        };
+      }
 
-  if (rawWrite.data.capture.ingested !== publicationDate) {
-    publicationDate = rawWrite.data.capture.ingested;
-    typedContent = buildTypedContent(
-      input.title,
-      publicationDate,
-      input.type,
-      tags,
-      rawRelPath,
-      input.provenance,
-    );
-    publication = preparePagePublicationFromContent({
-      vault: input.vault,
-      content: typedContent,
-      target: typedRelPath,
-      logNote: `ingested from ${rawRelPath}`,
-      now: new Date(`${publicationDate}T00:00:00Z`),
-    });
-    if (!publication.ok) {
+      if (rawWrite.data.capture.ingested !== publicationDate) {
+        publicationDate = rawWrite.data.capture.ingested;
+        typedContent = buildTypedContent(
+          input.title,
+          publicationDate,
+          input.type,
+          tags,
+          rawRelPath,
+          input.provenance,
+        );
+        const refreshedPublication = preparePagePublicationFromContent({
+          vault: input.vault,
+          content: typedContent,
+          target: typedRelPath,
+          logNote: `ingested from ${rawRelPath}`,
+          now: new Date(`${publicationDate}T00:00:00Z`),
+        });
+        if (!refreshedPublication.ok) {
+          return {
+            exitCode: ExitCode.INGEST_VALIDATION_FAILED,
+            result: refreshedPublication,
+          };
+        }
+        preparedPublication = refreshedPublication.data;
+      }
+
+      const published = await publishPreparedPageWithReceipt(
+        preparedPublication,
+        input.vault,
+        receipt,
+        pagePublishDeps,
+      );
+      if (!published.result.ok) {
+        return { exitCode: published.exitCode, result: published.result };
+      }
+      if (published.exitCode !== ExitCode.OK) {
+        return {
+          exitCode: published.exitCode,
+          result: err("WRITE_FAILED", { message: "publisher returned inconsistent success state" }),
+        };
+      }
+
+      const changedFiles = [
+        ...(rawWrite.data.changed ? [rawRelPath] : []),
+        ...published.result.data.files_changed,
+      ];
+      if (changedFiles.length > 0) {
+        appendLastOp(input.vault, {
+          operation: "ingest",
+          summary: `added ${slug}`,
+          files: [...new Set(changedFiles)],
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       return {
-        exitCode: ExitCode.INGEST_VALIDATION_FAILED,
-        result: publication,
+        exitCode: ExitCode.OK,
+        result: ok({
+          raw_path: rawRelPath,
+          typed_path: typedRelPath,
+          sha256,
+          dry_run: false,
+          humanHint: [
+            "created:",
+            `  ${rawRelPath} (sha256: ${sha256.slice(0, 12)}...)`,
+            `  ${typedRelPath}`,
+          ].join("\n"),
+          publication: published.result.data,
+        }),
       };
-    }
-  }
-
-  const published = await publishPreparedPage(publication.data, input.vault);
-  if (!published.result.ok) {
-    return { exitCode: published.exitCode, result: published.result };
-  }
-  if (published.exitCode !== ExitCode.OK) {
-    return {
-      exitCode: published.exitCode,
-      result: err("WRITE_FAILED", { message: "publisher returned inconsistent success state" }),
-    };
-  }
-
-  const changedFiles = [
-    ...(rawWrite.data.changed ? [rawRelPath] : []),
-    ...published.result.data.files_changed,
-  ];
-  if (changedFiles.length > 0) {
-    appendLastOp(input.vault, {
-      operation: "ingest",
-      summary: `added ${slug}`,
-      files: [...new Set(changedFiles)],
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  return {
-    exitCode: ExitCode.OK,
-    result: ok({
-      raw_path: rawRelPath,
-      typed_path: typedRelPath,
-      sha256,
-      dry_run: false,
-      humanHint: [
-        "created:",
-        `  ${rawRelPath} (sha256: ${sha256.slice(0, 12)}...)`,
-        `  ${typedRelPath}`,
-      ].join("\n"),
-      publication: published.result.data,
-    }),
-  };
+    },
+  });
 }

@@ -7,6 +7,10 @@ SNAPSHOT_REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SCRIPT_UNDER_TEST="$SNAPSHOT_REPO_ROOT/packages/vault-sync/scripts/wiki-snapshot.sh"
 PASS=0
 FAIL=0
+# Existing fixtures focus on independent snapshot invariants and predate the
+# projection barrier. The script honors this only when SNAPSHOT_TEST_ROOT is
+# also present; dedicated parity fixtures below explicitly turn it back on.
+export WIKI_SNAPSHOT_TEST_SKIP_PROJECTION_PARITY=1
 
 assert_eq() {
   local label="$1" actual="$2" expected="$3"
@@ -66,6 +70,10 @@ assert_contains "snapshot gates post-repair path with conflict marker guard" "if
 assert_contains "snapshot has delete-intent no-resurrect" "snapshot_apply_delete_intents"
 assert_contains "snapshot sources delete-intent lib" "delete-intent.sh"
 assert_contains "snapshot strips resurrected tombstone paths" "stripped resurrected path"
+assert_contains "snapshot resolves linked worktrees through git" "rev-parse --is-inside-work-tree"
+assert_contains "snapshot freezes convergence receipt" "snapshot_freeze_git_receipt"
+assert_contains "snapshot rechecks convergence receipt before staging" "snapshot_verify_git_receipt"
+assert_contains "snapshot refreshes origin for final proof" "final snapshot proof"
 
 test_snapshot_dry_run_warns_on_direct_s3_note_not_in_git() {
   local root
@@ -1007,6 +1015,264 @@ test_snapshot_skips_optional_prune_when_inventory_fails
 test_snapshot_direct_s3_warning_excludes_tombstone_but_keeps_unexplained_path
 test_snapshot_rejects_invalid_tombstone_prune_cap
 
+# ── Projection parity barrier ────────────────────────────────
+# These fixtures model the production race as distinct phases:
+# live materialization -> delayed direct-store visibility -> S3 sync ->
+# read-only worktree projection preview. A fixed elapsed delay or queue state
+# is deliberately insufficient; direct remote bytes must match.
+
+setup_projection_parity_fixture() {
+  local root="$1"
+  local git_dir="$root/wiki-git" bin_dir="$root/bin"
+  local origin_dir="$root/origin.git"
+  mkdir -p "$git_dir" "$bin_dir" "$root/home"
+  make_live_vault_fixture "$root"
+
+  printf '# Expected Index\n' > "$root/expected-index.md"
+  printf '# Expected Log\n\n- latest event\n' > "$root/expected-log.md"
+  printf '# Stale Index\n' > "$root/stale-index.md"
+  printf '# Stale Log\n' > "$root/stale-log.md"
+  : > "$root/rclone.calls"
+  printf '0\n' > "$root/cat-count-index.md"
+  printf '0\n' > "$root/cat-count-log.md"
+
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  cp "$root/stale-index.md" "$git_dir/index.md"
+  cp "$root/stale-log.md" "$git_dir/log.md"
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" add -A >/dev/null
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m init >/dev/null
+  git -C "$git_dir" clone --bare . "$origin_dir" >/dev/null 2>&1
+  git -C "$git_dir" remote add origin "$origin_dir" >/dev/null 2>&1
+  git -C "$git_dir" fetch origin main >/dev/null 2>&1 || true
+  git -C "$git_dir" branch --set-upstream-to=origin/main main >/dev/null 2>&1 || true
+
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  cat > "$bin_dir/flock" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/skillwiki.calls"
+if [ "$1" = "projections" ] && [ "$2" = "materialize" ]; then
+  if [ "${4:-}" = "--write" ]; then
+    cp "$SNAPSHOT_TEST_ROOT/expected-index.md" "$3/index.md"
+    cp "$SNAPSHOT_TEST_ROOT/expected-log.md" "$3/log.md"
+    exit 0
+  fi
+  if [ "${SNAPSHOT_PREVIEW_DRIFT:-0}" = "1" ]; then
+    printf '{"ok":true,"data":{"index_drift":true,"log_drift":false,"dry_run":true}}\n'
+  else
+    printf '{"ok":true,"data":{"index_drift":false,"log_drift":false,"dry_run":true}}\n'
+  fi
+  exit 0
+fi
+if [ "$1" = "lint" ]; then
+  printf '{"ok":true}\n'
+  exit 0
+fi
+exit 99
+STUB
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+cmd="$1"
+if [ "$cmd" = "lsf" ]; then
+  printf 'SCHEMA.md\nindex.md\nlog.md\n'
+  exit 0
+fi
+if [ "$cmd" = "cat" ]; then
+  object="${2##*/}"
+  count_file="$SNAPSHOT_TEST_ROOT/cat-count-$object"
+  count="$(cat "$count_file")"
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$count_file"
+  if [ "$count" -gt "${RCLONE_PARITY_VISIBLE_AFTER_CALLS:-0}" ]; then
+    cp "$SNAPSHOT_TEST_ROOT/expected-$object" /dev/stdout
+  else
+    cp "$SNAPSHOT_TEST_ROOT/stale-$object" /dev/stdout
+  fi
+  exit 0
+fi
+if [ "$cmd" = "sync" ]; then
+  if [ "${RCLONE_SYNC_STALE_PROJECTION:-0}" = "1" ]; then
+    cp "$SNAPSHOT_TEST_ROOT/stale-index.md" "$3/index.md"
+    cp "$SNAPSHOT_TEST_ROOT/stale-log.md" "$3/log.md"
+  else
+    cp "$SNAPSHOT_TEST_ROOT/expected-index.md" "$3/index.md"
+    cp "$SNAPSHOT_TEST_ROOT/expected-log.md" "$3/log.md"
+  fi
+  exit 0
+fi
+if [ "$cmd" = "deletefile" ]; then
+  exit 0
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/skillwiki" "$bin_dir/rclone"
+
+  printf '%s\n' "$git_dir" "$bin_dir"
+}
+
+run_projection_parity_fixture() {
+  local root="$1"
+  local git_dir="$2"
+  local bin_dir="$3"
+  shift 3
+  env \
+    SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$root/wiki-snapshot.log" \
+    WIKI_SNAPSHOT_LOCK="$root/wiki-snapshot.lock" \
+    WIKI_SNAPSHOT_PROJECTION_PARITY_TIMEOUT_SECONDS=2 \
+    WIKI_SNAPSHOT_PROJECTION_PARITY_POLL_SECONDS=0 \
+    WIKI_SNAPSHOT_TEST_SKIP_PROJECTION_PARITY=0 \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$@" \
+    "$SCRIPT_UNDER_TEST" >"$root/out.txt" 2>&1
+}
+
+test_snapshot_waits_for_direct_remote_projection_parity() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_PARITY_VISIBLE_AFTER_CALLS=1
+  local rc=$?
+  local cat_count
+  cat_count=$((
+    $(cat "$root/cat-count-index.md")
+    + $(cat "$root/cat-count-log.md")
+  ))
+
+  if [ "$rc" -eq 0 ] \
+      && [ "$cat_count" -ge 4 ] \
+      && grep -q 'projection direct-store parity confirmed' "$root/wiki-snapshot.log" \
+      && grep -q 'projection worktree parity confirmed' "$root/wiki-snapshot.log" \
+      && grep -q 'projection semantic preview confirmed' "$root/wiki-snapshot.log" \
+      && grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
+    printf 'PASS: snapshot waits for direct remote projection bytes before promotion\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: delayed projection parity fixture (rc=%s cat_count=%s log=%s calls=%s)\n' \
+      "$rc" "$cat_count" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)" \
+      "$(tr '\n' ';' < "$root/rclone.calls" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_projection_parity_timeout_fails_before_sync() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir before_head after_head
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    WIKI_SNAPSHOT_PROJECTION_PARITY_TIMEOUT_SECONDS=0 \
+    RCLONE_PARITY_VISIBLE_AFTER_CALLS=999999
+  local rc=$?
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  if [ "$rc" -ne 0 ] \
+      && [ "$before_head" = "$after_head" ] \
+      && grep -q 'projection direct-store parity timeout' "$root/wiki-snapshot.log" \
+      && ! grep -q '^sync ' "$root/rclone.calls" \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
+    printf 'PASS: projection parity timeout fails closed before S3 sync\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: projection timeout fixture (rc=%s before=%s after=%s log=%s calls=%s)\n' \
+      "$rc" "$before_head" "$after_head" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)" \
+      "$(tr '\n' ';' < "$root/rclone.calls" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_stale_worktree_projection_fails_before_commit() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir before_head after_head
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_SYNC_STALE_PROJECTION=1
+  local rc=$?
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  if [ "$rc" -ne 0 ] \
+      && [ "$before_head" = "$after_head" ] \
+      && grep -q 'projection worktree parity mismatch' "$root/wiki-snapshot.log" \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
+    printf 'PASS: stale synchronized projection fails before commit\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: stale worktree projection fixture (rc=%s before=%s after=%s log=%s)\n' \
+      "$rc" "$before_head" "$after_head" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_semantic_projection_drift_fails_before_commit() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir before_head after_head
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    SNAPSHOT_PREVIEW_DRIFT=1
+  local rc=$?
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  if [ "$rc" -ne 0 ] \
+      && [ "$before_head" = "$after_head" ] \
+      && grep -q 'projection semantic preview mismatch' "$root/wiki-snapshot.log" \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
+    printf 'PASS: semantic projection drift fails before commit\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: semantic projection drift fixture (rc=%s before=%s after=%s log=%s)\n' \
+      "$rc" "$before_head" "$after_head" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_waits_for_direct_remote_projection_parity
+test_snapshot_projection_parity_timeout_fails_before_sync
+test_snapshot_stale_worktree_projection_fails_before_commit
+test_snapshot_semantic_projection_drift_fails_before_commit
+
 # ── Canonical completion record (v0.10.14) ────────────────────
 # wiki-snapshot.sh must emit one stable machine-parseable terminal record
 #   SNAPSHOT_COMPLETE schema=v1 outcome=<pushed|no-change> result=success ...
@@ -1020,6 +1286,7 @@ setup_completion_record_fixture() {
   local log_file="$root/wiki-snapshot.log" lock_file="$root/wiki-snapshot.lock"
   local origin_dir="$root/origin.git"
   mkdir -p "$git_dir" "$bin_dir" "$root/home"
+  make_live_vault_fixture "$root"
 
   printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
   printf '# Index\n' > "$git_dir/index.md"
@@ -1077,7 +1344,8 @@ test_snapshot_emits_canonical_completion_record_on_pushed_success() {
   log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
   lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
 
-  WIKI_GIT_WORKTREE="$git_dir" \
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
     WIKI_DIR="$root/wiki" \
     WIKI_SNAPSHOT_LOG="$log_file" \
     WIKI_SNAPSHOT_LOCK="$lock_file" \
@@ -1108,7 +1376,8 @@ test_snapshot_emits_canonical_completion_record_on_no_change_success() {
   log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
   lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
 
-  WIKI_GIT_WORKTREE="$git_dir" \
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
     WIKI_DIR="$root/wiki" \
     WIKI_SNAPSHOT_LOG="$log_file" \
     WIKI_SNAPSHOT_LOCK="$lock_file" \
@@ -1150,7 +1419,8 @@ exit 1
 STUB
   chmod +x "$bin_dir/rclone"
 
-  WIKI_GIT_WORKTREE="$git_dir" \
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
     WIKI_DIR="$root/wiki" \
     WIKI_SNAPSHOT_LOG="$log_file" \
     WIKI_SNAPSHOT_LOCK="$lock_file" \

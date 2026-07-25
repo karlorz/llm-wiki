@@ -1,6 +1,15 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExitCode } from "@skillwiki/shared";
@@ -114,7 +123,7 @@ function makeProtectedPublicationFixture() {
   const home = mkdtempSync(join(tmpdir(), "publish-protected-home-"));
   const fleetDir = join(liveVault, "projects", "llm-wiki", "architecture");
   mkdirSync(fleetDir, { recursive: true });
-  writeFileSync(join(fleetDir, "fleet.yaml"), `schema_version: 1
+  const fleet = `schema_version: 1
 vault_remote: git@example.invalid:wiki.git
 s3_remote: example:wiki
 hosts:
@@ -125,7 +134,12 @@ hosts:
     protected: true
     identity:
       hostnames: [sg01]
-`);
+`;
+  writeFileSync(join(fleetDir, "fleet.yaml"), fleet);
+  const snapshotFleetDir = join(snapshot.vault, "projects", "llm-wiki", "architecture");
+  mkdirSync(snapshotFleetDir, { recursive: true });
+  writeFileSync(join(snapshotFleetDir, "fleet.yaml"), fleet);
+  rmSync(join(liveVault, ".git"), { recursive: true, force: true });
   mkdirSync(join(home, ".skillwiki"), { recursive: true });
   writeFileSync(
     join(home, ".skillwiki", ".env"),
@@ -464,6 +478,57 @@ describe("cli smoke", () => {
     });
     expect(readFileSync(join(fixture.snapshotVault, "SCHEMA.md"), "utf8")).toBe(schemaBefore);
     expect(existsSync(join(fixture.snapshotVault, "queries", "safety.md"))).toBe(false);
+  });
+
+  it("log-append mutates the non-Git live vault while converging through the configured snapshot worktree", () => {
+    const fixture = makeProtectedPublicationFixture();
+    const helperDir = mkdtempSync(join(tmpdir(), "managed-write-helper-"));
+    const helper = join(helperDir, "wiki-pull-with-auto-resolve.sh");
+    const helperCwdLog = join(helperDir, "cwd.log");
+    writeFileSync(
+      helper,
+      [
+        "#!/bin/bash",
+        "set -eu",
+        'printf "%s\\n" "$PWD" >> "$PULL_HELPER_CWD_LOG"',
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(helper, 0o755);
+    const snapshotLogBefore = readFileSync(join(fixture.snapshotVault, "log.md"), "utf8");
+
+    const result = run(
+      [
+        "log-append",
+        fixture.liveVault,
+        "--content",
+        "## [2026-07-26] test | dual-path managed append",
+        "--operation-id",
+        "d".repeat(64),
+      ],
+      {
+        ...process.env,
+        HOME: fixture.home,
+        WIKI_PATH: fixture.liveVault,
+        SKILLWIKI_HOST_ID: "sg01",
+        HOSTNAME: "sg01",
+        USER: "root",
+        SKILLWIKI_VAULT_SYNC_PULL_HELPER: helper,
+        PULL_HELPER_CWD_LOG: helperCwdLog,
+      },
+    );
+
+    expect(result.status).toBe(ExitCode.OK);
+    expect(readFileSync(join(fixture.liveVault, "log.md"), "utf8")).toContain(
+      "dual-path managed append",
+    );
+    expect(readFileSync(join(fixture.snapshotVault, "log.md"), "utf8")).toBe(snapshotLogBefore);
+    expect(realpathSync(readFileSync(helperCwdLog, "utf8").trim())).toBe(
+      realpathSync(fixture.snapshotVault),
+    );
+    expect(existsSync(join(fixture.liveVault, ".skillwiki", "managed-write.lock"))).toBe(false);
+    expect(existsSync(join(fixture.snapshotVault, ".skillwiki", "managed-write.lock"))).toBe(false);
   });
 
   it("--human produces non-JSON output for validate", () => {

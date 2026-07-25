@@ -179,6 +179,11 @@ async function emitManagedVaultWrite<T>(
     command,
     allowImmutableRecord: opts?.allowImmutableRecord === true,
     convergenceVault: opts?.convergenceVault,
+    env: process.env,
+    home: process.env.HOME ?? "",
+    cwd: process.cwd(),
+    osHostname: process.env.HOSTNAME,
+    user: process.env.USER,
     mutate: async (receipt) => await mutate(receipt),
   });
   return emit(run, vault, opts);

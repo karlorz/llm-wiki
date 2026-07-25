@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
-import { join, resolve as resolvePath } from "node:path";
+import { resolve as resolvePath } from "node:path";
 import { err, ExitCode, type ErrResult } from "@skillwiki/shared";
 import { loadFleetManifestAndHost } from "../commands/fleet.js";
+import { resolveConfiguredSnapshotWorktree } from "./snapshot-worktree.js";
 import { resolveRuntimePath } from "./wiki-path.js";
 
 export interface ProtectedVaultWriteGuardInput {
@@ -55,16 +55,17 @@ export async function guardProtectedVaultWrite(
     return { blocked: false };
   }
 
-  const snapshotWorktree = resolveSnapshotWorktree(home);
   const targetVault = resolvePath(input.vault);
   const canonicalLiveVault = liveVaultPath ? resolvePath(liveVaultPath) : undefined;
-  const canonicalSnapshotWorktree = snapshotWorktree ? resolvePath(snapshotWorktree) : undefined;
 
   if (canonicalLiveVault && targetVault === canonicalLiveVault) {
     return { blocked: false };
   }
 
-  if (canonicalSnapshotWorktree && targetVault === canonicalSnapshotWorktree) {
+  const canonicalSnapshotWorktree = resolvePath(
+    resolveConfiguredSnapshotWorktree(home) ?? "/root/wiki-git",
+  );
+  if (targetVault === canonicalSnapshotWorktree) {
     return {
       blocked: true,
       exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED,
@@ -108,37 +109,4 @@ async function resolveLiveVaultPath(input: {
     cwd: input.cwd,
   });
   return resolved.ok ? resolved.data.path : undefined;
-}
-
-function resolveSnapshotWorktree(home: string): string | undefined {
-  const skillwikiEnv = join(home, ".skillwiki", ".env");
-  const explicitWorktree = readEnvKey(skillwikiEnv, ["vault_sync.snapshot_worktree"]);
-  if (explicitWorktree) return explicitWorktree;
-
-  const snapshotProfile = readEnvKey(skillwikiEnv, ["vault_sync.snapshot_profile"]);
-  if (snapshotProfile) {
-    const fromProfile = readEnvKey(snapshotProfile, ["WIKI_GIT_WORKTREE", "SNAPSHOT_WORKTREE", "GIT_DIR"]);
-    if (fromProfile) return fromProfile;
-  }
-
-  return "/root/wiki-git";
-}
-
-function readEnvKey(path: string, keys: string[]): string | undefined {
-  try {
-    const content = readFileSync(path, "utf8");
-    for (const line of content.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
-      const eq = trimmed.indexOf("=");
-      if (eq <= 0) continue;
-      const key = trimmed.slice(0, eq).trim();
-      if (!keys.includes(key)) continue;
-      const value = trimmed.slice(eq + 1).trim();
-      if (value.length > 0) return value;
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
 }

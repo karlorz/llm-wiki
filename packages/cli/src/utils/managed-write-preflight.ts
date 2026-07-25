@@ -19,17 +19,24 @@ import {
   type VaultSyncPullHelperInput,
   type VaultSyncPullReceipt,
 } from "./vault-sync-helper.js";
+import { resolveConfiguredSnapshotWorktree } from "./snapshot-worktree.js";
 
 export type ManagedWriteMode = "standalone" | "git-writer" | "immutable-record";
+export type ManagedWriteConvergenceSource = "single-path" | "explicit" | "configured";
 
 export interface ManagedWriteReceipt {
   mode: ManagedWriteMode;
   host_id?: string;
+  /** Absolute live vault where the mutation callback is allowed to write. */
+  mutation_vault: string;
+  /** Absolute Git vault used for HEAD/base-OID proof, or null for record-only writes. */
+  git_vault: string | null;
   base_oid: string | null;
   converged: boolean;
   helper_path?: string;
   /** Absolute path of the Git vault used for pull/base-OID when dual-path. */
   convergence_vault?: string;
+  convergence_source: ManagedWriteConvergenceSource;
 }
 
 export interface ManagedWritePreflightInput {
@@ -51,6 +58,7 @@ export interface ManagedWritePreflightInput {
 
 export interface ManagedWritePreflightDeps {
   converge(input: VaultSyncPullHelperInput): Promise<Result<VaultSyncPullReceipt>>;
+  resolveConfiguredSnapshotWorktree?(home: string): string | undefined;
 }
 
 export interface ManagedWriteTransactionInput<T> {
@@ -61,12 +69,18 @@ export interface ManagedWriteTransactionInput<T> {
   hostId?: string;
   env?: Record<string, string | undefined>;
   home?: string;
+  cwd?: string;
   osHostname?: string;
+  user?: string;
+  preflight?(
+    input: ManagedWritePreflightInput,
+  ): Promise<{ exitCode: number; result: Result<ManagedWriteReceipt> }>;
   mutate(receipt: ManagedWriteReceipt): Promise<{ exitCode: number; result: Result<T> }>;
 }
 
 const DEFAULT_DEPS: ManagedWritePreflightDeps = {
   converge: (input) => runVaultSyncPullHelper(input),
+  resolveConfiguredSnapshotWorktree,
 };
 
 function preflightBlocker(vault: string): { reason: string; operation_id?: string; unmerged_paths?: string[] } | null {
@@ -95,10 +109,8 @@ function preflightBlocker(vault: string): { reason: string; operation_id?: strin
   return null;
 }
 
-function fleetManifestBytes(vault: string): Buffer | null {
-  const path = join(vault, FLEET_REL_PATH);
-  if (!existsSync(path)) return null;
-  return readFileSync(path);
+function hasFleetManifest(vault: string): boolean {
+  return existsSync(join(vault, FLEET_REL_PATH));
 }
 
 function isGitVault(vault: string): boolean {
@@ -109,15 +121,16 @@ export async function runManagedWritePreflight(
   input: ManagedWritePreflightInput,
   deps: ManagedWritePreflightDeps = DEFAULT_DEPS,
 ): Promise<{ exitCode: number; result: Result<ManagedWriteReceipt> }> {
-  const vault = input.vault;
-  const convergenceVault =
-    input.convergenceVault && resolve(input.convergenceVault) !== resolve(vault)
+  const mutationVault = resolve(input.vault);
+  let convergenceVault =
+    input.convergenceVault && resolve(input.convergenceVault) !== mutationVault
       ? resolve(input.convergenceVault)
       : undefined;
-  const gitVault = convergenceVault ?? vault;
+  let convergenceSource: ManagedWriteConvergenceSource =
+    convergenceVault ? "explicit" : "single-path";
 
   // Mutation-target preflight: unmerged paths / review-required on the live vault.
-  const mutationBlocker = preflightBlocker(vault);
+  const mutationBlocker = preflightBlocker(mutationVault);
   if (mutationBlocker) {
     return {
       exitCode: ExitCode.PREFLIGHT_FAILED,
@@ -129,6 +142,100 @@ export async function runManagedWritePreflight(
     };
   }
 
+  // Fleet identity and write authority always come from the mutation target.
+  const fleet = await loadFleetManifestAndHost({
+    vault: mutationVault,
+    hostId: input.hostId,
+    env: input.env as NodeJS.ProcessEnv | undefined,
+    home: input.home,
+    cwd: input.cwd,
+    osHostname: input.osHostname,
+    user: input.user,
+  });
+
+  if (!fleet) {
+    const gitVault = isGitVault(mutationVault) ? mutationVault : null;
+    const head = gitVault ? git(gitVault, ["rev-parse", "HEAD"]) || null : null;
+    return {
+      exitCode: ExitCode.OK,
+      result: ok({
+        mode: "standalone",
+        mutation_vault: mutationVault,
+        git_vault: gitVault,
+        base_oid: head,
+        converged: false,
+        convergence_source: "single-path",
+      }),
+    };
+  }
+
+  if (fleet.identityStatus === "unknown" || fleet.identityStatus === "invalid" || !fleet.hostId) {
+    return {
+      exitCode: ExitCode.PREFLIGHT_FAILED,
+      result: err("PREFLIGHT_FAILED", {
+        reason: "fleet-identity-unresolved",
+        identity_status: fleet.identityStatus,
+        host_id: fleet.hostId,
+      }),
+    };
+  }
+
+  const host = fleet.manifest.hosts[fleet.hostId];
+  if (!host) {
+    return {
+      exitCode: ExitCode.PREFLIGHT_FAILED,
+      result: err("PREFLIGHT_FAILED", { reason: "fleet-host-missing", host_id: fleet.hostId }),
+    };
+  }
+
+  const writesGithub = host.writes_to.includes("github");
+  if (!writesGithub) {
+    return {
+      exitCode: ExitCode.OK,
+      result: ok({
+        mode: "immutable-record",
+        host_id: fleet.hostId,
+        mutation_vault: mutationVault,
+        git_vault: null,
+        base_oid: null,
+        converged: false,
+        ...(convergenceVault ? { convergence_vault: convergenceVault } : {}),
+        convergence_source: convergenceSource,
+      }),
+    };
+  }
+
+  if (!convergenceVault && host.role === "snapshotter" && host.protected === true) {
+    const home = input.home ?? input.env?.HOME ?? process.env.HOME ?? "";
+    const configured =
+      (deps.resolveConfiguredSnapshotWorktree ?? resolveConfiguredSnapshotWorktree)(home);
+    if (!configured) {
+      return {
+        exitCode: ExitCode.PREFLIGHT_FAILED,
+        result: err("PREFLIGHT_FAILED", {
+          reason: "convergence-vault-not-configured",
+          host_id: fleet.hostId,
+          mutation_vault: mutationVault,
+        }),
+      };
+    }
+    convergenceVault = resolve(configured);
+    convergenceSource = "configured";
+    if (convergenceVault === mutationVault) {
+      return {
+        exitCode: ExitCode.PREFLIGHT_FAILED,
+        result: err("PREFLIGHT_FAILED", {
+          reason: "convergence-vault-not-distinct",
+          host_id: fleet.hostId,
+          mutation_vault: mutationVault,
+          convergence_vault: convergenceVault,
+        }),
+      };
+    }
+  }
+
+  const gitVault = convergenceVault ?? mutationVault;
+
   // Git sequencer / review-required that belong to the convergence repository.
   // Do not require pre-pull fleet.yaml byte equality: snapshot deliberately
   // reconciles S3↔Git drift, and fleet files can differ until rclone runs.
@@ -138,6 +245,17 @@ export async function runManagedWritePreflight(
         exitCode: ExitCode.PREFLIGHT_FAILED,
         result: err("PREFLIGHT_FAILED", {
           reason: "convergence-vault-not-git",
+          convergence_vault: convergenceVault,
+        }),
+      };
+    }
+    const convergenceHasFleet = hasFleetManifest(convergenceVault);
+    if (convergenceSource === "configured" && !convergenceHasFleet) {
+      return {
+        exitCode: ExitCode.PREFLIGHT_FAILED,
+        result: err("PREFLIGHT_FAILED", {
+          reason: "convergence-vault-fleet-missing",
+          host_id: fleet.hostId,
           convergence_vault: convergenceVault,
         }),
       };
@@ -156,51 +274,18 @@ export async function runManagedWritePreflight(
     }
   }
 
-  // Fleet identity and write authority always come from the mutation target.
-  const fleet = await loadFleetManifestAndHost({
-    vault,
-    hostId: input.hostId,
-    env: input.env as NodeJS.ProcessEnv | undefined,
-    home: input.home,
-    osHostname: input.osHostname,
-  });
-
-  const dualPathMeta = convergenceVault ? { convergence_vault: convergenceVault } : {};
-
-  if (!fleet) {
-    const head = git(gitVault, ["rev-parse", "HEAD"]) || null;
-    return {
-      exitCode: ExitCode.OK,
-      result: ok({
-        mode: "standalone",
-        base_oid: head,
-        converged: false,
-        ...dualPathMeta,
-      }),
-    };
-  }
-
-  if (fleet.identityStatus === "unknown" || fleet.identityStatus === "invalid" || !fleet.hostId) {
-    return {
-      exitCode: ExitCode.PREFLIGHT_FAILED,
-      result: err("PREFLIGHT_FAILED", {
-        reason: "fleet-identity-unresolved",
-        identity_status: fleet.identityStatus,
-        host_id: fleet.hostId,
-      }),
-    };
-  }
-
   // When the convergence vault also carries a fleet, require the same resolved
   // host id (not full-file byte equality) so dual-path cannot pair a leaf
   // identity with a snapshotter mutation target.
-  if (convergenceVault && fleetManifestBytes(convergenceVault)) {
+  if (convergenceVault && hasFleetManifest(convergenceVault)) {
     const convergeFleetCtx = await loadFleetManifestAndHost({
       vault: convergenceVault,
       hostId: input.hostId ?? fleet.hostId,
       env: input.env as NodeJS.ProcessEnv | undefined,
       home: input.home,
+      cwd: input.cwd,
       osHostname: input.osHostname,
+      user: input.user,
     });
     if (
       !convergeFleetCtx ||
@@ -220,27 +305,7 @@ export async function runManagedWritePreflight(
     }
   }
 
-  const host = fleet.manifest.hosts[fleet.hostId];
-  if (!host) {
-    return {
-      exitCode: ExitCode.PREFLIGHT_FAILED,
-      result: err("PREFLIGHT_FAILED", { reason: "fleet-host-missing", host_id: fleet.hostId }),
-    };
-  }
-
-  const writesGithub = host.writes_to.includes("github");
-  if (!writesGithub) {
-    return {
-      exitCode: ExitCode.OK,
-      result: ok({
-        mode: "immutable-record",
-        host_id: fleet.hostId,
-        base_oid: null,
-        converged: false,
-        ...dualPathMeta,
-      }),
-    };
-  }
+  const dualPathMeta = convergenceVault ? { convergence_vault: convergenceVault } : {};
 
   // Dual-path: mutation lock lives on the live vault (often non-Git FUSE);
   // the pull helper locks the Git convergence vault separately. Passing the
@@ -274,10 +339,13 @@ export async function runManagedWritePreflight(
     result: ok({
       mode: "git-writer",
       host_id: fleet.hostId,
+      mutation_vault: mutationVault,
+      git_vault: gitVault,
       base_oid: baseOid,
       converged: true,
       helper_path: converge.data.helper_path,
       ...dualPathMeta,
+      convergence_source: convergenceSource,
     }),
   };
 }
@@ -286,30 +354,43 @@ export async function runManagedWriteTransaction<T>(
   input: ManagedWriteTransactionInput<T>,
   deps: ManagedWritePreflightDeps = DEFAULT_DEPS,
 ): Promise<{ exitCode: number; result: Result<T> }> {
-  const lock = acquireManagedWriteLock(input.vault, input.command);
+  const mutationVault = resolve(input.vault);
+  const lock = acquireManagedWriteLock(mutationVault, input.command);
   if (!lock.ok) {
     return { exitCode: ExitCode.SYNC_LOCK_HELD, result: lock as Result<T> };
   }
 
-  let handle: ManagedWriteLockHandle = lock.data;
+  const handle: ManagedWriteLockHandle = lock.data;
   try {
-    const preflight = await runManagedWritePreflight(
-      {
-        vault: input.vault,
-        command: input.command,
-        convergenceVault: input.convergenceVault,
-        hostId: input.hostId,
-        lockToken: handle.ownerToken,
-        env: input.env,
-        home: input.home,
-        osHostname: input.osHostname,
-      },
-      deps,
-    );
+    const preflightInput: ManagedWritePreflightInput = {
+      vault: mutationVault,
+      command: input.command,
+      convergenceVault: input.convergenceVault,
+      hostId: input.hostId,
+      lockToken: handle.ownerToken,
+      env: input.env,
+      home: input.home,
+      cwd: input.cwd,
+      osHostname: input.osHostname,
+      user: input.user,
+    };
+    const preflight = input.preflight
+      ? await input.preflight(preflightInput)
+      : await runManagedWritePreflight(preflightInput, deps);
     if (!preflight.result.ok) {
       return { exitCode: preflight.exitCode, result: preflight.result as Result<T> };
     }
     const receipt = preflight.result.data;
+    if (receipt.mutation_vault !== mutationVault) {
+      return {
+        exitCode: ExitCode.PREFLIGHT_FAILED,
+        result: err("PREFLIGHT_FAILED", {
+          reason: "mutation-vault-receipt-mismatch",
+          expected: mutationVault,
+          actual: receipt.mutation_vault,
+        }) as Result<T>,
+      };
+    }
     if (receipt.mode === "immutable-record" && !input.allowImmutableRecord) {
       return {
         exitCode: ExitCode.PREFLIGHT_FAILED,

@@ -403,6 +403,9 @@ describe("page publish managed write receipt", () => {
         result: ok({
           mode: "git-writer",
           host_id: "macos-dev",
+          mutation_vault: vault,
+          git_vault: vault,
+          convergence_source: "single-path",
           base_oid: head,
           converged: true,
         }),
@@ -418,5 +421,60 @@ describe("page publish managed write receipt", () => {
       },
     });
   });
-});
 
+  it("checks the frozen base OID in the receipt Git vault, not the live mutation vault", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { ok } = await import("@skillwiki/shared");
+    const { publishPreparedPage } = await import("../../src/commands/page-publish.js");
+
+    const liveVault = makeVault(["research"]);
+    const gitVault = makeVault(["research"]);
+    execFileSync("git", ["init"], { cwd: gitVault });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: gitVault });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: gitVault });
+    execFileSync("git", ["add", "."], { cwd: gitVault });
+    execFileSync("git", ["commit", "-m", "init"], { cwd: gitVault });
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: gitVault,
+      encoding: "utf8",
+    }).trim();
+
+    const prepared = preparePagePublicationFromContent({
+      vault: liveVault,
+      content: queryDraft(["research"], "Dual Path Receipt Query"),
+      target: "queries/dual-path-receipt-query.md",
+      now: NOW,
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) return;
+
+    const deps = defaultPagePublishDeps({
+      preflight: async () => ({
+        exitCode: 0,
+        result: ok({
+          mode: "git-writer",
+          host_id: "sg01",
+          mutation_vault: liveVault,
+          convergence_vault: gitVault,
+          git_vault: gitVault,
+          convergence_source: "configured",
+          base_oid: head,
+          converged: true,
+        }),
+      }),
+    });
+
+    const run = await publishPreparedPage(prepared.data, liveVault, deps);
+
+    expect(run.exitCode).toBe(ExitCode.OK);
+    expect(run.result).toMatchObject({
+      ok: true,
+      data: {
+        base_oid: head,
+        write_mode: "git-writer",
+        mutation_vault: liveVault,
+        git_vault: gitVault,
+      },
+    });
+  });
+});

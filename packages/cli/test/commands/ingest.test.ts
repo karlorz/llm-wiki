@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExitCode } from "@skillwiki/shared";
 import { runIngest } from "../../src/commands/ingest.js";
+import { defaultPagePublishDeps } from "../../src/commands/page-publish.js";
 import { extractTaxonomy } from "../../src/parsers/taxonomy.js";
 import { lockPath } from "../../src/utils/sync-lock.js";
 
@@ -537,6 +538,42 @@ taxonomy:
     expect(existsSync(join(fixture.vault, "queries/blocked-ingest.md"))).toBe(false);
   });
 
+  it("does not create a raw orphan when managed publisher preflight refuses", async () => {
+    const fixture = makeIngestVault(["research"]);
+    const deps = defaultPagePublishDeps({
+      preflight: async () => ({
+        exitCode: ExitCode.PREFLIGHT_FAILED,
+        result: {
+          ok: false as const,
+          error: "PREFLIGHT_FAILED",
+          detail: { reason: "convergence-vault-not-configured" },
+        },
+      }),
+    });
+
+    const result = await runIngest(
+      {
+        source: fixture.source,
+        vault: fixture.vault,
+        type: "query",
+        title: "Preflight Refused Ingest",
+        tags: ["research"],
+      },
+      deps,
+    );
+
+    expect(result).toMatchObject({
+      exitCode: ExitCode.PREFLIGHT_FAILED,
+      result: {
+        ok: false,
+        error: "PREFLIGHT_FAILED",
+        detail: { reason: "convergence-vault-not-configured" },
+      },
+    });
+    expect(existsSync(join(fixture.vault, "raw/articles/preflight-refused-ingest.md"))).toBe(false);
+    expect(existsSync(join(fixture.vault, "queries/preflight-refused-ingest.md"))).toBe(false);
+  });
+
   it("reuses identical immutable raw bytes without a durable retry change", async () => {
     const fixture = makeIngestVault(["research"]);
     const input = {
@@ -616,7 +653,6 @@ taxonomy:
     const secondSource = join(sourceDir, "second.txt");
     writeFileSync(firstSource, "first immutable source bytes");
     writeFileSync(secondSource, "second immutable source bytes");
-    holdPublicationLock(fixture.vault);
     const shared = {
       vault: fixture.vault,
       type: "query",
@@ -629,11 +665,16 @@ taxonomy:
       runIngest({ ...shared, source: secondSource }),
     ]);
 
-    expect(results.filter((result) => result.exitCode === ExitCode.SYNC_LOCK_HELD)).toHaveLength(1);
-    expect(results.filter((result) => result.exitCode === ExitCode.INGEST_VALIDATION_FAILED)).toHaveLength(1);
+    expect(results.filter((result) => result.exitCode === ExitCode.OK)).toHaveLength(1);
+    expect(
+      results.filter((result) =>
+        result.exitCode === ExitCode.SYNC_LOCK_HELD
+        || result.exitCode === ExitCode.INGEST_VALIDATION_FAILED
+      ),
+    ).toHaveLength(1);
     const raw = readFileSync(join(fixture.vault, "raw/articles/concurrent-ingest.md"), "utf8");
     expect(raw.includes("first immutable source bytes") || raw.includes("second immutable source bytes")).toBe(true);
-    expect(existsSync(join(fixture.vault, "queries/concurrent-ingest.md"))).toBe(false);
+    expect(existsSync(join(fixture.vault, "queries/concurrent-ingest.md"))).toBe(true);
   });
 
   it("rejects a malformed existing raw capture as immutable source validation failure", async () => {

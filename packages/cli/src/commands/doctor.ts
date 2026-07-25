@@ -30,6 +30,7 @@ import {
   satelliteLatestRunPath,
 } from "../utils/satellite-run-health.js";
 import { resolveVaultSyncPullHelper } from "../utils/vault-sync-helper.js";
+import { resolveConfiguredSnapshotWorktree } from "../utils/snapshot-worktree.js";
 import { listReviewRequiredOps } from "../utils/operation-journal.js";
 import {
   findRcloneMountPid,
@@ -1268,8 +1269,6 @@ interface VaultSyncRuntimeConfig {
   role?: string;
   serviceScope?: string;
   snapshotScript?: string;
-  snapshotProfile?: string;
-  snapshotWorktree?: string;
 }
 
 /** Read vault_sync.* keys from the .env file bypassing the whitelist filter. */
@@ -1280,8 +1279,6 @@ function readVaultSyncConfig(home: string): VaultSyncRuntimeConfig {
     let role: string | undefined;
     let serviceScope: string | undefined;
     let snapshotScript: string | undefined;
-    let snapshotProfile: string | undefined;
-    let snapshotWorktree: string | undefined;
     for (const line of content.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
@@ -1294,38 +1291,16 @@ function readVaultSyncConfig(home: string): VaultSyncRuntimeConfig {
       if (k === "vault_sync.role") role = v;
       if (k === "vault_sync.service_scope") serviceScope = v;
       if (k === "vault_sync.snapshot_script") snapshotScript = v;
-      if (k === "vault_sync.snapshot_profile") snapshotProfile = v;
-      if (k === "vault_sync.snapshot_worktree") snapshotWorktree = v;
     }
-    return { installed, role, serviceScope, snapshotScript, snapshotProfile, snapshotWorktree };
+    return { installed, role, serviceScope, snapshotScript };
   } catch {
     return { installed: false };
   }
 }
 
-function readKeyFromEnvFile(path: string, keys: string[]): string | undefined {
-  try {
-    const content = readFileSync(path, "utf8");
-    for (const line of content.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
-      const eq = trimmed.indexOf("=");
-      if (eq <= 0) continue;
-      const key = trimmed.slice(0, eq).trim();
-      if (!keys.includes(key)) continue;
-      const value = trimmed.slice(eq + 1).trim();
-      if (value.length > 0) return value;
-    }
-  } catch { /* profile is optional */ }
-  return undefined;
-}
-
-function resolveSnapshotGitWorktree(config: VaultSyncRuntimeConfig): string | undefined {
-  if (config.snapshotWorktree) return config.snapshotWorktree;
-  if (config.snapshotProfile) {
-    const fromProfile = readKeyFromEnvFile(config.snapshotProfile, ["WIKI_GIT_WORKTREE", "SNAPSHOT_WORKTREE", "GIT_DIR"]);
-    if (fromProfile) return fromProfile;
-  }
+function resolveSnapshotGitWorktree(home: string): string | undefined {
+  const configured = resolveConfiguredSnapshotWorktree(home);
+  if (configured) return configured;
   const defaultPath = "/root/wiki-git";
   return existsSync(defaultPath) ? defaultPath : undefined;
 }
@@ -1977,7 +1952,7 @@ export async function runDoctor(
   }
   const resolvedPath = resolved.ok ? resolved.data.path : undefined;
   const gitCheckPath = vsConfig.role === "snapshotter"
-    ? (resolveSnapshotGitWorktree(vsConfig) ?? resolvedPath)
+    ? (resolveSnapshotGitWorktree(input.home) ?? resolvedPath)
     : resolvedPath;
 
   checks.push(checkWikiPathExists(resolvedPath));

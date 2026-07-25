@@ -61,8 +61,20 @@ elif [ -f "$SCRIPT_DIR/../../scripts/lib/delete-intent.sh" ]; then
     source "$SCRIPT_DIR/../../scripts/lib/delete-intent.sh"
 fi
 
+if [ -f "$SCRIPT_DIR/lib/runtime-manifest.sh" ]; then
+    source "$SCRIPT_DIR/lib/runtime-manifest.sh"
+elif [ -f "$SCRIPT_DIR/scripts/lib/runtime-manifest.sh" ]; then
+    source "$SCRIPT_DIR/scripts/lib/runtime-manifest.sh"
+elif [ -f "$SCRIPT_DIR/../../scripts/lib/runtime-manifest.sh" ]; then
+    source "$SCRIPT_DIR/../../scripts/lib/runtime-manifest.sh"
+fi
+
 if ! command -v vault_sync_scan_conflict_markers >/dev/null 2>&1; then
     echo "[wiki-snapshot] ERROR: conflict-marker helper unavailable; refusing to run." >&2
+    exit 1
+fi
+if ! command -v vault_sync_sha256 >/dev/null 2>&1; then
+    echo "[wiki-snapshot] ERROR: SHA-256 helper unavailable; refusing to run." >&2
     exit 1
 fi
 
@@ -79,10 +91,26 @@ CLOUD_REMOTE="${CLOUD_REMOTE:-cloud:cloud/wiki}"
 REPAIR_SCRIPT="${WIKI_GIT_REPAIR_SCRIPT:-$SCRIPT_DIR/wiki-git-repair-v3.sh}"
 MAX_S3_ONLY_NOTES="${WIKI_SNAPSHOT_MAX_S3_ONLY_NOTES:-200}"
 MAX_TOMBSTONE_PRUNES="${WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES:-10}"
+PROJECTION_PARITY_TIMEOUT_SECONDS="${WIKI_SNAPSHOT_PROJECTION_PARITY_TIMEOUT_SECONDS:-120}"
+PROJECTION_PARITY_POLL_SECONDS="${WIKI_SNAPSHOT_PROJECTION_PARITY_POLL_SECONDS:-2}"
+PROJECTION_READ_TIMEOUT_SECONDS="${WIKI_SNAPSHOT_PROJECTION_READ_TIMEOUT_SECONDS:-15}"
 DATE=$(date +%Y%m%d_%H%M%S)
 RCLONE_LOG="/tmp/rclone-${DATE}.log"
 SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT=0
 SNAPSHOT_REMOTE_INVENTORY_READY=0
+PROJECTION_STATE_DIR=""
+PROJECTION_EXPECTED_INDEX_SHA256=""
+PROJECTION_EXPECTED_LOG_SHA256=""
+SNAPSHOT_BASE_OID=""
+SNAPSHOT_GIT_DIR=""
+SNAPSHOT_GIT_COMMON_DIR=""
+
+cleanup_projection_state() {
+    if [ -n "$PROJECTION_STATE_DIR" ] && [ -d "$PROJECTION_STATE_DIR" ]; then
+        rm -rf "$PROJECTION_STATE_DIR"
+    fi
+}
+trap cleanup_projection_state EXIT
 
 fetch_origin_main_ref() {
     # The snapshot guards read origin/main directly. Use an explicit destination
@@ -309,6 +337,174 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
 }
 
+snapshot_projection_hash_file() {
+    local path="${1:-}"
+    [ -f "$path" ] || return 1
+    local digest
+    digest="$(vault_sync_sha256 "$path")"
+    [ -n "$digest" ] || return 1
+    printf '%s\n' "$digest"
+}
+
+validate_projection_parity_config() {
+    case "$PROJECTION_PARITY_TIMEOUT_SECONDS" in
+        ''|*[!0-9]*)
+            log "ERROR: invalid WIKI_SNAPSHOT_PROJECTION_PARITY_TIMEOUT_SECONDS=$PROJECTION_PARITY_TIMEOUT_SECONDS; expected a non-negative integer"
+            return 1
+            ;;
+    esac
+    case "$PROJECTION_PARITY_POLL_SECONDS" in
+        ''|*[!0-9]*)
+            log "ERROR: invalid WIKI_SNAPSHOT_PROJECTION_PARITY_POLL_SECONDS=$PROJECTION_PARITY_POLL_SECONDS; expected a non-negative integer"
+            return 1
+            ;;
+    esac
+    case "$PROJECTION_READ_TIMEOUT_SECONDS" in
+        ''|*[!0-9]*|0)
+            log "ERROR: invalid WIKI_SNAPSHOT_PROJECTION_READ_TIMEOUT_SECONDS=$PROJECTION_READ_TIMEOUT_SECONDS; expected a positive integer"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+snapshot_freeze_projection_expectations() {
+    if [ "${WIKI_SNAPSHOT_TEST_SKIP_PROJECTION_PARITY:-0}" = "1" ] \
+        && [ -n "${SNAPSHOT_TEST_ROOT:-}" ]; then
+        log "projection parity guard skipped by test fixture"
+        return 0
+    fi
+
+    if [ ! -f "$WIKI_DIR/index.md" ] || [ ! -f "$WIKI_DIR/log.md" ]; then
+        log "ERROR: live projection files missing after materialization"
+        return 1
+    fi
+
+    PROJECTION_STATE_DIR="$(mktemp -d)" || {
+        log "ERROR: could not create private projection parity state"
+        return 1
+    }
+    if ! cp "$WIKI_DIR/index.md" "$PROJECTION_STATE_DIR/expected-index.md" \
+        || ! cp "$WIKI_DIR/log.md" "$PROJECTION_STATE_DIR/expected-log.md"; then
+        log "ERROR: could not freeze live projection bytes"
+        return 1
+    fi
+
+    PROJECTION_EXPECTED_INDEX_SHA256="$(snapshot_projection_hash_file "$PROJECTION_STATE_DIR/expected-index.md")" || return 1
+    PROJECTION_EXPECTED_LOG_SHA256="$(snapshot_projection_hash_file "$PROJECTION_STATE_DIR/expected-log.md")" || return 1
+    log "projection expected bytes frozen index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 log_sha256=$PROJECTION_EXPECTED_LOG_SHA256"
+    return 0
+}
+
+snapshot_live_projection_matches_frozen() {
+    local live_index_sha live_log_sha
+    if ! cmp -s "$PROJECTION_STATE_DIR/expected-index.md" "$WIKI_DIR/index.md" \
+        || ! cmp -s "$PROJECTION_STATE_DIR/expected-log.md" "$WIKI_DIR/log.md"; then
+        live_index_sha="$(snapshot_projection_hash_file "$WIKI_DIR/index.md" 2>/dev/null || echo unavailable)"
+        live_log_sha="$(snapshot_projection_hash_file "$WIKI_DIR/log.md" 2>/dev/null || echo unavailable)"
+        log "ERROR: live projection changed after freeze expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 live_index_sha256=$live_index_sha expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 live_log_sha256=$live_log_sha"
+        return 1
+    fi
+    return 0
+}
+
+snapshot_wait_for_direct_projection_parity() {
+    if [ -z "$PROJECTION_STATE_DIR" ]; then
+        # Test-only skip path above. Production always has frozen state.
+        return 0
+    fi
+
+    local started deadline now attempts
+    local remote_index="$PROJECTION_STATE_DIR/remote-index.md"
+    local remote_log="$PROJECTION_STATE_DIR/remote-log.md"
+    local remote_index_sha="unavailable"
+    local remote_log_sha="unavailable"
+    local index_pid log_pid index_rc log_rc
+    started="$(date +%s)"
+    deadline=$((started + PROJECTION_PARITY_TIMEOUT_SECONDS))
+    attempts=0
+
+    while :; do
+        attempts=$((attempts + 1))
+        : > "$remote_index"
+        : > "$remote_log"
+        timeout "$PROJECTION_READ_TIMEOUT_SECONDS" \
+            rclone cat "${CLOUD_REMOTE%/}/index.md" --retries 1 >"$remote_index" 2>>"$LOG_FILE" &
+        index_pid=$!
+        timeout "$PROJECTION_READ_TIMEOUT_SECONDS" \
+            rclone cat "${CLOUD_REMOTE%/}/log.md" --retries 1 >"$remote_log" 2>>"$LOG_FILE" &
+        log_pid=$!
+        wait "$index_pid"
+        index_rc=$?
+        wait "$log_pid"
+        log_rc=$?
+        if [ "$index_rc" -eq 0 ] && [ "$log_rc" -eq 0 ]; then
+            if cmp -s "$PROJECTION_STATE_DIR/expected-index.md" "$remote_index" \
+                && cmp -s "$PROJECTION_STATE_DIR/expected-log.md" "$remote_log"; then
+                if ! snapshot_live_projection_matches_frozen; then
+                    return 1
+                fi
+                remote_index_sha="$(snapshot_projection_hash_file "$remote_index" 2>/dev/null || echo unavailable)"
+                remote_log_sha="$(snapshot_projection_hash_file "$remote_log" 2>/dev/null || echo unavailable)"
+                log "projection direct-store parity confirmed attempts=$attempts expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 live_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 remote_index_sha256=$remote_index_sha expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 live_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 remote_log_sha256=$remote_log_sha"
+                return 0
+            fi
+        fi
+
+        now="$(date +%s)"
+        if [ "$now" -ge "$deadline" ]; then
+            if [ "$index_rc" -eq 0 ]; then
+                remote_index_sha="$(snapshot_projection_hash_file "$remote_index" 2>/dev/null || echo unavailable)"
+            fi
+            if [ "$log_rc" -eq 0 ]; then
+                remote_log_sha="$(snapshot_projection_hash_file "$remote_log" 2>/dev/null || echo unavailable)"
+            fi
+            log "ERROR: projection direct-store parity timeout attempts=$attempts expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 remote_index_sha256=$remote_index_sha expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 remote_log_sha256=$remote_log_sha"
+            return 1
+        fi
+        sleep "$PROJECTION_PARITY_POLL_SECONDS"
+    done
+}
+
+snapshot_verify_worktree_projection_parity() {
+    if [ -z "$PROJECTION_STATE_DIR" ]; then
+        return 0
+    fi
+    local worktree_index_sha worktree_log_sha
+    worktree_index_sha="$(snapshot_projection_hash_file "$SNAPSHOT_WORKTREE/index.md" 2>/dev/null || echo unavailable)"
+    worktree_log_sha="$(snapshot_projection_hash_file "$SNAPSHOT_WORKTREE/log.md" 2>/dev/null || echo unavailable)"
+    if ! cmp -s "$PROJECTION_STATE_DIR/expected-index.md" "$SNAPSHOT_WORKTREE/index.md" \
+        || ! cmp -s "$PROJECTION_STATE_DIR/expected-log.md" "$SNAPSHOT_WORKTREE/log.md"; then
+        log "ERROR: projection worktree parity mismatch expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 worktree_index_sha256=$worktree_index_sha expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 worktree_log_sha256=$worktree_log_sha"
+        return 1
+    fi
+    log "projection worktree parity confirmed expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 worktree_index_sha256=$worktree_index_sha expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 worktree_log_sha256=$worktree_log_sha"
+    return 0
+}
+
+snapshot_verify_semantic_projection_preview() {
+    if [ -z "$PROJECTION_STATE_DIR" ]; then
+        return 0
+    fi
+    local preview="$PROJECTION_STATE_DIR/worktree-preview.json"
+    if ! "$SKILLWIKI_BIN" projections materialize "$SNAPSHOT_WORKTREE" >"$preview" 2>>"$LOG_FILE"; then
+        log "ERROR: projection semantic preview failed"
+        return 1
+    fi
+    if ! grep -Eq '"index_drift"[[:space:]]*:[[:space:]]*false' "$preview" \
+        || ! grep -Eq '"log_drift"[[:space:]]*:[[:space:]]*false' "$preview"; then
+        log "ERROR: projection semantic preview mismatch index_or_log_drift=true"
+        return 1
+    fi
+    log "projection semantic preview confirmed index_drift=false log_drift=false"
+    return 0
+}
+
+snapshot_verify_projection_candidate() {
+    snapshot_verify_worktree_projection_parity \
+        && snapshot_verify_semantic_projection_preview
+}
+
 # Emit the canonical snapshot-completion terminal record (v0.10.14).
 # One stable machine-parseable line written for both pushed and no-change
 # success outcomes. Failure paths must never call this.
@@ -316,9 +512,43 @@ log() {
 emit_snapshot_complete() {
     local outcome="$1"
     local head_oid origin_oid
+    if ! snapshot_refresh_origin_main; then
+        log "ERROR: could not refresh origin/main for final snapshot proof"
+        return 1
+    fi
     head_oid="$(git -C "$SNAPSHOT_WORKTREE" rev-parse HEAD 2>/dev/null || echo unknown)"
     origin_oid="$(git -C "$SNAPSHOT_WORKTREE" rev-parse --verify -q origin/main 2>/dev/null || echo unknown)"
+    if [ "$head_oid" = "unknown" ] || [ "$origin_oid" = "unknown" ] || [ "$head_oid" != "$origin_oid" ]; then
+        log "ERROR: final snapshot proof failed head=$head_oid origin=$origin_oid"
+        return 1
+    fi
     log "SNAPSHOT_COMPLETE schema=v1 outcome=${outcome} result=success ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) head=${head_oid} origin=${origin_oid}"
+    return 0
+}
+
+snapshot_freeze_git_receipt() {
+    local mutation_root convergence_root
+    mutation_root="$(cd "$WIKI_DIR" 2>/dev/null && pwd -P)" || return 1
+    convergence_root="$(cd "$SNAPSHOT_WORKTREE" 2>/dev/null && pwd -P)" || return 1
+    SNAPSHOT_GIT_DIR="$(git -C "$SNAPSHOT_WORKTREE" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+    SNAPSHOT_GIT_COMMON_DIR="$(git -C "$SNAPSHOT_WORKTREE" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+    SNAPSHOT_BASE_OID="$(git -C "$SNAPSHOT_WORKTREE" rev-parse HEAD 2>/dev/null)" || return 1
+    log "snapshot transaction receipt mutation_root=$mutation_root convergence_root=$convergence_root git_dir=$SNAPSHOT_GIT_DIR git_common_dir=$SNAPSHOT_GIT_COMMON_DIR base_oid=$SNAPSHOT_BASE_OID write_mode=dual-path-snapshot"
+    return 0
+}
+
+snapshot_verify_git_receipt() {
+    local current_git_dir current_common_dir current_head
+    current_git_dir="$(git -C "$SNAPSHOT_WORKTREE" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+    current_common_dir="$(git -C "$SNAPSHOT_WORKTREE" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+    current_head="$(git -C "$SNAPSHOT_WORKTREE" rev-parse HEAD 2>/dev/null)" || return 1
+    if [ "$current_git_dir" != "$SNAPSHOT_GIT_DIR" ] \
+        || [ "$current_common_dir" != "$SNAPSHOT_GIT_COMMON_DIR" ] \
+        || [ "$current_head" != "$SNAPSHOT_BASE_OID" ]; then
+        log "ERROR: snapshot transaction receipt drift expected_base_oid=$SNAPSHOT_BASE_OID actual_base_oid=$current_head"
+        return 1
+    fi
+    return 0
 }
 
 validate_tombstone_prune_cap() {
@@ -410,6 +640,9 @@ log "=== Wiki Snapshot: $DATE ==="
 if ! validate_tombstone_prune_cap; then
     exit 1
 fi
+if ! validate_projection_parity_config; then
+    exit 1
+fi
 
 # Check disk space (need at least 100MB free)
 AVAILABLE_KB=$(df -k "$SNAPSHOT_WORKTREE" | awk 'NR==2 {print $4}')
@@ -418,8 +651,9 @@ if [ "$AVAILABLE_KB" -lt 102400 ]; then
     exit 1
 fi
 
-# Check if git directory exists
-if [ ! -d "$SNAPSHOT_WORKTREE/.git" ]; then
+# Check repository validity through Git so linked worktrees (.git text files)
+# are accepted and Git-internal paths are resolved from the convergence root.
+if [ "$(git -C "$SNAPSHOT_WORKTREE" rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then
     log "ERROR: Git worktree not found or not a git repo: $SNAPSHOT_WORKTREE"
     exit 1
 fi
@@ -430,6 +664,10 @@ refresh_git_baseline
 # Same-path would materialize projections then immediately rclone-overwrite them.
 if [ "$(cd "$WIKI_DIR" 2>/dev/null && pwd -P)" = "$(cd "$SNAPSHOT_WORKTREE" 2>/dev/null && pwd -P)" ]; then
     log "ERROR: WIKI_DIR and WIKI_GIT_WORKTREE must be distinct paths for dual-path projection (got: $WIKI_DIR)"
+    exit 1
+fi
+if ! snapshot_freeze_git_receipt; then
+    log "ERROR: could not freeze snapshot transaction receipt"
     exit 1
 fi
 
@@ -459,6 +697,17 @@ if command -v "$SKILLWIKI_BIN" >/dev/null 2>&1; then
         exit 1
     fi
     log "OK projections materialize before snapshot sync"
+    if ! snapshot_freeze_projection_expectations; then
+        log "FAIL projection expectation freeze; snapshot promotion refused"
+        exit 1
+    fi
+    if ! snapshot_wait_for_direct_projection_parity; then
+        log "FAIL projection direct-store parity; snapshot promotion refused"
+        exit 1
+    fi
+else
+    log "ERROR: skillwiki CLI unavailable; refusing snapshot without projection materialization and parity proof"
+    exit 1
 fi
 
 # Common rclone options
@@ -660,6 +909,10 @@ snapshot_reconcile_delete_intents() {
 if ! snapshot_reconcile_delete_intents; then
     exit 1
 fi
+if ! snapshot_verify_projection_candidate; then
+    log "FAIL projection candidate verification; snapshot promotion refused"
+    exit 1
+fi
 
 # Change to git dir for operations
 cd "$SNAPSHOT_WORKTREE" || { log "ERROR: Failed to cd to $SNAPSHOT_WORKTREE"; exit 1; }
@@ -730,6 +983,14 @@ if [ "$needs_repair" = true ]; then
     if ! snapshot_reconcile_delete_intents; then
         exit 1
     fi
+    if ! snapshot_verify_projection_candidate; then
+        log "FAIL post-repair projection candidate verification; snapshot promotion refused"
+        exit 1
+    fi
+    if ! snapshot_freeze_git_receipt; then
+        log "ERROR: could not refresh snapshot transaction receipt after repair"
+        exit 1
+    fi
 fi
 
 if ! raw_dedup_guard; then
@@ -743,7 +1004,13 @@ fi
 # Check for changes
 if [ -z "$(git status --porcelain)" ]; then
     log "No changes to commit"
-    emit_snapshot_complete "no-change"
+    if ! snapshot_verify_git_receipt; then
+        log "ERROR: snapshot transaction changed before no-change proof"
+        exit 1
+    fi
+    if ! emit_snapshot_complete "no-change"; then
+        exit 1
+    fi
     exit 0
 fi
 
@@ -755,6 +1022,13 @@ if command -v git_case_assert_clean >/dev/null 2>&1; then
         printf '%s\n' "$CASE_CONFLICTS" | tee -a "$LOG_FILE"
         exit 1
     fi
+fi
+
+# The commit candidate may modify worktree bytes, but it must not silently move
+# the convergence repository or HEAD away from the frozen transaction base.
+if ! snapshot_verify_git_receipt; then
+    log "ERROR: snapshot transaction changed before staging"
+    exit 1
 fi
 
 # Commit
@@ -820,7 +1094,9 @@ done
 if [ "$PUSH_SUCCESS" = true ]; then
     log "Push successful"
     log "Status: complete"
-    emit_snapshot_complete "pushed"
+    if ! emit_snapshot_complete "pushed"; then
+        exit 1
+    fi
     exit 0
 else
     log "ERROR: Push failed after $PUSH_RETRIES attempts"

@@ -26,6 +26,8 @@ designated snapshotter host per fleet may run this.
 4. **Delete-intent no-resurrection** — active Git tombstones always strip matching paths from the snapshot worktree before `git add`, even when the optional S3 prune is unavailable.
 5. **Bound attempts, not successes** — `WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES` defaults to 10 and caps exact `deletefile` calls. The snapshot intersects active tombstones with a successful recursive remote inventory, so already-absent keys cause zero delete calls.
 6. **Unknown is not absent** — a failed remote inventory skips optional tombstone pruning with an explicit warning; it never becomes an empty-set proof.
+7. **Projection parity is a promotion barrier** — after live `index.md` and `log.md` materialization, the script freezes those bytes, reads both objects through the direct S3 remote until their SHA-256 values match under `WIKI_SNAPSHOT_PROJECTION_PARITY_TIMEOUT_SECONDS` (default 120), with each object read bounded by `WIKI_SNAPSHOT_PROJECTION_READ_TIMEOUT_SECONDS` (default 15), then syncs. It requires byte-identical worktree files plus a read-only `skillwiki projections materialize <worktree>` preview with `index_drift=false` and `log_drift=false` before staging. A fixed sleep, FUSE cache refresh, object existence, or queue-empty observation is not sufficient.
+8. **Git proof stays in the convergence worktree** — the script records the canonical mutation/convergence roots, Git dir/common-dir, and frozen base OID; rechecks that receipt before staging; and refreshes `origin/main` after push or no-change before emitting `SNAPSHOT_COMPLETE result=success`.
 
 ## Steps
 
@@ -33,8 +35,9 @@ designated snapshotter host per fleet may run this.
 2. **Read fleet.yaml** via `fleet_load`. Confirm this host's role is `snapshotter`. If not, abort with message.
 3. **Run guard verification** — call `wiki_snapshot_assert_guards` against the snapshot script body to verify `--max-delete` is present.
 4. **Execute snapshot script** — call `wiki-snapshot.sh` (in `$(platform_share_dir)/bin/`). Pass `--dry-run` if the skill was invoked with `--dry-run`.
-5. **Verify delete-intent summary** — expect one stable line with `active`, `inventory_ready`, `remote_present`, `attempted`, `pruned`, `already_absent`, `failed`, and `deferred` counters. In a zero-live-key steady state, `attempted=0` and no tombstone `object not found` block should appear.
-6. **Log results** — write to `$(platform_log_dir)/wiki-snapshot.log`. Include start timestamp, exit code, and summary.
+5. **Verify projection proof** — on a live run, require `projection direct-store parity confirmed`, `projection worktree parity confirmed`, and `projection semantic preview confirmed` before the terminal success record. Hashes are non-sensitive byte-integrity evidence; do not log object contents.
+6. **Verify delete-intent summary** — expect one stable line with `active`, `inventory_ready`, `remote_present`, `attempted`, `pruned`, `already_absent`, `failed`, and `deferred` counters. In a zero-live-key steady state, `attempted=0` and no tombstone `object not found` block should appear.
+7. **Log results** — write to `$(platform_log_dir)/wiki-snapshot.log`. Include start timestamp, exit code, parity evidence, and summary.
 
 ## Execution
 
