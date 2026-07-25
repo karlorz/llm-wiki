@@ -53,6 +53,30 @@ json_escape() {
   python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
 }
 
+# Portable line reverser. GNU tac is not available on macOS by default, so
+# prefer `tail -r` (BSD/macOS) and fall back to python3. Reads stdin, writes
+# reversed lines to stdout.
+reverse_lines() {
+  if command -v tac >/dev/null 2>&1; then
+    tac
+  else
+    python3 -c "import sys; print('\n'.join(reversed(sys.stdin.read().splitlines())))"
+  fi
+}
+
+# Portable reverse of a file (most-recent-first). Uses `tail -r` on BSD/macOS
+# when tac is unavailable.
+reverse_file() {
+  local file="$1"
+  if command -v tac >/dev/null 2>&1; then
+    tac "$file" 2>/dev/null
+  elif command -v tail >/dev/null 2>&1; then
+    tail -r "$file" 2>/dev/null
+  else
+    python3 -c "import sys; print('\n'.join(reversed(open('$file').read().splitlines())))" 2>/dev/null
+  fi
+}
+
 # ── Snapshot health fixture seam (v0.10.14) ──────────────────
 # When VS_SNAPSHOT_HEALTH_FIXTURE points at a scenario JSON, the snapshotter
 # health checks read timer/service properties and the bounded snapshot log
@@ -809,7 +833,7 @@ except Exception:
   completion_head=""
   completion_origin=""
   if [ -n "${VS_SNAPSHOT_HEALTH_FIXTURE:-}" ]; then
-    snapshot_fixture_log_tail | tac | while IFS= read -r line; do
+    snapshot_fixture_log_tail | reverse_lines | while IFS= read -r line; do
       if printf '%s' "$line" | command grep -q 'SNAPSHOT_COMPLETE schema=v1'; then
         printf '%s\n' "$line"
         break
@@ -827,7 +851,7 @@ except Exception:
     snapshot_log="$LOG_DIR/wiki-snapshot.log"
     if [ -f "$snapshot_log" ]; then
       local complete_line
-      complete_line="$(tac "$snapshot_log" 2>/dev/null | command grep -m1 'SNAPSHOT_COMPLETE schema=v1' || true)"
+      complete_line="$(reverse_file "$snapshot_log" | command grep -m1 'SNAPSHOT_COMPLETE schema=v1' || true)"
       completion_ts="$(printf '%s' "$complete_line" | sed -n 's/.* ts=\([^ ]*\).*/\1/p')"
       completion_outcome="$(printf '%s' "$complete_line" | sed -n 's/.* outcome=\([^ ]*\).*/\1/p')"
     fi
@@ -888,7 +912,7 @@ except Exception:
   fail_count=0
   most_recent_fail=""
   if [ -n "${VS_SNAPSHOT_HEALTH_FIXTURE:-}" ]; then
-    snapshot_fixture_log_tail | tac | while IFS= read -r line; do
+    snapshot_fixture_log_tail | reverse_lines | while IFS= read -r line; do
       if printf '%s' "$line" | command grep -qE 'ERROR|SNAPSHOT_COMPLETE schema=v1'; then
         printf '%s\n' "$line"
       fi
@@ -911,7 +935,7 @@ except Exception:
     snapshot_log="$LOG_DIR/wiki-snapshot.log"
     if [ -f "$snapshot_log" ]; then
       local recent_lines
-      recent_lines="$(tac "$snapshot_log" 2>/dev/null | head -n 60 || true)"
+      recent_lines="$(reverse_file "$snapshot_log" | head -n 60 || true)"
       while IFS= read -r line; do
         if printf '%s' "$line" | command grep -q 'SNAPSHOT_COMPLETE schema=v1'; then
           break
