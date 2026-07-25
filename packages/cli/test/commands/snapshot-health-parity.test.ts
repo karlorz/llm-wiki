@@ -175,6 +175,9 @@ function runShellStatusFixture(fixturePath: string, fixture: ScenarioFixture): M
 }
 
 describe("snapshot-health cross-surface parity (shell status.sh === TypeScript doctor)", () => {
+  // status.sh uses platform_detect_os which only supports Linux and macOS.
+  // Skip the shell half on Windows (MSYS) where the script cannot run.
+  const isWindows = process.platform === "win32";
   const fixtures = loadFixtures();
   const parityIds = [
     "vault_sync_jobs_enabled",
@@ -184,7 +187,8 @@ describe("snapshot-health cross-surface parity (shell status.sh === TypeScript d
   ];
 
   for (const { fixture, path } of fixtures) {
-    it(`shell and TS agree on ${fixture.scenario_id}`, async () => {
+    const skipOnWindows = isWindows ? it.skip : it;
+    skipOnWindows(`shell and TS agree on ${fixture.scenario_id}`, async () => {
       const tsChecks = await runFixture(fixture, path);
       const shellChecks = runShellStatusFixture(path, fixture);
       for (const id of parityIds) {
