@@ -4,3 +4,4 @@ export * from "./schemas.js";
 export * from "./blocked-hosts.js";
 export * from "./error-message.js";
 export * from "./session-kind.js";
+export * from "./systemd-property-catalog.js";

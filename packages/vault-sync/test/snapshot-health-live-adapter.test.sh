@@ -85,11 +85,22 @@ run_status() {
   local log_linux="$home/.local/state/vault-sync/log"
   local log_macos="$home/Library/Logs"
   mkdir -p "$log_linux" "$log_macos"
-  if [ "$profile" = "completed" ]; then
+  if [ "$profile" = "completed" ] || [ "$profile" = "timer-no-next" ]; then
     cat >"$log_linux/wiki-snapshot.log" <<'LOG'
 2026-07-25 11:32:10 === Wiki Snapshot: 20260725_113210 ===
 2026-07-25 11:33:38 Push successful
 2026-07-25T11:33:40Z SNAPSHOT_COMPLETE schema=v1 outcome=pushed result=success ts=2026-07-25T11:33:40Z head=aaa1bbbb2ccc3ddd4eee5fff6aaa7bbb8ccc9ddd0 origin=fff6eee5ddd4ccc3bbb2aaa1fff6eee5ddd4ccc3
+LOG
+    cp "$log_linux/wiki-snapshot.log" "$log_macos/wiki-snapshot.log"
+  elif [ "$profile" = "stale" ]; then
+    cat >"$log_linux/wiki-snapshot.log" <<'LOG'
+2026-07-25T09:30:00Z SNAPSHOT_COMPLETE schema=v1 outcome=pushed result=success ts=2026-07-25T09:30:00Z head=aaa origin=bbb
+LOG
+    cp "$log_linux/wiki-snapshot.log" "$log_macos/wiki-snapshot.log"
+  elif [ "$profile" = "consecutive-failures" ]; then
+    cat >"$log_linux/wiki-snapshot.log" <<'LOG'
+2026-07-25 11:55:00 ERROR snapshot push failed
+2026-07-25 11:56:00 ERROR snapshot retry failed
 LOG
     cp "$log_linux/wiki-snapshot.log" "$log_macos/wiki-snapshot.log"
   fi
@@ -190,6 +201,31 @@ RUN="$TEST_ROOT/running"
 run_status "$RUN" system running
 load_status_map "$RUN/out.json" "$RUN/map.tsv"
 assert_eq "running service_result" "pass" "$(check_status "$RUN/map.tsv" vault_sync_snapshot_service_result)"
+
+# ── failed oneshot: Result=failed / non-zero ExecMainStatus → error ──
+FAILED="$TEST_ROOT/failed"
+run_status "$FAILED" system failed
+load_status_map "$FAILED/out.json" "$FAILED/map.tsv"
+assert_eq "failed service_result" "error" "$(check_status "$FAILED/map.tsv" vault_sync_snapshot_service_result)"
+assert_eq "failed last_push_age" "error" "$(check_status "$FAILED/map.tsv" vault_sync_last_push_age)"
+
+# ── enabled timer without next trigger → error ──
+NO_NEXT="$TEST_ROOT/timer-no-next"
+run_status "$NO_NEXT" system timer-no-next
+load_status_map "$NO_NEXT/out.json" "$NO_NEXT/map.tsv"
+assert_eq "timer-no-next jobs_enabled" "error" "$(check_status "$NO_NEXT/map.tsv" vault_sync_jobs_enabled)"
+
+# ── stale successful completion → error at >135 minutes ──
+STALE="$TEST_ROOT/stale"
+run_status "$STALE" system stale
+load_status_map "$STALE/out.json" "$STALE/map.tsv"
+assert_eq "stale last_push_age" "error" "$(check_status "$STALE/map.tsv" vault_sync_last_push_age)"
+
+# ── two errors since last completion → consecutive-failure error ──
+STREAK="$TEST_ROOT/consecutive-failures"
+run_status "$STREAK" system consecutive-failures
+load_status_map "$STREAK/out.json" "$STREAK/map.tsv"
+assert_eq "consecutive-failures streak" "error" "$(check_status "$STREAK/map.tsv" vault_sync_snapshot_consecutive_failures)"
 
 # ── unavailable properties → warn ──
 UN="$TEST_ROOT/unavailable"

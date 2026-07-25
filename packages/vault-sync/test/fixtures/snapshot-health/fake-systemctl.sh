@@ -3,7 +3,9 @@
 #
 # Env:
 #   FAKE_SYSTEMCTL_LOG      - request log path (scope\tunit\tProperty lines)
-#   FAKE_SYSTEMCTL_PROFILE  - completed | never-run | running | unavailable
+#   FAKE_SYSTEMCTL_PROFILE  - completed | failed | never-run | running |
+#                             timer-no-next | stale | consecutive-failures |
+#                             unavailable
 #
 # Refuses snake_case property names (underscores). Returns case-sensitive
 # systemd property values for wiki-snapshot.timer / wiki-snapshot.service.
@@ -67,6 +69,19 @@ timer_value() {
 
 service_value() {
   case "$PROFILE" in
+    failed)
+      case "$1" in
+        LoadState) printf 'loaded' ;;
+        ActiveState) printf 'failed' ;;
+        SubState) printf 'failed' ;;
+        Result) printf 'failed' ;;
+        ExecMainStatus) printf '23' ;;
+        ExecMainCode) printf '1' ;;
+        InactiveEnterTimestamp) printf '2026-07-25T11:58:40Z' ;;
+        ExecMainStartTimestamp) printf '2026-07-25T11:58:10Z' ;;
+        ExecMainExitTimestamp) printf '2026-07-25T11:58:40Z' ;;
+      esac
+      ;;
     never-run)
       case "$1" in
         LoadState) printf 'loaded' ;;
@@ -89,7 +104,7 @@ service_value() {
         ExecMainStartTimestamp) printf '2026-07-25T11:59:30Z' ;;
       esac
       ;;
-    completed|*)
+    completed|timer-no-next|stale|consecutive-failures|*)
       case "$1" in
         LoadState) printf 'loaded' ;;
         ActiveState) printf 'inactive' ;;
@@ -107,7 +122,13 @@ service_value() {
 }
 
 case "$unit" in
-  wiki-snapshot.timer) timer_value "$prop" ;;
+  wiki-snapshot.timer)
+    if [ "$PROFILE" = "timer-no-next" ] && [ "$prop" = "NextElapseUSecRealtime" ]; then
+      printf ''
+    else
+      timer_value "$prop"
+    fi
+    ;;
   wiki-snapshot.service) service_value "$prop" ;;
 esac
 printf '\n'

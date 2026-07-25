@@ -73,6 +73,23 @@ case-sensitive systemd names (`unit_file_state` → `UnitFileState`,
 `ExecMainExitTimestamp`, `InactiveEnterTimestamp`, or `ActiveEnterTimestamp`
 (live oneshots often leave `ActiveEnterTimestamp` empty). Running elapsed time
 prefers `ExecMainStartTimestamp` and falls back to `ActiveEnterTimestamp`.
+
+The canonical mapping lives in
+`packages/shared/src/systemd-property-catalog.json`. TypeScript consumes it
+through `@skillwiki/shared`; the shell adapter sources the generated
+`packages/vault-sync/skills/vault-sync-status/systemd-property-catalog.sh`.
+Run `npm run generate:systemd-catalog` after catalog edits. CI runs
+`npm run check:systemd-catalog` and fails if the generated shell adapter
+drifts.
+
+The live-adapter gate executes `fake-systemctl.sh` as an external process for
+both surfaces. It covers completed oneshots with empty
+`ActiveEnterTimestamp`, failed/nonzero service results, running service start
+evidence, enabled timers with and without a next trigger, stale completion,
+consecutive failures, unavailable properties, and user/system scopes. The
+fake refuses snake_case property requests, so fixture-only parity cannot hide
+a live property-name regression.
+
 - `expected` - exact check ID -> `{ status, facts? }`. `status` is one of
   `pass|warn|error`. `facts` holds stable structured fields automation
   compares exactly (e.g. `count`, `outcome`). Human-readable detail may

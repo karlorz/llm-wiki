@@ -225,7 +225,15 @@ const LIVE_CORE_PROPS = [
   "ExecMainExitTimestamp",
 ] as const;
 
-type LiveProfile = "completed" | "never-run" | "running" | "unavailable";
+type LiveProfile =
+  | "completed"
+  | "failed"
+  | "never-run"
+  | "running"
+  | "timer-no-next"
+  | "stale"
+  | "consecutive-failures"
+  | "unavailable";
 
 function installFakeSystemctl(
   binDir: string,
@@ -254,7 +262,7 @@ function runLiveAdapter(
 
     const logDir = join(root, "log");
     mkdirSync(logDir, { recursive: true });
-    if (profile === "completed") {
+    if (profile === "completed" || profile === "timer-no-next") {
       writeFileSync(
         join(logDir, "wiki-snapshot.log"),
         [
@@ -262,6 +270,17 @@ function runLiveAdapter(
           "2026-07-25T11:33:40Z SNAPSHOT_COMPLETE schema=v1 outcome=pushed result=success ts=2026-07-25T11:33:40Z head=aaa origin=bbb",
           "",
         ].join("\n"),
+      );
+    } else if (profile === "stale") {
+      writeFileSync(
+        join(logDir, "wiki-snapshot.log"),
+        "2026-07-25T09:30:00Z SNAPSHOT_COMPLETE schema=v1 outcome=pushed result=success ts=2026-07-25T09:30:00Z head=aaa origin=bbb\n",
+      );
+    } else if (profile === "consecutive-failures") {
+      writeFileSync(
+        join(logDir, "wiki-snapshot.log"),
+        "2026-07-25 11:55:00 ERROR snapshot push failed\n"
+        + "2026-07-25 11:56:00 ERROR snapshot retry failed\n",
       );
     }
 
@@ -316,6 +335,27 @@ describe("snapshot-health live systemctl adapter (TypeScript doctor)", () => {
   maybeIt("running service uses ExecMainStartTimestamp when ActiveEnterTimestamp empty", () => {
     const { checks } = runLiveAdapter("system", "running");
     expect(checks.get("vault_sync_snapshot_service_result")).toBe("pass");
+  });
+
+  maybeIt("failed Result and nonzero ExecMainStatus are errors", () => {
+    const { checks } = runLiveAdapter("system", "failed");
+    expect(checks.get("vault_sync_snapshot_service_result")).toBe("error");
+    expect(checks.get("vault_sync_last_push_age")).toBe("error");
+  });
+
+  maybeIt("enabled timer without next trigger is an error", () => {
+    const { checks } = runLiveAdapter("system", "timer-no-next");
+    expect(checks.get("vault_sync_jobs_enabled")).toBe("error");
+  });
+
+  maybeIt("stale successful completion crosses the error threshold", () => {
+    const { checks } = runLiveAdapter("system", "stale");
+    expect(checks.get("vault_sync_last_push_age")).toBe("error");
+  });
+
+  maybeIt("two recent errors produce a consecutive-failure error", () => {
+    const { checks } = runLiveAdapter("system", "consecutive-failures");
+    expect(checks.get("vault_sync_snapshot_consecutive_failures")).toBe("error");
   });
 
   maybeIt("unavailable properties yield warn", () => {

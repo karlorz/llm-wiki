@@ -1,0 +1,15 @@
+{
+  "load_state": "LoadState",
+  "unit_file_state": "UnitFileState",
+  "active_state": "ActiveState",
+  "sub_state": "SubState",
+  "next_elapse": "NextElapseUSecRealtime",
+  "result": "Result",
+  "exec_main_status": "ExecMainStatus",
+  "exec_main_code": "ExecMainCode",
+  "active_enter_timestamp": "ActiveEnterTimestamp",
+  "inactive_enter_timestamp": "InactiveEnterTimestamp",
+  "exec_main_start_timestamp": "ExecMainStartTimestamp",
+  "exec_main_exit_timestamp": "ExecMainExitTimestamp",
+  "invocation_id": "InvocationID"
+}

@@ -29,6 +29,14 @@ fi
 # shellcheck source=/dev/null
 source "$RUNTIME_MANIFEST_LIB"
 
+SYSTEMD_PROPERTY_CATALOG="$SCRIPT_DIR/systemd-property-catalog.sh"
+if [ ! -f "$SYSTEMD_PROPERTY_CATALOG" ]; then
+  echo "FATAL: missing generated systemd property catalog: $SYSTEMD_PROPERTY_CATALOG" >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$SYSTEMD_PROPERTY_CATALOG"
+
 lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
@@ -135,30 +143,6 @@ snapshot_health_timeout_seconds() {
   case "$v" in
     ''|*[!0-9]*) printf '900\n' ;;
     *) printf '%s\n' "$v" ;;
-  esac
-}
-
-# Map fixture/semantic snake_case keys to live systemd property names.
-# systemctl property names are case-sensitive; snake_case keys must never
-# be passed through on the live path (v0.10.15 adapter fix).
-# Usage: snapshot_semantic_to_systemd_prop <semantic-key> -> PascalCase name
-snapshot_semantic_to_systemd_prop() {
-  case "$1" in
-    load_state) printf 'LoadState\n' ;;
-    unit_file_state) printf 'UnitFileState\n' ;;
-    active_state) printf 'ActiveState\n' ;;
-    sub_state) printf 'SubState\n' ;;
-    next_elapse) printf 'NextElapseUSecRealtime\n' ;;
-    result) printf 'Result\n' ;;
-    exec_main_status) printf 'ExecMainStatus\n' ;;
-    exec_main_code) printf 'ExecMainCode\n' ;;
-    active_enter_timestamp) printf 'ActiveEnterTimestamp\n' ;;
-    inactive_enter_timestamp) printf 'InactiveEnterTimestamp\n' ;;
-    exec_main_start_timestamp) printf 'ExecMainStartTimestamp\n' ;;
-    exec_main_exit_timestamp) printf 'ExecMainExitTimestamp\n' ;;
-    invocation_id) printf 'InvocationID\n' ;;
-    # Closed map: never pass unknown/snake_case keys through to systemctl.
-    *) return 1 ;;
   esac
 }
 

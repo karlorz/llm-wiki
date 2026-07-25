@@ -85,7 +85,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run -w skillwiki build
-      - run: npm run test:vault-sync
+      - name: Vault-sync suite (includes live-adapter gate)
+        run: npm run test:vault-sync
 
   e2e-plugin:
     needs: build-and-test

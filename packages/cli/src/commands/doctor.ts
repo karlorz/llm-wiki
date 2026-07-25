@@ -1,4 +1,4 @@
-import { ok, ExitCode, type Result } from "@skillwiki/shared";
+import { ok, ExitCode, systemdPropertyFor, type Result } from "@skillwiki/shared";
 import { existsSync, lstatSync, readlinkSync, readdirSync, statSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execSync } from "node:child_process";
@@ -1359,32 +1359,6 @@ interface SnapshotServiceProps {
   exec_main_exit_timestamp?: string | null;
 }
 
-/**
- * Map fixture/semantic snake_case keys to live systemd property names.
- * systemctl property names are case-sensitive; snake_case keys must never
- * be passed through on the live path (v0.10.15 adapter fix).
- */
-const SNAPSHOT_SEMANTIC_TO_SYSTEMD: Record<string, string> = {
-  load_state: "LoadState",
-  unit_file_state: "UnitFileState",
-  active_state: "ActiveState",
-  sub_state: "SubState",
-  next_elapse: "NextElapseUSecRealtime",
-  result: "Result",
-  exec_main_status: "ExecMainStatus",
-  exec_main_code: "ExecMainCode",
-  active_enter_timestamp: "ActiveEnterTimestamp",
-  inactive_enter_timestamp: "InactiveEnterTimestamp",
-  exec_main_start_timestamp: "ExecMainStartTimestamp",
-  exec_main_exit_timestamp: "ExecMainExitTimestamp",
-  invocation_id: "InvocationID",
-};
-
-/** Closed map: unknown semantic keys must not pass through as snake_case. */
-function semanticToSystemdProp(semantic: string): string | undefined {
-  return SNAPSHOT_SEMANTIC_TO_SYSTEMD[semantic];
-}
-
 /** Normalize empty / systemd "n/a" property values to undefined. */
 function normalizeSystemdValue(raw: string | undefined | null): string | undefined {
   if (raw == null) return undefined;
@@ -1443,13 +1417,13 @@ function snapshotProp(
 ): string | undefined {
   if (fixture) {
     // Fixture path keeps semantic snake_case keys for corpus parity.
-    const bag = fixture[kind] as Record<string, unknown>;
+    const bag = fixture[kind] as unknown as Record<string, unknown>;
     const v = bag[prop];
     return v == null ? undefined : String(v);
   }
   const unit = kind === "timer" ? "wiki-snapshot.timer" : "wiki-snapshot.service";
   // Live path: translate semantic keys → case-sensitive systemd names.
-  const liveProp = semanticToSystemdProp(prop);
+  const liveProp = systemdPropertyFor(prop);
   if (!liveProp) return undefined;
   return systemctlShowProperty(scope, unit, liveProp);
 }
@@ -1474,7 +1448,12 @@ export function snapshotterHealthChecks(
   const fixture = loadSnapshotFixture(env);
   const cadence = fixture ? fixture.cadence_minutes : parseInt(env.VS_SNAPSHOT_CADENCE_MINUTES ?? "30", 10) || 30;
   const timeout = fixture ? fixture.service_timeout_seconds : parseInt(env.VS_SNAPSHOT_SERVICE_TIMEOUT_SECONDS ?? "900", 10) || 900;
-  const nowMs = fixture ? Date.parse(fixture.now) : Date.now();
+  const injectedNowMs = env.VS_SNAPSHOT_HEALTH_NOW
+    ? Date.parse(env.VS_SNAPSHOT_HEALTH_NOW)
+    : Number.NaN;
+  const nowMs = fixture
+    ? Date.parse(fixture.now)
+    : Number.isFinite(injectedNowMs) ? injectedNowMs : Date.now();
   const warnAge = cadence * 2 + 15;
   const errorAge = cadence * 4 + 15;
 
