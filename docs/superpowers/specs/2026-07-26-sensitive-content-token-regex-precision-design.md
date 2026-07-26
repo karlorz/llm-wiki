@@ -1,9 +1,10 @@
 # Design: Sensitive-content token matcher precision (G1 + G2)
 
 **Date:** 2026-07-26  
-**Status:** approved-for-spec (awaiting user review of written file)  
+**Status:** **implemented** — merged to `main` (`195d8af`, 2026-07-26); release/fleet CLI upgrade still follow-up  
 **Scope:** CLI product fix only (`packages/cli` sensitive-content scanner)  
 **Related work item:** `projects/llm-wiki/work/2026-07-26-sensitive-content-token-regex-false-positives/`  
+**Plan:** `docs/superpowers/plans/2026-07-26-sensitive-content-token-regex-precision.md`  
 **Handoff context:** `logs/2026-07-26-skillwiki-vault-sync-fleet-health-handoff.md`  
 **Non-goals:** vault content rewrites, fingerprint allowlists, severity changes, entropy thresholds, vault-sync host reinstalls (Track C), raw_source_identity_conflict policy
 

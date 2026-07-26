@@ -1,6 +1,8 @@
 # Sensitive-content token matcher precision (G1 + G2) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Status:** **COMPLETE** — merged to `main` as `195d8af` (2026-07-26). Implementation commits `d0918a6` + `46c8422`. Focused tests 15/15 green. Release / fleet CLI upgrade still out of scope (Task 4).
 
 **Goal:** Stop the sensitive-content `token` matcher from flagging pure lower-hyphen prose (`this session: incidents-isolate`) and `session://` URL values, without weakening existing secret detection.
 
@@ -9,6 +11,20 @@
 **Tech Stack:** TypeScript, Vitest, Node crypto (existing fingerprinting), monorepo package `packages/cli` (`skillwiki`).
 
 **Spec:** `docs/superpowers/specs/2026-07-26-sensitive-content-token-regex-precision-design.md`
+
+**llm-wiki routing (post-execution note):** This plan was authored and executed via the Superpowers SDD loop *in a direct agent session* (brainstorm → design → writing-plans → subagent-driven-development → finishing-a-development-branch). That is **not** a Grok-Build-native menu — the end options (merge / PR / keep / discard) come from `superpowers:finishing-a-development-branch`.
+
+The same SDD skills are already the **default PRD path for this repo** via `.claude/dev-loop.config.md`:
+
+| Config | Value | Meaning |
+|--------|--------|---------|
+| `prd_layer` | `superpowers` | Brainstorm / plan / execute / review map to Superpowers skills |
+| `prd_pipeline` | `full` | Spec → plan → execute → review steps all enabled |
+| `preflight.require_approved_spec_and_plan` | `true` | Unattended execute skips items without approved artifacts |
+| Default plan skill | `superpowers:writing-plans` | Plans land under `docs/superpowers/plans/` (or vault work paths when vault-routed) |
+| Default execute skill | `superpowers:subagent-driven-development` | Prefer `dev-loop:sdd-execute-worker` when dispatched from a dev-loop EXECUTE step |
+
+**Future preference:** for monorepo write work already tracked as a vault work item, prefer `/dev-loop` (or EXECUTE via `sdd-execute-worker`) so preflight, vault sync, and release policy stay attached. Standalone Superpowers SDD remains valid for attended deep dives when the agent is already mid-brainstorm outside a cycle.
 
 ## Global Constraints
 
@@ -42,7 +58,7 @@ No new files.
 - Consumes: `scanSensitiveContent(text, opts?)`, `redactSensitiveContent(text, opts?)` from `../../src/utils/sensitive-content.js`
 - Produces: new `describe("token matcher precision (G1/G2)")` block that documents required behavior for Task 2
 
-- [ ] **Step 1: Append the failing test block**
+- [x] **Step 1: Append the failing test block**
 
 Open `packages/cli/test/utils/sensitive-content.test.ts`. Keep all existing tests. Append this block **before** the final closing `});` of the top-level `describe("sensitive-content", …)` (i.e. as sibling `it`/`describe` children of that suite):
 
@@ -89,7 +105,7 @@ Open `packages/cli/test/utils/sensitive-content.test.ts`. Keep all existing test
   });
 ```
 
-- [ ] **Step 2: Run tests and confirm the FP cases fail**
+- [x] **Step 2: Run tests and confirm the FP cases fail**
 
 Run:
 
@@ -108,7 +124,7 @@ Expected:
 
 Do not implement production code until you see the FP-related failures.
 
-- [ ] **Step 3: Commit the failing tests**
+- [x] **Step 3: Commit the failing tests**
 
 ```bash
 cd /Users/karlchow/Desktop/code/llm-wiki
@@ -140,7 +156,7 @@ function isNonSecretTokenCapture(value: string): boolean
 
 Returns `true` when the token capture must be skipped (G1 or G2).
 
-- [ ] **Step 1: Add the helper after `isSyntheticPlaceholder`**
+- [x] **Step 1: Add the helper after `isSyntheticPlaceholder`**
 
 In `packages/cli/src/utils/sensitive-content.ts`, immediately after `isSyntheticPlaceholder`:
 
@@ -159,7 +175,7 @@ function isNonSecretTokenCapture(value: string): boolean {
 
 Do not export this function.
 
-- [ ] **Step 2: Wire the filter into `collectMatches`**
+- [x] **Step 2: Wire the filter into `collectMatches`**
 
 In the `matchAll` loop, after:
 
@@ -200,7 +216,7 @@ Full relevant loop body after the change:
 
 Do **not** change the token regex line. Do **not** alter other matchers.
 
-- [ ] **Step 3: Run unit tests — all must pass**
+- [x] **Step 3: Run unit tests — all must pass**
 
 ```bash
 cd /Users/karlchow/Desktop/code/llm-wiki/packages/cli && npm test -- test/utils/sensitive-content.test.ts
@@ -208,7 +224,7 @@ cd /Users/karlchow/Desktop/code/llm-wiki/packages/cli && npm test -- test/utils/
 
 Expected: all tests in that file PASS, including the new G1/G2 block and the full pre-existing suite.
 
-- [ ] **Step 4: Quick local reproduction (optional but recommended)**
+- [x] **Step 4: Quick local reproduction (optional but recommended)**
 
 From monorepo root (tsx/node as available). Prefer running the same Vitest file; if you want a one-liner against source:
 
@@ -218,7 +234,7 @@ cd /Users/karlchow/Desktop/code/llm-wiki/packages/cli && npx vitest run test/uti
 
 Expected: exit code 0.
 
-- [ ] **Step 5: Commit implementation**
+- [x] **Step 5: Commit implementation**
 
 ```bash
 cd /Users/karlchow/Desktop/code/llm-wiki
@@ -245,7 +261,7 @@ EOF
 - Consumes: Task 2 implementation
 - Produces: green typecheck + green focused test suite as merge gate for this change
 
-- [ ] **Step 1: Re-run focused tests**
+- [x] **Step 1: Re-run focused tests**
 
 ```bash
 cd /Users/karlchow/Desktop/code/llm-wiki/packages/cli && npm test -- test/utils/sensitive-content.test.ts
@@ -253,7 +269,7 @@ cd /Users/karlchow/Desktop/code/llm-wiki/packages/cli && npm test -- test/utils/
 
 Expected: PASS, exit 0.
 
-- [ ] **Step 2: Typecheck the CLI package**
+- [x] **Step 2: Typecheck the CLI package**
 
 ```bash
 cd /Users/karlchow/Desktop/code/llm-wiki/packages/cli && npm run typecheck
@@ -261,7 +277,7 @@ cd /Users/karlchow/Desktop/code/llm-wiki/packages/cli && npm run typecheck
 
 Expected: PASS, exit 0. If typecheck fails only because of pre-existing unrelated errors, note them in the commit message / PR description; do not expand scope to fix unrelated packages. If your change introduced a type error, fix it in `sensitive-content.ts` only.
 
-- [ ] **Step 3: Manual assertion checklist (read findings JSON mentally)**
+- [x] **Step 3: Manual assertion checklist (read findings JSON mentally)**
 
 Confirm by reading the test names / results:
 
@@ -272,7 +288,7 @@ Confirm by reading the test names / results:
 | `token: abcdefghijklmnop` | one `token` finding |
 | Existing access_key / bearer / provider_key tests | still pass |
 
-- [ ] **Step 4: Commit only if you made typecheck fixes; otherwise skip**
+- [x] **Step 4: Commit only if you made typecheck fixes; otherwise skip**
 
 If no file changes, skip commit. If you fixed types:
 
@@ -290,7 +306,7 @@ git commit -m "fix: typecheck cleanups for token capture filters"
 
 This plan stops at code + tests. Release (`0.10.20` or next), npm publish, and fleet CLI upgrade are **out of scope** (see design §6).
 
-- [ ] **Step 1: Summarize for the human**
+- [x] **Step 1: Summarize for the human**
 
 Report:
 1. Commits created (hashes + subjects)
@@ -298,7 +314,51 @@ Report:
 3. Reminder: vault FP fingerprints clear only after hosts run a CLI build/release that includes this change
 4. Remaining inherited lint: `raw_source_identity_conflict` still separate
 
-- [ ] **Step 2: Do not** run `npm version`, publish, remote `npm install -g`, or vault edits unless the human explicitly asks in a follow-up.
+- [x] **Step 2: Do not** run `npm version`, publish, remote `npm install -g`, or vault edits unless the human explicitly asks in a follow-up.
+
+---
+
+## Execution record (2026-07-26)
+
+| Field | Value |
+|-------|--------|
+| Branch | `fix/sensitive-content-token-g1-g2` (deleted after local merge) |
+| Worktree | `.worktrees/fix/sensitive-content-token-g1-g2` (removed) |
+| Task 1 | `d0918a6` tests |
+| Task 2 | `46c8422` G1+G2 helper + wire |
+| Task 3 | verify only — 15/15 pass; package typecheck has pre-existing unrelated errors |
+| Task 4 | no release |
+| Merge | `195d8af` into `main` (local; not pushed) |
+| Final review | Ready to merge — Yes |
+
+### Baseline surprise (plan vs tree at execute time)
+
+Before Task 1, history already contained `a7a90fe` (`fix(cli): clear daily-wiki-sleep lint false positives`) introducing a **broader** `looksLikeCredentialValue` (single-`/` skip + pure-lowercase reject + hyphen prose). Consequently:
+
+- Planned “FP cases fail first” RED never appeared — FPs already passed.
+- RED was inverted onto pure-lowercase true-positive `token: abcdefghijklmnop`.
+- Task 2 **aligned** production to the **approved G1+G2-only** design (removed pure-lowercase reject and single-`/` skip; kept `//` + hyphen compounds).
+
+Lesson for future plans on this repo: **re-read the live matcher and test file at plan-time and again at Task-1 base**, not only from an earlier research snapshot. Concurrent merges (daily-wiki-sleep FP fix) can land mid-session.
+
+### Process map (this session vs dev-loop)
+
+```text
+This attended session:
+  deep-research → brainstorming → design → writing-plans
+  → subagent-driven-development (manual spawn + task review)
+  → finishing-a-development-branch (merge / PR / keep / discard menu)
+
+llm-wiki default when /dev-loop EXECUTE runs (prd_layer=superpowers, prd_pipeline=full):
+  preflight (require_approved_spec_and_plan)
+  → SPEC (brainstorming / vault work item)
+  → PLAN (writing-plans)
+  → EXECUTE (prefer sdd-execute-worker → subagent-driven-development)
+  → REVIEW (simplify / requesting-code-review)
+  → MERGE / PUSH per release_policy
+```
+
+The finishing menu is **skill-owned**, not a harness UI. When EXECUTE is driven by dev-loop, finishing options may be adapted (Codex reduced menu, merge_policy, etc.) — still Superpowers SDD under the hood.
 
 ---
 
