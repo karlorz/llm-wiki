@@ -121,4 +121,45 @@ describe("sensitive-content", () => {
     expect(result.text).not.toContain(secret);
     expect(JSON.stringify(result.findings)).not.toContain(secret);
   });
+
+  describe("token matcher precision (G1/G2)", () => {
+    it("ignores pure lower-hyphen prose after bare session: (FP1 shape)", () => {
+      const text = "Prior this session: incidents-isolate session-scoped root\n";
+      expect(scanSensitiveContent(text)).toEqual([]);
+    });
+
+    it("ignores session:// URL scheme captures (FP2 shape)", () => {
+      const text = "source_url: session://abc123def456ghi789xyz\n";
+      expect(scanSensitiveContent(text)).toEqual([]);
+    });
+
+    it("ignores additional pure lower-hyphen session prose", () => {
+      const text = "this session: another-long-hyphenated-phrase\n";
+      expect(scanSensitiveContent(text)).toEqual([]);
+    });
+
+    it("still detects explicit token assignments", () => {
+      const secret = "abcdefghijklmnop"; // length 16, not pure lower-hyphen compound
+      const findings = scanSensitiveContent(`token: ${secret}\n`);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]).toMatchObject({ kind: "token", line: 1 });
+      expect(findings[0]!.preview).toContain("[REDACTED:token:");
+      expect(JSON.stringify(findings)).not.toContain(secret);
+    });
+
+    it("still detects mixed-shape token values", () => {
+      const secret = "tok_aB3dEf9hIjKlMnOpQrStUv";
+      const findings = scanSensitiveContent(`token: ${secret}\n`);
+      expect(findings.map(f => f.kind)).toContain("token");
+      expect(JSON.stringify(findings)).not.toContain(secret);
+    });
+
+    it("does not redact FP prose via redactSensitiveContent", () => {
+      const text = "Prior this session: incidents-isolate session-scoped root\n";
+      const result = redactSensitiveContent(text);
+      expect(result.changed).toBe(false);
+      expect(result.text).toBe(text);
+      expect(result.findings).toEqual([]);
+    });
+  });
 });
