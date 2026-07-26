@@ -55,4 +55,22 @@ describe("assessSourceIdentity", () => {
     expect(result.sourceSignals).toContain("seaweedfs");
     expect(result.bodySignals).toContain("seaweedfs");
   });
+
+  it("recognizes CamelCase SkillWiki body text after normalize()", () => {
+    const result = assessSourceIdentity({
+      rawPath: "raw/transcripts/2026-07-26-task-p2-close-skillwiki-feedback-loop-safely.md",
+      body: [
+        "---",
+        'title: "task capture"',
+        "---",
+        "",
+        "# task: P2 close SkillWiki feedback loop safely",
+        "",
+        "Cross-link: [[queries/2026-07-26-superpowers-frontier-model-performance-response]]",
+      ].join("\n"),
+    });
+
+    expect(result.bodySignals).toContain("skillwiki");
+    expect(result.status).toBe("ok");
+  });
 });

@@ -45,6 +45,10 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("log-append").requiredOption("--content <text>").option("--operation-id <id>").option("--write-event").option("--wiki <name>");
   program.command("work-complete").requiredOption("--work-item <path>").option("--operation-id <id>").option("--no-commit").option("--wiki <name>");
   program.command("work-validate").requiredOption("--work-item <path>").option("--require-complete").option("--wiki <name>");
+  // Managed write / projection surface (v0.10.x) — keep in sync with cli.ts
+  program.command("log"); // has subcommands: materialize, migrate-legacy
+  program.command("index"); // has subcommands: rebuild
+  program.command("projections"); // has subcommands: materialize, repair-legacy
   program.command("lint").option("--days <n>").option("--lines <n>").option("--log-threshold <n>").option("--fix").option("--only <bucket>").option("--summary").option("--examples <n>").option("--wiki <name>");
   program.command("config"); // has subcommands
   program.command("health").option("--wiki <name>").option("--sync <mode>").option("--no-fail").option("--out <path>").option("--examples <n>");
@@ -110,6 +114,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--skip-budget")
     .option("--checks <list>")
     .option("--wiki <name>");
+  program.command("mcp"); // stdio MCP server (no vault-doc flags in surface)
 
   // Subcommands
   const graphCmd = program.commands.find(c => c.name() === "graph")!;
@@ -144,6 +149,17 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--log-note <text>")
     .option("--write")
     .option("--wiki <name>");
+
+  const logCmd = program.commands.find(c => c.name() === "log")!;
+  logCmd.command("materialize").option("--write").option("--wiki <name>");
+  logCmd.command("migrate-legacy").option("--write").option("--converge-vault <dir>").option("--wiki <name>");
+
+  const indexCmd = program.commands.find(c => c.name() === "index")!;
+  indexCmd.command("rebuild").option("--write").option("--wiki <name>");
+
+  const projectionsCmd = program.commands.find(c => c.name() === "projections")!;
+  projectionsCmd.command("materialize").option("--write").option("--converge-vault <dir>").option("--wiki <name>");
+  projectionsCmd.command("repair-legacy").requiredOption("--event-operation-id <id>").option("--write").option("--converge-vault <dir>").option("--wiki <name>");
 
   const syncCmd = program.commands.find(c => c.name() === "sync")!;
   syncCmd.command("status").option("--wiki <name>").option("--include-stashes").option("--include-remote-health").option("--check-snapshotter");

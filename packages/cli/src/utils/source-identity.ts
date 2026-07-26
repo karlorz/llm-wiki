@@ -16,7 +16,8 @@ export interface SourceIdentityAssessment {
 
 const PROJECT_PATTERNS: Record<string, RegExp[]> = {
   hermes: [/\bhermes\b/i, /nousresearch\s*hermes/i, /nousresearch\/hermes-agent/i, /hermes agent/i],
-  skillwiki: [/\bskillwiki\b/i, /\bllm[-_ ]?wiki\b/i, /karpathy'?s llm wiki/i],
+  // normalize() splits CamelCase ("SkillWiki" → "skill wiki"), so match both forms.
+  skillwiki: [/\bskillwiki\b/i, /\bskill\s+wiki\b/i, /\bllm[-_ ]?wiki\b/i, /karpathy'?s llm wiki/i],
   superpowers: [/\bsuperpowers\b/i, /obra\/superpowers/i, /complete software development methodology/i],
   playwright: [/\bplaywright\b/i, /microsoft\s*playwright/i, /microsoft\/playwright/i],
   convex: [/\bconvex\b/i],
@@ -30,6 +31,9 @@ const PROJECT_PATTERNS: Record<string, RegExp[]> = {
 const COMPATIBLE = new Set([
   "hermes|skillwiki",
   "skillwiki|hermes",
+  // SkillWiki work items commonly reference Superpowers skills/methodology.
+  "skillwiki|superpowers",
+  "superpowers|skillwiki",
   "proxmox|seaweedfs",
   "seaweedfs|proxmox",
   "coolify|seaweedfs",

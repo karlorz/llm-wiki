@@ -82,6 +82,36 @@ describe("sensitive-content", () => {
     expect(scanSensitiveContent(text)).toEqual([]);
   });
 
+  it("ignores session prose and session-scheme URLs (token matcher false positives)", () => {
+    // Structural shapes of the 2026-07-26 vault findings — do not quote live vault text.
+    const proseNote = "Prior this session: incidents-isolated\n";
+    const sessionSchemeUrl = "source_url: session://example-project-v1.2.3-sync-run\n";
+    const pytestScope = "session: session-scoped-root\n";
+
+    expect(scanSensitiveContent(proseNote)).toEqual([]);
+    expect(scanSensitiveContent(sessionSchemeUrl)).toEqual([]);
+    expect(scanSensitiveContent(pytestScope)).toEqual([]);
+  });
+
+  it("still detects credential-shaped session and token assignments", () => {
+    const sessionSecret = "Sess" + "0".repeat(12) + "AbCdEf";
+    const tokenSecret = "tok_" + "A1b2".repeat(8);
+
+    // Scan separately so adjacent-line preview windows cannot leak the peer secret.
+    const sessionFindings = scanSensitiveContent(`session: ${sessionSecret}\n`);
+    const tokenFindings = scanSensitiveContent(`token: ${tokenSecret}\n`);
+
+    expect(sessionFindings).toHaveLength(1);
+    expect(sessionFindings[0]!.kind).toBe("token");
+    expect(sessionFindings[0]!.preview).toContain("[REDACTED:token:");
+    expect(JSON.stringify(sessionFindings)).not.toContain(sessionSecret);
+
+    expect(tokenFindings).toHaveLength(1);
+    expect(tokenFindings[0]!.kind).toBe("token");
+    expect(tokenFindings[0]!.preview).toContain("[REDACTED:token:");
+    expect(JSON.stringify(tokenFindings)).not.toContain(tokenSecret);
+  });
+
   it("redacts values and keeps findings redacted", () => {
     const secret = generatedAccessKey();
     const result = redactSensitiveContent(`Access key: ${secret}\n`);
