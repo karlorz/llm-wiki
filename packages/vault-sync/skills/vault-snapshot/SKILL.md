@@ -53,6 +53,14 @@ bash $(platform_share_dir)/bin/wiki-snapshot.sh --dry-run
 bash $(platform_share_dir)/bin/wiki-snapshot.sh
 ```
 
+## Dead managed-write lock recovery
+
+If root projection materialization fails with `SYNC_LOCK_HELD`, do not edit the
+snapshot worktree or remove the lock by age. Follow
+[`docs/managed-write-lock-reclaim-runbook.md`](../../docs/managed-write-lock-reclaim-runbook.md)
+for the attended dead-PID-only backup, reclaim, systemd restart, and doctor
+closeout procedure.
+
 ## Hand-migration checklist
 
 When migrating from sg01's legacy `wiki-snapshot-v3.sh`:

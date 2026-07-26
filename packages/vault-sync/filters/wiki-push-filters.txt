@@ -7,6 +7,7 @@
 #
 # Coordination exclusions:
 #   .skillwiki/sync.lock                        → wiki-sync v0.6.0 advisory lock
+#   .skillwiki/managed-write.lock               → transient managed-write owner lock
 #   .skillwiki/graph.json                       → local-only graph cache
 #   .skillwiki/memory/                          → local-only derived memory cache
 #   .skillwiki/memory-topics.json               → legacy local-only memory cache
@@ -38,6 +39,7 @@
 - .obsidian/plugins/remotely-save/data.json
 - .claude/settings.local.json
 - .skillwiki/sync.lock
+- .skillwiki/managed-write.lock
 - .skillwiki/graph.json
 - .skillwiki/memory/
 - .skillwiki/memory-topics.json

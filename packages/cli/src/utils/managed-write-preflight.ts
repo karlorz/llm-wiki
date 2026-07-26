@@ -355,7 +355,11 @@ export async function runManagedWriteTransaction<T>(
   deps: ManagedWritePreflightDeps = DEFAULT_DEPS,
 ): Promise<{ exitCode: number; result: Result<T> }> {
   const mutationVault = resolve(input.vault);
-  const lock = acquireManagedWriteLock(mutationVault, input.command);
+  const lock = acquireManagedWriteLock(mutationVault, input.command, {
+    gitStateVault: input.convergenceVault
+      ? resolve(input.convergenceVault)
+      : mutationVault,
+  });
   if (!lock.ok) {
     return { exitCode: ExitCode.SYNC_LOCK_HELD, result: lock as Result<T> };
   }

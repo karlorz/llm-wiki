@@ -159,7 +159,7 @@ vault_sync_managed_lock_reclaim_dead_owner() {
 vault_sync_managed_lock_acquire() {
   local repo="${1:-.}"
   local command="${2:-wiki-pull}"
-  local path token now inherited attempt
+  local path token now owner_hostname inherited attempt
 
   path="$(vault_sync_managed_lock_path "$repo")" || return 1
   VAULT_SYNC_MANAGED_LOCK_PATH="$path"
@@ -185,8 +185,9 @@ vault_sync_managed_lock_acquire() {
     token="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
     [ -n "$token" ] || token="$$-$(date +%s)"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    if ( set -o noclobber; printf '{"pid":%s,"owner_token":"%s","acquired":"%s","command":"%s"}\n' \
-        "$$" "$token" "$now" "$command" >"$path" ) 2>/dev/null; then
+    owner_hostname="$(hostname 2>/dev/null || printf unknown)"
+    if ( set -o noclobber; printf '{"pid":%s,"owner_hostname":"%s","owner_token":"%s","acquired":"%s","command":"%s"}\n' \
+        "$$" "$owner_hostname" "$token" "$now" "$command" >"$path" ) 2>/dev/null; then
       VAULT_SYNC_MANAGED_LOCK_TOKEN_OWNED="$token"
       VAULT_SYNC_MANAGED_LOCK_ACQUIRED="$now"
       VAULT_SYNC_MANAGED_LOCK_OWNS_RELEASE=1

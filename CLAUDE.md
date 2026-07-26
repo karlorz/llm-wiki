@@ -12,6 +12,7 @@
 - [SkillWiki maintenance](packages/skillwiki-maintenance/README.md)
 - [Vault-sync offline-host runbook](packages/vault-sync/docs/offline-host-runbook.md)
 - [Vault-sync health invariants](packages/vault-sync/docs/health-invariants.md)
+- [Managed-write lock reclaim runbook](packages/vault-sync/docs/managed-write-lock-reclaim-runbook.md)
 - [Credential rotation & env sanitization runbook](packages/vault-sync/docs/credential-rotation-runbook.md)
 - [Remote E2E host profiles](scripts/hosts/README.md)
 

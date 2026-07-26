@@ -46,6 +46,9 @@ wiki_push_log_file() {
 }
 
 assert_file_contains "push filter excludes local logs directory" "$FILTER_UNDER_TEST" "- logs/"
+assert_file_contains "push filter excludes managed-write coordination lock" \
+  "$FILTER_UNDER_TEST" \
+  "- .skillwiki/managed-write.lock"
 
 git_commit() {
   local repo="$1" msg="$2"

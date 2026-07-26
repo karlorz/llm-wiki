@@ -7,7 +7,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { ExitCode, err, ok } from "@skillwiki/shared";
@@ -57,6 +57,13 @@ function makeNonGitMutationVault(label: string, fleetBody: string = SG01_FLEET):
   writeFileSync(join(vault, "SCHEMA.md"), "# Schema\n");
   writeFleet(vault, fleetBody);
   return vault;
+}
+
+function writeManagedLockRecord(vault: string, record: Record<string, unknown>): string {
+  const lockPath = managedWriteLockPath(vault);
+  mkdirSync(join(lockPath, ".."), { recursive: true });
+  writeFileSync(lockPath, `${JSON.stringify(record)}\n`);
+  return lockPath;
 }
 
 function git(cwd: string, args: string[]): string {
@@ -373,6 +380,160 @@ hosts:
         vault: resolve(convergenceVault),
       }),
     );
+  });
+
+  it("reclaims a dead live-vault lock using explicit Git convergence state", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-fuse-dead-lock");
+    const { vault: convergenceVault, head } = makeGitConvergenceVault(
+      "managed-preflight-git-dead-lock",
+    );
+    const lockPath = writeManagedLockRecord(mutationVault, {
+      pid: 999999999,
+      owner_hostname: hostname(),
+      owner_token: "dead-fuse-owner",
+      acquired: "2026-07-26T11:39:59.741Z",
+      command: "log-append",
+    });
+    const converge = vi.fn(async () =>
+      ok({ before_oid: head, after_oid: head, changed: false, helper_path: "/test/helper" }),
+    );
+    const mutate = vi.fn(async () => ({ exitCode: 0, result: ok({ materialized: true }) }));
+
+    const run = await runManagedWriteTransaction(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+        allowImmutableRecord: false,
+        mutate,
+      },
+      { converge },
+    );
+
+    expect(run.exitCode).toBe(ExitCode.OK);
+    expect(run.result).toMatchObject({ ok: true, data: { materialized: true } });
+    expect(converge).toHaveBeenCalledTimes(1);
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(existsSync(lockPath)).toBe(false);
+    const recoveryDir = join(lockPath, "..", "recovery");
+    const recoveryFiles = readdirSync(recoveryDir).filter((file) =>
+      file.startsWith("stale-managed-write-lock-"),
+    );
+    expect(recoveryFiles).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(recoveryDir, recoveryFiles[0]), "utf8"))).toMatchObject({
+      recovery_reason: "owner_pid_dead",
+      owner_pid_alive: false,
+      git_state_vault: resolve(convergenceVault),
+      lock: { owner_token: "dead-fuse-owner", command: "log-append" },
+    });
+  });
+
+  it("does not reclaim a live FUSE owner even with a clean convergence vault", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-fuse-live-lock");
+    const { vault: convergenceVault } = makeGitConvergenceVault(
+      "managed-preflight-git-live-lock",
+    );
+    const lockPath = writeManagedLockRecord(mutationVault, {
+      pid: process.pid,
+      owner_hostname: hostname(),
+      owner_token: "live-fuse-owner",
+      acquired: "2026-07-26T11:39:59.741Z",
+      command: "log-append",
+    });
+    const converge = vi.fn();
+    const mutate = vi.fn(async () => ({ exitCode: 0, result: ok({ materialized: true }) }));
+
+    const run = await runManagedWriteTransaction(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+        allowImmutableRecord: false,
+        mutate,
+      },
+      { converge },
+    );
+
+    expect(run.exitCode).toBe(ExitCode.SYNC_LOCK_HELD);
+    expect(run.result).toMatchObject({ ok: false, error: "SYNC_LOCK_HELD" });
+    expect(existsSync(lockPath)).toBe(true);
+    expect(converge).not.toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("does not reclaim a dead FUSE owner when convergence Git state is unsafe", async () => {
+    const mutationVault = makeNonGitMutationVault("managed-preflight-fuse-unsafe-lock");
+    const { vault: convergenceVault } = makeGitConvergenceVault(
+      "managed-preflight-git-unsafe-lock",
+    );
+    const lockPath = writeManagedLockRecord(mutationVault, {
+      pid: 999999999,
+      owner_hostname: hostname(),
+      owner_token: "dead-fuse-owner",
+      acquired: "2026-07-26T11:39:59.741Z",
+      command: "log-append",
+    });
+    const gitDir = git(convergenceVault, ["rev-parse", "--absolute-git-dir"]);
+    writeFileSync(join(gitDir, "MERGE_HEAD"), "0000000000000000000000000000000000000000\n");
+    const converge = vi.fn();
+    const mutate = vi.fn(async () => ({ exitCode: 0, result: ok({ materialized: true }) }));
+
+    const run = await runManagedWriteTransaction(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+        allowImmutableRecord: false,
+        mutate,
+      },
+      { converge },
+    );
+
+    expect(run.exitCode).toBe(ExitCode.SYNC_LOCK_HELD);
+    expect(run.result).toMatchObject({ ok: false, error: "SYNC_LOCK_HELD" });
+    expect(existsSync(lockPath)).toBe(true);
+    expect(converge).not.toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "foreign-host", ownerHostname: "another-writer.example.invalid" },
+    { label: "legacy unknown-origin", ownerHostname: undefined },
+  ])("does not reclaim a $label FUSE lock from a dead local PID", async ({ label, ownerHostname }) => {
+    const mutationVault = makeNonGitMutationVault(`managed-preflight-fuse-${label}-lock`);
+    const { vault: convergenceVault } = makeGitConvergenceVault(
+      `managed-preflight-git-${label}-lock`,
+    );
+    const lockPath = writeManagedLockRecord(mutationVault, {
+      pid: 999999999,
+      owner_hostname: ownerHostname,
+      owner_token: "foreign-or-legacy-fuse-owner",
+      acquired: "2026-07-26T11:39:59.741Z",
+      command: "log-append",
+    });
+    const converge = vi.fn();
+    const mutate = vi.fn(async () => ({ exitCode: 0, result: ok({ materialized: true }) }));
+
+    const run = await runManagedWriteTransaction(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "projections materialize",
+        hostId: "sg01",
+        allowImmutableRecord: false,
+        mutate,
+      },
+      { converge },
+    );
+
+    expect(run.exitCode).toBe(ExitCode.SYNC_LOCK_HELD);
+    expect(run.result).toMatchObject({ ok: false, error: "SYNC_LOCK_HELD" });
+    expect(existsSync(lockPath)).toBe(true);
+    expect(converge).not.toHaveBeenCalled();
+    expect(mutate).not.toHaveBeenCalled();
   });
 
   it("auto-resolves the configured snapshot worktree for a protected snapshotter write", async () => {
