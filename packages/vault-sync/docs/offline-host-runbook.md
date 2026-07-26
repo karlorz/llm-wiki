@@ -33,6 +33,18 @@ an explicitly resolved remote fails.
 
 **Warning:** do not treat `sg01` as data authority. It is a worker that can be rebuilt from the GitHub repo, S3 remote, vault-sync package, and `fleet.yaml`.
 
+## Related: stale managed-write lock on FUSE snapshotter
+
+If `wiki-snapshot.service` fails root projection with `SYNC_LOCK_HELD` because
+`/root/wiki/.skillwiki/managed-write.lock` is held by a **dead** PID, use the
+attended procedure in
+[`managed-write-lock-reclaim-runbook.md`](./managed-write-lock-reclaim-runbook.md)
+(dead-PID only, fingerprinted backup, `systemctl start wiki-snapshot.service`,
+doctor closeout). Do not force-push and do not hand-edit `/root/wiki-git`.
+
+Leaf prevention: `filters/wiki-push-filters.txt` excludes
+`.skillwiki/managed-write.lock` so transient locks are not republished to S3.
+
 ## Staged / rsync install provenance
 
 When installing from a **rsynced or staged** package tree that is not a full
