@@ -25,14 +25,14 @@ describe("cli-surface drift detection", () => {
     const knownCommands = [
       "hash", "fetch-guard", "validate", "graph", "canvas", "overlap",
       "query", "orphans", "audit", "install", "path", "lang", "init",
-      "links", "tag-audit", "index-check", "index-link-format",
+      "links", "tag-audit", "index", "index-check", "index-link-format",
       "topic-map-check", "stale", "claim", "pagesize", "log-rotate",
-      "log-append", "work-complete", "work-validate",
+      "log-append", "work-complete", "work-validate", "log", "projections",
       "lint", "config", "health", "doctor", "status", "archive", "remove", "drift", "dedup",
       "migrate-citations", "frontmatter-fix", "update", "self-update",
       "transcripts", "project-index", "compound", "page", "tag", "tag-sync", "sync",
       "backup", "seed", "observe", "session-brief", "memory", "ingest", "fleet",
-      "write-preflight", "snapshot-maintenance",
+      "write-preflight", "snapshot-maintenance", "mcp",
     ];
 
     for (const cmd of knownCommands) {
@@ -49,6 +49,9 @@ describe("cli-surface drift detection", () => {
       { parent: "compound", subs: ["promote", "list", "delete"] },
       { parent: "page", subs: ["publish"] },
       { parent: "tag", subs: ["reconcile"] },
+      { parent: "log", subs: ["materialize", "migrate-legacy"] },
+      { parent: "index", subs: ["rebuild"] },
+      { parent: "projections", subs: ["materialize", "repair-legacy"] },
       { parent: "sync", subs: ["status", "push", "pull"] },
       { parent: "backup", subs: ["sync", "restore"] },
       { parent: "memory", subs: ["topics", "index", "recall", "review", "import"] },
@@ -69,14 +72,14 @@ describe("cli-surface drift detection", () => {
     const knownCommands = new Set([
       "hash", "fetch-guard", "validate", "graph", "canvas", "overlap",
       "query", "orphans", "audit", "install", "path", "lang", "init",
-      "links", "tag-audit", "index-check", "index-link-format",
+      "links", "tag-audit", "index", "index-check", "index-link-format",
       "topic-map-check", "stale", "claim", "pagesize", "log-rotate",
-      "log-append", "work-complete", "work-validate",
+      "log-append", "work-complete", "work-validate", "log", "projections",
       "lint", "config", "health", "doctor", "status", "archive", "remove", "drift", "dedup",
       "migrate-citations", "frontmatter-fix", "update", "self-update",
       "transcripts", "project-index", "compound", "page", "tag", "tag-sync", "sync",
       "backup", "seed", "observe", "session-brief", "memory", "ingest", "fleet",
-      "write-preflight", "snapshot-maintenance",
+      "write-preflight", "snapshot-maintenance", "mcp",
     ]);
 
     const topLevelKeys = [...surface.keys()].filter(k => !k.includes("."));

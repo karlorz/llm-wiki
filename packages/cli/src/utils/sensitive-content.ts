@@ -46,6 +46,24 @@ interface Matcher {
 
 const REDACTED_RE = /\[REDACTED:[^\]]+\]/i;
 const SYNTHETIC_RE = /^(?:<[^>]+>|\$\{[^}]+\}|REPLACE_WITH_[A-Z0-9_]+|YOUR_[A-Z0-9_]+|EXAMPLE_[A-Z0-9_]+)$/i;
+/** Pure lowercase hyphenated prose (e.g. "session-scoped-root") — not credential-shaped. */
+const LOWERCASE_HYPHEN_PROSE_RE = /^[a-z]+(?:-[a-z]+)+$/;
+/** Pure lowercase letters only — low-entropy prose / identifiers, not high-confidence secrets. */
+const LOWERCASE_LETTERS_ONLY_RE = /^[a-z]+$/;
+
+/**
+ * Reject token/session value shapes that are almost never credentials:
+ * - URL scheme remnants after `session://...` (value starts with `/` or `//`)
+ * - Hyphenated lowercase English compounds (pytest/session prose)
+ * - Pure lowercase letter runs with no digits or mixed case
+ */
+function looksLikeCredentialValue(value: string): boolean {
+  // Covers session://… remnants (value starts with "//" or "/").
+  if (value.startsWith("/")) return false;
+  if (LOWERCASE_HYPHEN_PROSE_RE.test(value)) return false;
+  if (LOWERCASE_LETTERS_ONLY_RE.test(value)) return false;
+  return true;
+}
 
 const MATCHERS: Matcher[] = [
   {
@@ -131,6 +149,9 @@ function collectMatches(text: string): Match[] {
 
       const value = matcher.valueGroup ? m[matcher.valueGroup] : whole;
       if (isSyntheticPlaceholder(value)) continue;
+      // token/session labeled values need credential shape; other matchers already
+      // encode high-confidence structure (JWT dots, provider prefixes, PEM blocks).
+      if (matcher.kind === "token" && !looksLikeCredentialValue(value)) continue;
 
       const valueOffset = whole.lastIndexOf(value);
       const valueStart = start + Math.max(0, valueOffset);
