@@ -174,64 +174,47 @@ When the user mentions editing from Obsidian desktop and Claude Code on a server
 - If both devices edit the same page between syncs, conflicts are inevitable — the Conflict Resolution section handles this.
 - Suggest enabling auto-commit in Obsidian (Community Plugins: `obsidian-git`) to reduce dirty-state drift.
 
-## Rclone-backed vault with git snapshotting (cron pattern)
-Some deployments use a cloud-backed vault (`rclone mount`) with a separate git repository for versioned snapshots. This pattern separates "live working vault" from "versioned backup".
-### Architecture
-```
-~/wiki           → rclone mount to cloud storage (S3/IDrive/etc) — live vault
-~/wiki-git       → git repository cloned from GitHub — snapshot target
-cron hourly      → rsync ~/wiki/ → ~/wiki-git/ → git commit → git push
-```
-On snapshotter hosts, `~/wiki` remains the active SkillWiki vault for path resolution unless the operator explicitly configures otherwise. `~/wiki-git` is snapshot infrastructure, not the default authoring or dev-loop vault. Agents may author the live vault path when the host policy allows it, but should not point project work or `fleet context` at `~/wiki-git` unless `skillwiki path` intentionally resolves there.
+## Host-aware write and promotion authority
 
-### Implementation (wiki-snapshot.sh)
-```bash
-#!/bin/bash
-WIKI_DIR="/root/wiki"
-GIT_DIR="/root/wiki-git"
-DATE=$(date +%Y%m%d_%H%M%S)
-# Sync from rclone mount to git repo (quiet mode for slow mounts)
-rsync -a --delete -q \
---exclude='.snapshots' --exclude='.git' --exclude='.obsidian' --exclude='.skillwiki' \
-"$WIKI_DIR/" "$GIT_DIR/"
-cd "$GIT_DIR" || exit 1
-git config user.email "cron@hermes.local"
-git config user.name "Hermes Snapshot"
-# Check for changes
-if [ -z "$(git status --porcelain)" ]; then
-exit 0  # Nothing to commit
-fi
-git add -A
-git commit -m "Snapshot $DATE"
-# Pull with rebase to handle remote changes (e.g., README edits on GitHub)
-if ! git pull --rebase origin main 2>/dev/null; then
-git pull origin main 2>/dev/null || true
-fi
-git push origin main || echo "Push failed"
-```
-### Pitfalls specific to this pattern
-1. **Divergent branches from external pushes**: If something else pushes to the same GitHub repo (manual edits from macOS desktop, GitHub web UI edits, another server), the local `~/wiki-git` will diverge. The `--rebase` flag handles most cases, but if commits conflict:
-```bash
-cd ~/wiki-git
-git rebase --abort 2>/dev/null || true
-git fetch origin main
-git reset --hard origin/main
-bash ~/.hermes/scripts/wiki-snapshot.sh  # Re-sync fresh
-```
-**Prevention**: Avoid editing the GitHub repo directly via web interface or uncoordinated clones. The canonical flow is **single-writer-git** (see `concepts/vault-write-authority-model.md`):
-- Server (sg01): agents may author the live vault at `~/wiki`; the snapshot job promotes cloud-backed live-vault state into `~/wiki-git`, then commits and pushes — **sole git writer to `main`**
-- macOS/desktop: edit → `wiki-push` rclone copy to S3 (NO git push) → consume sg01 snapshots via `wiki-fetch-notify` (opt-in `WIKI_FETCH_PULL_ON_DELTA=1`) or manual `skillwiki sync`
-- `wiki-sync` skill push is for **explicit** agent/human edit commits only, not automated background pushes
-2. **Slow rsync on rclone mounts**: The rclone FUSE mount can be slow for large directory listings. Use `rsync -q` (quiet) to reduce output overhead, and consider `--delete-delay` instead of `--delete` if file churn is high. The rclone mount latency can cause `du` and `find` operations to timeout — this is normal, not an error.
-3. **Golden Rule violation**: Never mix sync methods on the same vault. If using rclone mount + git snapshotting, do NOT also enable Obsidian Sync, Syncthing, or iCloud on `~/wiki`. The rclone mount IS the sync mechanism.
-4. **Credential exposure**: The rclone mount and git remote use different credentials. Ensure git credentials are cached or use HTTPS with token, but never commit rclone config to git.
+Resolve the live vault with `skillwiki path` first. Then choose the host role:
+
+| Host role | Live vault | Authoring surface | Promotion to GitHub |
+| --- | --- | --- | --- |
+| Authorized Git-backed leaf (e.g. macOS) | Git vault from `skillwiki path` | Managed SkillWiki publishers against that vault | `skillwiki sync push "$VAULT"` after lint-delta |
+| Protected snapshotter (sg01) | `/root/wiki` (rclone FUSE; not a Git repo) | Managed SkillWiki publishers against `/root/wiki` | S3 → `wiki-snapshot.timer` (default) → protected `/root/wiki-git` pipeline → GitHub |
+
+High-signal safety rule:
+
+> Do not author, copy, edit, stage, commit, pull, reset, or push agent changes
+> in `/root/wiki-git`.
+
+### Protected snapshotter rules (sg01)
+
+- Author only via managed commands against the live vault (`skillwiki path` → usually `/root/wiki`).
+- Do **not** run `skillwiki sync push /root/wiki` (not a Git repo) or `skillwiki sync push /root/wiki-git` (blocked as protected snapshot worktree).
+- Do **not** `cd` into `/root/wiki-git` or `~/wiki-git` for ordinary authoring.
+- Do **not** rsync, copy, or edit files into the snapshot worktree as an agent/operator workflow.
+- Do **not** run `git reset --hard`, direct commits, or manual snapshot scripts to "fix" divergence.
+- Promotion is owned by `wiki-snapshot.timer` by default. Publishers never start systemd units.
+- `skillwiki work-complete` may finish with `committed=false` on sg01; later snapshot promotion owns the Git commit/push.
+
+### Authorized Git leaf rules
+
+- Use managed publication (`skillwiki page publish`, `skillwiki project-page publish`, etc.) against the resolved Git vault.
+- Then use this skill's push workflow (`skillwiki sync status` → lint-delta → commit → `skillwiki sync push` / `git push` as documented above).
+- Never treat a snapshot worktree mirror as a substitute for the live vault.
+
+### Historical rationale (not executable)
+
+Some older deployments separated a cloud-backed live vault from a Git snapshot worktree. That architecture still exists on protected snapshotters, but the snapshot worktree is **pipeline-internal**. Historical recipes that rsync into the worktree, reset it hard to origin/main, or run snapshot shell scripts by hand are obsolete and must not be copied.
 
 ## Stop conditions
-- `skillwiki sync status` reports `not_a_repo` — the vault is not a git repository. Advise the user to initialize one.
+- `skillwiki sync status` reports `not_a_repo` — the vault is not a git repository. On protected snapshotters this is expected for the FUSE live path; do not switch to `/root/wiki-git` to force a push.
 - Lint errors are found before a push — do not push until resolved.
 - `git push` or `git pull` fails with a network error — report and stop.
 - Peer lock is held or peer stashes exist — abort and ask the user to wait or pass `--force`.
 - Untracked file collision detected on pull — surface to user for manual resolution.
+- Host is a protected snapshotter and the requested operation would author or push via `/root/wiki-git` — refuse and use managed live-vault publication + timer promotion instead.
 
 ## Forbidden
 - Pushing when lint errors exist.
@@ -240,6 +223,9 @@ bash ~/.hermes/scripts/wiki-snapshot.sh  # Re-sync fresh
 - Modifying files in `raw/` to resolve conflicts (N9 — archive and re-ingest instead).
 - Stashing without the `wiki-sync:...` name format (breaks peer detection).
 - Force-deleting a peer's lockfile (use `--force` only if peer is confirmed dead).
+- Authoring, copying, editing, staging, committing, pulling, resetting, or pushing agent changes in `/root/wiki-git` (or any configured snapshot worktree).
+- Running `skillwiki sync push` against a protected snapshot worktree or against a non-Git FUSE live vault.
+- Invoking snapshot services/scripts or `git reset --hard` in the snapshot worktree as a recovery shortcut.
 
 ## Convergence safeguards (2026-07-11)
 
