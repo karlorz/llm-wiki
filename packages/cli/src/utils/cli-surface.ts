@@ -96,6 +96,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("ingest").requiredOption("--vault <path>").requiredOption("--type <type>").requiredOption("--title <title>").option("--tags <csv>").option("--provenance <provenance>").option("--dry-run");
   program.command("fleet"); // has subcommands
   program.command("page"); // has subcommands
+  program.command("project-page"); // has subcommands
   program.command("write-preflight")
     .option("--command <name>")
     .option("--dirty-threshold <n>")
@@ -148,6 +149,16 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .requiredOption("--target <path>")
     .option("--log-note <text>")
     .option("--write")
+    .option("--approve <token>")
+    .option("--wiki <name>");
+
+  const projectPageCmd = program.commands.find(c => c.name() === "project-page")!;
+  projectPageCmd.command("publish")
+    .requiredOption("--project <slug>")
+    .requiredOption("--target <path>")
+    .option("--log-note <text>")
+    .option("--write")
+    .option("--approve <token>")
     .option("--wiki <name>");
 
   const logCmd = program.commands.find(c => c.name() === "log")!;

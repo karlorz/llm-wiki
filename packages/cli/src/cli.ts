@@ -53,6 +53,7 @@ import { runIngest } from "./commands/ingest.js";
 import { runTagSync } from "./commands/tag-sync.js";
 import { runTagReconcile } from "./commands/tag-reconcile.js";
 import { runPagePublish } from "./commands/page-publish.js";
+import { runProjectPagePublish } from "./commands/project-page-publish.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers, runSyncLintDelta } from "./commands/sync.js";
 import { runSyncJournalList, runSyncJournalClearStale } from "./commands/sync-journal.js";
 import { runSnapshotMaintenanceDryRun, runSnapshotMaintenanceExecute } from "./commands/snapshot-maintenance.js";
@@ -431,6 +432,7 @@ pageCmd
   .requiredOption("--target <path>", "vault-relative typed page target")
   .option("--log-note <text>", "single-line publication log note")
   .option("--write", "publish SCHEMA, page, index, and log", false)
+  .option("--approve <token>", "target-bound approval token from a prior dry-run")
   .option("--wiki <name>", "wiki profile name")
   .action(async (draft, vault, opts) => {
     const resolved = await resolveVaultArg(vault, opts.wiki);
@@ -441,12 +443,45 @@ pageCmd
       target: opts.target,
       logNote: opts.logNote,
       write: !!opts.write,
+      approve: opts.approve,
     };
     if (!opts.write) return emit(await runPagePublish(input), resolved.vault, { postCommit: false });
     return emitGuardedVaultWrite(
       resolved.vault,
       "page publish",
       () => runPagePublish(input),
+      { postCommit: false },
+    );
+  });
+
+const projectPageCmd = program.command("project-page").description("publish project-local architecture pages");
+
+projectPageCmd
+  .command("publish <draft> [vault]")
+  .description("preview or publish a Layer-3 architecture page under projects/{slug}/architecture/")
+  .requiredOption("--project <slug>", "project slug")
+  .requiredOption("--target <path>", "vault-relative architecture target")
+  .option("--log-note <text>", "single-line publication log note")
+  .option("--write", "publish SCHEMA, page, project knowledge index, and log", false)
+  .option("--approve <token>", "required with --write; token from a prior dry-run")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (draft, vault, opts) => {
+    const resolved = await resolveVaultArg(vault, opts.wiki);
+    if (!resolved.ok) return emit({ exitCode: resolved.exitCode, result: resolved.payload });
+    const input = {
+      vault: resolved.vault,
+      draftPath: draft,
+      project: opts.project,
+      target: opts.target,
+      logNote: opts.logNote,
+      write: !!opts.write,
+      approve: opts.approve,
+    };
+    if (!opts.write) return emit(await runProjectPagePublish(input), resolved.vault, { postCommit: false });
+    return emitGuardedVaultWrite(
+      resolved.vault,
+      "project-page publish",
+      () => runProjectPagePublish(input),
       { postCommit: false },
     );
   });

@@ -42,7 +42,7 @@ export interface LogAppendOutput {
 
 type LogAppendRun = { exitCode: number; result: Result<LogAppendOutput> };
 
-/** Accept page-publish and generic log-op markers for stable operation IDs. */
+/** Accept page-publish, project-page-publish, and generic log-op markers. */
 export function operationMarkers(operationId: string): Result<string[]> {
   if (!/^[0-9a-f]{64}$/.test(operationId)) {
     return err("USAGE", { message: "operationId must be a SHA-256 hex string" });
@@ -50,14 +50,19 @@ export function operationMarkers(operationId: string): Result<string[]> {
   return ok([
     `<!-- skillwiki-log-op:${operationId} -->`,
     `<!-- skillwiki-page-publish:${operationId} -->`,
+    `<!-- skillwiki-project-page-publish:${operationId} -->`,
   ]);
 }
 
 function preferredMarker(operationId: string, eventKind?: string): string {
   // Default keeps page-publish marker for backward-compatible callers that only
-  // pass operationId (notably page-publish). Explicit non-publish kinds use log-op.
+  // pass operationId (notably page-publish). Explicit non-publish kinds use log-op
+  // unless a known publisher kind is provided.
   if (!eventKind || eventKind === "page-publish") {
     return `<!-- skillwiki-page-publish:${operationId} -->`;
+  }
+  if (eventKind === "project-page-publish") {
+    return `<!-- skillwiki-project-page-publish:${operationId} -->`;
   }
   return `<!-- skillwiki-log-op:${operationId} -->`;
 }

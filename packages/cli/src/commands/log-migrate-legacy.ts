@@ -19,7 +19,8 @@ export interface LogMigrateLegacyOutput {
 }
 
 const BLOCK_RE = /^## \[(\d{4}-\d{2}-\d{2})\][^\n]*$/gm;
-const PUBLISH_RE = /<!--\s*skillwiki-page-publish:([a-f0-9]{64})\s*-->/i;
+const PUBLISH_RE =
+  /<!--\s*skillwiki-(?:page-publish|project-page-publish):([a-f0-9]{64})\s*-->/i;
 
 function splitLegacyBlocks(text: string): Array<{ date: string; block: string; ordinal: number }> {
   const matches = [...text.matchAll(BLOCK_RE)];
