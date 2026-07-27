@@ -49,6 +49,12 @@ describe("exit-codes", () => {
     expect(ExitCode.SENSITIVE_CONTENT_DETECTED).toBe(51);
     expect(ExitCode.FLEET_SATELLITE_HEALTH_FAILED).toBe(52);
     expect(ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED).toBe(53);
+    expect(ExitCode.INVALID_CONFIG_VALUE).toBe(54);
+    expect(ExitCode.APPROVAL_REQUIRED).toBe(55);
+    expect(ExitCode.APPROVAL_INVALID).toBe(56);
+    expect(ExitCode.APPROVAL_MISMATCH).toBe(57);
+    expect(ExitCode.TARGET_DRIFT).toBe(58);
+    expect(ExitCode.RECOVERY_EVIDENCE_MISSING).toBe(59);
     expect(ExitCode.SYNC_LOCK_HELD).toBe(48);
     expect(ExitCode.LOG_APPEND_LOCK_HELD).toBe(49);
   });
@@ -60,5 +66,11 @@ describe("exit-codes", () => {
     for (const n of names) expect(n.length).toBeGreaterThan(0);
     expect(exitCodeName(51)).toBe("SENSITIVE_CONTENT_DETECTED");
     expect(exitCodeName(53)).toBe("PROTECTED_SNAPSHOTTER_WRITE_BLOCKED");
+    expect(exitCodeName(54)).toBe("INVALID_CONFIG_VALUE");
+    expect(exitCodeName(55)).toBe("APPROVAL_REQUIRED");
+    expect(exitCodeName(56)).toBe("APPROVAL_INVALID");
+    expect(exitCodeName(57)).toBe("APPROVAL_MISMATCH");
+    expect(exitCodeName(58)).toBe("TARGET_DRIFT");
+    expect(exitCodeName(59)).toBe("RECOVERY_EVIDENCE_MISSING");
   });
 });
