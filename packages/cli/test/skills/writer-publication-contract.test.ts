@@ -45,3 +45,42 @@ describe("managed writer publication contract", () => {
     }
   });
 });
+
+// packages/skills is the materialize canonical source; codex-skills/root are mirrors.
+const SNAPSHOT_SAFETY_SOURCES = [
+  "packages/skills/wiki-sync/SKILL.md",
+  "packages/skills/proj-decide/SKILL.md",
+  "packages/codex-skills/skills/wiki-sync/SKILL.md",
+  "packages/codex-skills/skills/proj-decide/SKILL.md",
+];
+
+describe("protected snapshot worktree safety contract", () => {
+  for (const relative of SNAPSHOT_SAFETY_SOURCES) {
+    it(`${relative} forbids agent authoring in /root/wiki-git`, () => {
+      const text = readFileSync(resolve(ROOT, relative), "utf8");
+      expect(text).toMatch(
+        /Do not author, copy, edit, stage, commit, pull, reset, or push agent changes[\s\S]{0,40}\/root\/wiki-git/,
+      );
+      // No executable recovery recipes that reset or rsync into the snapshot worktree.
+      expect(text).not.toMatch(/cd\s+(?:~\/wiki-git|\/root\/wiki-git)[\s\S]{0,200}git\s+reset\s+--hard/);
+      expect(text).not.toMatch(/^\s*rsync\s+[^\n]*\/root\/wiki-git/m);
+      // Forbid bare instructional push lines; allow explicit "Do not run …" prohibitions.
+      const instructionalPush = text
+        .split("\n")
+        .filter((line) => /skillwiki\s+sync\s+push\s+\/root\/wiki(?:-git)?\b/.test(line))
+        .filter((line) => !/\bdo\s+\*\*not\*\*\s+run\b|\bdo not run\b|\bnever\b|\brefuse\b|\bnot\b/i.test(line));
+      expect(instructionalPush).toEqual([]);
+    });
+  }
+
+  it("proj-decide requires project-page publish for architecture ADRs", () => {
+    for (const relative of [
+      "packages/skills/proj-decide/SKILL.md",
+      "packages/codex-skills/skills/proj-decide/SKILL.md",
+    ]) {
+      const text = readFileSync(resolve(ROOT, relative), "utf8");
+      expect(text).toContain("skillwiki project-page publish");
+      expect(text).toContain("--write --approve");
+    }
+  });
+});

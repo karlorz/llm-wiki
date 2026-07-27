@@ -9,12 +9,15 @@ function marker(event: SkillwikiLogEventV1): string {
 }
 
 function bodyFor(event: SkillwikiLogEventV1): string {
-  if (event.kind === "page-publish") {
+  if (event.kind === "page-publish" || event.kind === "project-page-publish") {
     const tax = Array.isArray(event.metadata.taxonomy_added)
       ? (event.metadata.taxonomy_added as string[])
       : [];
+    const project =
+      typeof event.metadata.project === "string" ? event.metadata.project : undefined;
     return [
       `- Published: [[${event.target.replace(/\.md$/, "")}]]`,
+      ...(event.kind === "project-page-publish" && project ? [`- Project: [[${project}]]`] : []),
       `- Taxonomy: ${tax.length > 0 ? `added ${tax.join(", ")}` : "no additions"}`,
       event.note ? `- Note: ${event.note}` : "",
     ].filter(Boolean).join("\n");

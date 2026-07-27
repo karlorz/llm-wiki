@@ -16,9 +16,9 @@ export interface LogMergeStagesResult {
 }
 
 const ENTRY_RE = /^## \[/m;
-/** Matches page-publish and generic log-op markers for cross-host dedup. */
+/** Matches page-publish, project-page-publish, and generic log-op markers for cross-host dedup. */
 const OPERATION_MARKER_RE =
-  /<!--\s*skillwiki-(?:page-publish|log-op):([a-f0-9]{64})\s*-->/i;
+  /<!--\s*skillwiki-(?:page-publish|project-page-publish|log-op):([a-f0-9]{64})\s*-->/i;
 
 function splitLog(text: string): { preamble: string; entries: string[] } {
   const normalized = text.replace(/\r\n/g, "\n");

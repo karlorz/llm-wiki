@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { err, ok, ExitCode, type ErrResult, type Result } from "@skillwiki/shared";
@@ -14,8 +14,17 @@ import {
   type ManagedWriteReceipt,
   type ManagedWriteMode,
 } from "../utils/managed-write-preflight.js";
-import { operationId } from "../utils/operation-id.js";
 import { writeLogEvent } from "../utils/log-events.js";
+import {
+  buildApprovalPayload,
+  encodeApprovalToken,
+  normalizeLogNote,
+  operationIdFromApproval,
+  redactApprovalTokens,
+  sha256Hex,
+  verifyApprovalToken,
+  type ApprovalPayload,
+} from "../utils/publication-approval.js";
 import { redactSensitiveContent, scanSensitiveContent } from "../utils/sensitive-content.js";
 import { safeWritePage } from "../utils/safe-write.js";
 import { acquireOwnedSyncLock, releaseOwnedSyncLock } from "../utils/sync-lock.js";
@@ -31,6 +40,8 @@ export interface PagePublishInput {
   target: string;
   logNote?: string;
   write: boolean;
+  /** Optional target-bound approval token from a prior dry-run. */
+  approve?: string;
   now?: Date;
 }
 
@@ -40,6 +51,8 @@ export interface PagePublicationContentInput {
   target: string;
   logNote?: string;
   now?: Date;
+  /** Prior target SHA-256 or "absent"; computed automatically when omitted. */
+  priorTargetSha256?: string;
 }
 
 export interface PagePublishOutput {
@@ -55,6 +68,9 @@ export interface PagePublishOutput {
   files_changed: string[];
   base_oid: string | null;
   write_mode: ManagedWriteMode | null;
+  approval_token?: string;
+  draft_sha256?: string;
+  target_before?: string;
   mutation_vault?: string;
   git_vault?: string | null;
   convergence_vault?: string;
@@ -73,6 +89,9 @@ export interface PreparedPagePublication {
   operationId: string;
   date: string;
   taxonomyComment: string;
+  draftSha256: string;
+  priorTargetSha256: string;
+  approvalPayload: ApprovalPayload;
 }
 
 export type PublishStage = "schema" | "page" | "verify" | "event" | "index" | "unlock" | "log";
@@ -113,16 +132,22 @@ function errorExitCode(error: string): number {
       return ExitCode.SYNC_LOCK_HELD;
     case "PREFLIGHT_FAILED":
       return ExitCode.PREFLIGHT_FAILED;
+    case "APPROVAL_REQUIRED":
+      return ExitCode.APPROVAL_REQUIRED;
+    case "APPROVAL_INVALID":
+      return ExitCode.APPROVAL_INVALID;
+    case "APPROVAL_MISMATCH":
+      return ExitCode.APPROVAL_MISMATCH;
+    case "TARGET_DRIFT":
+      return ExitCode.TARGET_DRIFT;
+    case "USAGE":
+      return ExitCode.USAGE;
     case "EVENT_IDENTITY_COLLISION":
     case "WRITE_FAILED":
       return ExitCode.WRITE_FAILED;
     default:
       return ExitCode.INVALID_FRONTMATTER;
   }
-}
-
-function publicationId(target: string, content: string, logNote = ""): string {
-  return operationId("skillwiki-page-publish-v1", [target, content, logNote]);
 }
 
 export type RootAggregateMode = "dual" | "source-only";
@@ -147,7 +172,7 @@ function prepareFrozenPublication(
   if (input.logNote !== undefined && /[\r\n]/.test(input.logNote)) {
     return err("SCHEME_REJECTED", { message: "log note must be one line" });
   }
-  const logNote = input.logNote?.trim() || undefined;
+  const logNote = normalizeLogNote(input.logNote) || undefined;
   if (logNote && Buffer.byteLength(logNote, "utf8") > 500) {
     return err("SCHEME_REJECTED", { message: "log note must be one line and at most 500 UTF-8 bytes" });
   }
@@ -159,14 +184,43 @@ function prepareFrozenPublication(
   const taxonomyComment = taxonomyCommentForPage(input.target, date);
   if (!taxonomyComment.ok) return taxonomyComment;
 
+  const draftSha256 = sha256Hex(input.content);
+  let priorTargetSha256 = input.priorTargetSha256;
+  if (priorTargetSha256 === undefined) {
+    try {
+      const existing = readFileSync(target.data.absolutePath, "utf8");
+      priorTargetSha256 = sha256Hex(existing);
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") priorTargetSha256 = "absent";
+      else {
+        return err("WRITE_FAILED", {
+          path: target.data.absolutePath,
+          message: String(error),
+        });
+      }
+    }
+  }
+
+  const approvalPayload = buildApprovalPayload({
+    publisher: "page",
+    draft_sha256: draftSha256,
+    target: input.target,
+    log_note: logNote ?? "",
+    prior_target_sha256: priorTargetSha256,
+  });
+  if (!approvalPayload.ok) return approvalPayload;
+
   return ok({
     page: page.data,
     source,
     targetPath: target.data.absolutePath,
     logNote,
-    operationId: publicationId(input.target, input.content, logNote),
+    operationId: operationIdFromApproval(approvalPayload.data),
     date,
     taxonomyComment: taxonomyComment.data,
+    draftSha256,
+    priorTargetSha256,
+    approvalPayload: approvalPayload.data,
   });
 }
 
@@ -389,7 +443,7 @@ function redactDetail(detail: unknown): unknown {
   if (detail === undefined) return undefined;
   try {
     const encoded = JSON.stringify(detail);
-    return JSON.parse(redactSensitiveContent(encoded).text);
+    return JSON.parse(redactApprovalTokens(redactSensitiveContent(encoded).text));
   } catch {
     return { message: "unserializable error detail omitted" };
   }
@@ -427,6 +481,7 @@ function successReceipt(
   filesChanged: string[],
   dryRun = false,
   receipt: ManagedWriteReceipt | null = null,
+  approvalToken?: string,
 ): PagePublishRun {
   return {
     exitCode: ExitCode.OK,
@@ -443,6 +498,9 @@ function successReceipt(
       files_changed: filesChanged,
       base_oid: receipt?.base_oid ?? null,
       write_mode: receipt?.mode ?? null,
+      draft_sha256: input.draftSha256,
+      target_before: input.priorTargetSha256,
+      ...(approvalToken ? { approval_token: approvalToken } : {}),
       ...(receipt ? {
         mutation_vault: receipt.mutation_vault,
         git_vault: receipt.git_vault,
@@ -535,6 +593,8 @@ export async function previewPreparedPagePublication(
     ...(index.data.changed ? ["index.md"] : []),
     ...(logAppended ? ["log.md"] : []),
   ];
+  const token = encodeApprovalToken(input.approvalPayload);
+  if (!token.ok) return { exitCode: errorExitCode(token.error), result: token };
   return successReceipt(
     input,
     reconciled.data.added,
@@ -543,6 +603,8 @@ export async function previewPreparedPagePublication(
     logAppended,
     filesChanged,
     true,
+    null,
+    token.data,
   );
 }
 
@@ -734,8 +796,32 @@ export async function runPagePublish(
   input: PagePublishInput,
   deps: PagePublishDeps = DEFAULT_DEPS,
 ): Promise<PagePublishRun> {
+  if (input.approve && !input.write) {
+    return {
+      exitCode: ExitCode.USAGE,
+      result: err("USAGE", { message: "--approve requires --write" }),
+    };
+  }
+
   const prepared = await preparePagePublication(input);
   if (!prepared.ok) return { exitCode: errorExitCode(prepared.error), result: prepared };
   if (!input.write) return previewPreparedPagePublication(prepared.data, input.vault);
+
+  if (input.approve) {
+    const verified = verifyApprovalToken(input.approve, {
+      publisher: "page",
+      draft_sha256: prepared.data.draftSha256,
+      target: prepared.data.page.target,
+      log_note: prepared.data.logNote ?? "",
+      prior_target_sha256: prepared.data.priorTargetSha256,
+    });
+    if (!verified.ok) {
+      return {
+        exitCode: errorExitCode(verified.error),
+        result: err(verified.error, redactDetail(verified.detail)),
+      };
+    }
+  }
+
   return publishPreparedPage(prepared.data, input.vault, deps);
 }

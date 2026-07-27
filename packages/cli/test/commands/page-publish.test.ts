@@ -477,4 +477,108 @@ describe("page publish managed write receipt", () => {
       },
     });
   });
+
+  it("emits approval tokens on dry-run and remains compatible without --approve", async () => {
+    const vault = makeVault(["research"]);
+    const draft = writeQueryDraft(["research", "novel"]);
+
+    const dry = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/novel.md",
+      logNote: "approval canary",
+      write: false,
+      now: NOW,
+    });
+    expect(dry.exitCode).toBe(ExitCode.OK);
+    if (!dry.result.ok) return;
+    expect(dry.result.data.approval_token).toMatch(/^swpub1\./);
+    expect(dry.result.data.draft_sha256).toMatch(/^[0-9a-f]{64}$/);
+
+    const withoutApprove = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/novel.md",
+      logNote: "approval canary",
+      write: true,
+      now: NOW,
+    });
+    expect(withoutApprove.exitCode).toBe(ExitCode.OK);
+  });
+
+  it("validates --approve before mutation and rejects project-page tokens", async () => {
+    const vault = makeVault(["research"]);
+    const draft = writeQueryDraft(["research", "novel"]);
+    const before = snapshotFiles(vault);
+
+    const approveOnly = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/novel.md",
+      write: false,
+      approve: "swpub1.x.y",
+      now: NOW,
+    });
+    expect(approveOnly.exitCode).toBe(ExitCode.USAGE);
+
+    const invalid = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/novel.md",
+      write: true,
+      approve: "swpub1.invalid.token",
+      now: NOW,
+    });
+    expect(invalid.exitCode).toBe(ExitCode.APPROVAL_INVALID);
+    expect(snapshotFiles(vault)).toEqual(before);
+
+    const dry = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/novel.md",
+      logNote: "ok",
+      write: false,
+      now: NOW,
+    });
+    if (!dry.result.ok) return;
+    const token = dry.result.data.approval_token!;
+
+    // Cross-command: project-page token rejected by page publish.
+    const { encodeApprovalToken, sha256Hex } = await import("../../src/utils/publication-approval.js");
+    const content = readFileSync(draft, "utf8");
+    const projectToken = encodeApprovalToken({
+      contract: "skillwiki-publication-approval-v1",
+      publisher: "project-page",
+      draft_sha256: sha256Hex(content),
+      target: "queries/novel.md",
+      project: "llm-wiki",
+      log_note: "ok",
+      prior_target_sha256: "absent",
+    });
+    expect(projectToken.ok).toBe(true);
+    if (!projectToken.ok) return;
+    const cross = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/novel.md",
+      logNote: "ok",
+      write: true,
+      approve: projectToken.data,
+      now: NOW,
+    });
+    expect(cross.exitCode).toBe(ExitCode.APPROVAL_MISMATCH);
+    expect(snapshotFiles(vault)).toEqual(before);
+
+    const approved = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/novel.md",
+      logNote: "ok",
+      write: true,
+      approve: token,
+      now: NOW,
+    });
+    expect(approved.exitCode).toBe(ExitCode.OK);
+    expect(existsSync(join(vault, "queries", "novel.md"))).toBe(true);
+  });
 });
