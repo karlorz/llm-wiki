@@ -54,8 +54,11 @@ describe("publication-operation-journal", () => {
     expect(created.ok).toBe(true);
     const paths = resolveJournalPaths(vault, OP_ID, home);
     expect(existsSync(paths.journalPath)).toBe(true);
-    expect(statSync(paths.vaultDir).mode & 0o777).toBe(0o700);
-    expect(statSync(paths.journalPath).mode & 0o777).toBe(0o600);
+    // POSIX permission bits are best-effort; Windows ignores chmod modes.
+    if (process.platform !== "win32") {
+      expect(statSync(paths.vaultDir).mode & 0o777).toBe(0o700);
+      expect(statSync(paths.journalPath).mode & 0o777).toBe(0o600);
+    }
 
     const text = readFileSync(paths.journalPath, "utf8");
     const parsed = JSON.parse(text);
