@@ -178,21 +178,102 @@ describe("runStale", () => {
     }
   });
 
-  it("--archive moves stale items to _archive", async () => {
+  it("--archive skips raw files cited by project work pages", async () => {
+    const v = makeVault();
+    const relative = "raw/transcripts/2026-04-01-work-cited.md";
+    writeFileSync(join(v, relative), TRANSCRIPT_FM);
+    const workDir = join(v, "projects", "acme", "work", "2026-04-01-work-cited");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: done item\nstatus: completed\nsources: [${relative}]\n---\nClaim. ^[${relative}]\n`);
+    const result = await runStale({ vault: v, days: 3, archive: true });
+    expect(result.result.ok).toBe(true);
+    if (result.result.ok) expect(result.result.data.planned_archives).toEqual([]);
+    expect(existsSync(join(v, relative))).toBe(true);
+  });
+
+  it("--archive previews, then approved apply preserves raw under raw/archived", async () => {
     const v = makeVault();
     const transcriptPath = join(v, "raw", "transcripts", "2026-04-01-idea-arch.md");
     writeFileSync(transcriptPath, TRANSCRIPT_FM);
     const workDir = join(v, "projects", "acme", "work", "2026-04-01-arch");
     mkdirSync(workDir, { recursive: true });
     writeFileSync(join(workDir, "spec.md"), DONE_SPEC);
-    const r = await runStale({ vault: v, days: 3, archive: true });
+    const preview = await runStale({ vault: v, days: 3, archive: true });
+    expect(existsSync(transcriptPath)).toBe(true);
+    if (!preview.result.ok || !preview.result.data.approval_token) throw new Error("stale preview failed");
+    const r = await runStale({ vault: v, days: 3, archive: true, apply: true, approve: preview.result.data.approval_token });
     expect(r.exitCode).toBe(19);
     if (r.result.ok) {
-      // Transcript archived to _archive, done work item archived to history
+      // Transcript remains in Layer 1; done work item moves to project history.
       expect(r.result.data.archived.length).toBe(2);
       expect(existsSync(transcriptPath)).toBe(false);
+      expect(existsSync(join(v, "raw", "archived", "transcripts", "2026-04-01-idea-arch.md"))).toBe(true);
       expect(existsSync(workDir)).toBe(false);
     }
+  });
+
+  it("rejects a stale archive approval after transcript bytes change", async () => {
+    const v = makeVault();
+    const transcriptPath = join(v, "raw", "transcripts", "2026-04-01-idea-state-bound.md");
+    writeFileSync(transcriptPath, TRANSCRIPT_FM);
+    const workDir = join(v, "projects", "acme", "work", "2026-04-01-state-bound");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), DONE_SPEC);
+
+    const preview = await runStale({ vault: v, days: 3, archive: true });
+    if (!preview.result.ok || !preview.result.data.approval_token) throw new Error("stale preview failed");
+    writeFileSync(transcriptPath, `${TRANSCRIPT_FM}\nchanged after preview\n`);
+
+    const applied = await runStale({
+      vault: v,
+      days: 3,
+      archive: true,
+      apply: true,
+      approve: preview.result.data.approval_token,
+    });
+    expect(applied.result.ok).toBe(false);
+    if (!applied.result.ok) expect(applied.result.error).toBe("APPROVAL_INVALID");
+    expect(existsSync(transcriptPath)).toBe(true);
+    expect(existsSync(join(v, "raw", "archived", "transcripts", "2026-04-01-idea-state-bound.md"))).toBe(false);
+  });
+
+  it("surfaces raw structural planning failures instead of silently skipping them", async () => {
+    const v = makeVault();
+    const transcript = "2026-04-01-idea-conflict.md";
+    writeFileSync(join(v, "raw", "transcripts", transcript), TRANSCRIPT_FM);
+    mkdirSync(join(v, "raw", "archived", "transcripts"), { recursive: true });
+    writeFileSync(join(v, "raw", "archived", "transcripts", transcript), "occupied");
+    const workDir = join(v, "projects", "acme", "work", "2026-04-01-conflict");
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), DONE_SPEC);
+    const result = await runStale({ vault: v, days: 3, archive: true });
+    expect(result.result.ok).toBe(false);
+    expect(existsSync(join(v, "raw", "transcripts", transcript))).toBe(true);
+  });
+
+  it("surfaces work-item archive rename failures", async () => {
+    const v = makeVault();
+    const itemName = "2026-04-01-work-conflict";
+    const workDir = join(v, "projects", "acme", "work", itemName);
+    const occupied = join(v, "projects", "acme", "history", "archived-work", itemName);
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(join(workDir, "spec.md"), DONE_SPEC);
+    mkdirSync(occupied, { recursive: true });
+    writeFileSync(join(occupied, "existing.md"), "occupied");
+
+    const preview = await runStale({ vault: v, days: 3, archive: true });
+    if (!preview.result.ok || !preview.result.data.approval_token) throw new Error("stale preview failed");
+    const result = await runStale({
+      vault: v,
+      days: 3,
+      archive: true,
+      apply: true,
+      approve: preview.result.data.approval_token,
+    });
+
+    expect(result.result.ok).toBe(false);
+    if (!result.result.ok) expect(result.result.error).toBe("WRITE_FAILED");
+    expect(existsSync(workDir)).toBe(true);
   });
 
   it("detects unclaimed task transcript with project field", async () => {

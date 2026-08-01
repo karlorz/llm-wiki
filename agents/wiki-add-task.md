@@ -39,7 +39,7 @@ You are a quick-capture agent specializing in writing ad-hoc captures to `raw/tr
    project: "[[{slug}]]"  # omit if no project
    ---
    ```
-   No `sha256` — ad-hoc captures are mutable working notes.
+   `sha256` may be omitted, but the completed capture is still immutable evidence.
 6. **Write body:** `# {type}: {text}` then the text content.
 7. **Cross-reference (optional).** If project slug provided, verify `projects/{slug}/` exists. Append one-line reference to project compound notes.
 8. **Log.** Append to `{vault}/log.md`: `## [YYYY-MM-DD] capture | [type]: [text (first 60 chars)]`.
@@ -60,6 +60,7 @@ Return:
 **Forbidden:**
 - Creating an `inbox/` directory
 - Appending to existing capture files
+- Editing or correcting an existing raw transcript; create a new capture or maintained work-item note
 - Creating a full work item (that's proj-work's job)
 - Writing to Layer 2 or Layer 3 locations (captures are Layer 1)
 - Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault

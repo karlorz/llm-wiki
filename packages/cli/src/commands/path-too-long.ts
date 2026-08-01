@@ -60,6 +60,13 @@ export async function fixPathTooLong(input: PathTooLongInput): Promise<{ exitCod
   const unresolved: string[] = [];
 
   for (const violation of violations) {
+    if (violation.relPath.startsWith("raw/")) {
+      // Raw path repair is a structural lifecycle operation. Scheduled lint/sync
+      // callers remain report-only; an attended approved move must use the
+      // shared raw structural transaction instead of direct rename/unlink.
+      unresolved.push(violation.relPath);
+      continue;
+    }
     const target = await resolveFixTarget(input.vault, violation.relPath, violation.suggestedRelPath, maxFixLength);
     if (!target || target.relPath === violation.relPath || target.relPath.length > maxFixLength) {
       unresolved.push(violation.relPath);

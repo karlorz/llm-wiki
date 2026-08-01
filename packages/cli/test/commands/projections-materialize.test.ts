@@ -32,7 +32,7 @@ describe("projections materialize CLI", () => {
     mkdirSync(join(vault, "meta", "log-events"), { recursive: true });
     mkdirSync(join(vault, "projects"), { recursive: true });
     const beforeIndex = "# Index\n";
-    const preview = await runProjectionsMaterialize({ vault, write: false, skipAuthority: true });
+    const preview = await runProjectionsMaterialize({ vault, write: false });
     expect(preview.result.ok).toBe(true);
     expect(preview.result).toMatchObject({ ok: true, data: { dry_run: true } });
     expect(readFileSync(join(vault, "index.md"), "utf8")).toBe(beforeIndex);

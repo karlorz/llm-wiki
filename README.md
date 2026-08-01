@@ -11,7 +11,7 @@ Project-aware Karpathy-style knowledge base for Claude Code skills.
 /plugin install skillwiki@llm-wiki
 ```
 
-The plugin ships 18 skills (`wiki-*`, `proj-*`, `wiki-add-task`, `wiki-adapter-prd`, `wiki-reingest`, `using-skillwiki`). They are namespaced by Claude Code as `llm-wiki:<skill>` (e.g. `llm-wiki:wiki-init`).
+The plugin ships 19 skills (`wiki-*`, `proj-*`, `wiki-add-task`, `wiki-adapter-prd`, `wiki-reingest`, `using-skillwiki`). They are namespaced by Claude Code as `llm-wiki:<skill>` (e.g. `llm-wiki:wiki-init`).
 
 ### Option B — npm CLI installer
 
@@ -19,7 +19,7 @@ The plugin ships 18 skills (`wiki-*`, `proj-*`, `wiki-add-task`, `wiki-adapter-p
 npx skillwiki@latest install
 ```
 
-This copies 18 SKILL.md files into `~/.claude/skills/` and writes `.claude/skills/wiki-manifest.json`. Use this when you want the skills available outside a Claude Code plugin context, or to seed `~/.claude/skills/` for tools that scan it directly.
+This copies 19 SKILL.md files into `~/.claude/skills/` and writes `.claude/skills/wiki-manifest.json`. Use this when you want the skills available outside a Claude Code plugin context, or to seed `~/.claude/skills/` for tools that scan it directly.
 
 ### Option C — Antigravity CLI (`agy`)
 
@@ -71,7 +71,7 @@ node packages/cli/dist/cli.js --help | awk '/^Commands:/{listed=1; next} listed 
 
 | Subcommand | Purpose |
 |---|---|
-| `init` | Bootstrap vault with SCHEMA.md, index.md, log.md. |
+| `init` | Bootstrap vault and install the importable `_Templates/web-clipper/llm-wiki-clippings.json` capture template. |
 | `install` | Cross-platform skills installer (copies or symlinks SKILL.md files). |
 | `hash <file>` | sha256 of body bytes after closing `---`. |
 | `validate <file>` | Frontmatter Zod validation. |
@@ -80,13 +80,17 @@ node packages/cli/dist/cli.js --help | awk '/^Commands:/{listed=1; next} listed 
 | `status <vault>` | Vault diagnostics. |
 | `audit <file>` | Citation marker + sources↔body consistency. |
 | `fetch-guard <url>` | URL preflight (Layer 1 security). |
-| `query <text>` | Score and rank vault pages by relevance. |
+| `query <text>` | Score typed pages; `--include-pending` adds a separate unranked pending-evidence channel. |
+| `sources pending <vault>` | List captured articles/papers not yet integrated into typed knowledge. |
+| `sources disposition <raw-path>` | Record append-only editorial status for one exact active raw source. |
+| `sources dispose <raw-path>` | Preview/attended-apply exceptional permanent disposal for one exact raw object. |
 | `graph` | Wikilink adjacency + Adamic-Adar table. |
 | `overlap <vault>` | Source-overlap clusters. |
 | `orphans <vault>` | Orphan + bridge node detection. |
 | `drift <vault>` | Detect raw source drift via sha256 comparison. |
-| `dedup <vault>` | Detect duplicate raw articles. |
-| `archive <page>` | Move superseded typed-knowledge page to `_archive/`. |
+| `dedup <vault>` | Detect duplicates; approved apply rewires maintained citations and preserves duplicate bytes under `raw/duplicates/`. |
+| `archive <page>` | Archive typed pages, or dry-run/approved preserve-move exact raw sources under `raw/archived/`. |
+| `remove <page>` | Remove maintained pages with durable delete intent; raw targets are refused in favor of `sources dispose`. |
 | `claim <transcript>` | Claim an unclaimed transcript by creating a work item. |
 | `config` | Manage skillwiki configuration and wiki profiles. |
 | `doctor` | Diagnose setup issues (paths, env, plugin, sync health). |
@@ -126,6 +130,12 @@ All subcommands emit JSON by default. Pass `--human` for terminal output.
 `tag reconcile` and `page publish` default to dry-run; add `--write` only after
 their preview succeeds. `page publish` is the required write path for new or
 updated typed knowledge pages.
+
+Raw evidence is immutable after capture. The CLI may create new captures and,
+through attended state-bound workflows, preserve-move exact bytes within
+`raw/`; it never rewrites raw content/frontmatter. `raw/assets/**` is a flexible
+stable pool: use explicit embeds such as `![[raw/assets/example/diagram.png]]`,
+and do not move referenced assets as a side effect of archive or dedup.
 
 ## MCP Server (experimental, hidden)
 

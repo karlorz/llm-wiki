@@ -13,6 +13,8 @@ Standard four reads (SCHEMA, index, log, project context if applicable).
 ## Steps
 0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`.
 1. **Determine scope.** Ask the user once if ambiguous: vault | current project | project+concepts.
+   - Ordinary questions are typed-knowledge-first. Run `skillwiki query "<text>" [vault]` without widening into raw captures.
+   - Explicit freshness language — `new`, `recent`, `fresh`, `clipped`, `raw`, `pending`, `undigested`, `unprocessed`, `not yet ingested`, or `not yet integrated` — requests the pending evidence channel. Run `skillwiki sources pending [vault]` for inventory and `skillwiki query "<text>" [vault] --include-pending` for synthesis support.
 2. **Refresh graph.** If `.skillwiki/graph.json` is missing or older than 24h: `skillwiki graph build <vault>`.
 3. **Compute overlap.** `skillwiki overlap <vault>`.
 4. **Score candidates** in prompt using the 4 signals:
@@ -22,6 +24,9 @@ Standard four reads (SCHEMA, index, log, project context if applicable).
 - Type affinity: 1.0×
 5. **Read top candidates** in full (frontmatter + body).
 6. **Synthesize answer** with explicit citations to the candidate pages.
+   - When pending evidence was requested, keep the CLI's `pending_sources` separate from ranked typed `results`. Pending captures never change typed scores or ordering.
+   - Label raw captures as **pending evidence**, not established vault knowledge. Explain that they have not yet been distilled into a maintained page.
+   - Weak typed results may justify suggesting a pending lookup, but never silently broaden the query.
 7. **Sensitive content guard.** Before filing any query or comparison page, scan the generated body for live credentials, access keys, tokens, passwords, cookies, bearer headers, or private keys. Redact before writing. If the answer depends on preserving a live secret, STOP and ask for a redacted source or explicit rotation/remediation direction.
 8. **Optional file.** If the user accepts, first run `skillwiki page publish --help`. If it is unavailable, fail closed and leave the result unpublished. Otherwise:
    1. Resolve the vault and create a temporary directory outside the vault.
@@ -52,4 +57,6 @@ When a wiki page (especially a work item `tasks.md`) claims that fixes were appl
 - Filing without the `skillwiki page publish` dry-run passing.
 - Directly creating a final typed page or separately editing `index.md` or `log.md` for its publication.
 - Skipping the orientation reads even for "quick" queries.
+- Treating a pending raw capture as integrated typed knowledge, or mixing it into typed ranking.
+- Silently searching pending sources when the user did not request fresh/raw/unprocessed material.
 - Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault.

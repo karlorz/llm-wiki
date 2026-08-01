@@ -21,7 +21,8 @@ Standard four reads.
 0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`.
 1. `skillwiki audit <page>`. Read the JSON report.
 2. Reason over the report:
-   - For each unresolved marker: suggest ingesting the missing source or correcting the path.
+   - Resolve citations against active `raw/`, `raw/archived/`, `raw/duplicates/`, and append-only relocation history. Legacy `_archive/raw/` is read-compatible only, not a valid new destination.
+   - For each unresolved marker: distinguish a genuinely missing target from a stale historical path, then suggest ingesting the missing source or correcting maintained-page metadata.
    - For each `unused_sources` entry: suggest adding a body marker or removing from `sources:`.
    - For each `missing_from_sources` entry: suggest adding to `sources:`.
 3. Append one `log.md` entry summarizing the audit and any suggested follow-ups.
@@ -31,3 +32,4 @@ None — audit always completes.
 
 ## Forbidden
 - Auto-applying suggested fixes (audit is observation-only).
+- Rewriting raw evidence while repairing an audit finding.

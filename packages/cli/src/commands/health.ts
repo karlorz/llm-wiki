@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { platform } from "node:os";
 import { runDoctor, snapshotterHealthChecks, type CheckResult, type DoctorOutput } from "./doctor.js";
 import { runLint, type LintBucketSummary, type LintSummaryOutput, type LintSeverity } from "./lint.js";
+import { inventorySources } from "../utils/source-lifecycle.js";
 
 export type HealthStatus = "pass" | "info" | "warn" | "error" | "unknown";
 export type CoverageState = "checked" | "skipped" | "not_applicable" | "unknown";
@@ -65,6 +66,18 @@ export interface HealthReport {
     vault_sync: VaultSyncComponent;
     query_readiness: QueryReadinessComponent;
     source_freshness: HealthComponent<{ stale_pages: number; file_source_url: number; stale_sections: number }>;
+    source_lifecycle: HealthComponent<{
+      pending: number;
+      deferred: number;
+      reviewed_no_op: number;
+      archived_raw: number;
+      preserved_duplicates: number;
+      legacy_archive_raw: number;
+      legacy_schema: number;
+      invalid_schema: number;
+      oldest_pending: string | null;
+      fresh_pending_examples: string[];
+    }>;
   };
   risk_flags: RiskFlag[];
   details_included: false;
@@ -431,7 +444,7 @@ function selfCheckReport(report: Omit<HealthReport, "self_check" | "humanHint">)
   if (lint.summary.info !== sumBySeverity("info")) {
     errors.push(`lint.summary.info=${lint.summary.info} but info bucket counts sum to ${sumBySeverity("info")}`);
   }
-  for (const component of ["doctor", "lint", "vault_sync", "query_readiness", "source_freshness"]) {
+  for (const component of ["doctor", "lint", "vault_sync", "query_readiness", "source_freshness", "source_lifecycle"]) {
     if (!report.coverage[component]) errors.push(`missing coverage entry for ${component}`);
   }
   for (const flag of report.risk_flags) {
@@ -452,6 +465,7 @@ function buildHumanHint(report: Omit<HealthReport, "humanHint">): string {
   }
   lines.push(`vault_sync: ${report.components.vault_sync.summary.pass} pass, ${report.components.vault_sync.summary.warn} warn, ${report.components.vault_sync.summary.error} error`);
   lines.push(`query_readiness: ${report.components.query_readiness.status} (${report.components.query_readiness.summary.score}/100)`);
+  lines.push(`source_lifecycle: ${report.components.source_lifecycle.summary.pending} pending, ${report.components.source_lifecycle.summary.deferred} deferred, ${report.components.source_lifecycle.summary.reviewed_no_op} reviewed-no-op`);
   if (report.risk_flags.length > 0) {
     lines.push("risk flags:");
     for (const flag of report.risk_flags) {
@@ -520,6 +534,7 @@ function buildIncompleteReport(input: HealthInput, syncMode: SyncMode): HealthRe
       vault_sync: vaultSyncCoverage,
       query_readiness: { state: "unknown", status: "unknown", reason: "health run not complete" },
       source_freshness: { state: "unknown", status: "unknown", reason: "health run not complete" },
+      source_lifecycle: { state: "unknown", status: "unknown", reason: "health run not complete" },
     },
     components: {
       doctor: {
@@ -547,6 +562,11 @@ function buildIncompleteReport(input: HealthInput, syncMode: SyncMode): HealthRe
         status: "unknown",
         blocking: false,
         summary: { stale_pages: 0, file_source_url: 0, stale_sections: 0 },
+      },
+      source_lifecycle: {
+        status: "unknown",
+        blocking: false,
+        summary: { pending: 0, deferred: 0, reviewed_no_op: 0, archived_raw: 0, preserved_duplicates: 0, legacy_archive_raw: 0, legacy_schema: 0, invalid_schema: 0, oldest_pending: null, fresh_pending_examples: [] },
       },
     },
     risk_flags: [],
@@ -609,6 +629,26 @@ export async function runHealth(input: HealthInput): Promise<{ exitCode: number;
       stale_sections: bucketCount(lint.result.data.buckets, "stale_sections"),
     },
   };
+  const sourceInventory = await inventorySources({ vault: input.vault });
+  const sourceItems = sourceInventory.output?.items ?? [];
+  const pendingItems = sourceItems.filter(item => item.lifecycle_status === "pending" && item.storage_status === "active");
+  const pendingDates = pendingItems.map(item => item.captured).filter((value): value is string => value !== null).sort();
+  const sourceLifecycle: HealthReport["components"]["source_lifecycle"] = {
+    status: pendingItems.length > 0 ? "info" : "pass",
+    blocking: false,
+    summary: {
+      pending: pendingItems.length,
+      deferred: sourceItems.filter(item => item.lifecycle_status === "deferred").length,
+      reviewed_no_op: sourceItems.filter(item => item.lifecycle_status === "reviewed-no-op").length,
+      archived_raw: sourceItems.filter(item => item.storage_status === "archived").length,
+      preserved_duplicates: sourceItems.filter(item => item.storage_status === "duplicate").length,
+      legacy_archive_raw: sourceItems.filter(item => item.storage_status === "legacy-archived").length,
+      legacy_schema: sourceItems.filter(item => item.schema_status === "legacy").length,
+      invalid_schema: sourceItems.filter(item => item.schema_status === "invalid").length,
+      oldest_pending: pendingDates[0] ?? null,
+      fresh_pending_examples: pendingItems.filter(item => item.age_bucket === "fresh").slice(0, 3).map(item => item.raw_path),
+    },
+  };
 
   const doctorComponent: DoctorComponent = {
     status: doctorStatus,
@@ -656,6 +696,7 @@ export async function runHealth(input: HealthInput): Promise<{ exitCode: number;
       vault_sync: vaultSyncCoverage,
       query_readiness: { state: "checked", status: queryReadiness.status },
       source_freshness: { state: "checked", status: sourceFreshness.status },
+      source_lifecycle: { state: "checked", status: sourceLifecycle.status },
     },
     components: {
       doctor: doctorComponent,
@@ -663,6 +704,7 @@ export async function runHealth(input: HealthInput): Promise<{ exitCode: number;
       vault_sync: vaultSync,
       query_readiness: queryReadiness,
       source_freshness: sourceFreshness,
+      source_lifecycle: sourceLifecycle,
     },
     risk_flags: riskFlags,
     details_included: false,

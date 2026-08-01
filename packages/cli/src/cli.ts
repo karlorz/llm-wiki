@@ -63,6 +63,9 @@ import { runStatus } from "./commands/status.js";
 import { runSeed } from "./commands/seed.js";
 import { runCanvasGenerate } from "./commands/canvas.js";
 import { runQuery } from "./commands/query.js";
+import { runSourcesPending } from "./commands/sources.js";
+import { runSourceDisposition } from "./commands/source-disposition.js";
+import { runSourceDisposal } from "./commands/source-disposal.js";
 import { runIndexLinkFormat } from "./commands/index-link-format.js";
 import { runTopicMapCheck } from "./commands/topic-map-check.js";
 import { loadFleetManifestAndHost, runFleetContext, runFleetValidate, snapshotterAliasForLocalHost } from "./commands/fleet.js";
@@ -251,11 +254,115 @@ program
   .command("query <text> [vault]")
   .description("score and rank vault pages by relevance to a query")
   .option("--limit <n>", "max results to return", (s) => parseInt(s, 10), 10)
+  .option("--include-pending", "include a separate pending-evidence channel")
   .option("--wiki <name>", "wiki profile name")
   .action(async (text, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runQuery({ text, vault: v.vault, limit: opts.limit }), v.vault);
+    else emit(await runQuery({ text, vault: v.vault, limit: opts.limit, includePending: opts.includePending }), v.vault, { postCommit: false });
+  });
+
+const sourcesCmd = program.command("sources").description("inspect raw-source lifecycle state");
+
+sourcesCmd
+  .command("pending [vault]")
+  .description("list captured articles and papers awaiting typed integration")
+  .option("--since <date>", "include sources captured on or after YYYY-MM-DD")
+  .option("--older-than <days>", "include sources at least this many days old", (s) => parseInt(s, 10))
+  .option("--match <text>", "literal title, URL, or path match")
+  .option("--ingested-by <channel>", "manual, wiki-ingest, proj-work, or unknown")
+  .option("--scope <scope>", "articles, papers, or all", "all")
+  .option("--sort <order>", "newest or oldest", "newest")
+  .option("--limit <n>", "max items to return", (s) => parseInt(s, 10), 50)
+  .option("--all", "return the complete matching inventory")
+  .option("--include-integrated", "also return actively integrated sources")
+  .option("--include-archived", "also return raw/archived sources")
+  .option("--include-duplicates", "also return raw/duplicates sources")
+  .option("--include-legacy-archived", "also return legacy _archive/raw sources")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runSourcesPending({
+      vault: v.vault,
+      since: opts.since,
+      olderThan: opts.olderThan,
+      match: opts.match,
+      ingestedBy: opts.ingestedBy,
+      scope: opts.scope,
+      sort: opts.sort,
+      limit: opts.limit,
+      all: opts.all,
+      includeIntegrated: opts.includeIntegrated,
+      includeArchived: opts.includeArchived,
+      includeDuplicates: opts.includeDuplicates,
+      includeLegacyArchived: opts.includeLegacyArchived,
+    }), v.vault, { postCommit: false });
+  });
+
+sourcesCmd
+  .command("disposition <raw-path> [vault]")
+  .description("record an append-only editorial decision for an exact raw source")
+  .requiredOption("--status <status>", "reviewed-no-op, deferred, duplicate, out-of-scope, superseded, or reopened")
+  .requiredOption("--reason <text>", "editorial reason")
+  .option("--review-after <date>", "future review date for deferred")
+  .option("--duplicate-of <raw-path>", "canonical exact raw path for duplicate")
+  .option("--write", "write the approved disposition event")
+  .option("--approve <token>", "approve the exact state-bound disposition plan")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (rawPath, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (!opts.write) emit(await runSourceDisposition({
+      vault: v.vault,
+      rawPath,
+      status: opts.status,
+      reason: opts.reason,
+      reviewAfter: opts.reviewAfter,
+      duplicateOf: opts.duplicateOf,
+      write: false,
+    }), v.vault, { postCommit: false });
+    else return emitManagedVaultWrite(
+      v.vault,
+      "sources disposition",
+      (receipt) => runSourceDisposition({
+        vault: v.vault,
+        rawPath,
+        status: opts.status,
+        reason: opts.reason,
+        reviewAfter: opts.reviewAfter,
+        duplicateOf: opts.duplicateOf,
+        write: true,
+        approve: opts.approve,
+      }),
+      { allowImmutableRecord: true },
+    );
+  });
+
+sourcesCmd
+  .command("dispose <raw-path> [vault]")
+  .description("permanently delete one exact raw object after an attended approved preview")
+  .requiredOption("--reason <text>", "permanent-disposal reason")
+  .option("--write", "apply the approved exact-target disposal")
+  .option("--approve <token>", "approve the exact state-bound disposal plan")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (rawPath, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (!opts.write) emit(await runSourceDisposal({ vault: v.vault, rawPath, reason: opts.reason, write: false }), v.vault, { postCommit: false });
+    else return emitManagedVaultWrite(
+      v.vault,
+      "sources dispose",
+      () => runSourceDisposal({
+        vault: v.vault,
+        rawPath,
+        reason: opts.reason,
+        write: true,
+        approve: opts.approve,
+        attended: process.stdin.isTTY === true && process.stdout.isTTY === true,
+      }),
+      { allowImmutableRecord: true },
+    );
   });
 
 program
@@ -529,7 +636,9 @@ program.command("topic-map-check [vault]")
 program
   .command("stale [vault]")
   .description("identify stale transcripts and incomplete work items")
-  .option("--archive", "move stale items to _archive/", false)
+  .option("--archive", "preview lifecycle-first archives for stale items", false)
+  .option("--apply", "apply an approved stale archive preview", false)
+  .option("--approve <token>", "approve the exact state-bound stale archive plan")
   .option("--days <n>", "staleness threshold in days", (s) => parseInt(s, 10), 3)
   .option("--force-scan", "infer kind/project from filename and content when frontmatter is missing", false)
   .option("--project <slug>", "scope to a single project")
@@ -537,12 +646,12 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else if (opts.archive) return emitGuardedVaultWrite(
+    else if (opts.archive && opts.apply) return emitManagedVaultWrite(
       v.vault,
       "stale --archive",
-      () => runStale({ vault: v.vault, days: opts.days, archive: true, forceScan: !!opts.forceScan, project: opts.project })
+      () => runStale({ vault: v.vault, days: opts.days, archive: true, apply: true, approve: opts.approve, forceScan: !!opts.forceScan, project: opts.project })
     );
-    else emit(await runStale({ vault: v.vault, days: opts.days, archive: false, forceScan: !!opts.forceScan, project: opts.project }), v.vault);
+    else emit(await runStale({ vault: v.vault, days: opts.days, archive: !!opts.archive, apply: false, forceScan: !!opts.forceScan, project: opts.project }), v.vault, { postCommit: false });
   });
 
 program
@@ -753,6 +862,21 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (opts.fix && opts.summary) return emitGuardedVaultWrite(
+      v.vault,
+      "lint --fix",
+      () => runLint({
+        vault: v.vault,
+        source: vault ? "flag" : undefined,
+        days: opts.days,
+        lines: opts.lines,
+        logThreshold: opts.logThreshold,
+        fix: true,
+        only: opts.only,
+        summary: true,
+        examplesLimit: opts.examples,
+      })
+    );
     else if (opts.fix) return emitGuardedVaultWrite(
       v.vault,
       "lint --fix",
@@ -764,8 +888,7 @@ program
         logThreshold: opts.logThreshold,
         fix: true,
         only: opts.only,
-        summary: !!opts.summary,
-        examplesLimit: opts.summary ? opts.examples : undefined,
+        summary: false,
       })
     );
     else if (opts.summary) emit(await runLint({
@@ -880,13 +1003,14 @@ program
   .option("--wiki <name>", "wiki profile name")
   .option("--cascade", "scan vault for references (wikilinks + sources arrays); preview by default", false)
   .option("--apply", "with --cascade: mutate sources arrays and archive (without --apply, --cascade is preview-only)", false)
+  .option("--approve <token>", "approve an exact state-bound raw archive plan")
   .option("--remote <remote>", "rclone remote root to prune the archived source path, for example seaweed-wiki:cloud/wiki")
   .option("--remote-delete", "delete the archived source path from the remote after local archive", false)
   .option("--max-remote-deletes <n>", "maximum remote object deletes allowed", "1")
   .action(async (page, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else if (opts.cascade && !opts.apply) emit(await runArchive({
+    else if (!opts.apply && (opts.cascade || String(page).startsWith("raw/"))) emit(await runArchive({
       vault: v.vault,
       page,
       cascade: true,
@@ -903,6 +1027,7 @@ program
         page,
         cascade: !!opts.cascade,
         apply: !!opts.apply,
+        approve: opts.approve,
         remote: opts.remote,
         remoteDelete: !!opts.remoteDelete,
         maxRemoteDeletes: Number.parseInt(opts.maxRemoteDeletes, 10),
@@ -958,7 +1083,8 @@ program
 program
   .command("dedup [vault]")
   .description("detect duplicate raw sources by sha256")
-  .option("--apply", "rewire citations and remove duplicate raw files", false)
+  .option("--apply", "rewire citations and preserve duplicate raw files under raw/duplicates", false)
+  .option("--approve <token>", "approve the exact state-bound dedup plan")
   .option("--canonical-policy <policy>", "canonical policy: stable-path or scan-order", "stable-path")
   .option("--manifest-out <path>", "write raw dedup delete manifest before applying")
   .option("--manifest-in <path>", "read existing raw dedup delete manifest for remote pruning")
@@ -969,12 +1095,13 @@ program
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else if (opts.apply || opts.manifestOut) return emitGuardedVaultWrite(
+    else if (opts.apply || opts.manifestOut) return emitManagedVaultWrite(
       v.vault,
       opts.apply ? "dedup --apply" : "dedup --manifest-out",
       () => runDedup({
         vault: v.vault,
         apply: opts.apply,
+        approve: opts.approve,
         canonicalPolicy: opts.canonicalPolicy,
         manifestOut: opts.manifestOut,
         manifestIn: opts.manifestIn,
@@ -986,6 +1113,7 @@ program
     else emit(await runDedup({
       vault: v.vault,
       apply: opts.apply,
+      approve: opts.approve,
       canonicalPolicy: opts.canonicalPolicy,
       manifestOut: opts.manifestOut,
       manifestIn: opts.manifestIn,

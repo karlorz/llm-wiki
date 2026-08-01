@@ -26,7 +26,8 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("graph"); // has subcommands
   program.command("canvas"); // has subcommands
   program.command("overlap").option("--wiki <name>");
-  program.command("query").option("--limit <n>").option("--wiki <name>");
+  program.command("query").option("--limit <n>").option("--include-pending").option("--wiki <name>");
+  program.command("sources"); // has subcommands
   program.command("orphans").option("--wiki <name>");
   program.command("audit");
   program.command("install").option("--target <dir>").option("--dry-run").option("--skills-root <dir>").option("--symlink");
@@ -38,7 +39,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("index-check").option("--wiki <name>");
   program.command("index-link-format").option("--wiki <name>");
   program.command("topic-map-check").option("--threshold <n>").option("--wiki <name>");
-  program.command("stale").option("--archive").option("--days <n>").option("--force-scan").option("--project <slug>").option("--wiki <name>");
+  program.command("stale").option("--archive").option("--apply").option("--approve <token>").option("--days <n>").option("--force-scan").option("--project <slug>").option("--wiki <name>");
   program.command("claim").option("--project <slug>").option("--slug <slug>").option("--wiki <name>");
   program.command("pagesize").option("--lines <n>").option("--wiki <name>");
   program.command("log-rotate").option("--threshold <n>").option("--apply").option("--wiki <name>");
@@ -58,6 +59,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--wiki <name>")
     .option("--cascade")
     .option("--apply")
+    .option("--approve <token>")
     .option("--remote <remote>")
     .option("--remote-delete")
     .option("--max-remote-deletes <n>");
@@ -70,6 +72,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("drift").option("--apply").option("--new <date>").option("--wiki <name>");
   program.command("dedup")
     .option("--apply")
+    .option("--approve <token>")
     .option("--canonical-policy <policy>")
     .option("--manifest-out <path>")
     .option("--manifest-in <path>")
@@ -120,6 +123,35 @@ export function buildCliSurface(): Map<string, Set<string>> {
   // Subcommands
   const graphCmd = program.commands.find(c => c.name() === "graph")!;
   graphCmd.command("build").option("--out <path>").option("--wiki <name>");
+
+  const sourcesCmd = program.commands.find(c => c.name() === "sources")!;
+  sourcesCmd.command("pending")
+    .option("--since <date>")
+    .option("--older-than <days>")
+    .option("--match <text>")
+    .option("--ingested-by <channel>")
+    .option("--scope <scope>")
+    .option("--sort <order>")
+    .option("--limit <n>")
+    .option("--all")
+    .option("--include-integrated")
+    .option("--include-archived")
+    .option("--include-duplicates")
+    .option("--include-legacy-archived")
+    .option("--wiki <name>");
+  sourcesCmd.command("disposition")
+    .requiredOption("--status <status>")
+    .requiredOption("--reason <text>")
+    .option("--review-after <date>")
+    .option("--duplicate-of <raw-path>")
+    .option("--write")
+    .option("--approve <token>")
+    .option("--wiki <name>");
+  sourcesCmd.command("dispose")
+    .requiredOption("--reason <text>")
+    .option("--write")
+    .option("--approve <token>")
+    .option("--wiki <name>");
 
   const canvasCmd = program.commands.find(c => c.name() === "canvas")!;
   canvasCmd.command("generate").option("--graph-path <path>").option("--wiki <name>");

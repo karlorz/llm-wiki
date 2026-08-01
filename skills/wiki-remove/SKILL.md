@@ -1,13 +1,14 @@
 ---
 name: wiki-remove
-description: Hard-delete a vault path with a durable delete-intent tombstone so S3+snapshot cannot resurrect it. Prefer skillwiki remove; if CLI missing, failsafe-git via private GitHub.
+description: Remove maintained vault paths with durable delete intent; raw evidence requires the separate attended exact-target sources dispose workflow.
 ---
 
 # wiki-remove
 
 ## When This Skill Activates
 
-- User wants to permanently remove a vault path (not archive-for-reference).
+- User wants to permanently remove a maintained vault path (not archive-for-reference).
+- User explicitly requests permanent disposal of one exact raw object.
 - Cleanup of stale pages that should not return via snapshot resurrection.
 - User says hard delete, remove for real, stop resurrecting.
 
@@ -17,7 +18,7 @@ If `skillwiki` is available: run `skillwiki lang` at the start. Otherwise defaul
 
 ## Pre-orientation
 
-Read SCHEMA/index only as needed. Confirm full vault-relative path with the user before delete.
+Read SCHEMA/index only as needed. Confirm the full vault-relative path. First classify the target as maintained content or `raw/**` evidence.
 
 ## Probe (required)
 
@@ -33,7 +34,7 @@ Read SCHEMA/index only as needed. Confirm full vault-relative path with the user
 
 Do not auto `npm install -g skillwiki` in headless/goal/satellite sessions.
 
-## PRIMARY steps
+## PRIMARY — maintained pages
 
 1. Resolve vault: `skillwiki path`.
 2. Confirm path with user.
@@ -44,9 +45,22 @@ Do not auto `npm install -g skillwiki` in headless/goal/satellite sessions.
 5. Commit + push via normal wiki-sync / git (tombstone + deletion must reach private `main` for durability).
 6. Report MODE=primary, paths, and whether remote-delete ran.
 
+`skillwiki remove` must refuse every `raw/**` target. Do not bypass that refusal.
+
+## PRIMARY — exact raw disposal
+
+Permanent raw disposal is exceptional and never inferred from cleanup, dedup, stale, archive, or reingest intent.
+
+1. Require an explicit user request naming one exact raw file and a reason. Refuse basenames, globs, directories, symlinks, batches, and inferred targets.
+2. Run `skillwiki sources dispose <exact-raw-path> [vault] --reason "<text>"`.
+3. Present the preview: complete-file SHA-256, byte size, typed/other/asset inbound references, delete-intent path, recoverability statement, operation ID, and approval token.
+4. Only in the same attended session, after the user approves that exact preview, run the identical command with `--write --approve <token>`.
+5. The command revalidates bytes and inbound references under the managed lock, writes append-only approval/completion events plus durable delete intent, then removes the exact object.
+6. Scheduled/headless disposal is always refused. A stale token never authorizes changed state.
+
 ## FAILSAFE-GIT steps (no skillwiki CLI)
 
-Agent **must** have git (and preferably gh) access to private vault remote.
+Agent **must** have git (and preferably gh) access to private vault remote. This fallback is for maintained pages only. If the target is under `raw/`, fail closed until `skillwiki sources dispose` is available; never reproduce raw disposal by hand.
 
 1. Confirm path with user. Set `PATH_REL` (vault-relative, no `..`).
 2. Write tombstone `meta/delete-intents/<slug>.json` where slug is path with `/` → `__`, e.g. `summaries/foo.md` → `summaries__foo.md.json`:
@@ -83,6 +97,7 @@ Delete-Source: failsafe-git
 - FAIL CLOSED (no CLI and no private git access).
 - Push to private wiki fails.
 - Path invalid or under `_archive/` without explicit restore/remove policy.
+- Raw target cannot be processed by the attended exact-target CLI flow.
 
 ## Forbidden
 
@@ -90,6 +105,8 @@ Delete-Source: failsafe-git
 - Force-push.
 - Unbounded `rclone sync` / mass remote delete.
 - Claiming fleet delete complete without tombstone on `origin/main` (and push success).
+- Passing raw paths to ordinary `skillwiki remove`, or using FAILSAFE-GIT/bare filesystem deletion for raw evidence.
+- Scheduled, headless, batch, glob, directory, basename-inferred, or stale-token raw disposal.
 
 ## Reversibility
 

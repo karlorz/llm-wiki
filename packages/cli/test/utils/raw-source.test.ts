@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -26,6 +26,13 @@ describe("normalizeRawSourceTarget", () => {
     expect(normalizeRawSourceTarget("_archive/raw/transcripts/old.md")).toBe(
       "_archive/raw/transcripts/old.md",
     );
+  });
+
+  it("rejects traversal, normalized aliases, absolute paths, and NUL bytes", () => {
+    expect(normalizeRawSourceTarget("raw/../SCHEMA.md")).toBeNull();
+    expect(normalizeRawSourceTarget("raw/articles/./x.md")).toBeNull();
+    expect(normalizeRawSourceTarget("/raw/articles/x.md")).toBeNull();
+    expect(normalizeRawSourceTarget("raw/articles/x\0.md")).toBeNull();
   });
 });
 
@@ -56,6 +63,15 @@ describe("rawSourceTargetExistsSync", () => {
     expect(rawSourceTargetExistsSync(vault, "raw/articles/hit.md")).toBe(true);
     expect(rawSourceTargetExistsSync(vault, "raw/articles/miss.md")).toBe(false);
   });
+
+  it("rejects a raw target that is a symlink to an outside file", () => {
+    const vault = mkdtempSync(join(tmpdir(), "raw-src-link-"));
+    const outside = join(mkdtempSync(join(tmpdir(), "raw-src-outside-")), "outside.md");
+    mkdirSync(join(vault, "raw", "articles"), { recursive: true });
+    writeFileSync(outside, "outside");
+    symlinkSync(outside, join(vault, "raw", "articles", "linked.md"));
+    expect(rawSourceTargetExistsSync(vault, "raw/articles/linked.md")).toBe(false);
+  });
 });
 
 describe("rawSourceTargetExists", () => {
@@ -64,5 +80,14 @@ describe("rawSourceTargetExists", () => {
     mkdirSync(join(vault, "raw", "papers"), { recursive: true });
     writeFileSync(join(vault, "raw/papers/p.md"), "x");
     await expect(rawSourceTargetExists(vault, "raw/papers/p.md")).resolves.toBe(true);
+  });
+
+  it("rejects a symlinked raw parent directory", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "raw-src-parent-link-"));
+    const outside = mkdtempSync(join(tmpdir(), "raw-src-parent-outside-"));
+    mkdirSync(join(vault, "raw"), { recursive: true });
+    writeFileSync(join(outside, "p.md"), "outside");
+    symlinkSync(outside, join(vault, "raw", "papers"));
+    await expect(rawSourceTargetExists(vault, "raw/papers/p.md")).resolves.toBe(false);
   });
 });

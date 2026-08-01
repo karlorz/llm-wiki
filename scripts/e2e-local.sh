@@ -44,12 +44,16 @@ assert_exit 0 "$RUN_RC" "init succeeds"
 assert_json_contains "$RUN_OUTPUT" "ok" "true" "init returns ok"
 
 for dir in raw/articles raw/papers raw/transcripts raw/assets \
+           raw/archived/articles raw/archived/papers raw/archived/transcripts \
+           raw/duplicates/articles raw/duplicates/papers raw/duplicates/transcripts \
            entities concepts comparisons queries meta projects; do
   assert_file_exists "$VAULT/$dir" "init created $dir"
 done
 assert_file_exists "$VAULT/SCHEMA.md"               "init created SCHEMA.md"
 assert_file_exists "$VAULT/index.md"                "init created index.md"
 assert_file_exists "$VAULT/log.md"                  "init created log.md"
+assert_file_exists "$VAULT/_Templates/web-clipper/llm-wiki-clippings.json" "init installed Web Clipper template"
+assert_file_exists "$VAULT/_Templates/web-clipper/readme.txt" "init installed Web Clipper import readme"
 assert_file_exists "$TEMP_HOME/.skillwiki/.env"     "init wrote .env"
 
 # ==== 2. Seed vault =========================================================
@@ -357,17 +361,19 @@ if [ "$dup_count" = "1" ]; then
 else
   FAIL=$((FAIL + 1)); printf "  \u2717 dedup reports %s groups, expected 1\n" "$dup_count"
 fi
+dedup_approval=$(printf '%s' "$RUN_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['approval_token'])" 2>/dev/null)
 
 # ==== 37. dedup --apply =====================================================
 printf "\n--- dedup apply ---\n"
-run_cli "${CLI[@]}" dedup "$DEDUP_VAULT" --apply
+run_cli "${CLI[@]}" dedup "$DEDUP_VAULT" --apply --approve "$dedup_approval"
 assert_exit 36 "$RUN_RC" "dedup --apply succeeds (exit 36)"
-# Verify removed count via JSON — exactly 1 duplicate file should be removed
+# Verify exactly one duplicate was relocated and no raw evidence was removed.
+relocated_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d['data']['relocated']))" 2>/dev/null)
 removed_count=$(printf '%s' "$RUN_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d['data']['removed']))" 2>/dev/null)
-if [ "$removed_count" = "1" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 dedup apply removed 1 file\n"
+if [ "$relocated_count" = "1" ] && [ "$removed_count" = "0" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 dedup apply preserved 1 duplicate and removed 0 raw objects\n"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 dedup apply removed %s files, expected 1\n" "$removed_count"
+  FAIL=$((FAIL + 1)); printf "  \u2717 dedup apply relocated=%s removed=%s, expected 1/0\n" "$relocated_count" "$removed_count"
 fi
 # Verify only one raw file remains (the canonical)
 raw_remaining=$(find "$DEDUP_VAULT/raw/articles" -name "aaa-*.md" | wc -l | tr -d ' ')
@@ -375,6 +381,12 @@ if [ "$raw_remaining" = "1" ]; then
   PASS=$((PASS + 1)); printf "  \u2713 only 1 raw file remains after dedup\n"
 else
   FAIL=$((FAIL + 1)); printf "  \u2717 %s raw files remain, expected 1\n" "$raw_remaining"
+fi
+preserved_count=$(find "$DEDUP_VAULT/raw/duplicates/articles" -name "aaa-*.md" | wc -l | tr -d ' ')
+if [ "$preserved_count" = "1" ]; then
+  PASS=$((PASS + 1)); printf "  \u2713 duplicate bytes preserved under raw/duplicates\n"
+else
+  FAIL=$((FAIL + 1)); printf "  \u2717 preserved duplicate count is %s, expected 1\n" "$preserved_count"
 fi
 # Verify page citations now all point to one file (no mixed references)
 canonical=$(find "$DEDUP_VAULT/raw/articles" -name "aaa-*.md" -exec basename {} .md \;)

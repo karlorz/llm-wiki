@@ -1,12 +1,17 @@
 import { readdir, rename, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ok, ExitCode, type Result } from "@skillwiki/shared";
+import { err, ok, ExitCode, type Result } from "@skillwiki/shared";
 import { mapWithConcurrency, readPageCached, scanVault, vaultIoConcurrency, type PageTextCache, type VaultScan } from "../utils/vault.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { parseExpiryAnnotations, type ExpiryAnnotation } from "../parsers/expiry-annotations.js";
 import { appendLastOp } from "../utils/last-op.js";
+import { lifecycleDestination } from "../utils/raw-operation-policy.js";
+import { applyRawStructuralMove, planRawStructuralMove } from "../utils/raw-structural-transaction.js";
+import { operationId } from "../utils/operation-id.js";
+import { buildSourceReferenceIndex } from "../utils/source-reference-index.js";
+import { buildSourceRelocationProjection, readSourceRelocations } from "../utils/source-relocations.js";
 
-export interface StaleInput { vault: string; days: number; archive?: boolean; forceScan?: boolean; project?: string; scan?: VaultScan; pageTextCache?: PageTextCache }
+export interface StaleInput { vault: string; days: number; archive?: boolean; apply?: boolean; approve?: string; forceScan?: boolean; project?: string; scan?: VaultScan; pageTextCache?: PageTextCache }
 export interface StaleTranscript { path: string; reason: string; hint?: string }
 export interface IncompleteWorkItem { path: string; reason: string }
 export interface StaleSection {
@@ -27,6 +32,8 @@ export interface StaleOutput {
   done_work_items: IncompleteWorkItem[];
   stale_sections: StaleSection[];
   archived: string[];
+  planned_archives?: Array<{ from: string; to: string }>;
+  approval_token?: string;
   humanHint: string;
 }
 
@@ -296,26 +303,73 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   const today = new Date().toISOString().slice(0, 10);
   if (input.archive) {
     const archiveDir = join(input.vault, "_archive", today);
-    await mkdir(archiveDir, { recursive: true });
-    // Build set of raw paths cited as sources by typed-knowledge pages (protect from archival)
-    const citedRawPaths = new Set<string>();
-    for (const page of scan.typedKnowledge) {
-      const text = await readPageCached(page, input.pageTextCache).catch(() => "");
-      for (const line of text.split("\n")) {
-        for (const m of line.matchAll(/\^\[(raw\/[^\]]+)\]/g)) {
-          citedRawPaths.add(m[1]!);
-        }
-        // Also check sources: frontmatter
-        for (const m of line.matchAll(/raw\/[^\s,\]"]+\.md/g)) {
-          citedRawPaths.add(m[0]!);
-        }
-      }
-    }
+    // Protect any raw source referenced by typed knowledge or other maintained
+    // Markdown, using the same canonical parser and relocation projection as
+    // inventory, disposal, and audit surfaces.
+    const relocations = await readSourceRelocations(input.vault);
+    if (!relocations.ok) return { exitCode: ExitCode.WRITE_FAILED, result: relocations };
+    const typedPaths = new Set(scan.typedKnowledge.map(page => page.relPath));
+    const references = await buildSourceReferenceIndex({
+      typedPages: scan.typedKnowledge,
+      otherPages: scan.allMarkdown.filter(page => !typedPaths.has(page.relPath) && !page.relPath.startsWith("raw/")),
+      availableRawPaths: scan.raw.map(page => page.relPath),
+      relocationProjection: buildSourceRelocationProjection(relocations.data),
+    });
+    const citedRawPaths = new Set([
+      ...references.integratedBy.keys(),
+      ...references.referencedElsewhereBy.keys(),
+    ]);
+    const rawPlans: Array<{ from: string; to: string; approval: string; sourceSha256: string }> = [];
     for (const t of staleTranscripts) {
       // Never archive raw files that are cited as sources (N9: raw immutability)
       if (citedRawPaths.has(t.path) || citedRawPaths.has(t.path.replace(/\.md$/, ""))) continue;
-      const dest = join(archiveDir, t.path.split("/").pop()!);
-      try { await rename(join(input.vault, t.path), dest); archived.push(t.path); } catch { /* skip */ }
+      const destination = lifecycleDestination(t.path, "archive");
+      if (!destination.ok) return { exitCode: ExitCode.WRITE_FAILED, result: destination };
+      const plan = await planRawStructuralMove({ vault: input.vault, operation: "archive", source: t.path, destination: destination.data });
+      if (!plan.ok) return { exitCode: ExitCode.WRITE_FAILED, result: plan };
+      rawPlans.push({
+        from: t.path,
+        to: destination.data,
+        approval: plan.data.approval_token,
+        sourceSha256: plan.data.source_sha256,
+      });
+    }
+    const workPlans = [...incompleteWorkItems, ...doneWorkItems].map(w => w.path).sort();
+    const approvalToken = operationId("stale-archive-approval", [
+      today,
+      ...rawPlans.flatMap(plan => [plan.from, plan.to, plan.sourceSha256, plan.approval]),
+      ...workPlans,
+    ]);
+    if (!input.apply) {
+      const total = stale.length + staleTranscripts.length + unclaimedTranscripts.length + incompleteWorkItems.length + doneWorkItems.length + staleSections.length;
+      return { exitCode: total > 0 ? ExitCode.STALE_PAGE : ExitCode.OK, result: ok({
+        stale: [...stale, ...staleTranscripts.map(t => ({ page: t.path, reason: t.reason })), ...unclaimedTranscripts.map(t => ({ page: t.path, reason: t.reason })), ...incompleteWorkItems.map(w => ({ page: w.path, reason: w.reason })), ...doneWorkItems.map(w => ({ page: w.path, reason: w.reason }))],
+        stale_transcripts: staleTranscripts,
+        unclaimed_transcripts: unclaimedTranscripts,
+        incomplete_work_items: incompleteWorkItems,
+        done_work_items: doneWorkItems,
+        stale_sections: staleSections,
+        archived: [],
+        planned_archives: rawPlans.map(plan => ({ from: plan.from, to: plan.to })),
+        approval_token: approvalToken,
+        humanHint: `DRY-RUN — ${rawPlans.length} raw transcript archive(s) and ${workPlans.length} work archive(s) require --apply --approve ${approvalToken}`,
+      }) };
+    }
+    if (input.approve !== approvalToken) {
+      return { exitCode: ExitCode.USAGE, result: { ok: false, error: "APPROVAL_INVALID", detail: { message: "stale archive approval does not match live state", approval_token: approvalToken } } };
+    }
+    await mkdir(archiveDir, { recursive: true });
+    for (const plan of rawPlans) {
+      const moved = await applyRawStructuralMove({
+        vault: input.vault,
+        operation: "archive",
+        source: plan.from,
+        destination: plan.to,
+        approve: plan.approval,
+        command: "skillwiki stale --archive --apply",
+      });
+      if (!moved.ok) return { exitCode: ExitCode.WRITE_FAILED, result: moved };
+      archived.push(plan.from);
     }
     for (const w of [...incompleteWorkItems, ...doneWorkItems]) {
       // Work items are directories — move to project history/ dir
@@ -327,11 +381,21 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
         const histDir = join(input.vault, "projects", slug, "history", "archived-work");
         await mkdir(histDir, { recursive: true });
         const dest = join(histDir, itemName);
-        try { await rename(join(input.vault, w.path), dest); archived.push(w.path); } catch { /* skip */ }
+        try {
+          await rename(join(input.vault, w.path), dest);
+          archived.push(w.path);
+        } catch (error) {
+          return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { path: w.path, destination: dest, message: String(error) }) };
+        }
       } else {
         // Fallback: flat archive
         const dest = join(archiveDir, w.path.replace(/\//g, "_"));
-        try { await rename(join(input.vault, w.path), dest); archived.push(w.path); } catch { /* skip */ }
+        try {
+          await rename(join(input.vault, w.path), dest);
+          archived.push(w.path);
+        } catch (error) {
+          return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { path: w.path, destination: dest, message: String(error) }) };
+        }
       }
     }
   }

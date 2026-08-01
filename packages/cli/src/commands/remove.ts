@@ -80,6 +80,16 @@ export async function runRemove(input: RemoveInput): Promise<{ exitCode: number;
     };
   }
 
+  if (relPath.startsWith("raw/")) {
+    return {
+      exitCode: ExitCode.USAGE,
+      result: err("RAW_DISPOSAL_REQUIRES_EXACT_TARGET_APPROVAL", {
+        path: relPath,
+        message: "ordinary remove never deletes raw evidence; use sources dispose with an exact target and approved preview",
+      }),
+    };
+  }
+
   if (relPath.startsWith("_archive/")) {
     return {
       exitCode: ExitCode.USAGE,

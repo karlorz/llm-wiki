@@ -25,6 +25,13 @@ ingested: "2026-05-05"
 ${body}`;
 }
 
+async function applyDedup(input: Parameters<typeof runDedup>[0]) {
+  const preview = await runDedup({ ...input, apply: false, remoteDelete: false });
+  if (!preview.result.ok) throw new Error("dedup preview failed");
+  if (!preview.result.data.approval_token) return runDedup({ ...input, apply: true });
+  return runDedup({ ...input, apply: true, approve: preview.result.data.approval_token });
+}
+
 describe("runDedup", () => {
   it("returns OK when no duplicates", async () => {
     const dir = makeVault();
@@ -86,7 +93,7 @@ no hash`);
     }
   });
 
-  it("apply rewires citations and removes duplicates", async () => {
+  it("apply rewires citations and preserves duplicates under raw/duplicates", async () => {
     const dir = makeVault();
     writeFileSync(join(dir, "raw", "articles", "canonical.md"), rawFile(HASH_A, "same body"));
     writeFileSync(join(dir, "raw", "articles", "dup.md"), rawFile(HASH_A, "same body"));
@@ -100,14 +107,16 @@ sources:
 
 Content citing duplicate.^[raw/articles/dup.md]
 `);
-    const r = await runDedup({ vault: dir, apply: true });
+    const r = await applyDedup({ vault: dir });
     expect(r.exitCode).toBe(36); // DEDUP_APPLIED
     if (r.result.ok) {
       expect(r.result.data.rewired).toContain("concepts/page.md");
-      expect(r.result.data.removed).toContain("raw/articles/dup.md");
+      expect(r.result.data.removed).toEqual([]);
+      expect(r.result.data.relocated).toContainEqual({ from: "raw/articles/dup.md", to: "raw/duplicates/articles/dup.md" });
     }
-    // Duplicate raw file deleted
+    // Duplicate address is retired, but exact bytes remain preserved in Layer 1.
     expect(existsSync(join(dir, "raw", "articles", "dup.md"))).toBe(false);
+    expect(existsSync(join(dir, "raw", "duplicates", "articles", "dup.md"))).toBe(true);
     // Canonical raw file preserved
     expect(existsSync(join(dir, "raw", "articles", "canonical.md"))).toBe(true);
     // Citations rewired
@@ -116,20 +125,68 @@ Content citing duplicate.^[raw/articles/dup.md]
     expect(pageContent).not.toContain("^[raw/articles/dup.md]");
   });
 
+  it("apply rewires extensionless body and sources citations", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "canonical.md"), rawFile(HASH_A, "same body"));
+    writeFileSync(join(dir, "raw", "articles", "dup.md"), rawFile(HASH_A, "same body"));
+    writeFileSync(join(dir, "concepts", "extensionless.md"), `---\ntitle: Test\ntype: concept\ntags: []\nsources: [raw/articles/dup]\n---\nContent.^[raw/articles/dup]\n`);
+    const result = await applyDedup({ vault: dir });
+    expect(result.exitCode).toBe(36);
+    const maintained = readFileSync(join(dir, "concepts", "extensionless.md"), "utf8");
+    expect(maintained).toContain("raw/articles/canonical");
+    expect(maintained).not.toContain("raw/articles/dup");
+  });
+
+  it("is a no-op when rerun after duplicates were preserved", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "canonical.md"), rawFile(HASH_A, "same body"));
+    writeFileSync(join(dir, "raw", "articles", "dup.md"), rawFile(HASH_A, "same body"));
+
+    const first = await applyDedup({ vault: dir });
+    expect(first.result.ok).toBe(true);
+    const second = await runDedup({ vault: dir });
+
+    expect(second.exitCode).toBe(0);
+    expect(second.result.ok).toBe(true);
+    if (second.result.ok) {
+      expect(second.result.data.duplicates).toEqual([]);
+      expect(second.result.data.relocated).toEqual([]);
+      expect(second.result.data.scanned).toBe(1);
+    }
+    expect(existsSync(join(dir, "raw", "duplicates", "articles", "dup.md"))).toBe(true);
+  });
+
+  it("rejects an approval after maintained citation state changes", async () => {
+    const dir = makeVault();
+    writeFileSync(join(dir, "raw", "articles", "canonical.md"), rawFile(HASH_A, "same body"));
+    writeFileSync(join(dir, "raw", "articles", "dup.md"), rawFile(HASH_A, "same body"));
+    const page = join(dir, "concepts", "page.md");
+    writeFileSync(page, "Cites ^[raw/articles/dup.md]\n");
+
+    const preview = await runDedup({ vault: dir });
+    if (!preview.result.ok || !preview.result.data.approval_token) throw new Error("dedup preview failed");
+    writeFileSync(page, "Changed after preview; still cites ^[raw/articles/dup.md]\n");
+    const applied = await runDedup({ vault: dir, apply: true, approve: preview.result.data.approval_token });
+
+    expect(applied.result.ok).toBe(false);
+    if (!applied.result.ok) expect(applied.result.error).toBe("APPROVAL_INVALID");
+    expect(existsSync(join(dir, "raw", "articles", "dup.md"))).toBe(true);
+    expect(existsSync(join(dir, "raw", "duplicates", "articles", "dup.md"))).toBe(false);
+  });
+
   it("apply keeps the stable shortest raw path instead of the first scanned duplicate", async () => {
     const dir = makeVault();
     const longName = "JayCRLMobileVC Turn your phone into the control center for an AI coding assistant CLI session.md";
     writeFileSync(join(dir, "raw", "articles", longName), rawFile(HASH_A, "same body"));
     writeFileSync(join(dir, "raw", "articles", "JayCRLMobileVC.md"), rawFile(HASH_A, "same body"));
 
-    const r = await runDedup({ vault: dir, apply: true });
+    const r = await applyDedup({ vault: dir });
 
     expect(r.exitCode).toBe(36);
     expect(existsSync(join(dir, "raw", "articles", "JayCRLMobileVC.md"))).toBe(true);
     expect(existsSync(join(dir, "raw", "articles", longName))).toBe(false);
     if (r.result.ok) {
-      expect(r.result.data.removed).toContain(`raw/articles/${longName}`);
-      expect(r.result.data.removed).not.toContain("raw/articles/JayCRLMobileVC.md");
+      expect(r.result.data.relocated).toContainEqual({ from: `raw/articles/${longName}`, to: `raw/duplicates/articles/${longName}` });
     }
   });
 
@@ -140,7 +197,7 @@ Content citing duplicate.^[raw/articles/dup.md]
     mkdirSync(join(dir, "projects", "llm-wiki", "history"), { recursive: true });
     writeFileSync(join(dir, "projects", "llm-wiki", "history", "note.md"), "Uses ^[raw/articles/dup.md]\n");
 
-    const r = await runDedup({ vault: dir, apply: true });
+    const r = await applyDedup({ vault: dir });
 
     expect(readFileSync(join(dir, "projects", "llm-wiki", "history", "note.md"), "utf-8"))
       .toContain("^[raw/articles/canonical.md]");
@@ -154,12 +211,12 @@ Content citing duplicate.^[raw/articles/dup.md]
     writeFileSync(join(dir, "raw", "articles", "a.md"), rawFile(HASH_A, "alpha body"));
     writeFileSync(join(dir, "raw", "articles", "b.md"), rawFile(HASH_A, "different body"));
 
-    const r = await runDedup({ vault: dir, apply: true });
+    const r = await applyDedup({ vault: dir });
 
     expect(existsSync(join(dir, "raw", "articles", "a.md"))).toBe(true);
     expect(existsSync(join(dir, "raw", "articles", "b.md"))).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.removed).toEqual([]);
+      expect(r.result.data.relocated).toEqual([]);
       expect(r.result.data.unsafe?.[0]?.reason).toBe("body_hash_mismatch");
       expect(r.result.data.unsafe?.[0]?.files).toEqual(["raw/articles/a.md", "raw/articles/b.md"]);
     }
@@ -171,9 +228,8 @@ Content citing duplicate.^[raw/articles/dup.md]
     writeFileSync(join(dir, "raw", "articles", "dup.md"), rawFile(HASH_A, "same body"));
     const calls: string[][] = [];
 
-    const r = await runDedup({
+    const r = await applyDedup({
       vault: dir,
-      apply: true,
       manifestOut: join(dir, ".skillwiki", "raw-dedup-manifest.json"),
       remote: "seaweed-wiki:cloud/wiki",
       remoteDelete: false,
@@ -204,9 +260,8 @@ Content citing duplicate.^[raw/articles/dup.md]
     writeFileSync(join(dir, "raw", "articles", "dup.md"), rawFile(HASH_A, "same body"));
     const calls: string[][] = [];
 
-    const r = await runDedup({
+    const r = await applyDedup({
       vault: dir,
-      apply: true,
       remote: "seaweed-wiki:cloud/wiki/",
       remoteDelete: true,
       maxRemoteDeletes: 1,
@@ -229,9 +284,8 @@ Content citing duplicate.^[raw/articles/dup.md]
     writeFileSync(join(dir, "raw", "articles", "dup-b.md"), rawFile(HASH_A, "same body"));
     const calls: string[][] = [];
 
-    const r = await runDedup({
+    const r = await applyDedup({
       vault: dir,
-      apply: true,
       remote: "seaweed-wiki:cloud/wiki",
       remoteDelete: true,
       maxRemoteDeletes: 1,
@@ -284,6 +338,92 @@ Content citing duplicate.^[raw/articles/dup.md]
     }
   });
 
+  it("rejects traversal paths in an imported manifest before remote deletion", async () => {
+    const dir = makeVault();
+    mkdirSync(join(dir, ".skillwiki"), { recursive: true });
+    const manifestPath = join(dir, ".skillwiki", "raw-dedup-manifest.json");
+    writeFileSync(manifestPath, JSON.stringify({
+      version: 1,
+      created_at: "2026-06-18T00:00:00.000Z",
+      vault: dir,
+      entries: [{
+        sha256: HASH_A,
+        bodyHash: HASH_B,
+        canonical: "raw/articles/canonical.md",
+        duplicates: ["../outside.md"],
+      }],
+    }));
+    const calls: string[][] = [];
+
+    const result = await runDedup({
+      vault: dir,
+      manifestIn: manifestPath,
+      remote: "seaweed-wiki:cloud/wiki",
+      remoteDelete: true,
+      maxRemoteDeletes: 1,
+      rcloneRunner: async args => {
+        calls.push(args);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(result.result.ok).toBe(false);
+    if (!result.result.ok) expect(result.result.error).toBe("APPROVAL_INVALID");
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects an imported manifest bound to a different vault", async () => {
+    const dir = makeVault();
+    const otherVault = makeVault();
+    mkdirSync(join(dir, ".skillwiki"), { recursive: true });
+    const manifestPath = join(dir, ".skillwiki", "raw-dedup-manifest.json");
+    writeFileSync(manifestPath, JSON.stringify({
+      version: 1,
+      created_at: "2026-06-18T00:00:00.000Z",
+      vault: otherVault,
+      entries: [{
+        sha256: HASH_A,
+        bodyHash: HASH_B,
+        canonical: "raw/articles/canonical.md",
+        duplicates: ["raw/articles/dup.md"],
+      }],
+    }));
+    const calls: string[][] = [];
+
+    const result = await runDedup({
+      vault: dir,
+      manifestIn: manifestPath,
+      remote: "seaweed-wiki:cloud/wiki",
+      remoteDelete: true,
+      maxRemoteDeletes: 1,
+      rcloneRunner: async args => {
+        calls.push(args);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    expect(result.result.ok).toBe(false);
+    if (!result.result.ok) expect(result.result.error).toBe("APPROVAL_INVALID");
+    expect(calls).toEqual([]);
+  });
+
+  it("rejects a stale manifest when a local duplicate path was reused with different bytes", async () => {
+    const dir = makeVault();
+    mkdirSync(join(dir, ".skillwiki"), { recursive: true });
+    writeFileSync(join(dir, "raw", "articles", "canonical.md"), rawFile(HASH_A, "same body"));
+    writeFileSync(join(dir, "raw", "articles", "dup.md"), rawFile(HASH_A, "same body"));
+    const preview = await runDedup({ vault: dir });
+    if (!preview.result.ok || !preview.result.data.manifest) throw new Error("manifest preview failed");
+    const manifestPath = join(dir, ".skillwiki", "raw-dedup-manifest.json");
+    writeFileSync(manifestPath, JSON.stringify(preview.result.data.manifest));
+    writeFileSync(join(dir, "raw", "articles", "dup.md"), rawFile(HASH_B, "new unrelated body"));
+    const result = await runDedup({ vault: dir, manifestIn: manifestPath, apply: true });
+    expect(result.result.ok).toBe(false);
+    if (!result.result.ok) expect(result.result.error).toBe("APPROVAL_INVALID");
+    expect(existsSync(join(dir, "raw", "articles", "dup.md"))).toBe(true);
+    expect(existsSync(join(dir, "raw", "duplicates", "articles", "dup.md"))).toBe(false);
+  });
+
   it("remoteDelete requires apply or manifestIn before deleting remote objects", async () => {
     const dir = makeVault();
     writeFileSync(join(dir, "raw", "articles", "canonical.md"), rawFile(HASH_A, "same body"));
@@ -311,9 +451,8 @@ Content citing duplicate.^[raw/articles/dup.md]
     writeFileSync(join(dir, "raw", "articles", "canonical.md"), rawFile(HASH_A, "same body"));
     writeFileSync(join(dir, "raw", "articles", "dup.md"), rawFile(HASH_A, "same body"));
 
-    const r = await runDedup({
+    const r = await applyDedup({
       vault: dir,
-      apply: true,
       remote: "seaweed-wiki:cloud/wiki",
       remoteDelete: true,
       maxRemoteDeletes: 1,
@@ -325,7 +464,7 @@ Content citing duplicate.^[raw/articles/dup.md]
     if (!r.result.ok) {
       expect(r.result.error).toBe("SYNC_PUSH_FAILED");
     }
-    expect(existsSync(join(dir, "raw", "articles", "dup.md"))).toBe(true);
+    expect(existsSync(join(dir, "raw", "duplicates", "articles", "dup.md"))).toBe(true);
   });
 
   it("remoteDelete requires a remote root", async () => {

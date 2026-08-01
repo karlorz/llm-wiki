@@ -3,13 +3,23 @@
 Prompt-only Markdown skills for Claude Code. Installed via `skillwiki install`
 or the Claude/Codex/Antigravity plugin packaging paths.
 
-Current package inventory: **18 skills**.
+Current package inventory: **19 skills**.
 
 Publication policy: new or updated typed-knowledge and meta pages must use
 `skillwiki page publish` from a temporary draft, inspect its dry-run, and add
 `--write` only after the preview succeeds. Do not directly publish the final
 typed path or separately edit its index/log entries; immutable raw sources and
 non-typed project work retain their existing workflows.
+
+Raw lifecycle policy: completed raw captures are byte-immutable. Attended,
+state-bound structural commands may preserve-move sources under
+`raw/archived/` or `raw/duplicates/`; ordinary remove refuses raw, and permanent
+disposal requires `skillwiki sources dispose` for one explicit exact target.
+Web Clipper captures enter asynchronously through the init-installed
+`_Templates/web-clipper/llm-wiki-clippings.json`; inspect them with
+`skillwiki sources pending` or the separate `query --include-pending` channel.
+`raw/assets/**` is a flexible stable pool with explicit vault-root embeds, not a
+fixed papers/transcripts taxonomy.
 
 | Namespace | Skills |
 |---|---|
@@ -48,8 +58,9 @@ Before a managed vault mutation, invoke the managed SkillWiki command while the 
 
 - typed pages: `skillwiki page publish <draft> <vault> --target <path>` then the same command with `--write`
 - archive: `skillwiki archive <path> <vault>`
+- pending inventory/query: `skillwiki sources pending <vault>` and `skillwiki query "..." <vault> --include-pending`
+- raw disposition/disposal: `skillwiki sources disposition ...` / attended `skillwiki sources dispose ...`
 - ad-hoc structural log: `skillwiki log-append <vault> --content '<entry>'` (Release A dual-write) or event materialization (Release B)
 - project/root index: `skillwiki project-index <slug> <vault> --apply` and `skillwiki index rebuild <vault> --write` only through managed commands
 - log projection: `skillwiki log materialize <vault> [--write]`
 - paired projections: `skillwiki projections materialize <vault> [--write]`
-

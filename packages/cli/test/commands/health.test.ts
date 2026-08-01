@@ -127,6 +127,39 @@ describe("runHealth", () => {
     }
   });
 
+  it("reports pending source lifecycle counts without changing health exit status", async () => {
+    const home = makeHome();
+    const vault = makeVault();
+    const baseline = await runHealth({
+      vault,
+      home,
+      envValue: undefined,
+      argv: ["node", "skillwiki", "health"],
+      currentVersion: "0.10.22-test",
+      sync: "off",
+      noFail: false,
+    });
+    writeFileSync(join(vault, "raw", "articles", "2026-08-02-pending.md"), "---\ntitle: Pending\nsource_url: https://example.com/pending\ningested: 2026-08-02\ningested_by: manual\n---\nBody\n");
+    const result = await runHealth({
+      vault,
+      home,
+      envValue: undefined,
+      argv: ["node", "skillwiki", "health"],
+      currentVersion: "0.10.22-test",
+      sync: "off",
+      noFail: false,
+    });
+    expect(result.exitCode).toBe(baseline.exitCode);
+    if (!result.result.ok) throw new Error("health failed");
+    expect(result.result.data.components.source_lifecycle).toMatchObject({
+      status: "info",
+      blocking: false,
+      summary: { pending: 1, fresh_pending_examples: ["raw/articles/2026-08-02-pending.md"] },
+    });
+    expect(result.result.data.coverage.source_lifecycle.state).toBe("checked");
+    expect(result.result.data.risk_flags.some(flag => flag.id.includes("pending"))).toBe(false);
+  });
+
   it("uses the latest OK push line when trailing JSON is appended to wiki-push.log", async () => {
     const home = makeHome();
     const vault = makeVault();

@@ -97,4 +97,18 @@ describe("runRemove", () => {
     const r = await runRemove({ vault: dir, page: "missing" });
     expect(r.exitCode).toBe(ExitCode.FILE_NOT_FOUND);
   });
+
+  it("refuses ordinary removal of raw evidence and leaves bytes untouched", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    const path = join(dir, "raw", "articles", "evidence.md");
+    const bytes = "---\nsource_url: https://example.com\ningested: 2026-08-02\n---\nEvidence\n";
+    writeFileSync(path, bytes);
+    const result = await runRemove({ vault: dir, page: "raw/articles/evidence.md" });
+    expect(result.exitCode).toBe(ExitCode.USAGE);
+    expect(result.result.ok).toBe(false);
+    if (!result.result.ok) expect(result.result.error).toBe("RAW_DISPOSAL_REQUIRES_EXACT_TARGET_APPROVAL");
+    expect(readFileSync(path, "utf8")).toBe(bytes);
+    expect(existsSync(join(dir, "meta", "delete-intents", "raw__articles__evidence.md.json"))).toBe(false);
+  });
 });

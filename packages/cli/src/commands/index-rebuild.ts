@@ -61,7 +61,7 @@ export async function runIndexRebuild(
     return { exitCode: guard.exitCode, result: guard.result };
   }
 
-  return runManagedWriteTransaction({
+  return runManagedWriteTransaction<IndexRebuildOutput>({
     vault: input.vault,
     command: "index rebuild",
     allowImmutableRecord: false,

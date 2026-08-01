@@ -12,7 +12,7 @@ This sets the language of generated page prose. Frontmatter keys, schema section
 
 ## Layers
 
-- `raw/` — immutable source material (never modify after ingest).
+- `raw/` — immutable evidence. Never rewrite existing content/frontmatter or autonomously remove an object. Attended rename/relocate/archive/dedup is allowed only when exact bytes remain somewhere under `raw/`.
 - `entities/`, `concepts/`, `comparisons/`, `queries/` — typed knowledge unified across origin via `provenance:`.
 - `meta/` — cross-project synthesis (notes naming ≥2 projects).
 - `projects/{slug}/` — per-project lifecycle workspace.
@@ -42,6 +42,7 @@ Rule: every tag on every page MUST appear in this taxonomy. Add new tags here fi
 - DO NOT create a page for passing mentions.
 - Split a page when it exceeds ~200 lines.
 - Archive a page when fully superseded — move to `_archive/`, remove from `index.md`.
+- Raw source lifecycle is separate: preserve archived sources under `raw/archived/{articles,papers,transcripts}/` and preserved duplicates under `raw/duplicates/{articles,papers,transcripts}/`. Legacy `_archive/raw/` is read-only compatibility, never a new-write target.
 
 ## Update Policy
 
@@ -71,8 +72,9 @@ Obsidian-compatible Mermaid rules:
 
 ## Ad-Hoc Capture Format
 
-Ad-hoc captures are mutable working notes created during development
+Ad-hoc captures are immutable completed evidence created during development
 (via `/wiki-add-task` or filesystem drop). They live in `raw/transcripts/`.
+Corrections create a new capture or a maintained work-item note; never edit an existing transcript.
 
 ### Frontmatter
 
@@ -98,15 +100,16 @@ project:          # optional: "[[slug]]" for cross-reference
 | Aspect | Ad-Hoc Capture | Ingested Source |
 |--------|----------------|-----------------|
 | Location | `raw/transcripts/` | `raw/articles/`, `raw/papers/`, etc. |
-| Mutability | Mutable (working notes) | Immutable after ingest |
+| Mutability | Immutable after capture | Immutable after ingest |
 | `sha256` | **Omitted** | Required |
 | `created` | Required | Use `ingested` |
 | Entry | `/wiki-add-task`, filesystem drop | `wiki-ingest`, `skillwiki fetch` |
 
 ## Obsidian Integration
 
-- **Attachment folder:** `raw/assets/` — binary assets (images, diagrams) live here.
-  Set Obsidian's "Attachment folder path" to `raw/assets` for automatic filing.
+- **Stable asset pool:** binary assets may use any flat or URL-friendly nested path under `raw/assets/`; no fixed internal taxonomy such as papers/transcripts is required.
+- Use explicit vault-root embeds such as `![[raw/assets/example/diagram.png]]` so Obsidian preview and GitHub browsing remain unambiguous.
+- Resolve and preview a new local embed before finalizing its raw capture. Once referenced, the asset path freezes; source archive/dedup does not move it. Remote HTTP(S) images remain external dependencies unless separately captured.
 - **Dataview queries** (read-only; do not replace index.md):
 
 ```dataview

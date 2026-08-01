@@ -24,7 +24,7 @@ describe("cli-surface drift detection", () => {
     const surface = buildCliSurface();
     const knownCommands = [
       "hash", "fetch-guard", "validate", "graph", "canvas", "overlap",
-      "query", "orphans", "audit", "install", "path", "lang", "init",
+      "query", "sources", "orphans", "audit", "install", "path", "lang", "init",
       "links", "tag-audit", "index", "index-check", "index-link-format",
       "topic-map-check", "stale", "claim", "pagesize", "log-rotate",
       "log-append", "work-complete", "work-validate", "log", "projections",
@@ -44,6 +44,7 @@ describe("cli-surface drift detection", () => {
     const surface = buildCliSurface();
     const subcommandGroups = [
       { parent: "graph", subs: ["build"] },
+      { parent: "sources", subs: ["pending", "disposition", "dispose"] },
       { parent: "canvas", subs: ["generate"] },
       { parent: "config", subs: ["get", "set", "list", "path"] },
       { parent: "compound", subs: ["promote", "list", "delete"] },
@@ -72,7 +73,7 @@ describe("cli-surface drift detection", () => {
     const surface = buildCliSurface();
     const knownCommands = new Set([
       "hash", "fetch-guard", "validate", "graph", "canvas", "overlap",
-      "query", "orphans", "audit", "install", "path", "lang", "init",
+      "query", "sources", "orphans", "audit", "install", "path", "lang", "init",
       "links", "tag-audit", "index", "index-check", "index-link-format",
       "topic-map-check", "stale", "claim", "pagesize", "log-rotate",
       "log-append", "work-complete", "work-validate", "log", "projections",

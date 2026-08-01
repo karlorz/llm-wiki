@@ -7,6 +7,7 @@ describe("buildCliSurface", () => {
     expect(surface.has("stale")).toBe(true);
     expect(surface.has("lint")).toBe(true);
     expect(surface.has("init")).toBe(true);
+    expect(surface.has("sources.pending")).toBe(true);
     expect(surface.has("health")).toBe(true);
     expect(surface.has("doctor")).toBe(true);
   });
@@ -41,6 +42,8 @@ describe("buildCliSurface", () => {
     expect(surface.get("health")!.has("--out")).toBe(true);
     expect(surface.get("init")!.has("--force")).toBe(true);
     expect(surface.get("init")!.has("--domain")).toBe(true);
+    expect(surface.get("query")!.has("--include-pending")).toBe(true);
+    expect(surface.get("sources.pending")!.has("--include-legacy-archived")).toBe(true);
     expect(surface.get("archive")!.has("--cascade")).toBe(true);
     expect(surface.get("archive")!.has("--apply")).toBe(true);
     expect(surface.get("sync.lock")!.has("--summary")).toBe(true);

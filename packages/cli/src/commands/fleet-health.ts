@@ -401,7 +401,7 @@ export async function runFleetHealth(
       // local host. sg02 is only SSH-reachable from macos-dev; from any other
       // host (sg01, a fresh dev box), skip with no-access instead of
       // false-positive "unreachable".
-      if (!hasDeclaredSshAccess(t.host, localHostId, t.sshAlias)) {
+      if (!localHostId || !hasDeclaredSshAccess(t.host, localHostId, t.sshAlias)) {
         rows.push({
           host: t.id,
           timer: "unknown",

@@ -1,4 +1,4 @@
-import { rename, mkdir, readFile, writeFile } from "node:fs/promises";
+import { rename, mkdir, readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
@@ -13,12 +13,19 @@ import {
   type RemotePruneResult,
 } from "../utils/rclone.js";
 import { buildDeleteIntent, writeDeleteIntent } from "../utils/delete-intent.js";
+import { lifecycleDestination } from "../utils/raw-operation-policy.js";
+import { applyRawStructuralMove, planRawStructuralMove } from "../utils/raw-structural-transaction.js";
+import { safeWritePage } from "../utils/safe-write.js";
+import { operationId } from "../utils/operation-id.js";
+import { rewriteRawSourceReferences } from "../utils/raw-reference-rewrite.js";
+import { snapshotMaintainedPageState } from "../utils/maintained-page-state.js";
 
 export interface ArchiveInput {
   vault: string;
   page: string;
   cascade?: boolean;
   apply?: boolean;
+  approve?: string;
   remote?: string;
   remoteDelete?: boolean;
   maxRemoteDeletes?: number;
@@ -35,6 +42,7 @@ export interface CascadeSourceArrayRef {
 
 export interface CascadePreview {
   wikilink_refs: CascadeWikilinkRef[];
+  citation_refs: CascadeWikilinkRef[];
   index_refs: CascadeIndexRef[];
   source_array_refs: CascadeSourceArrayRef[];
 }
@@ -44,6 +52,7 @@ export interface ArchiveOutput {
   archived_to: string;
   index_updated: boolean;
   applied?: boolean;
+  approval_token?: string;
   cascade?: CascadePreview;
   remote?: RemotePruneResult;
   humanHint: string;
@@ -82,7 +91,7 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
   let relPath = lookup(scan.data.typedKnowledge);
   let isRaw = false;
   if (!relPath) {
-    relPath = lookup(scan.data.raw);
+    relPath = input.page.includes("/") ? lookup(scan.data.raw) : undefined;
     isRaw = relPath != null;
   }
 
@@ -91,14 +100,17 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
   if (relPath.startsWith("_archive/")) return { exitCode: ExitCode.ARCHIVE_ALREADY_ARCHIVED, result: err("ARCHIVE_ALREADY_ARCHIVED", { page: relPath }) };
 
   const slug = relPath.replace(/\.md$/, "").split("/").pop()!;
-  const archivePath = join("_archive", relPath).replace(/\\/g, "/");
+  const rawArchive = isRaw ? lifecycleDestination(relPath, "archive") : undefined;
+  if (rawArchive && !rawArchive.ok) return { exitCode: ExitCode.USAGE, result: rawArchive };
+  const archivePath = isRaw ? rawArchive!.data : join("_archive", relPath).replace(/\\/g, "/");
   const remoteRoot = normalizeRemoteRoot(input.remote);
   const remoteObjectPath = buildRemoteObjectPath(remoteRoot, relPath);
 
   // ----- Cascade scan (read-only) -----
   let cascade: CascadePreview | undefined;
-  if (input.cascade) {
+  if (input.cascade || isRaw) {
     const wikilinkRefs: CascadeWikilinkRef[] = [];
+    const citationRefs: CascadeWikilinkRef[] = [];
     const sourceArrayRefs: CascadeSourceArrayRef[] = [];
     for (const page of scan.data.typedKnowledge) {
       if (page.relPath === relPath) continue;
@@ -108,13 +120,16 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
       // Wikilinks in body
       const wl = countWikilinks(split.data.body, slug);
       if (wl > 0) wikilinkRefs.push({ page: page.relPath, count: wl });
+      const rewritten = isRaw ? rewriteRawSourceReferences(text, relPath, archivePath) : undefined;
+      const citationCount = rewritten?.bodyCitationCount ?? 0;
+      if (citationCount > 0) citationRefs.push({ page: page.relPath, count: citationCount });
       // sources: arrays in frontmatter
       const fm = extractFrontmatter(text);
       if (!fm.ok) continue;
       const sources = fm.data.sources;
-      if (Array.isArray(sources) && sources.includes(relPath)) {
+      if (Array.isArray(sources) && (isRaw ? rewritten!.sourcesBefore.some((source, index) => source !== rewritten!.sourcesAfter[index]) : sources.includes(relPath))) {
         const before = sources.filter((s): s is string => typeof s === "string");
-        const after = before.filter(s => s !== relPath);
+        const after = isRaw ? rewritten!.sourcesAfter : before.filter(s => s !== relPath);
         sourceArrayRefs.push({ page: page.relPath, sources_before: before, sources_after: after });
       }
     }
@@ -130,12 +145,29 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
         if (e instanceof Error && "code" in e && e.code !== "ENOENT") throw e;
       }
     }
-    cascade = { wikilink_refs: wikilinkRefs, index_refs: indexRefs, source_array_refs: sourceArrayRefs };
+    cascade = { wikilink_refs: wikilinkRefs, citation_refs: citationRefs, index_refs: indexRefs, source_array_refs: sourceArrayRefs };
   }
+
+  let rawPlan: Awaited<ReturnType<typeof planRawStructuralMove>> | undefined;
+  if (isRaw) {
+    rawPlan = await planRawStructuralMove({ vault: input.vault, operation: "archive", source: relPath, destination: archivePath });
+    if (!rawPlan.ok) return { exitCode: ExitCode.WRITE_FAILED, result: rawPlan };
+  }
+  const citationState = isRaw ? await snapshotMaintainedPageState(scan.data.allMarkdown) : [];
+  const rawApprovalToken = rawPlan?.ok
+    ? operationId("raw-archive-approval", [
+        rawPlan.data.operation_id,
+        rawPlan.data.approval_token,
+        rawPlan.data.source_sha256,
+        archivePath,
+        ...citationState,
+      ])
+    : undefined;
+  const rawStructuralApproval = rawPlan?.ok ? rawPlan.data.approval_token : undefined;
 
   // ----- Dry-run gate -----
   // --cascade alone is preview-only; --apply confirms mutation.
-  if (input.cascade && !input.apply) {
+  if ((input.cascade || isRaw) && !input.apply) {
     const summary = `DRY-RUN — would archive ${relPath}; ${cascade!.wikilink_refs.length} wikilink ref(s), ${cascade!.index_refs.length} index ref(s), ${cascade!.source_array_refs.length} source array ref(s).`;
     return {
       exitCode: ExitCode.OK,
@@ -144,6 +176,7 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
         archived_to: archivePath,
         index_updated: false,
         applied: false,
+        ...(rawApprovalToken ? { approval_token: rawApprovalToken } : {}),
         cascade,
         ...(remoteObjectPath ? { remote: { plannedDeletes: [remoteObjectPath], deleted: [] } } : {}),
         humanHint: summary + (remoteObjectPath ? ` (remote planned ${input.remoteDelete ? "delete" : "preview"}: ${remoteObjectPath})` : ""),
@@ -151,35 +184,67 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
     };
   }
 
+  if (isRaw) {
+    if (!input.approve || !rawStructuralApproval || input.approve !== rawApprovalToken) {
+      return { exitCode: ExitCode.USAGE, result: err("APPROVAL_INVALID", { message: "raw archive requires the live dry-run --approve token" }) };
+    }
+    const moved = await applyRawStructuralMove({
+      vault: input.vault,
+      operation: "archive",
+      source: relPath,
+      destination: archivePath,
+      approve: rawStructuralApproval,
+      command: "skillwiki archive",
+      citationChanges: [...new Set([...(cascade?.source_array_refs.map(ref => ref.page) ?? []), ...(cascade?.citation_refs.map(ref => ref.page) ?? [])])],
+    });
+    if (!moved.ok) return { exitCode: ExitCode.WRITE_FAILED, result: moved };
+  }
+
   // ----- Apply cascade mutations (sources arrays only) -----
-  if (input.cascade && input.apply && cascade) {
+  if ((input.cascade || isRaw) && input.apply && cascade) {
     for (const ref of cascade.source_array_refs) {
       const absPath = join(input.vault, ref.page);
       const text = await readFile(absPath, "utf8");
-      const split = splitFrontmatter(text);
-      if (!split.ok) continue;
-      // Rewrite the sources: block in the frontmatter
-      const before = split.data.rawFrontmatter;
-      // Replace the YAML `sources:` array. Conservative regex: matches a `sources:` key followed by
-      // either inline `[...]` or block-list lines (`  - ...`) until next top-level key or end.
-      const newSourcesYaml = ref.sources_after.length === 0
-        ? "sources: []"
-        : "sources:\n" + ref.sources_after.map(s => `  - ${s}`).join("\n");
-      const fmRewritten = before.replace(
-        /^sources:\s*(?:\[[^\]]*\]|(?:\r?\n(?:\s*-\s.*))+)/m,
-        newSourcesYaml,
-      );
-      if (fmRewritten === before) continue; // no change — bail safely
       if (!arraysEqual(ref.sources_after, ref.sources_before)) {
-        await writeFile(absPath, `---\n${fmRewritten}\n---${split.data.body}`, "utf8");
+        let updated: string;
+        if (isRaw) {
+          updated = rewriteRawSourceReferences(text, relPath, archivePath).text;
+        } else {
+          const split = splitFrontmatter(text);
+          if (!split.ok) continue;
+          const newSourcesYaml = ref.sources_after.length === 0
+            ? "sources: []"
+            : "sources:\n" + ref.sources_after.map(s => `  - ${s}`).join("\n");
+          const fmRewritten = split.data.rawFrontmatter.replace(
+            /^sources:\s*(?:\[[^\]]*\]|(?:\r?\n(?:\s*-\s.*))+)/m,
+            newSourcesYaml,
+          );
+          if (fmRewritten === split.data.rawFrontmatter) continue;
+          updated = `---\n${fmRewritten}\n---${split.data.body}`;
+        }
+        const write = await safeWritePage(absPath, updated);
+        if (!write.ok) return { exitCode: ExitCode.WRITE_FAILED, result: write };
+      }
+    }
+    if (isRaw) {
+      for (const ref of cascade.citation_refs) {
+        if (cascade.source_array_refs.some(sourceRef => sourceRef.page === ref.page)) continue;
+        const absPath = join(input.vault, ref.page);
+        const original = await readFile(absPath, "utf8");
+        const updated = rewriteRawSourceReferences(original, relPath, archivePath).text;
+        if (updated !== original) {
+          const write = await safeWritePage(absPath, updated);
+          if (!write.ok) return { exitCode: ExitCode.WRITE_FAILED, result: write };
+        }
       }
     }
   }
 
   // ----- Standard archive flow (always runs unless dry-run gated above) -----
-  await mkdir(dirname(join(input.vault, archivePath)), { recursive: true });
-
-  await rename(join(input.vault, relPath), join(input.vault, archivePath));
+  if (!isRaw) {
+    await mkdir(dirname(join(input.vault, archivePath)), { recursive: true });
+    await rename(join(input.vault, relPath), join(input.vault, archivePath));
+  }
 
   // Rebuild root index from the post-rename page tree (full-path projection).
   let indexUpdated = false;
@@ -225,7 +290,7 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
     remote = pruned.data;
   }
 
-  const applied = input.cascade ? true : undefined;
+  const applied = input.cascade || isRaw ? true : undefined;
   const cascadeNote = input.cascade ? ` (cascade: ${cascade!.source_array_refs.length} src arrays updated, ${cascade!.wikilink_refs.length} wikilinks reported)` : "";
   const remoteNote = remote
     ? ` (remote ${input.remoteDelete ? `deleted ${remote.deleted.length}` : `planned ${remote.plannedDeletes.length}`})`

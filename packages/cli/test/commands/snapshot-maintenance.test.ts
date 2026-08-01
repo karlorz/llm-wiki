@@ -60,11 +60,19 @@ function writeReviewRequiredJournal(repo: string, opId: string, targetOid: strin
   writeFileSync(join(opsDir, `${opId}.env`), lines.join("\n") + "\n");
 }
 
-function makeFleetLoad(hostId: string, role: string, protectedFlag: boolean): FleetManifestAndHost {
+function makeFleetLoad(hostId: string, role: "leaf" | "snapshotter", protectedFlag: boolean): FleetManifestAndHost {
   return {
     manifest: {
+      schema_version: 1,
+      vault_remote: "origin",
       hosts: {
-        [hostId]: { role, protected: protectedFlag },
+        [hostId]: {
+          class: role === "snapshotter" ? "prod-linux" : "dev-linux",
+          role,
+          writes_to: role === "snapshotter" ? ["s3", "github"] : ["s3"],
+          protected: protectedFlag,
+          identity: { hostnames: [hostId] },
+        },
       },
     },
     hostId,
@@ -75,7 +83,7 @@ function makeFleetLoad(hostId: string, role: string, protectedFlag: boolean): Fl
 }
 
 function makeFixture(opts: {
-  role?: string;
+  role?: "leaf" | "snapshotter";
   protected?: boolean;
   hostId?: string;
   clean?: boolean;

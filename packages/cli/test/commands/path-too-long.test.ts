@@ -116,7 +116,7 @@ describe("fixPathTooLong", () => {
     }
   });
 
-  it("dedupes to an existing identical shortened target instead of creating suffix variants", async () => {
+  it("leaves raw path repair report-only instead of deleting an identical source", async () => {
     const v = vault();
     mkdirSync(join(v, "raw", "articles", "obsidian-import"), { recursive: true });
     const longStem = "duplicate-windows-hostile-note-name-".repeat(6);
@@ -128,21 +128,21 @@ describe("fixPathTooLong", () => {
     writeFileSync(join(v, "index.md"), `# Index\n\n## Concepts\n- [[${longStem}]]\n`);
 
     const r = await fixPathTooLong({ vault: v });
-    expect(r.exitCode).toBe(0);
+    expect(r.exitCode).toBe(23);
     if (r.result.ok) {
-      expect(r.result.data.fixed).toEqual([{ from: relPath, to: preferred }]);
-      expect(existsSync(join(v, relPath))).toBe(false);
+      expect(r.result.data.fixed).toEqual([]);
+      expect(r.result.data.unresolved).toContain(relPath);
+      expect(existsSync(join(v, relPath))).toBe(true);
       expect(existsSync(join(v, preferred))).toBe(true);
       const suffixVariant = preferred.replace(/\.md$/, "-2.md");
       expect(existsSync(join(v, suffixVariant))).toBe(false);
 
-      const newStem = preferred.split("/").pop()!.replace(/\.md$/, "");
       const index = readFileSync(join(v, "index.md"), "utf8");
-      expect(index).toContain(`[[${newStem}]]`);
+      expect(index).toContain(`[[${longStem}]]`);
     }
   });
 
-  it("uses a suffix variant when the shortened target exists with different content", async () => {
+  it("does not autonomously rename raw content when a shortened target collides", async () => {
     const v = vault();
     mkdirSync(join(v, "raw", "articles", "obsidian-import"), { recursive: true });
     const longStem = "collision-windows-hostile-note-name-".repeat(6);
@@ -152,16 +152,13 @@ describe("fixPathTooLong", () => {
     writeFileSync(join(v, preferred), "---\ntitle: t\n---\n\ndifferent body\n");
 
     const r = await fixPathTooLong({ vault: v });
-    expect(r.exitCode).toBe(0);
+    expect(r.exitCode).toBe(23);
     if (r.result.ok) {
-      expect(r.result.data.fixed).toHaveLength(1);
-      const fixed = r.result.data.fixed[0]!;
-      expect(fixed.from).toBe(relPath);
-      expect(fixed.to).not.toBe(preferred);
-      expect(fixed.to.length).toBeLessThanOrEqual(240);
+      expect(r.result.data.fixed).toEqual([]);
+      expect(r.result.data.unresolved).toContain(relPath);
       expect(existsSync(join(v, preferred))).toBe(true);
       expect(readFileSync(join(v, preferred), "utf8")).toContain("different body");
-      expect(readFileSync(join(v, fixed.to), "utf8")).toContain("source body");
+      expect(readFileSync(join(v, relPath), "utf8")).toContain("source body");
     }
   });
 });

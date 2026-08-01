@@ -34,6 +34,8 @@ describe("runInit", () => {
       expect(r.result.data.imported_from_hermes).toBe(false);
     }
     for (const dir of ["raw/articles", "raw/papers", "raw/transcripts", "raw/assets",
+                        "raw/archived/articles", "raw/archived/papers", "raw/archived/transcripts",
+                        "raw/duplicates/articles", "raw/duplicates/papers", "raw/duplicates/transcripts",
                         "entities", "concepts", "comparisons", "queries", "meta", "projects",
                         ".obsidian", "_Templates"]) {
       expect(statSync(join(target, dir)).isDirectory()).toBe(true);
@@ -51,6 +53,26 @@ describe("runInit", () => {
     expect(template).toContain("created: {{date:YYYY-MM-DD}}");
     expect(template).toContain("ingested:");
     expect(template).not.toContain("ingested: {{");
+    const clipperTemplatePath = join(target, "_Templates", "web-clipper", "llm-wiki-clippings.json");
+    const clipperReadmePath = join(target, "_Templates", "web-clipper", "readme.txt");
+    expect(statSync(join(target, "_Templates", "web-clipper")).isDirectory()).toBe(true);
+    const clipperTemplate = JSON.parse(readFileSync(clipperTemplatePath, "utf8"));
+    expect(clipperTemplate).toMatchObject({
+      schemaVersion: "0.1.0",
+      name: "llm-wiki-clippings",
+      behavior: "create",
+      path: "raw/articles",
+      noteContentFormat: "{{content}}",
+      triggers: [],
+    });
+    expect(clipperTemplate.noteNameFormat).toBe('{{date|date:"YYYY-MM-DD"}}-{{title|safe_name}}');
+    expect(readFileSync(clipperReadmePath, "utf8")).toContain("Obsidian Web Clipper Settings");
+    if (r.result.ok) {
+      expect(r.result.data.web_clipper_template_path).toBe("_Templates/web-clipper/llm-wiki-clippings.json");
+      expect(r.result.data.web_clipper_readme_path).toBe("_Templates/web-clipper/readme.txt");
+      expect(r.result.data.web_clipper_template_created).toBe(true);
+      expect(r.result.data.web_clipper_template_preserved).toBe(false);
+    }
     const schema = readFileSync(join(target, "SCHEMA.md"), "utf8");
     expect(schema).toContain("AI safety");
     expect(schema).toContain("- research");
@@ -315,6 +337,33 @@ describe("runInit", () => {
     if (r.result.ok) expect(r.result.data.preserved).not.toContain("log.md");
     const idx = readFileSync(join(target, "index.md"), "utf8");
     expect(idx).toContain("Total pages: 0");
+  });
+
+  it("--force preserves customized short Web Clipper files byte-for-byte", async () => {
+    const h = home();
+    const target = tmp();
+    const clipperDir = join(target, "_Templates", "web-clipper");
+    mkdirSync(clipperDir, { recursive: true });
+    writeFileSync(join(target, "SCHEMA.md"), "# Old\n");
+    const customJson = '{"name":"my-custom-template"}\n';
+    const customReadme = "my custom instructions\n";
+    writeFileSync(join(clipperDir, "llm-wiki-clippings.json"), customJson);
+    writeFileSync(join(clipperDir, "readme.txt"), customReadme);
+
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: undefined, force: true, noEnv: true
+    });
+
+    expect(r.exitCode).toBe(0);
+    expect(readFileSync(join(clipperDir, "llm-wiki-clippings.json"), "utf8")).toBe(customJson);
+    expect(readFileSync(join(clipperDir, "readme.txt"), "utf8")).toBe(customReadme);
+    if (r.result.ok) {
+      expect(r.result.data.preserved).toContain("_Templates/web-clipper/llm-wiki-clippings.json");
+      expect(r.result.data.preserved).toContain("_Templates/web-clipper/readme.txt");
+      expect(r.result.data.web_clipper_template_created).toBe(false);
+      expect(r.result.data.web_clipper_template_preserved).toBe(true);
+    }
   });
 
   it("--force migrates existing hermes SCHEMA.md (domain preserved, taxonomy merged)", async () => {

@@ -787,7 +787,7 @@ hosts:
     writeFileSync(join(convergenceVault, "SCHEMA.md"), "# Schema\n");
     writeFleet(convergenceVault);
     const converge = vi.fn(async () =>
-      ok({ before_oid: null, after_oid: null, changed: false, helper_path: "/test/helper" }),
+      ok({ before_oid: "missing", after_oid: "missing", changed: false, helper_path: "/test/helper" }),
     );
     const run = await runManagedWritePreflight(
       {

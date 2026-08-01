@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExitCode } from "@skillwiki/shared";
-import { runFleetHealth } from "../../src/commands/fleet-health.js";
+import { runFleetHealth, type FleetHealthDeps } from "../../src/commands/fleet-health.js";
 
 const { LOCAL_SATELLITE_VAULT, localLatestRunFixture } = vi.hoisted(() => ({
   LOCAL_SATELLITE_VAULT: "/home/agent-memory/wiki",
@@ -182,11 +182,11 @@ describe("fleet health", () => {
       osHostname: "local-sat",
       deps: {
         platform: () => "linux",
-        execSync: (cmd: string) => {
+        execSync: ((cmd: string) => {
           if (cmd.includes("systemctl is-active")) return "active\n";
           if (cmd.includes("systemctl is-failed")) return "failed\n";
           throw new Error(`unexpected: ${cmd}`);
-        },
+        }) as FleetHealthDeps["execSync"],
       },
     });
 
@@ -215,10 +215,10 @@ describe("fleet health", () => {
       osHostname: "local-sat",
       deps: {
         platform: () => "linux",
-        execSync: (cmd: string) => {
+        execSync: ((cmd: string) => {
           if (cmd.includes("systemctl is-active")) return "active\n";
           throw new Error(`unexpected: ${cmd}`);
-        },
+        }) as FleetHealthDeps["execSync"],
       },
     });
 
@@ -325,10 +325,10 @@ describe("fleet health", () => {
       osHostname: "local-sat",
       deps: {
         platform: () => "linux",
-        execSync: (cmd: string) => {
+        execSync: ((cmd: string) => {
           if (cmd.includes("systemctl is-active")) return "active\n";
           throw new Error(cmd);
-        },
+        }) as FleetHealthDeps["execSync"],
       },
     });
 

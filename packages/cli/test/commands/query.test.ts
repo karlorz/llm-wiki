@@ -340,4 +340,19 @@ describe("query", () => {
       expect(r.result.data.results.length).toBeLessThanOrEqual(10);
     }
   });
+
+  it("returns pending evidence separately without changing typed results", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(join(v, "concepts", "typed.md"), "---\ntitle: Codex Typed\ntype: concept\ncreated: 2026-08-02\nupdated: 2026-08-02\ntags: []\nsources: [raw/articles/other.md]\n---\nCodex typed knowledge.\n");
+    writeFileSync(join(v, "raw", "articles", "2026-08-02-pending.md"), "---\ntitle: Codex Pending\nsource_url: https://example.com/pending\ningested: 2026-08-02\ningested_by: manual\n---\nPending evidence.\n");
+
+    const normal = await runQuery({ text: "Codex", vault: v });
+    const included = await runQuery({ text: "Codex", vault: v, includePending: true });
+    expect(normal.result.ok && normal.result.data.results).toEqual(included.result.ok && included.result.data.results);
+    expect(normal.result.ok && normal.result.data.pending_sources).toBeUndefined();
+    expect(included.result.ok && included.result.data.pending_sources?.map((item) => item.raw_path)).toEqual(["raw/articles/2026-08-02-pending.md"]);
+  });
 });

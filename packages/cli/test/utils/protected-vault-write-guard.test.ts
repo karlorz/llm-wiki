@@ -81,7 +81,8 @@ describe("guardProtectedVaultWrite", () => {
         host_id: "sg01",
         command: "observe",
       });
-      expect(String(result.result.detail?.reason)).toContain("snapshot worktree");
+      const detail = result.result.detail as { reason?: unknown } | undefined;
+      expect(String(detail?.reason)).toContain("snapshot worktree");
     }
   });
 
@@ -105,7 +106,8 @@ describe("guardProtectedVaultWrite", () => {
     expect(result.blocked).toBe(true);
     if (result.blocked) {
       expect(result.exitCode).toBe(ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED);
-      expect(String(result.result.detail?.reason)).toContain("outside the live vault path");
+      const detail = result.result.detail as { reason?: unknown } | undefined;
+      expect(String(detail?.reason)).toContain("outside the live vault path");
     }
   });
 

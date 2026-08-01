@@ -93,7 +93,7 @@ body`);
     expect(r.exitCode).toBe(9);
   });
 
-  it("--apply updates sha256 in drifted source", async () => {
+  it("--apply remains report-only for immutable drifted raw sources", async () => {
     const dir = makeVault();
     const srcPath = join(dir, "raw", "articles", "src.md");
     writeFileSync(srcPath, RAW_FM_TEMPLATE("https://example.com/a", STORED_HASH));
@@ -103,16 +103,15 @@ body`);
       apply: true,
       fetchFn: async () => ok({ body: newBody }),
     });
-    // Exit 0 because drift was fixed via --apply
-    expect(r.exitCode).toBe(0);
+    expect(r.exitCode).toBe(32);
     if (r.result.ok) {
-      expect(r.result.data.updated.length).toBe(1);
-      expect(r.result.data.updated[0].status).toBe("updated");
+      expect(r.result.data.updated).toEqual([]);
+      expect(r.result.data.drifted[0]?.status).toBe("drifted");
+      expect(r.result.data.humanHint).toContain("raw evidence is immutable");
     }
-    // Verify file was updated with new sha256
+    // Existing raw bytes and stored identity remain untouched.
     const updated = readFileSync(srcPath, "utf8");
-    expect(updated).toMatch(/^sha256: [a-f0-9]{64}$/m);
-    expect(updated).not.toContain(STORED_HASH);
+    expect(updated).toContain(`sha256: ${STORED_HASH}`);
   });
 
   it("--apply does not modify unchanged sources", async () => {

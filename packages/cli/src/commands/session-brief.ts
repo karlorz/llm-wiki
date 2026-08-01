@@ -8,6 +8,7 @@ import { appendLastOp } from "../utils/last-op.js";
 import { renderRootIndex, writeRootIndexProjection } from "../utils/index-projection.js";
 import { evaluateSatelliteRunHealth, satelliteLatestRunPath } from "../utils/satellite-run-health.js";
 import { memoryAuthorityTiersRank, type MemoryAuthorityTier } from "../utils/memory-authority.js";
+import { inventorySources } from "../utils/source-lifecycle.js";
 
 export interface SessionBriefInput {
   vault: string;
@@ -33,6 +34,7 @@ export interface SessionBriefOutput {
   log_updated: boolean;
   generated_at: string;
   session_pins: SessionBriefItem[];
+  pending_sources: SessionBriefItem[];
   memory_topics: SessionBriefMemoryTopic[];
   humanHint: string;
 }
@@ -82,6 +84,7 @@ export async function runSessionBrief(
       satelliteHealth,
       sessionPins,
       memoryTopics,
+      pendingSources,
     ] = await Promise.all([
       loadTranscriptInfo(scan.data.raw),
       loadWorkItems(scan.data.workItems),
@@ -90,6 +93,7 @@ export async function runSessionBrief(
       loadSatelliteHealth(input.vault),
       loadSessionPins(input.vault, project),
       project ? loadMemoryTopics(input.vault, project) : Promise.resolve([]),
+      loadPendingSources(input.vault, today),
     ]);
     const healthWarnings = [
       ...baseHealthWarnings,
@@ -116,6 +120,7 @@ export async function runSessionBrief(
       sessionPins,
       latestLogs,
       unclaimedCaptures,
+      pendingSources,
       activeWork,
       latestDigest,
       projectLogs,
@@ -153,6 +158,7 @@ export async function runSessionBrief(
         log_updated: logUpdated,
         generated_at: generatedAt,
         session_pins: sessionPins,
+        pending_sources: pendingSources,
         memory_topics: memoryTopics,
         humanHint,
       }),
@@ -229,6 +235,21 @@ async function loadTranscriptInfo(rawPages: VaultPage[]): Promise<PageInfo[]> {
   return out;
 }
 
+async function loadPendingSources(vault: string, today: string): Promise<PageInfo[]> {
+  const inventory = await inventorySources({ vault, today });
+  if (!inventory.output) return [];
+  return inventory.output.items
+    .filter(item => item.storage_status === "active" && item.lifecycle_status === "pending")
+    .slice(0, 5)
+    .map(item => ({
+      path: item.raw_path,
+      title: item.title,
+      summary: item.source_url ?? `${item.schema_status} source awaiting integration`,
+      date: item.captured ?? "",
+      status: item.schema_status,
+    }));
+}
+
 async function loadWorkItems(workItemPages: VaultPage[]): Promise<PageInfo[]> {
   const out: PageInfo[] = [];
   for (const page of workItemPages.filter((p) => p.relPath.endsWith("/spec.md"))) {
@@ -300,6 +321,7 @@ function renderBrief(input: {
   sessionPins: PageInfo[];
   latestLogs: PageInfo[];
   unclaimedCaptures: PageInfo[];
+  pendingSources: PageInfo[];
   activeWork: PageInfo[];
   latestDigest: PageInfo[];
   projectLogs: PageInfo[];
@@ -317,6 +339,7 @@ function renderBrief(input: {
   appendPinnedContextSection(lines, input.sessionPins);
   appendSection(lines, "Active Work", input.activeWork, "No active project work found.");
   appendSection(lines, "Unclaimed Captures", input.unclaimedCaptures, "No unclaimed task or bug captures found.");
+  appendSection(lines, "Recent Pending Sources", input.pendingSources, "No pending articles or papers found.");
   appendSection(lines, "Recent Session Logs", input.project ? input.projectLogs : input.latestLogs, "No recent session logs found.");
   appendSection(lines, "Latest Agent Memory Trends", input.latestDigest, "No agent memory trends digest found.");
   appendMemoryTopicsSection(lines, input.project, input.memoryTopics);
@@ -328,6 +351,7 @@ function renderBrief(input: {
     "- `skillwiki status`",
     input.project ? `- \`skillwiki project-index ${input.project}\`` : "- `skillwiki query \"active work\"`",
     "- `skillwiki transcripts --since <date>`",
+    "- `skillwiki sources pending`",
     "",
   );
 

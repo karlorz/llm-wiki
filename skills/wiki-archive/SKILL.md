@@ -1,6 +1,6 @@
 ---
 name: wiki-archive
-description: Archive a superseded typed-knowledge page. Moves page to _archive/, removes from index.md, logs the action.
+description: Archive a superseded typed page or preserve-move an exact raw source through the attended lifecycle workflow.
 ---
 
 # wiki-archive
@@ -8,7 +8,8 @@ description: Archive a superseded typed-knowledge page. Moves page to _archive/,
 ## When This Skill Activates
 
 - User wants to retire, supersede, or remove a typed-knowledge page from active use.
-- A page has been replaced by a newer version and should be kept for reference but excluded from lint and queries.
+- A page has been replaced by a newer version and should be kept for reference but excluded from active use.
+- The user explicitly requests a structural archive of one exact raw source while preserving its bytes under `raw/`.
 
 ## Output language
 
@@ -20,29 +21,32 @@ Standard four reads (SCHEMA, index, log, project context if applicable).
 
 ## Probe
 
-Same matrix as `using-skillwiki` → **CLI probe and failsafe**: PRIMARY (`skillwiki archive`), FAILSAFE-GIT (hand tombstone + `git mv` to `_archive/` + push), or FAIL CLOSED.
+Same matrix as `using-skillwiki` → **CLI probe and failsafe**. FAILSAFE-GIT is permitted for typed pages only. Raw archive requires the SkillWiki attended approval flow; if it is unavailable, fail closed.
 
 ## Steps (PRIMARY)
 
 0. Resolve vault: `skillwiki path` and `skillwiki lang`.
-1. Identify the target page. Confirm with the user which page to archive (show full relPath).
-2. Run `skillwiki archive <page> [vault]`. On a vault-sync leaf host where S3 stale originals must be pruned, use `skillwiki archive <page> [vault] --remote seaweed-wiki:cloud/wiki --remote-delete --max-remote-deletes 1` only when that remote path deletion is explicitly intended. Read the JSON output. Successful archive **always** writes a live-path tombstone under `meta/delete-intents/` so snapshot cannot resurrect the live key.
-3. Verify with `skillwiki index-check [vault]` — confirm no ghost entries remain.
-4. Run `skillwiki lint [vault]` — check for broken wikilinks from other pages that still reference the archived page. If found, update those pages to point to the replacement or remove the stale link.
-5. **Raw file archiving (N9 Reingest Protocol only):** When archiving a `raw/` file due to content drift, update ALL `^[raw/...]` citation markers and `sources:` frontmatter entries that reference the old path. Change `raw/articles/foo.md` to `_archive/raw/articles/foo.md` in every referencing page. Verify with `skillwiki audit` that no broken markers remain.
-6. Append a `log.md` entry: `## [{date}] archive | {relPath} → _archive/{subdir}/`.
-7. Commit/push so tombstone + archive land on private `main`.
+1. Identify the target page and show its full vault-relative path. Raw targets must be exact `raw/...` paths; basename inference is refused.
+2. For a typed page, run `skillwiki archive <page> [vault]` using the normal managed mutation workflow.
+3. For a raw article, paper, or transcript:
+   1. Run `skillwiki archive <exact-raw-path> [vault]` and inspect the dry-run, destination, complete-file hash, citation impact, and state-bound approval token.
+   2. If the user approves that exact live plan, run the identical command with `--apply --approve <token>`.
+   3. The destination is `raw/archived/<category>/...`. The command copies exclusively, verifies complete-file SHA-256, retires the old address, records append-only relocation history, and leaves the raw bytes unchanged.
+   4. Maintained citations may be rewritten to the new address; historical addresses also resolve through relocation history. Legacy `_archive/raw/` is read-compatible only and is never a new-write destination.
+4. On a vault-sync leaf where remote stale-path pruning is explicitly intended, add `--remote ... --remote-delete --max-remote-deletes 1`. This prunes only the retired address; the preserved raw destination remains.
+5. Verify with `skillwiki index-check [vault]`, `skillwiki lint [vault]`, and `skillwiki audit <referencing-page>` where applicable.
+6. Commit/push through the normal vault-sync workflow so the tombstone, preserved destination, and relocation event land together.
 
 ## FAILSAFE-GIT (no skillwiki)
 
-1. Confirm path. Write `meta/delete-intents/<slug>.json` with `action: "archive"`, `source: "failsafe-git"`, schema `vault-delete-intent/v1`.
-2. `git mv` live path → `_archive/<same relPath>` (create dirs as needed); update `index.md` if typed.
-3. Commit with `Delete-Intent` / `Delete-Source: failsafe-git` trailers; push to private `main`.
-4. Optional single-path `rclone deletefile` for the **live** path if remote configured.
+1. Confirm the target is not under `raw/`. Raw preserve-moves fail closed without the CLI transaction.
+2. Write `meta/delete-intents/<slug>.json` with `action: "archive"`, `source: "failsafe-git"`, schema `vault-delete-intent/v1`.
+3. `git mv` the typed page to `_archive/<same relPath>`; update `index.md`.
+4. Commit with `Delete-Intent` / `Delete-Source: failsafe-git` trailers; push to private `main`.
 
 ## Reversibility
 
-Archiving is locally reversible: move the file back from `_archive/` to its original directory, re-add the wikilink entry to `index.md`, and **delete the matching tombstone** under `meta/delete-intents/`. If `--remote-delete` was used, the stale active-path object is pruned from the remote after the archive move, but the archived copy remains and a restore will republish the active path on the next push once the tombstone is cleared.
+Typed archiving is locally reversible from `_archive/`. Raw archive is reversible only through another attended preserve-move that keeps exact bytes under `raw/`; do not hand-edit or recreate the source at its old address.
 
 ## Stop conditions
 
@@ -52,8 +56,9 @@ Archiving is locally reversible: move the file back from `_archive/` to its orig
 
 ## Forbidden
 
-- Archiving `raw/` files outside the N9 Reingest Protocol (raw is immutable except during content-drift reingestion).
-- Archiving raw files without updating all `^[raw/...]` citation markers that reference them.
-- Archiving without user confirmation.
+- Rewriting raw content or frontmatter during archive.
+- Moving raw evidence outside `raw/`, including new writes to `_archive/raw/`.
+- Moving `raw/assets/**` as a side effect of source archive; referenced asset paths stay frozen.
+- Applying a raw archive without a fresh state-bound token and attended explicit invocation.
 - Deleting local vault files with bare `rm` / bare `git rm` without a delete-intent tombstone (causes snapshot resurrection).
 - Remote stale-path pruning only via explicit `skillwiki archive --remote ... --remote-delete` (PRIMARY) or bounded single-path rclone in FAILSAFE-GIT.

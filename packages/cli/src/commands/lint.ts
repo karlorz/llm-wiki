@@ -1,7 +1,6 @@
 import { ok, err, ExitCode, type ExitCodeValue, type Result } from "@skillwiki/shared";
 import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
-import { createHash } from "node:crypto";
 import { join, relative, sep } from "node:path";
 import { runLinks } from "./links.js";
 import { runTagAudit } from "./tag-audit.js";
@@ -267,15 +266,6 @@ function readMirrorHintLines(vault: LintVaultOutput): string[] {
   ];
 }
 
-function recomputeRawSha256IfPresent(content: string): string {
-  const split = splitFrontmatter(content);
-  if (!split.ok) return content;
-  if (!/^sha256:\s*[0-9a-f]{64}$/m.test(split.data.rawFrontmatter)) return content;
-  const sha256 = createHash("sha256").update(Buffer.from(split.data.body, "utf8")).digest("hex");
-  const rawFrontmatter = split.data.rawFrontmatter.replace(/^sha256:\s*[0-9a-f]{64}$/m, `sha256: ${sha256}`);
-  return `---\n${rawFrontmatter}\n---\n${split.data.body}`;
-}
-
 function appendLintFixLastOp(vault: string, fixed: string[]): void {
   if (fixed.length === 0) return;
   appendLastOp(vault, {
@@ -480,6 +470,10 @@ async function applyFileSourceUrlFix(
 
   const fileFixed: string[] = [];
   for (const relPath of fileSourceUrlFrontmatterFlags) {
+    if (relPath.startsWith("raw/")) {
+      unresolved.push(relPath);
+      continue;
+    }
     try {
       const absPath = `${input.vault}/${relPath}`;
       const raw = await readFile(absPath, "utf8");
@@ -1012,7 +1006,8 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
     staleSectionFlags.push(...staleSectionResults.flat());
     if (staleSectionFlags.length > 0) buckets.stale_sections = staleSectionFlags;
 
-    // --fix: redact sensitive content as a security exception to raw immutability.
+    // --fix: redact maintained material only. Existing raw evidence is immutable;
+    // raw findings remain visible and require containment/reingest/disposal review.
     if (shouldFix("sensitive_content") && buckets.sensitive_content) {
       const sensitiveFixed: string[] = [];
       for (const page of scan.allMarkdown) {
@@ -1020,8 +1015,11 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
           const raw = await readPage(page);
           const redacted = redactSensitiveContent(raw, { file: page.relPath });
           if (!redacted.changed) continue;
-          const next = recomputeRawSha256IfPresent(redacted.text);
-          const w = await safeWritePage(page.absPath, next, { minBodyRatio: null });
+          if (page.relPath.startsWith("raw/")) {
+            unresolved.push(page.relPath);
+            continue;
+          }
+          const w = await safeWritePage(page.absPath, redacted.text, { minBodyRatio: null });
           if (!w.ok) { unresolved.push(page.relPath); continue; }
           sensitiveFixed.push(page.relPath);
         } catch {
@@ -1348,6 +1346,11 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
       const invalidItems = buckets.frontmatter_yaml_invalid as { path: string; message: string }[];
       const remaining: { path: string; message: string }[] = [];
       for (const item of invalidItems) {
+        if (item.path.startsWith("raw/")) {
+          unresolved.push(item.path);
+          remaining.push(item);
+          continue;
+        }
         const page = scan.allMarkdown.find(p => p.relPath === item.path);
         if (!page) {
           unresolved.push(item.path);

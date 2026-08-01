@@ -8,7 +8,7 @@ Capture ad-hoc ideas, bugs, tasks, and notes into the vault. Three entry points 
 |-------|------|-------------|
 | `/wiki-add-task <text>` | You're in a Claude Code session (NOT Hermes compact) | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with ad-hoc capture frontmatter |
 | Filesystem drop | Hermes Agent compact mode (no slash commands available) | Same as above — create `.md` in `raw/transcripts/`, dev-loop discovers it |
-| Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create any `.md` file in `raw/transcripts/` using the vault template — dev-loop discovers it on next cycle |
+| Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create a new `.md` file in `raw/transcripts/` using the vault template — dev-loop discovers it on next cycle |
 | Dev-loop discovery | Automatic, next cycle | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |
 **Path Rule:** Captures ALWAYS go to `$(skillwiki path)/raw/transcripts/` (Layer 1). Never under `projects/{slug}/raw/` — that violates SCHEMA.md Layer 1 immutability.
 ### Exception: Explicit project task requests
@@ -47,7 +47,7 @@ project: "[[{slug}]]"
 - If a `project` slug was provided, set `project: "[[slug]]"`.
 - If no project, omit the `project` field entirely.
 - `source_url` is null (these are locally originated captures).
-- No `sha256` — ad-hoc captures are mutable working notes, not immutable sources.
+- `sha256` may be omitted for locally originated captures, but the completed capture is still immutable evidence. Corrections create a new capture or a maintained work-item note; never rewrite the existing transcript.
 5. **Write body.** Below the frontmatter, write:
 ```markdown
 # {type}: {text}
@@ -79,7 +79,7 @@ Fix the template mismatch between wiki-add-task and the vault template.
 ```
 The `kind` field uses the capture type and must be one of: `idea`, `bug`, `task`, `note` (plus the existing `postmortem`, `session-log`, `meeting-notes`, `other` for non-capture raw sources).
 The `project` and `kind` fields can be set independently — they do not require `work_item`. The `work_item` field is only used when the raw source is directly tied to a project work item (set by `proj-work`).
-Ad-hoc captures omit `sha256` — they are mutable working notes, not immutable sources. The `sha256` field is reserved for ingested raw sources that require integrity verification.
+Ad-hoc captures may omit `sha256`; omission does not grant mutation authority. Once created, the transcript's content and frontmatter are immutable. The `sha256` field remains required for ingest pipelines that provide integrity verification.
 ## Stop conditions
 - `skillwiki path` returns NO_VAULT_CONFIGURED.
 - No `text` provided (prompt user once, then stop).
@@ -88,6 +88,7 @@ Ad-hoc captures omit `sha256` — they are mutable working notes, not immutable 
 ## Forbidden
 - Creating an `inbox/` directory. All captures go to `raw/transcripts/`.
 - Appending to existing capture files — each capture gets its own file.
+- Editing or correcting an existing raw transcript; create a new capture or maintained work-item note instead.
 - Creating a work item — this is capture-only. Use `proj-work` for full work items.
 - Writing to any Layer 2 or Layer 3 location. Captures are Layer 1 (raw).
 - Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault.

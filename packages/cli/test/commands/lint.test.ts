@@ -1538,24 +1538,22 @@ same body content here
       }
     });
 
-    it("--fix extracts web URL from body source: field and rewrites frontmatter", async () => {
+    it("--fix reports raw file source URL repair without rewriting immutable frontmatter", async () => {
       const v = vault();
       mkdirSync(join(v, "raw", "articles"), { recursive: true });
       const path = join(v, "raw", "articles", "fixable.md");
-      writeFileSync(
-        path,
-        `---\nsource_url: file:///Users/me/Downloads/article.html\ningested: "2026-05-24"\nsha256: abc123\n---\n\nsource: https://example.com/real-url\n\nbody content\n`
-      );
+      const before = `---\nsource_url: file:///Users/me/Downloads/article.html\ningested: "2026-05-24"\nsha256: abc123\n---\n\nsource: https://example.com/real-url\n\nbody content\n`;
+      writeFileSync(path, before);
       const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true });
       expect(r.result.ok).toBe(true);
       const after = readFileSync(path, "utf8");
-      expect(after).toContain("source_url: https://example.com/real-url");
-      expect(after).not.toContain("source_url: file://");
-      // Re-lint: file_source_url should no longer fire
+      expect(after).toBe(before);
+      if (r.result.ok) expect(r.result.data.unresolved).toContain("raw/articles/fixable.md");
+      // Re-lint: the report remains until a new capture/reingest resolves it.
       const r2 = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
       if (r2.result.ok) {
         const warningKinds = r2.result.data.by_severity.warning.map(b => b.kind);
-        expect(warningKinds).not.toContain("file_source_url");
+        expect(warningKinds).toContain("file_source_url");
       }
     });
 
@@ -1938,7 +1936,7 @@ Access key: ${secret}
       expect(after).not.toContain(secret);
     });
 
-    it("recomputes raw sha256 after redaction", async () => {
+    it("keeps sensitive raw bytes immutable and reports unresolved containment", async () => {
       const v = vault();
       mkdirSync(join(v, "raw", "transcripts"), { recursive: true });
       const secret = "hana_" + "dev_" + "A".repeat(43);
@@ -1954,11 +1952,11 @@ Access key: ${secret}
 
       const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500, fix: true, only: "sensitive_content" });
 
-      expect(r.exitCode).toBe(0);
+      expect(r.exitCode).toBe(23);
       const after = readFileSync(file, "utf8");
-      expect(after).not.toContain(secret);
-      expect(after).not.toContain(`sha256: ${"0".repeat(64)}`);
-      expect(after).toMatch(/^sha256: [0-9a-f]{64}$/m);
+      expect(after).toContain(secret);
+      expect(after).toContain(`sha256: ${"0".repeat(64)}`);
+      if (r.result.ok) expect(r.result.data.unresolved).toContain("raw/transcripts/secret.md");
     });
   });
 

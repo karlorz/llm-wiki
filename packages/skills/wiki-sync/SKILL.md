@@ -162,7 +162,7 @@ git -C "$VAULT" rebase --continue
 
 **Prevention**:
 - Sync more frequently — don't let local fall >5 commits behind origin/main
-- Bundle archive commits — `skillwiki archive --batch` groups 5-10 transcript archives into one commit, reducing rebase surface
+- Prefer smaller, attended exact-target archive operations and sync promptly; there is no batch raw-archive apply mode.
 - For vaults with snapshot cron, prefer smaller, more frequent syncs over large batch rebases
 
 See `concepts/wiki-sync-rebase-conflict-storm-pattern.md` for detailed analysis.
@@ -220,7 +220,7 @@ Some older deployments separated a cloud-backed live vault from a Git snapshot w
 - Pushing when lint errors exist.
 - Auto-resolving body conflicts without user review.
 - Force-pushing (`git push --force`).
-- Modifying files in `raw/` to resolve conflicts (N9 — archive and re-ingest instead).
+- Rewriting raw content/frontmatter to resolve conflicts. Preserve-moves must stay under `raw/` (normally `raw/archived/` or `raw/duplicates/`) and require an attended approved structural command; scheduled/headless sync remains report-only.
 - Stashing without the `wiki-sync:...` name format (breaks peer detection).
 - Force-deleting a peer's lockfile (use `--force` only if peer is confirmed dead).
 - Authoring, copying, editing, staging, committing, pulling, resetting, or pushing agent changes in `/root/wiki-git` (or any configured snapshot worktree).
@@ -242,4 +242,3 @@ Drop a local commit from rebase only when every path is proven present on the ta
 - CLI: `skillwiki sync lint-delta <vault> --base-ref origin/main`
 - Block publication only when `new_errors > 0`; inherited full debt remains visible.
 - Missing/malformed delta evidence blocks (never silent lint skip).
-

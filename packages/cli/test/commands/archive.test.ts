@@ -35,6 +35,12 @@ function makeVault(withIndex = false): string {
   return dir;
 }
 
+async function applyRawArchive(input: Parameters<typeof runArchive>[0]) {
+  const preview = await runArchive({ ...input, apply: false });
+  if (!preview.result.ok || !preview.result.data.approval_token) throw new Error("raw archive preview failed");
+  return runArchive({ ...input, apply: true, approve: preview.result.data.approval_token });
+}
+
 describe("runArchive", () => {
   it("writes a delete-intent tombstone for the live path on archive", async () => {
     const dir = makeVault(false);
@@ -91,34 +97,77 @@ describe("runArchive", () => {
     expect(r.exitCode).toBe(9);
   });
 
-  it("archives a raw file to _archive/raw/ preserving subdirectory", async () => {
+  it("archives a raw file under raw/archived preserving exact bytes", async () => {
     const dir = makeVault(false);
     mkdirSync(join(dir, "raw", "articles"), { recursive: true });
     writeFileSync(join(dir, "raw", "articles", "foo.md"), RAW_FM);
-    const r = await runArchive({ vault: dir, page: "raw/articles/foo.md" });
+    const before = readFileSync(join(dir, "raw", "articles", "foo.md"));
+    const r = await applyRawArchive({ vault: dir, page: "raw/articles/foo.md" });
     expect(r.exitCode).toBe(0);
     if (r.result.ok) {
       expect(r.result.data.archived_from).toBe("raw/articles/foo.md");
-      expect(r.result.data.archived_to).toBe("_archive/raw/articles/foo.md");
+      expect(r.result.data.archived_to).toBe("raw/archived/articles/foo.md");
       expect(r.result.data.index_updated).toBe(false);
     }
     expect(existsSync(join(dir, "raw", "articles", "foo.md"))).toBe(false);
-    expect(existsSync(join(dir, "_archive", "raw", "articles", "foo.md"))).toBe(true);
+    expect(readFileSync(join(dir, "raw", "archived", "articles", "foo.md"))).toEqual(before);
   });
 
-  it("archives a raw file by filename only", async () => {
+  it("rewrites maintained body citations while leaving raw bytes unchanged", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "raw", "articles", "cited.md"), RAW_FM);
+    writeFileSync(join(dir, "concepts", "citation.md"), `${FM}\nClaim. ^[raw/articles/cited.md]\n`);
+    const rawBefore = readFileSync(join(dir, "raw", "articles", "cited.md"));
+    const result = await applyRawArchive({ vault: dir, page: "raw/articles/cited.md" });
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(join(dir, "raw", "archived", "articles", "cited.md"))).toEqual(rawBefore);
+    expect(readFileSync(join(dir, "concepts", "citation.md"), "utf8")).toContain("^[raw/archived/articles/cited.md]");
+  });
+
+  it("rewrites extensionless body and sources citations", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "raw", "articles", "extensionless.md"), RAW_FM);
+    writeFileSync(
+      join(dir, "concepts", "extensionless.md"),
+      `---\ntitle: Extensionless\ntype: concept\ntags: []\nsources: [raw/articles/extensionless]\ncreated: 2026-05-05\nupdated: 2026-05-05\n---\nClaim. ^[raw/articles/extensionless]\n`,
+    );
+    const result = await applyRawArchive({ vault: dir, page: "raw/articles/extensionless.md" });
+    expect(result.exitCode).toBe(0);
+    const maintained = readFileSync(join(dir, "concepts", "extensionless.md"), "utf8");
+    expect(maintained).toContain("raw/archived/articles/extensionless");
+    expect(maintained).not.toContain("raw/articles/extensionless");
+  });
+
+  it("invalidates raw archive approval when maintained citation state changes", async () => {
+    const dir = makeVault(false);
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "raw", "articles", "state-bound.md"), RAW_FM);
+    const page = join(dir, "concepts", "state-bound.md");
+    writeFileSync(page, `${FM}\nClaim. ^[raw/articles/state-bound.md]\n`);
+    const preview = await runArchive({ vault: dir, page: "raw/articles/state-bound.md" });
+    if (!preview.result.ok || !preview.result.data.approval_token) throw new Error("preview failed");
+    writeFileSync(page, `${FM}\nChanged after preview. ^[raw/articles/state-bound.md]\n`);
+    const applied = await runArchive({
+      vault: dir,
+      page: "raw/articles/state-bound.md",
+      apply: true,
+      approve: preview.result.data.approval_token,
+    });
+    expect(applied.result.ok).toBe(false);
+    if (!applied.result.ok) expect(applied.result.error).toBe("APPROVAL_INVALID");
+    expect(existsSync(join(dir, "raw", "articles", "state-bound.md"))).toBe(true);
+    expect(existsSync(join(dir, "raw", "archived", "articles", "state-bound.md"))).toBe(false);
+  });
+
+  it("refuses ambiguous raw filename-only archive targets", async () => {
     const dir = makeVault(false);
     mkdirSync(join(dir, "raw", "articles"), { recursive: true });
     writeFileSync(join(dir, "raw", "articles", "bar.md"), RAW_FM);
     const r = await runArchive({ vault: dir, page: "bar" });
-    expect(r.exitCode).toBe(0);
-    if (r.result.ok) {
-      expect(r.result.data.archived_from).toBe("raw/articles/bar.md");
-      expect(r.result.data.archived_to).toBe("_archive/raw/articles/bar.md");
-      expect(r.result.data.index_updated).toBe(false);
-    }
-    expect(existsSync(join(dir, "raw", "articles", "bar.md"))).toBe(false);
-    expect(existsSync(join(dir, "_archive", "raw", "articles", "bar.md"))).toBe(true);
+    expect(r.exitCode).toBe(ExitCode.ARCHIVE_TARGET_NOT_FOUND);
+    expect(existsSync(join(dir, "raw", "articles", "bar.md"))).toBe(true);
   });
 
   it("plans a bounded remote delete for the archived source path", async () => {
@@ -145,8 +194,8 @@ describe("runArchive", () => {
       ]);
       expect(r.result.data.remote?.deleted).toEqual([]);
     }
-    expect(existsSync(join(dir, "raw", "articles", "remote-plan.md"))).toBe(false);
-    expect(existsSync(join(dir, "_archive", "raw", "articles", "remote-plan.md"))).toBe(true);
+    expect(existsSync(join(dir, "raw", "articles", "remote-plan.md"))).toBe(true);
+    expect(existsSync(join(dir, "raw", "archived", "articles", "remote-plan.md"))).toBe(false);
   });
 
   it("remoteDelete executes rclone deletefile for the archived source path", async () => {
@@ -155,7 +204,7 @@ describe("runArchive", () => {
     writeFileSync(join(dir, "raw", "articles", "remote-delete.md"), RAW_FM);
     const calls: string[][] = [];
 
-    const r = await runArchive({
+    const r = await applyRawArchive({
       vault: dir,
       page: "raw/articles/remote-delete.md",
       remote: "seaweed-wiki:cloud/wiki/",
@@ -175,7 +224,7 @@ describe("runArchive", () => {
       ]);
     }
     expect(existsSync(join(dir, "raw", "articles", "remote-delete.md"))).toBe(false);
-    expect(existsSync(join(dir, "_archive", "raw", "articles", "remote-delete.md"))).toBe(true);
+    expect(existsSync(join(dir, "raw", "archived", "articles", "remote-delete.md"))).toBe(true);
   });
 
   it("remoteDelete requires a remote before archiving", async () => {
@@ -219,7 +268,7 @@ describe("runArchive", () => {
     mkdirSync(join(dir, "raw", "articles"), { recursive: true });
     writeFileSync(join(dir, "raw", "articles", "remote-fail.md"), RAW_FM);
 
-    const r = await runArchive({
+    const r = await applyRawArchive({
       vault: dir,
       page: "raw/articles/remote-fail.md",
       remote: "seaweed-wiki:cloud/wiki",
@@ -237,7 +286,7 @@ describe("runArchive", () => {
       });
     }
     expect(existsSync(join(dir, "raw", "articles", "remote-fail.md"))).toBe(false);
-    expect(existsSync(join(dir, "_archive", "raw", "articles", "remote-fail.md"))).toBe(true);
+    expect(existsSync(join(dir, "raw", "archived", "articles", "remote-fail.md"))).toBe(true);
   });
 
   it("returns 30 for raw file not found", async () => {

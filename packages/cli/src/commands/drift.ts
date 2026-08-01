@@ -2,9 +2,7 @@ import { createHash } from "node:crypto";
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
-import { appendLastOp } from "../utils/last-op.js";
 import { controlledFetch, type FetchOptions } from "../utils/fetch.js";
-import { safeWritePage } from "../utils/safe-write.js";
 import { assessSourceIdentity, type SourceIdentityAssessment } from "../utils/source-identity.js";
 
 const FETCH_OPTS: FetchOptions = { timeoutMs: 10000, maxBytes: 5_000_000, maxRedirects: 5 };
@@ -115,27 +113,13 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
 
     const drifted = currentHash !== storedHash;
 
-    if (drifted && input.apply) {
-      // Update sha256 in frontmatter and write back
-      const newFm = rawFrontmatter.replace(/^sha256:\s*[a-f0-9]+$/m, `sha256: ${currentHash}`);
-      const newText = `---\n${newFm}\n---\n${body}`;
-      await safeWritePage(raw.absPath, newText);
-      results.push({
-        raw_path: raw.relPath,
-        source_url: sourceUrl,
-        stored_sha256: storedHash,
-        current_sha256: currentHash,
-        status: "updated",
-      });
-    } else {
-      results.push({
-        raw_path: raw.relPath,
-        source_url: sourceUrl,
-        stored_sha256: storedHash,
-        current_sha256: currentHash,
-        status: drifted ? "drifted" : "unchanged",
-      });
-    }
+    results.push({
+      raw_path: raw.relPath,
+      source_url: sourceUrl,
+      stored_sha256: storedHash,
+      current_sha256: currentHash,
+      status: drifted ? "drifted" : "unchanged",
+    });
   }
 
   const drifted = results.filter(r => r.status === "drifted");
@@ -158,16 +142,7 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
   }
   if (fetchFailed.length > 0) hintLines.push(`fetch_failed: ${fetchFailed.length}`, ...fetchFailed.map(f => `  ${f.raw_path}: ${f.fetch_error}`));
   if (updated.length > 0) hintLines.push(`updated: ${updated.length}`, ...updated.map(u => `  ${u.raw_path}`));
-
-  // Append last-op for drift-apply mutations
-  if (input.apply && updated.length > 0) {
-    appendLastOp(input.vault, {
-      operation: "drift-apply",
-      summary: `updated ${updated.length} raw sources`,
-      files: updated.map(u => u.raw_path),
-      timestamp: new Date().toISOString(),
-    });
-  }
+  if (input.apply && drifted.length > 0) hintLines.push("raw evidence is immutable; use attended reingest to create a new capture and archive the prior bytes");
 
   return {
     exitCode,

@@ -15,6 +15,8 @@ const DEFAULT_TAXONOMY = [
 
 const VAULT_DIRS = [
   "raw/articles", "raw/papers", "raw/transcripts", "raw/assets",
+  "raw/archived/articles", "raw/archived/papers", "raw/archived/transcripts",
+  "raw/duplicates/articles", "raw/duplicates/papers", "raw/duplicates/transcripts",
   "entities", "concepts", "comparisons", "queries", "meta", "projects",
   ".obsidian", "_Templates"
 ];
@@ -22,6 +24,8 @@ const VAULT_DIRS = [
 const ATTACHMENT_FOLDER = "raw/assets";
 const NEW_FILE_FOLDER = "raw/transcripts";
 const TEMPLATE_FOLDER = "_Templates";
+const WEB_CLIPPER_TEMPLATE_REL = `${TEMPLATE_FOLDER}/web-clipper/llm-wiki-clippings.json`;
+const WEB_CLIPPER_README_REL = `${TEMPLATE_FOLDER}/web-clipper/readme.txt`;
 
 export interface InitInput {
   flag: string | undefined;
@@ -49,6 +53,10 @@ export interface InitOutput {
   discovered_tags: number;
   humanHint: string;
   templates_created: boolean;
+  web_clipper_template_path: string;
+  web_clipper_readme_path: string;
+  web_clipper_template_created: boolean;
+  web_clipper_template_preserved: boolean;
 }
 
 function extractDomainFromSchema(text: string): string {
@@ -193,6 +201,27 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
     }
   }
 
+  async function copyTemplateOrPreserve(
+    fileName: string,
+    sourceName: string,
+  ): Promise<{ exitCode: number; result: Result<InitOutput> } | undefined> {
+    const destination = join(target, fileName);
+    try {
+      await readFile(destination);
+      preserved.push(fileName);
+      return undefined;
+    } catch { /* no existing file */ }
+
+    try {
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, await readFile(join(input.templates, sourceName)));
+      created.push(fileName);
+      return undefined;
+    } catch (e: unknown) {
+      return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: fileName, message: String(e) }) };
+    }
+  }
+
   const err1 = await writeOrPreserve("index.md", async () => {
     const tpl = await readFile(join(input.templates, "index.md"), "utf8");
     return tpl.replace("{{INIT_DATE}}", today);
@@ -223,6 +252,18 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
     ].join("\n");
   });
   if (errTemplate) return errTemplate;
+
+  const errWebClipperTemplate = await copyTemplateOrPreserve(
+    WEB_CLIPPER_TEMPLATE_REL,
+    "web-clipper/llm-wiki-clippings.json",
+  );
+  if (errWebClipperTemplate) return errWebClipperTemplate;
+
+  const errWebClipperReadme = await copyTemplateOrPreserve(
+    WEB_CLIPPER_README_REL,
+    "web-clipper/readme.txt",
+  );
+  if (errWebClipperReadme) return errWebClipperReadme;
 
   const err2 = await writeOrPreserve("log.md", async () => {
     const tpl = await readFile(join(input.templates, "log.md"), "utf8");
@@ -259,6 +300,8 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
     `created: ${created.length}, preserved: ${preserved.length}`,
     `discovered tags: ${discovered_tags}`,
     skipEnv ? "env: skipped" : `env: ${envWritten}`,
+    `web clipper template: ${WEB_CLIPPER_TEMPLATE_REL}`,
+    "web clipper import: open Obsidian Web Clipper Settings and import the JSON in each browser profile",
   ].join("\n");
 
   if (created.length > 0) {
@@ -284,7 +327,11 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       imported_from_hermes: importedFromHermes,
       discovered_tags,
       humanHint,
-      templates_created: created.includes(`${TEMPLATE_FOLDER}/tpl-ad-hoc-capture.md`)
+      templates_created: created.includes(`${TEMPLATE_FOLDER}/tpl-ad-hoc-capture.md`),
+      web_clipper_template_path: WEB_CLIPPER_TEMPLATE_REL,
+      web_clipper_readme_path: WEB_CLIPPER_README_REL,
+      web_clipper_template_created: created.includes(WEB_CLIPPER_TEMPLATE_REL),
+      web_clipper_template_preserved: preserved.includes(WEB_CLIPPER_TEMPLATE_REL),
     })
   };
 }

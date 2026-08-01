@@ -37,14 +37,17 @@ Invoke a skillwiki skill when the user:
 
 ## Vault Structure
 A skillwiki vault has three layers. The canonical architecture lives in `SCHEMA.md` at the vault root — read it before creating any new directories.
-**Layer 1 — Raw (`raw/`):** Immutable source material. Never modify after ingest. `raw/transcripts/` doubles as the ad-hoc capture point for meeting notes and unprocessed ideas.
+**Layer 1 — Raw (`raw/`):** Immutable evidence. Existing content/frontmatter is never autonomously rewritten or removed. Attended structural workflows may rename, relocate, archive, or deduplicate only when exact bytes remain somewhere under `raw/`. Permanent disposal requires explicit exact-target user intent. `raw/transcripts/` is the ad-hoc capture point for meeting notes and unprocessed ideas.
 ```
 raw/
-├── articles/    # Web articles, clippings
-├── papers/      # PDFs, arxiv papers
-├── transcripts/ # Meeting notes, interviews, ad-hoc captures
-└── assets/      # Images, diagrams referenced by sources
+├── articles/             # Active Web articles and clippings
+├── papers/               # Active PDFs and papers
+├── transcripts/          # Active meeting notes and ad-hoc captures
+├── assets/               # Stable flexible asset pool; no fixed internal taxonomy
+├── archived/{articles,papers,transcripts}/
+└── duplicates/{articles,papers,transcripts}/
 ```
+Use explicit vault-root asset embeds such as `![[raw/assets/example/diagram.png]]`. Agents may choose flat or URL-friendly nested paths. Once an immutable capture references an asset, that path freezes; routine source archive/dedup never moves the asset. Remote images remain external dependencies unless separately captured.
 Raw frontmatter:
 ```yaml
 ---
@@ -94,6 +97,9 @@ Also mirror these pointers in vault-presync / vault-sync-status skills when oper
 
 - typed pages: `skillwiki page publish <draft> <vault> --target <path>` then the same command with `--write`
 - archive: `skillwiki archive <path> <vault>`
+- pending source inventory: `skillwiki sources pending <vault>`
+- editorial disposition: `skillwiki sources disposition <exact-raw-path> <vault> ...`
+- exceptional raw disposal: `skillwiki sources dispose <exact-raw-path> <vault> --reason ...` then attended `--write --approve <token>`
 - ad-hoc structural log: `skillwiki log-append <vault> --content '<entry>'` (Release A dual-write) or event materialization (Release B)
 - project/root index: `skillwiki project-index <slug> <vault> --apply` and `skillwiki index rebuild <vault> --write` only through managed commands
 - log projection: `skillwiki log materialize <vault> [--write]`
@@ -125,20 +131,20 @@ The vault is shared across hosts, so host-local absolute paths are not durable s
 | Entry | When | What happens |
 |-------|------|-------------|
 | `/wiki-add-task <text>` | You're in a Claude session | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with ad-hoc capture frontmatter |
-| Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create/edit any `.md` file in `raw/transcripts/` — dev-loop discovers it on next cycle |
+| Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create a new `.md` file in `raw/transcripts/` — dev-loop discovers it on next cycle; do not edit it after capture |
 | Dev-loop discovery | Automatic, next cycle | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |
 
 ## Skill Map
 | Skill | When to Invoke |
 |-------|----------------|
-| `wiki-init` | Bootstrap a new vault — SCHEMA.md, index.md, log.md, ~/.skillwiki/.env |
+| `wiki-init` | Bootstrap a vault and install `_Templates/web-clipper/llm-wiki-clippings.json` plus import guidance |
 | `wiki-ingest` | Convert URLs, files, or pasted text into typed-knowledge pages |
-| `wiki-query` | Search the vault and synthesize an answer with ranked results |
+| `wiki-query` | Search typed knowledge by default; explicitly requested fresh/raw evidence uses the separate pending channel |
 | `wiki-lint` | Vault health and lint checks; use `health` for whole-system reports and `lint --summary` for bounded lint buckets |
 | `wiki-crystallize` | Distill the current working session into a typed-knowledge page |
 | `wiki-audit` | Verify raw provenance references and source frontmatter integrity |
-| `wiki-archive` | Archive a typed-knowledge page — move to `_archive/`, remove from index (writes delete-intent) |
-| `wiki-remove` | Hard-delete a path with delete-intent tombstone; failsafe-git if CLI missing |
+| `wiki-archive` | Archive typed pages, or attended preserve-move exact raw sources under `raw/archived/` |
+| `wiki-remove` | Remove maintained pages; exact raw disposal uses the separate attended `sources dispose` flow |
 | `wiki-reingest` | Detect drift in raw sources (sha256 comparison) and re-ingest updated content |
 | `wiki-add-task` | Quick-capture ideas, bugs, tasks, notes into `raw/transcripts/` without leaving the current workflow |
 | `wiki-adapter-prd` | Map foreign PRD formats (CodeStable, RFC, AIDE, Hermes) into vault pages |
@@ -174,8 +180,8 @@ Use `prd_layer` + `prd_pipeline` from `.claude/dev-loop.config.md` as source of 
 
 ## CLI Backbone
 All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, health reporting, and linting. Skills invoke it via Bash for the mechanical parts and use Claude for the creative parts.
-Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `archive`, `remove`, `drift`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
-Run `skillwiki health <vault> --out /tmp/skillwiki-health.json --no-fail` for a bounded whole-system report that includes doctor, lint, vault-sync, query-readiness, source-freshness, risk flags, and self-check coverage. Run `skillwiki lint <vault> --summary` for lint-only bucket counts with capped examples and details commands. Run `skillwiki doctor` to diagnose setup/runtime issues only. Run `skillwiki config list` to see current configuration.
+Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `query`, `sources pending`, `sources disposition`, `sources dispose`, `archive`, `remove`, `drift`, `dedup`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
+Run `skillwiki health <vault> --out /tmp/skillwiki-health.json --no-fail` for a bounded whole-system report that includes the nonblocking source-lifecycle backlog. Pending captures are informational and do not make health fail. Run `skillwiki lint <vault> --summary` for lint-only bucket counts with capped examples and details commands. Run `skillwiki doctor` to diagnose setup/runtime issues only. Run `skillwiki config list` to see current configuration.
 
 ## Runtime Host Context and Fleet Freshness
 Resolve the active project vault with `skillwiki path` first. Then pass that exact path to `skillwiki --human fleet context <vault>` for host identity and safety guidance. `fleet context` is authoritative for host identity. It overrides stale injected SessionStart context, remembered workspace context, and prior conversation summaries. `fleet context` is local and network-free; it reports `identity_status`, resolver trace, warnings, and the fact that remote freshness was not checked.
@@ -214,7 +220,7 @@ Before asking questions or running scheduled maintenance, resolve the session ki
 ## Typical Workflow
 1. **Init** (`wiki-init`) — create vault, set domain and taxonomy
 2. **Ingest** (`wiki-ingest`) — add sources, build pages
-3. **Query** (`wiki-query`) — search and synthesize answers
+3. **Query** (`wiki-query`) — search typed knowledge; explicitly include pending captures for fresh/raw intent
 4. **Lint** (`wiki-lint`) — periodic health checks
 5. **Crystallize** (`wiki-crystallize`) — save session insights as pages
 6. **Audit** (`wiki-audit`) — verify source integrity

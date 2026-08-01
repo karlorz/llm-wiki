@@ -83,6 +83,10 @@ test_pack_writes_to_artifacts_not_cli() {
     count="$(tar -tzf "$path" | grep -c "package/dist/vault-sync/scripts/lib/$lib" || true)"
     assert_eq "tarball includes lib/$lib" "$count" "1"
   done
+  clipper_template_in_tgz="$(tar -tzf "$path" | grep -c 'package/templates/web-clipper/llm-wiki-clippings.json' || true)"
+  assert_eq "tarball includes Web Clipper JSON template" "$clipper_template_in_tgz" "1"
+  clipper_readme_in_tgz="$(tar -tzf "$path" | grep -c 'package/templates/web-clipper/readme.txt' || true)"
+  assert_eq "tarball includes Web Clipper import readme" "$clipper_readme_in_tgz" "1"
 
   rm -rf "$dest"
 }

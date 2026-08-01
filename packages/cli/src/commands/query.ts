@@ -9,6 +9,7 @@ export interface QueryInput {
   text: string;
   vault: string;
   limit?: number;
+  includePending?: boolean;
 }
 
 export interface QueryResult {
@@ -20,6 +21,7 @@ export interface QueryResult {
 
 export interface QueryOutput {
   results: QueryResult[];
+  pending_sources?: import("../utils/source-lifecycle.js").SourceLifecycleItem[];
   humanHint: string;
 }
 
@@ -132,12 +134,28 @@ export async function runQuery(
     .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
     .slice(0, limit);
 
+  let pendingSources: import("../utils/source-lifecycle.js").SourceLifecycleItem[] | undefined;
+  if (input.includePending) {
+    const { runSourcesPending } = await import("./sources.js");
+    const pending = await runSourcesPending({
+      vault: input.vault,
+      match: input.text,
+      limit: input.limit ?? 10,
+    });
+    pendingSources = pending.result.ok ? pending.result.data.items : [];
+  }
+
   const humanHint =
     results.length === 0
-      ? "no matching pages found"
+      ? pendingSources && pendingSources.length > 0
+        ? `no matching typed pages found\n${pendingSources.length} matching pending source(s)`
+        : "no matching pages found"
       : results.map((r) => `${r.path} (score: ${r.score})`).join("\n");
 
-  return { exitCode: ExitCode.OK, result: ok({ results, humanHint }) };
+  return {
+    exitCode: ExitCode.OK,
+    result: ok({ results, ...(pendingSources ? { pending_sources: pendingSources } : {}), humanHint }),
+  };
 }
 
 // ---------------------------------------------------------------------------

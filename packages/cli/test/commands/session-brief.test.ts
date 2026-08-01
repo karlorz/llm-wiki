@@ -85,6 +85,21 @@ describe("runSessionBrief", () => {
     expect(existsSync(join(vault, ".skillwiki", "session-brief.md"))).toBe(false);
   });
 
+  it("includes at most five newest global pending articles and papers", async () => {
+    const vault = await makeVault();
+    mkdirSync(join(vault, "raw", "articles"), { recursive: true });
+    for (let day = 1; day <= 7; day++) {
+      const date = `2026-08-${String(day).padStart(2, "0")}`;
+      writeFileSync(join(vault, "raw", "articles", `${date}-clip.md`), `---\ntitle: Clip ${day}\nsource_url: https://example.com/${day}\ningested: ${date}\ningested_by: manual\n---\nBody\n`);
+    }
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: false });
+    if (!result.result.ok) throw new Error("brief failed");
+    expect(result.result.data.brief).toContain("## Recent Pending Sources");
+    expect(result.result.data.pending_sources).toHaveLength(5);
+    expect(result.result.data.pending_sources.map(item => item.title)).toEqual(["Clip 7", "Clip 6", "Clip 5", "Clip 4", "Clip 3"]);
+    expect(result.result.data.word_count).toBeLessThanOrEqual(900);
+  });
+
   it("writes committed and cache artifacts, with idempotent index and material log updates", async () => {
     const vault = await makeVault();
 

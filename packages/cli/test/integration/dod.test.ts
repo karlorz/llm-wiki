@@ -21,9 +21,16 @@ describe("Definition of Done", () => {
     expect(existsSync(CLI_DIST)).toBe(true);
   });
 
-  it("all 4 templates exist", () => {
+  it("all vault and Web Clipper templates exist", () => {
     const T = join(REPO, "packages", "cli", "templates");
-    for (const t of ["SCHEMA.md", "index.md", "log.md", "project-README.md"]) {
+    for (const t of [
+      "SCHEMA.md",
+      "index.md",
+      "log.md",
+      "project-README.md",
+      "web-clipper/llm-wiki-clippings.json",
+      "web-clipper/readme.txt",
+    ]) {
       expect(existsSync(join(T, t))).toBe(true);
     }
   });

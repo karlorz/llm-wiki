@@ -169,11 +169,19 @@ trap cleanup EXIT
 run_cli ssh "$SSH_TARGET" "HOME='$TEMP_HOME' $REMOTE_CLI init --target '$VAULT' --domain 'Plugin E2E' --taxonomy 'research,concept,tool' --lang en"
 assert_exit 0 "$RUN_RC" "plugin e2e init succeeds"
 
-for dir in raw/articles entities concepts meta; do
+for dir in raw/articles raw/archived/articles raw/duplicates/articles entities concepts meta; do
   if ssh "$SSH_TARGET" "test -d '$VAULT/$dir'" 2>/dev/null; then
     PASS=$((PASS + 1)); printf "  \u2713 vault has %s/\n" "$dir"
   else
     FAIL=$((FAIL + 1)); printf "  \u2717 vault missing %s/\n" "$dir"
+  fi
+done
+
+for file in _Templates/web-clipper/llm-wiki-clippings.json _Templates/web-clipper/readme.txt; do
+  if ssh "$SSH_TARGET" "test -f '$VAULT/$file'" 2>/dev/null; then
+    PASS=$((PASS + 1)); printf "  \u2713 vault has %s\n" "$file"
+  else
+    FAIL=$((FAIL + 1)); printf "  \u2717 vault missing %s\n" "$file"
   fi
 done
 
