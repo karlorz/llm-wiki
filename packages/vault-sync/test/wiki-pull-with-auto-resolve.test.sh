@@ -53,10 +53,14 @@ add_remote_commit() {
   local file="$2"
   local content="$3"
   local msg="$4"
+  local force_add="${5:-0}"
   local remote_work="$root/remote-work-$msg"
   git clone --branch main "$root/origin.git" "$remote_work" >/dev/null
   mkdir -p "$remote_work/$(dirname "$file")"
   printf '%s\n' "$content" > "$remote_work/$file"
+  if [ "$force_add" = "1" ]; then
+    git -C "$remote_work" add -f -- "$file"
+  fi
   git_commit "$remote_work" "$msg"
   git -C "$remote_work" push origin main >/dev/null
 }
@@ -159,6 +163,39 @@ test_divergent_untracked_remote_overlap_is_preserved_before_pull() {
   assert_eq "local divergent draft is preserved once" "$preserved_count" "1"
   assert_eq "preserved divergent draft keeps local content" "$preserved_content" "local draft"
   assert_eq "worktree is clean after preserving divergent overlap" "$(git -C "$vault" status --porcelain | wc -l | tr -d ' ')" "0"
+
+  rm -rf "$root"
+}
+
+test_divergent_ignored_remote_overlap_is_preserved_before_pull() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+
+  printf 'queries/ignored-query.md\n' > "$vault/.gitignore"
+  git_commit "$vault" "ignore local query fixture"
+  git -C "$vault" push origin main >/dev/null
+
+  mkdir -p "$vault/queries"
+  printf 'local ignored query\n' > "$vault/queries/ignored-query.md"
+
+  add_remote_commit "$root" "queries/ignored-query.md" "remote tracked query" "remote-tracks-ignored-query" 1
+
+  HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
+  rc=$?
+
+  local preserved_count preserved_content
+  preserved_count="$(find "$home" -type f -path '*/vault-sync/untracked-collisions/*/queries/ignored-query.md' 2>/dev/null | wc -l | tr -d ' ')"
+  preserved_content="$(find "$home" -type f -path '*/vault-sync/untracked-collisions/*/queries/ignored-query.md' -exec cat {} \; 2>/dev/null)"
+
+  assert_eq "divergent ignored overlap pull exits successfully" "$rc" "0"
+  assert_eq "divergent ignored overlap branch is no longer behind" "$(git -C "$vault" rev-list --count HEAD..origin/main 2>/dev/null || echo unknown)" "0"
+  assert_eq "remote ignored overlap wins in active worktree" "$(cat "$vault/queries/ignored-query.md" 2>/dev/null || true)" "remote tracked query"
+  assert_eq "local ignored query is preserved once" "$preserved_count" "1"
+  assert_eq "preserved ignored query keeps local content" "$preserved_content" "local ignored query"
+  assert_eq "worktree is clean after preserving ignored overlap" "$(git -C "$vault" status --porcelain | wc -l | tr -d ' ')" "0"
 
   rm -rf "$root"
 }
@@ -1285,6 +1322,7 @@ test_partial_match_commit_is_not_dropped
 test_raw_path_difference_is_not_dropped
 test_untracked_remote_duplicate_is_removed_before_pull
 test_divergent_untracked_remote_overlap_is_preserved_before_pull
+test_divergent_ignored_remote_overlap_is_preserved_before_pull
 test_non_archive_log_append_conflict_is_union_resolved
 test_mixed_log_and_non_log_conflict_falls_through_safely
 test_pull_fails_if_tracked_markdown_contains_conflict_markers

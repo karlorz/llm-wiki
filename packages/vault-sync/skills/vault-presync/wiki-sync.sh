@@ -259,6 +259,6 @@ find "$WIKI_DIR" -type d -empty -not -path '*/.git/*' -delete 2>/dev/null || tru
 REMAINING=$(git ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')
 log "Sync complete. $REMAINING untracked file(s) remaining (genuine new work)."
 
-if [[ "$AHEAD" -gt 0 ]] || ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+if [[ "$AHEAD" -gt 0 || "$REMAINING" -gt 0 ]] || ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
     log "Vault has local changes — ready for commit + push."
 fi

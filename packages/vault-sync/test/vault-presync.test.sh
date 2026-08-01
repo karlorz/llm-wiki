@@ -245,11 +245,38 @@ test_presync_lint_delta_malformed_blocks() {
   rm -rf "$root"
 }
 
+test_presync_untracked_only_reports_commit_ready() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  mkdir -p "$home"
+  local vault
+  vault="$(make_repo "$root")"
+  local stub="$root/bin"
+  make_skillwiki_stub "$stub" inherited
+
+  mkdir -p "$vault/queries"
+  printf '# Local query\n' > "$vault/queries/2026-08-02-local-query.md"
+
+  local out
+  out="$(HOME="$home" PATH="$stub:$PATH" WIKI_DIR="$vault" bash "$PRESYNC" --execute 2>&1)"
+  rc=$?
+
+  assert_eq "untracked-only presync exits 0" "$rc" "0"
+  assert_eq "untracked-only page remains untracked" \
+    "$(git -C "$vault" status --short queries/2026-08-02-local-query.md | cut -c1-2)" "??"
+  assert_eq "untracked-only presync reports commit-ready" \
+    "$(printf '%s\n' "$out" | grep -c 'Vault has local changes — ready for commit + push.' | tr -d ' ')" "1"
+
+  rm -rf "$root"
+}
+
 test_presync_parity_with_pull_helper
 test_presync_stash_name_peer_detectable
 test_presync_lint_delta_inherited_proceeds
 test_presync_lint_delta_new_blocks
 test_presync_lint_delta_malformed_blocks
+test_presync_untracked_only_reports_commit_ready
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

@@ -97,47 +97,67 @@ acquire_pull_lock() {
   return 0
 }
 
+handle_untracked_remote_overlap() {
+    local path="$1"
+    local collision_root="$2"
+    local remote_blob backup_path backup_dir
+
+    if ! git cat-file -e "$TARGET_OID:$path" 2>/dev/null; then
+        return 0
+    fi
+
+    remote_blob="$(mktemp)"
+    if git show "$TARGET_OID:$path" >"$remote_blob" 2>/dev/null && cmp -s "$path" "$remote_blob"; then
+        rm -f "$remote_blob"
+        if rm -f -- "$path"; then
+            return 10
+        else
+            log "FAIL could not remove untracked remote duplicate before pull: $path"
+            return 1
+        fi
+    else
+        rm -f "$remote_blob"
+        backup_path="$collision_root/$path"
+        backup_dir="$(dirname "$backup_path")"
+        if ! mkdir -p "$backup_dir" || ! cp -p "$path" "$backup_path"; then
+            log "FAIL could not preserve divergent untracked remote overlap before pull: $path"
+            return 1
+        fi
+        if rm -f -- "$path"; then
+            log "PRESERVE divergent untracked remote overlap before pull: $path -> $backup_path"
+            return 11
+        else
+            log "FAIL could not remove preserved divergent untracked remote overlap before pull: $path"
+            return 1
+        fi
+    fi
+}
+
 drop_or_preserve_untracked_remote_overlaps() {
     local removed=0
     local preserved=0
-    local path remote_blob
-    local collision_root backup_path backup_dir
+    local path rc
+    local collision_root
+    collision_root="$(platform_cache_dir)/untracked-collisions/$(date -u +%Y%m%dT%H%M%SZ)-$$"
 
     while IFS= read -r -d '' path; do
-        if ! git cat-file -e "$REMOTE/$BRANCH:$path" 2>/dev/null; then
-            continue
-        fi
-
-        remote_blob="$(mktemp)"
-        if git show "$REMOTE/$BRANCH:$path" >"$remote_blob" 2>/dev/null && cmp -s "$path" "$remote_blob"; then
-            if rm -f -- "$path"; then
-                removed=$((removed + 1))
-            else
-                rm -f "$remote_blob"
-                log "FAIL could not remove untracked remote duplicate before pull: $path"
-                return 1
-            fi
-        else
-            rm -f "$remote_blob"
-            if [ -z "${collision_root:-}" ]; then
-                collision_root="$(platform_cache_dir)/untracked-collisions/$(date -u +%Y%m%dT%H%M%SZ)-$$"
-            fi
-            backup_path="$collision_root/$path"
-            backup_dir="$(dirname "$backup_path")"
-            if ! mkdir -p "$backup_dir" || ! cp -p "$path" "$backup_path"; then
-                log "FAIL could not preserve divergent untracked remote overlap before pull: $path"
-                return 1
-            fi
-            if rm -f -- "$path"; then
-                preserved=$((preserved + 1))
-                log "PRESERVE divergent untracked remote overlap before pull: $path -> $backup_path"
-            else
-                log "FAIL could not remove preserved divergent untracked remote overlap before pull: $path"
-                return 1
-            fi
-        fi
-        rm -f "$remote_blob"
-    done < <(git ls-files --others --exclude-standard -z)
+        handle_untracked_remote_overlap "$path" "$collision_root"
+        rc=$?
+        case "$rc" in
+            0) ;;
+            10) removed=$((removed + 1)) ;;
+            11) preserved=$((preserved + 1)) ;;
+            *) return 1 ;;
+        esac
+    done < <(
+        git ls-files --others --exclude-standard -z
+        # `stash -u` excludes ignored paths. Protect only ignored typed-page
+        # Markdown, without sweeping unrelated ignored caches into the operation.
+        git ls-files --others --ignored --exclude-standard -z -- \
+            ':(glob)queries/**/*.md' \
+            ':(glob)concepts/**/*.md' \
+            ':(glob)entities/**/*.md'
+    )
 
     if [ "$removed" -gt 0 ]; then
         log "DROP $removed identical untracked remote duplicate(s) before pull"
