@@ -19,8 +19,9 @@
 #   12. .claude-plugin/plugin.json         (root agy GitHub URL marker)
 #   13. packages/agent-memory-trends/package.json (private workspace package)
 #   14. packages/skillwiki-maintenance/package.json (private workspace package)
+#   15. package-lock.json                 (npm-generated root/workspace metadata)
 #
-# After editing, verifies all manifest files have the new version.
+# After editing, regenerates package-lock.json and verifies all release metadata.
 
 set -euo pipefail
 
@@ -63,6 +64,13 @@ bump_file "plugin.json (root agy local plugin)"    "${REPO_ROOT}/plugin.json"
 bump_file ".claude-plugin/plugin.json (root agy URL marker)" "${REPO_ROOT}/.claude-plugin/plugin.json"
 bump_file "packages/agent-memory-trends/package.json" "${REPO_ROOT}/packages/agent-memory-trends/package.json"
 bump_file "packages/skillwiki-maintenance/package.json" "${REPO_ROOT}/packages/skillwiki-maintenance/package.json"
+
+echo "  … Regenerating package-lock.json"
+(
+  cd "$REPO_ROOT"
+  npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+)
+node "$REPO_ROOT/scripts/check-release-lockfile.mjs" "$VERSION" "$REPO_ROOT/package-lock.json"
 
 echo ""
 echo "Verifying all files..."

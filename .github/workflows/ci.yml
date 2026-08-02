@@ -12,6 +12,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
+      - name: Test release lockfile checker
+        run: npm run test:release-lockfile
       - name: Validate manifest consistency
         run: bash scripts/verify-manifests.sh
       - name: Verify plugin.json version bumped on main

@@ -5,14 +5,15 @@ set -euo pipefail
 #
 # Checks:
 #   1. Version field is identical across all 14 manifest files
-#   2. Every skill directory has a SKILL.md
-#   3. SKILL.md frontmatter uses Agent Skills schema fields across shipped layouts
-#   4. Skill count in plugin descriptions/marketplace matches actual count
-#   5. Claude marketplace version matches Claude plugin version
-#   6. Codex marketplace wiring points to ./packages/codex-skills for skillwiki
-#   7. Codex plugin layout mirrors top-level skills under ./skills/ and uses native Codex hooks
-#   8. Root agy plugin layout materializes skills/, agents/, and hooks/ for direct GitHub URL install
-#   9. Per-host e2e env files match fleet maintenance metadata
+#   2. package-lock root and versioned workspace metadata matches the release version
+#   3. Every skill directory has a SKILL.md
+#   4. SKILL.md frontmatter uses Agent Skills schema fields across shipped layouts
+#   5. Skill count in plugin descriptions/marketplace matches actual count
+#   6. Claude marketplace version matches Claude plugin version
+#   7. Codex marketplace wiring points to ./packages/codex-skills for skillwiki
+#   8. Codex plugin layout mirrors top-level skills under ./skills/ and uses native Codex hooks
+#   9. Root agy plugin layout materializes skills/, agents/, and hooks/ for direct GitHub URL install
+#   10. Per-host e2e env files match fleet maintenance metadata
 #
 # Exit 0 if all pass, non-zero with descriptive errors if any fail.
 #
@@ -99,6 +100,10 @@ check_version ".claude-plugin/marketplace.json metadata.version" "$MARKET_VER"
 
 if [ "$ERRORS" -eq 0 ]; then
   echo "✓ All 14 manifests at version $CLI_VER"
+fi
+
+if ! node "$REPO_ROOT/scripts/check-release-lockfile.mjs" "$CLI_VER" "$REPO_ROOT/package-lock.json"; then
+  ERRORS=$((ERRORS + 1))
 fi
 
 # ---- 2. Skill directories have SKILL.md ----
