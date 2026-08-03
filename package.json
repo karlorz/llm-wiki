@@ -13,7 +13,7 @@
     "build": "npm run -ws --if-present build",
     "test": "npm run -ws --if-present test",
     "test:release-lockfile": "bash scripts/test/release-lockfile.test.sh",
-    "test:vault-sync": "bash -c 'for t in packages/vault-sync/test/*.test.sh; do echo \"=== $t ===\"; bash \"$t\" || exit 1; done'",
+    "test:vault-sync": "bash -c 'for t in packages/vault-sync/test/*.test.sh; do echo \"=== $t ===\"; env -u WIKI_REMOTE -u VS_SNAPSHOT_PROFILE -u SNAPSHOT_PROFILE -u VS_CHECK_SNAPSHOTTER bash \"$t\" || exit 1; done'",
     "test:vault-sync-live-adapter": "bash packages/vault-sync/test/snapshot-health-live-adapter.test.sh && npm run -w skillwiki test -- test/commands/snapshot-health-parity.test.ts",
     "generate:systemd-catalog": "node packages/vault-sync/scripts/generate-systemd-property-catalog.mjs",
     "check:systemd-catalog": "node packages/vault-sync/scripts/generate-systemd-property-catalog.mjs --check",

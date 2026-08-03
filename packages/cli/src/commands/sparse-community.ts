@@ -17,7 +17,11 @@ export async function runSparseCommunity(
   const scan = input.scan ? ok(input.scan) : await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  const adjacency = await buildWikilinkAdjacency(scan.data.typedKnowledge, input.pageTextCache);
+  const adjacency = await buildWikilinkAdjacency(
+    scan.data.typedKnowledge,
+    input.pageTextCache,
+    scan.data.allMarkdown,
+  );
   const communities = findSparseCommunities(adjacency, {
     minSize: input.minSize,
     maxCohesion: input.maxCohesion,

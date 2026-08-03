@@ -182,8 +182,7 @@ export async function renderProjectIndex(
   for (const [type, items] of grouped) {
     body += `## ${type}\n\n`;
     for (const item of items) {
-      const pageRef = item.page.replace(/\.md$/, "");
-      body += `- [[${pageRef}]] — ${item.title}\n`;
+      body += `- [[${item.page.replace(/\.md$/, "")}]] — ${item.title}\n`;
     }
     body += "\n";
   }

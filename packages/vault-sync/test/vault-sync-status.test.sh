@@ -103,6 +103,21 @@ run_status_json() {
   env -u WIKI_REMOTE bash "$STATUS_SH" --read-only --json
 }
 
+# Fixture-only status launcher for checks that must not inherit a role,
+# snapshot profile, remote, or live snapshot-health probe from the caller.
+# Synthetic S3/profile tests intentionally use run_status_json instead so they
+# can exercise the documented precedence rules with a stub rclone.
+run_status_local_json() {
+  env -u WIKI_REMOTE \
+    -u VS_SNAPSHOT_PROFILE \
+    -u SNAPSHOT_PROFILE \
+    -u VS_CHECK_SNAPSHOTTER \
+    -u VS_ROLE \
+    -u VS_SERVICE_SCOPE \
+    -u VS_SNAPSHOT_HEALTH_FIXTURE \
+    bash "$STATUS_SH" --read-only --json
+}
+
 status_json_for_home() {
   local home="$1"
   HOME="$home" run_status_json
@@ -321,10 +336,35 @@ test_reachability_local_vault_on_clean_git_vault() {
   git -C "$home/wiki" commit -q -m init
 
   local json status
-  json="$(HOME="$home" WIKI_PATH="$home/wiki" bash "$STATUS_SH" --read-only --json)"
+  json="$(HOME="$home" WIKI_PATH="$home/wiki" run_status_local_json)"
   status="$(check_status "$json" "reachability_local_vault")"
 
   assert_eq "reachability local vault on clean git vault" "$status" "pass"
+}
+
+test_local_status_ignores_ambient_remote() {
+  local home="$TEST_ROOT/home-reach-ambient-remote"
+  local stub="$TEST_ROOT/stub-reach-ambient-remote"
+  local calls="$TEST_ROOT/reach-ambient-remote.calls"
+  prepare_home "$home"
+  prepare_vault_clean "$home"
+  prepare_rclone_stub "$stub"
+  : > "$calls"
+
+  local json status call_count
+  json="$(
+    HOME="$home" \
+    WIKI_PATH="$home/wiki" \
+    PATH="$stub/bin:$PATH" \
+    WIKI_REMOTE="ambient-real-remote:wiki" \
+    RCLONE_CALLS="$calls" \
+    run_status_local_json
+  )"
+  status="$(check_status "$json" "reachability_s3")"
+  call_count="$(wc -l < "$calls" | tr -d ' ')"
+
+  assert_eq "fixture-only status ignores ambient WIKI_REMOTE" "$status" "pass"
+  assert_eq "fixture-only status does not invoke ambient rclone" "$call_count" "0"
 }
 
 test_reachability_snapshotter_not_checked_by_default() {
@@ -589,9 +629,9 @@ test_status_identical_from_arbitrary_cwd() {
   local j1 j2 j3 s1 s2 s3
   local ids="reachability_github reachability_s3 reachability_local_vault vault_sync_conflict_markers"
 
-  j1="$(cd "$home/wiki" && HOME="$home" WIKI_PATH="$home/wiki" bash "$STATUS_SH" --read-only --json)"
-  j2="$(cd "$VAULT_SYNC_ROOT" && HOME="$home" WIKI_PATH="$home/wiki" bash "$STATUS_SH" --read-only --json)"
-  j3="$(cd /tmp && HOME="$home" WIKI_PATH="$home/wiki" bash "$STATUS_SH" --read-only --json)"
+  j1="$(cd "$home/wiki" && HOME="$home" WIKI_PATH="$home/wiki" run_status_local_json)"
+  j2="$(cd "$VAULT_SYNC_ROOT" && HOME="$home" WIKI_PATH="$home/wiki" run_status_local_json)"
+  j3="$(cd /tmp && HOME="$home" WIKI_PATH="$home/wiki" run_status_local_json)"
 
   s1="$(extract_check_statuses "$j1" $ids)"
   s2="$(extract_check_statuses "$j2" $ids)"
@@ -725,6 +765,7 @@ test_conflict_markers_error_on_conflict_block
 test_conflict_markers_pass_on_standalone_separator
 
 test_reachability_local_vault_on_clean_git_vault
+test_local_status_ignores_ambient_remote
 test_reachability_snapshotter_not_checked_by_default
 test_s3_reachability_skips_when_remote_is_unconfigured
 test_s3_reachability_uses_snapshotter_profile

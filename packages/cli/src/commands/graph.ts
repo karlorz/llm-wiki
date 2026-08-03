@@ -11,7 +11,7 @@ export async function runGraphBuild(input: GraphBuildInput): Promise<{ exitCode:
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
-  const adjacency = await buildWikilinkAdjacency(scan.data.typedKnowledge);
+  const adjacency = await buildWikilinkAdjacency(scan.data.typedKnowledge, undefined, scan.data.allMarkdown);
 
   const adamicAdar = computeAdamicAdar(adjacency);
   const edge_count = Object.values(adjacency).reduce((acc, arr) => acc + arr.length, 0);
@@ -22,9 +22,10 @@ export async function runGraphBuild(input: GraphBuildInput): Promise<{ exitCode:
   } catch (e: unknown) {
     return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { message: String(e) }) };
   }
+  const node_count = Object.keys(adjacency).length;
   return {
     exitCode: ExitCode.OK,
-    result: ok({ out_path: input.out, node_count: scan.data.typedKnowledge.length, edge_count, humanHint: `nodes: ${scan.data.typedKnowledge.length}, edges: ${edge_count}\nwritten: ${input.out}` })
+    result: ok({ out_path: input.out, node_count, edge_count, humanHint: `nodes: ${node_count}, edges: ${edge_count}\nwritten: ${input.out}` })
   };
 }
 

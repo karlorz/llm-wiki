@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ExitCode } from "@skillwiki/shared";
-import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "../../src/commands/sync.js";
+import { classifyManagedWriterProcesses, classifyStash, runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "../../src/commands/sync.js";
 import { appendLastOp } from "../../src/utils/last-op.js";
 
 let tmpDirs: string[] = [];
@@ -20,6 +20,17 @@ function makeTempDir(): string {
 
 function git(cwd: string, cmd: string): void {
   execSync(`git ${cmd}`, { cwd, stdio: "pipe" });
+}
+
+function makeGitRepo(): string {
+  const dir = makeTempDir();
+  git(dir, "init");
+  git(dir, 'config user.email "t@t"');
+  git(dir, 'config user.name "t"');
+  writeFileSync(join(dir, "README.md"), "hello");
+  git(dir, "add .");
+  git(dir, "commit -m init");
+  return dir;
 }
 
 function cliEnvWithoutSession(): NodeJS.ProcessEnv {
@@ -885,6 +896,119 @@ describe("runSyncPeers", () => {
       expect(result.data.stashes.length).toBe(0);
     }
   });
+
+  it("surfaces a stale vault-sync operation and manual peer as nonblocking audit data", () => {
+    const dir = makeGitRepo();
+    writeFileSync(join(dir, "README.md"), "modified");
+    git(dir, 'stash push -m "vault-sync op=pull-host-20260802T010203Z"');
+    const { result } = runSyncPeers({
+      vault: dir,
+      processSnapshot: "",
+      nowMs: Date.now() + 180 * 60 * 1000,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.stashes).toEqual([]);
+      expect(result.data.stash_audit[0]).toMatchObject({
+        format: "vault-sync",
+        operation_id: "pull-host-20260802T010203Z",
+        classification: "stale_stash_backlog",
+      });
+      expect(result.data.blocking).toBe(false);
+    }
+  });
+
+  it("fails closed for a recent parseable vault-sync operation stash", () => {
+    const dir = makeGitRepo();
+    writeFileSync(join(dir, "README.md"), "modified");
+    git(dir, 'stash push -m "vault-sync op=pull-host-20260802T010203Z"');
+    const { result } = runSyncPeers({ vault: dir, processSnapshot: "" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.stash_audit[0]).toMatchObject({
+        format: "vault-sync",
+        operation_id: "pull-host-20260802T010203Z",
+        classification: "recent_known_peer_stash",
+      });
+      expect(result.data.blocking).toBe(true);
+    }
+  });
+
+  it("keeps manual, unknown, and three-parent untracked stashes visible without blocking", () => {
+    const dir = makeGitRepo();
+
+    writeFileSync(join(dir, "manual.md"), "manual");
+    git(dir, 'stash push -u -m "peer"');
+    writeFileSync(join(dir, "unknown.md"), "unknown");
+    git(dir, 'stash push -u -m "custom maintenance note"');
+
+    const { result } = runSyncPeers({ vault: dir, processSnapshot: "" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.blocking).toBe(false);
+      expect(result.data.stash_audit).toHaveLength(2);
+      expect(result.data.stash_audit.map((entry) => entry.format)).toEqual(["unknown", "manual"]);
+      expect(result.data.stash_audit.every((entry) => entry.classification === "unknown_stash_ownership")).toBe(true);
+      for (const entry of result.data.stash_audit) {
+        const parents = execFileSync("git", ["-C", dir, "cat-file", "-p", entry.oid], { encoding: "utf8" })
+          .split("\n")
+          .filter((line) => line.startsWith("parent "));
+        expect(parents).toHaveLength(3);
+      }
+    }
+  });
+
+  it("treats live managed writers as blocking without exposing command lines", () => {
+    const observation = classifyManagedWriterProcesses(
+      "123 /usr/local/bin/wiki-push --vault /private/user/wiki\n124 rclone mount remote:/vault /private/user/wiki\n125 unrelated",
+      999,
+    );
+    expect(observation).toEqual({
+      count: 2,
+      kinds: ["rclone", "wiki-push"],
+      blocking: true,
+    });
+  });
+
+  it("classifies Windows tasklist CSV snapshots without persisting process details", () => {
+    const observation = classifyManagedWriterProcesses(
+      '"wiki-push.exe","123","Console","1","10,000 K"\n"rclone.exe","124","Console","1","12,000 K"\n"vault-sync.exe","999","Console","1","8,000 K"',
+      999,
+    );
+    expect(observation).toEqual({
+      count: 2,
+      kinds: ["rclone", "wiki-push"],
+      blocking: true,
+    });
+  });
+
+  it("propagates the bounded process snapshot into the peer gate", () => {
+    const dir = makeTempDir();
+    const { result } = runSyncPeers({
+      vault: dir,
+      processSnapshot: "123 /usr/local/bin/vault-sync --mode push\n124 unrelated",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.managed_writers).toEqual({
+        count: 1,
+        kinds: ["vault-sync"],
+        blocking: true,
+      });
+      expect(result.data.blocking).toBe(true);
+      expect(result.data.humanHint).toContain("1 live writer overlap(s)");
+      expect(JSON.stringify(result.data)).not.toContain("/usr/local/bin");
+    }
+  });
+
+  it("classifies self, recent peer, threshold, and stale stashes deterministically", () => {
+    expect(classifyStash(0, "session-a", "session-a")).toBe("self_or_local_recovery_stash");
+    expect(classifyStash(119, "session-b", "session-a")).toBe("recent_known_peer_stash");
+    expect(classifyStash(120, "session-b", "session-a")).toBe("recent_known_peer_stash");
+    expect(classifyStash(121, "session-b", "session-a")).toBe("stale_stash_backlog");
+    expect(classifyStash(121, undefined, "session-a")).toBe("stale_stash_backlog");
+    expect(classifyStash(0, undefined, "session-a")).toBe("unknown_stash_ownership");
+  });
 });
 
 describe("runSyncStatus with includeStashes", () => {
@@ -956,4 +1080,3 @@ describe("sync pull delegation", () => {
     expect(source).not.toContain('["pull", "--rebase"');
   });
 });
-

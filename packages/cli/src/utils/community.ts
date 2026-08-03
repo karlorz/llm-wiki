@@ -1,6 +1,7 @@
 import { mapWithConcurrency, readPageCached, vaultIoConcurrency, type PageTextCache, type VaultPage } from "./vault.js";
 import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
+import { buildWikilinkResolver } from "./wikilink-resolver.js";
 
 /** Directed wikilink adjacency: page relPath -> linked page relPaths. */
 export type Adjacency = Record<string, string[]>;
@@ -18,24 +19,28 @@ export interface SparseCommunity {
 /**
  * Build the directed wikilink adjacency over a vault's typed-knowledge pages.
  * Extracted from graph.ts so both the graph builder and the sparse-community
- * lint check share one pass (no duplication). Takes the already-scanned page
- * list so callers keep their own vault-validity guard.
+ * lint check share one pass (no duplication). Resolved target-only pages are
+ * added as degree-zero keys so graph consumers share one closed node universe.
+ * Takes the already-scanned page list so callers keep their own vault-validity
+ * guard.
  */
-export async function buildWikilinkAdjacency(typedKnowledge: VaultPage[], pageTextCache?: PageTextCache): Promise<Adjacency> {
+export async function buildWikilinkAdjacency(
+  typedKnowledge: VaultPage[],
+  pageTextCache?: PageTextCache,
+  allPages: VaultPage[] = typedKnowledge,
+): Promise<Adjacency> {
   const adjacency: Adjacency = {};
-  const slugToPath: Record<string, string> = {};
-  for (const p of typedKnowledge) {
-    const slug = p.relPath.replace(/\.md$/, "").split("/").pop()!;
-    slugToPath[slug] = p.relPath;
-  }
+  const resolver = buildWikilinkResolver(allPages);
   await mapWithConcurrency(typedKnowledge, vaultIoConcurrency(), async (p) => {
     const text = await readPageCached(p, pageTextCache);
     const split = splitFrontmatter(text);
     const body = split.ok ? split.data.body : text;
     const links = extractBodyWikilinks(body);
-    adjacency[p.relPath] = links
-      .map(slug => slugToPath[slug.split("/").pop()!])
+    const targets = links
+      .map(target => resolver.resolve(target).path)
       .filter((x): x is string => Boolean(x));
+    adjacency[p.relPath] = targets;
+    for (const target of targets) adjacency[target] ??= [];
   });
   return adjacency;
 }

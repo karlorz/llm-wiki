@@ -2,7 +2,7 @@ import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { mapWithConcurrency, readPageCached, scanVault, vaultIoConcurrency, type PageTextCache, type VaultScan } from "../utils/vault.js";
 import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
-import { buildSlugMap } from "../utils/slug.js";
+import { buildWikilinkResolver } from "../utils/wikilink-resolver.js";
 
 export interface LinksInput { vault: string; scan?: VaultScan; pageTextCache?: PageTextCache }
 export interface LinksOutput {
@@ -15,8 +15,7 @@ export async function runLinks(input: LinksInput): Promise<{ exitCode: number; r
   if (!scanResult.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scanResult };
   const scan = scanResult.data;
 
-  const allPages = [...scan.typedKnowledge, ...scan.raw, ...scan.workItems, ...scan.compound];
-  const slugs = buildSlugMap(allPages);
+  const resolver = buildWikilinkResolver(scan.allMarkdown);
 
   const perPage = await mapWithConcurrency(scan.typedKnowledge, vaultIoConcurrency(), async (p) => {
     const text = await readPageCached(p, input.pageTextCache);
@@ -25,8 +24,8 @@ export async function runLinks(input: LinksInput): Promise<{ exitCode: number; r
     const lines = body.split("\n");
     const broken: LinksOutput["broken"] = [];
     for (const slug of extractBodyWikilinks(body)) {
-      const tail = slug.split("/").pop()!.replace(/\.md$/, "");
-      if (!slugs.has(tail.toLowerCase())) {
+      const resolution = resolver.resolve(slug);
+      if (!resolution.path) {
         const line = lines.findIndex(l => l.includes(`[[${slug}`));
         broken.push({ page: p.relPath, slug, line: line >= 0 ? line + 1 : 0 });
       }

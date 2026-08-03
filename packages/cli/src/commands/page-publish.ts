@@ -1,9 +1,11 @@
 import { readFileSync, realpathSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, readFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { err, ok, ExitCode, type ErrResult, type Result } from "@skillwiki/shared";
 import { runLogAppend } from "./log-append.js";
+import { renderProjectIndex } from "./project-index.js";
 import { extractTaxonomy, reconcileTaxonomyDocument, taxonomyCommentForPage } from "../parsers/taxonomy.js";
+import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { atomicWriteText } from "../utils/atomic-write.js";
 import { git } from "../utils/git.js";
 import { upsertIndexEntry, renderIndexUpsert } from "../utils/index-entry.js";
@@ -62,6 +64,7 @@ export interface PagePublishOutput {
   taxonomy_added: string[];
   page_changed: boolean;
   index_updated: boolean;
+  project_index_updated: boolean;
   log_appended: boolean;
   operation_id: string;
   dry_run: boolean;
@@ -94,7 +97,7 @@ export interface PreparedPagePublication {
   approvalPayload: ApprovalPayload;
 }
 
-export type PublishStage = "schema" | "page" | "verify" | "event" | "index" | "unlock" | "log";
+export type PublishStage = "schema" | "page" | "verify" | "project-index" | "event" | "index" | "unlock" | "log";
 
 export interface PagePublishDeps {
   afterStage(stage: PublishStage): Promise<void>;
@@ -140,6 +143,8 @@ function errorExitCode(error: string): number {
       return ExitCode.APPROVAL_MISMATCH;
     case "TARGET_DRIFT":
       return ExitCode.TARGET_DRIFT;
+    case "PROJECT_NOT_FOUND":
+      return ExitCode.PROJECT_NOT_FOUND;
     case "USAGE":
       return ExitCode.USAGE;
     case "EVENT_IDENTITY_COLLISION":
@@ -148,6 +153,57 @@ function errorExitCode(error: string): number {
     default:
       return ExitCode.INVALID_FRONTMATTER;
   }
+}
+
+function projectSlugForTarget(target: string): string | undefined {
+  const match = target.match(/^projects\/([^/]+)\/(?:requirements|work|architecture|history|compound)\//);
+  return match?.[1];
+}
+
+interface ProjectIndexRefresh { changed: boolean; paths: string[] }
+
+export function projectSlugsForPublication(target: string, content: string): string[] {
+  const slugs = new Set<string>();
+  const pathSlug = projectSlugForTarget(target);
+  if (pathSlug) slugs.add(pathSlug);
+  const frontmatter = extractFrontmatter(content);
+  if (frontmatter.ok && Array.isArray(frontmatter.data.provenance_projects)) {
+    for (const entry of frontmatter.data.provenance_projects) {
+      const match = String(entry).match(/^\[\[([^\]]+)\]\]$/);
+      if (match && /^[a-z0-9][a-z0-9-]*$/i.test(match[1]!)) slugs.add(match[1]!);
+    }
+  }
+  return [...slugs].sort();
+}
+
+async function refreshProjectIndexForTarget(
+  vault: string,
+  projectSlugs: string[],
+  today: string,
+): Promise<Result<ProjectIndexRefresh>> {
+  const paths: string[] = [];
+  for (const slug of projectSlugs) {
+    const rendered = await renderProjectIndex(vault, slug, { today });
+    if (!rendered.ok) return rendered;
+    const indexPath = join(vault, rendered.data.index_path);
+    try {
+      await mkdir(dirname(indexPath), { recursive: true });
+    } catch (error: unknown) {
+      return err("WRITE_FAILED", { path: indexPath, message: String(error) });
+    }
+    const written = await atomicWriteText(indexPath, rendered.data.text);
+    if (!written.ok) return written;
+    try {
+      const visible = await readFile(indexPath, "utf8");
+      if (visible !== rendered.data.text) {
+        return err("WRITE_FAILED", { path: indexPath, message: "project index verification failed" });
+      }
+    } catch (error: unknown) {
+      return err("WRITE_FAILED", { path: indexPath, message: String(error) });
+    }
+    if (written.data.changed) paths.push(rendered.data.index_path);
+  }
+  return ok({ changed: paths.length > 0, paths });
 }
 
 export type RootAggregateMode = "dual" | "source-only";
@@ -277,6 +333,7 @@ interface LockedPublicationState {
   taxonomyAdded: string[];
   pageChanged: boolean;
   indexUpdated: boolean;
+  projectIndexUpdated: boolean;
   published: boolean;
   changed: Set<string>;
 }
@@ -286,7 +343,7 @@ type LockedPublicationOutcome =
   | {
       ok: false;
       exitCode: number;
-      stage: "target" | "schema" | "page" | "verify" | "index";
+      stage: "target" | "schema" | "page" | "verify" | "project-index" | "index";
       state: LockedPublicationState;
       cause: ErrResult;
     };
@@ -296,6 +353,7 @@ function emptyLockedState(): LockedPublicationState {
     taxonomyAdded: [],
     pageChanged: false,
     indexUpdated: false,
+    projectIndexUpdated: false,
     published: false,
     changed: new Set<string>(),
   };
@@ -414,6 +472,16 @@ async function runLockedPrimaryStages(
   const verifyHook = await observeStage(deps, "verify");
   if (verifyHook) return lockedFailure("verify", state, verifyHook);
 
+  const projectSlugs = projectSlugsForPublication(input.page.target, input.page.content);
+  if (projectSlugs.length > 0) {
+    const projectIndex = await refreshProjectIndexForTarget(vault, projectSlugs, input.date);
+    if (!projectIndex.ok) return lockedFailure("project-index", state, projectIndex);
+    state.projectIndexUpdated = projectIndex.data.changed;
+    for (const path of projectIndex.data.paths) state.changed.add(path);
+    const projectIndexHook = await observeStage(deps, "project-index");
+    if (projectIndexHook) return lockedFailure("project-index", state, projectIndexHook);
+  }
+
   const index = await upsertIndexEntry({
     vault,
     target: input.page.target,
@@ -434,6 +502,7 @@ type PagePublishFailureStage =
   | "schema"
   | "page"
   | "verify"
+  | "project-index"
   | "event"
   | "index"
   | "unlock"
@@ -477,6 +546,7 @@ function successReceipt(
   taxonomyAdded: string[],
   pageChanged: boolean,
   indexUpdated: boolean,
+  projectIndexUpdated: boolean,
   logAppended: boolean,
   filesChanged: string[],
   dryRun = false,
@@ -492,6 +562,7 @@ function successReceipt(
       taxonomy_added: [...taxonomyAdded],
       page_changed: pageChanged,
       index_updated: indexUpdated,
+      project_index_updated: projectIndexUpdated,
       log_appended: logAppended,
       operation_id: input.operationId,
       dry_run: dryRun,
@@ -577,6 +648,22 @@ export async function previewPreparedPagePublication(
   });
   if (!index.ok) return { exitCode: errorExitCode(index.error), result: index };
 
+  let projectIndexUpdated = false;
+  const projectIndexPaths: string[] = [];
+  for (const projectSlug of projectSlugsForPublication(input.page.target, input.page.content)) {
+    const renderedProject = await renderProjectIndex(vault, projectSlug, { today: input.date });
+    if (!renderedProject.ok) return { exitCode: errorExitCode(renderedProject.error), result: renderedProject };
+    const projectIndexPath = join(vault, renderedProject.data.index_path);
+    const projectIndexChanged = await readPageChanged(projectIndexPath, renderedProject.data.text);
+    if (!projectIndexChanged.ok) {
+      return { exitCode: errorExitCode(projectIndexChanged.error), result: projectIndexChanged };
+    }
+    if (projectIndexChanged.data || pageChanged.data) {
+      projectIndexUpdated = true;
+      projectIndexPaths.push(renderedProject.data.index_path);
+    }
+  }
+
   const logPath = join(vault, "log.md");
   let logText: string;
   try {
@@ -590,6 +677,7 @@ export async function previewPreparedPagePublication(
   const filesChanged = [
     ...(reconciled.data.changed ? ["SCHEMA.md"] : []),
     ...(pageChanged.data ? [input.page.target] : []),
+    ...projectIndexPaths,
     ...(index.data.changed ? ["index.md"] : []),
     ...(logAppended ? ["log.md"] : []),
   ];
@@ -600,6 +688,7 @@ export async function previewPreparedPagePublication(
     reconciled.data.added,
     pageChanged.data,
     index.data.changed,
+    projectIndexUpdated,
     logAppended,
     filesChanged,
     true,
@@ -770,6 +859,7 @@ export async function publishPreparedPageWithReceipt(
     state.taxonomyAdded,
     state.pageChanged,
     state.indexUpdated,
+    state.projectIndexUpdated,
     logAppended,
     [...state.changed],
     false,

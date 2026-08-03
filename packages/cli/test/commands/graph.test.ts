@@ -128,6 +128,27 @@ describe("graph build", () => {
     }
   });
 
+  it("keeps resolved project artifacts in the closed graph node universe", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    mkdirSync(join(v, "projects", "demo", "architecture"), { recursive: true });
+    writeFileSync(join(v, "concepts", "alpha.md"),
+      "---\ntitle: Alpha\ntype: concept\ncreated: 2026-05-09\nupdated: 2026-05-09\ntags: []\n---\nSee [[projects/demo/architecture/adr]].\n");
+    writeFileSync(join(v, "projects", "demo", "architecture", "adr.md"),
+      "---\ntitle: ADR\ntype: architecture\ncreated: 2026-05-09\nupdated: 2026-05-09\n---\n# ADR\n");
+
+    const out = join(v, "graph.json");
+    const r = await runGraphBuild({ vault: v, out });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.node_count).toBe(2);
+      const data = JSON.parse(readFileSync(out, "utf8"));
+      expect(data.adjacency["concepts/alpha.md"]).toContain("projects/demo/architecture/adr.md");
+      expect(data.adjacency["projects/demo/architecture/adr.md"]).toEqual([]);
+    }
+  });
+
   it("returns WRITE_FAILED when output path is not writable", async () => {
     // Use a valid vault but an output path inside a read-only directory
     const v = makeVault();

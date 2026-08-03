@@ -168,6 +168,47 @@ Done.
     expect(knowledge).toContain("[[projects/cmux/requirements/routing-implementation]] — Routing Implementation Report");
   });
 
+  it("uses the shared resolver for architecture and history entries", async () => {
+    const dir = makeVault("cmux");
+    mkdirSync(join(dir, "projects", "cmux", "architecture"), { recursive: true });
+    mkdirSync(join(dir, "projects", "cmux", "history", "2026-05-10-routing"), { recursive: true });
+    mkdirSync(join(dir, "projects", "cmux", "work", "2026-05-10-routing"), { recursive: true });
+    writeFileSync(join(dir, "projects", "cmux", "architecture", "adr.md"), `---
+title: Routing ADR
+type: architecture
+created: 2026-05-10
+updated: 2026-05-10
+---
+
+# Routing ADR
+`);
+    writeFileSync(join(dir, "projects", "cmux", "history", "2026-05-10-routing", "retro.md"), `---
+title: Routing Retro
+kind: retro
+created: 2026-05-10
+updated: 2026-05-10
+---
+
+# Routing Retro
+`);
+    writeFileSync(join(dir, "projects", "cmux", "work", "2026-05-10-routing", "design-notes.md"), `---
+title: Routing Design Notes
+kind: design
+created: 2026-05-10
+updated: 2026-05-10
+---
+
+# Routing Design Notes
+`);
+
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: true });
+    expect(r.exitCode).toBe(0);
+    const knowledge = readFileSync(join(dir, "projects", "cmux", "knowledge.md"), "utf8");
+    expect(knowledge).toContain("[[projects/cmux/architecture/adr]] — Routing ADR");
+    expect(knowledge).toContain("[[projects/cmux/history/2026-05-10-routing/retro]] — Routing Retro");
+    expect(knowledge).toContain("[[projects/cmux/work/2026-05-10-routing/design-notes]] — Routing Design Notes");
+  });
+
   it("includes project work spec pages in knowledge.md", async () => {
     const dir = makeVault("cmux");
     mkdirSync(join(dir, "projects", "cmux", "work", "2026-05-10-routing"), { recursive: true });

@@ -128,4 +128,16 @@ See [[missing-page]].
       expect(slugs).toContain("missing-b");
     }
   });
+
+  it("resolves exact project work artifacts without basename ambiguity", async () => {
+    const v = vault();
+    mkdirSync(join(v, "projects", "alpha", "work", "2026-08-02-fix"), { recursive: true });
+    mkdirSync(join(v, "projects", "beta", "work", "2026-08-02-fix"), { recursive: true });
+    writeFileSync(join(v, "concepts", "links.md"), FM + "See [[projects/alpha/work/2026-08-02-fix/retro]].\n");
+    writeFileSync(join(v, "projects", "alpha", "work", "2026-08-02-fix", "retro.md"), "# Alpha retro\n");
+    writeFileSync(join(v, "projects", "beta", "work", "2026-08-02-fix", "retro.md"), "# Beta retro\n");
+    const r = await runLinks({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) expect(r.result.data.broken).toEqual([]);
+  });
 });

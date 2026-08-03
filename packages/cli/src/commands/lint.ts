@@ -22,7 +22,7 @@ import { fixPathTooLong, runPathTooLong } from "./path-too-long.js";
 import { mapWithConcurrency, readPage, readPageCached, resolveReadOnlyVaultRoot, scanVault, vaultIoConcurrency, type PageTextCache, type VaultPage, type VaultScan } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
 import { extractCitationMarkers, isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations, stripFencedBlocks } from "../parsers/citations.js";
-import { buildSlugMap } from "../utils/slug.js";
+import { buildWikilinkResolver } from "../utils/wikilink-resolver.js";
 import { buildCliSurface, validateCliRefs } from "../utils/cli-surface.js";
 import { parseExpiryAnnotations } from "../parsers/expiry-annotations.js";
 import { assessSourceIdentity } from "../utils/source-identity.js";
@@ -698,8 +698,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
   if (pathCheck.result.ok && pathCheck.result.data.violations.length > 0) buckets.path_too_long = pathCheck.result.data.violations;
 
   // Citation style + page structure check
-  const allPages = [...scan.typedKnowledge, ...scan.raw, ...scan.workItems, ...scan.compound];
-  const slugs = buildSlugMap(allPages);
+  const wikilinkResolver = buildWikilinkResolver(scan.allMarkdown);
   {
     const allPageResults = await mapWithConcurrency(scan.allMarkdown, vaultIoConcurrency(), async (page) => {
       const sensitiveFlags: unknown[] = [];
@@ -819,8 +818,7 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
         const fmLinks = rawFm.match(/\[\[([^\[\]|]+)(?:\|[^\[\]]*)?\]\]/g) ?? [];
         for (const link of fmLinks) {
           const target = link.replace(/^\[\[/, "").replace(/(?:\|[^\[\]]*)?\]\]$/, "").trim();
-          const tail = target.split("/").pop()!.replace(/\.md$/, "");
-          if (!slugs.has(tail.toLowerCase())) {
+          if (!wikilinkResolver.resolve(target).path) {
             result.fmWikilinkFlags.push(`${page.relPath}: [[${target}]] does not resolve`);
           }
         }

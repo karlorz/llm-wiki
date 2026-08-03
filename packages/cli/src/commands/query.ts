@@ -22,6 +22,10 @@ export interface QueryResult {
 export interface QueryOutput {
   results: QueryResult[];
   pending_sources?: import("../utils/source-lifecycle.js").SourceLifecycleItem[];
+  ranking_guardrails?: {
+    repetitive_historical_cycles_suppressed: boolean;
+    historical_cycle_page_count: number;
+  };
   humanHint: string;
 }
 
@@ -40,6 +44,8 @@ const W_TYPE_AFFINITY = 1.0;
 // Non-seed discount: pages with zero keyword match get their structural
 // signals scaled down so they never outrank direct keyword matches.
 const NON_SEED_FACTOR = 0.4;
+const HISTORICAL_CYCLE_FACTOR = 0.55;
+const HISTORICAL_CYCLE_RE = /(?:^|\/)(?:\d{4}-\d{2}-\d{2}-)?.*\b(?:daily|deep|maintenance|research|office[- ]hours|sleep)\b.*\b(?:cycle|run|review|research)\b/i;
 
 // Conceptual query indicators for type affinity signal
 const CONCEPT_INDICATORS = new Set([
@@ -74,6 +80,7 @@ export async function runQuery(
     tags: string[];
     sources: string[];
     keywordScore: number;
+    historicalCycle: boolean;
   }
 
   const pages: PageData[] = [];
@@ -95,13 +102,30 @@ export async function runQuery(
     const body = split.ok ? split.data.body : text;
 
     const keywordScore = computeKeywordScore(queryTerms, title, tags, body);
-    pages.push({ relPath: p.relPath, title, type, tags, sources, keywordScore });
+    pages.push({
+      relPath: p.relPath,
+      title,
+      type,
+      tags,
+      sources,
+      keywordScore,
+      historicalCycle: isHistoricalCyclePage(p.relPath, title),
+    });
   }
 
-  // Identify seed pages — those with direct keyword match
-  const seedPaths = new Set(
-    pages.filter((p) => p.keywordScore > 0).map((p) => p.relPath),
-  );
+  // Identify seed pages — those with direct keyword match — and calculate the
+  // ranking guardrail inputs in the same pass.
+  const seedPaths = new Set<string>();
+  let historicalCyclePageCount = 0;
+  let hasDirectOperationalSeed = false;
+  for (const page of pages) {
+    if (page.historicalCycle) historicalCyclePageCount += 1;
+    if (page.keywordScore <= 0) continue;
+    seedPaths.add(page.relPath);
+    if (!page.historicalCycle) hasDirectOperationalSeed = true;
+  }
+  const suppressRepetitiveHistoricalCycles =
+    historicalCyclePageCount >= 3 && hasDirectOperationalSeed;
 
   // Composite scoring with 4 signals
   // Seed pages (keyword match > 0) always rank above non-seed pages
@@ -122,10 +146,13 @@ export async function runQuery(
       const composite = isSeed
         ? page.keywordScore * W_KEYWORD + structuralBoost + typeAffinity * W_TYPE_AFFINITY
         : structuralBoost * NON_SEED_FACTOR + typeAffinity * W_TYPE_AFFINITY;
+      const guardedComposite = suppressRepetitiveHistoricalCycles && page.historicalCycle
+        ? composite * HISTORICAL_CYCLE_FACTOR
+        : composite;
 
       return {
         path: page.relPath,
-        score: Math.round(composite * 1000) / 1000,
+        score: Math.round(guardedComposite * 1000) / 1000,
         title: page.title,
         type: page.type,
       };
@@ -152,9 +179,21 @@ export async function runQuery(
         : "no matching pages found"
       : results.map((r) => `${r.path} (score: ${r.score})`).join("\n");
 
+  const rankingGuardrails = suppressRepetitiveHistoricalCycles
+    ? {
+        repetitive_historical_cycles_suppressed: true,
+        historical_cycle_page_count: historicalCyclePageCount,
+      }
+    : undefined;
+
   return {
     exitCode: ExitCode.OK,
-    result: ok({ results, ...(pendingSources ? { pending_sources: pendingSources } : {}), humanHint }),
+    result: ok({
+      results,
+      ...(pendingSources ? { pending_sources: pendingSources } : {}),
+      ...(rankingGuardrails ? { ranking_guardrails: rankingGuardrails } : {}),
+      humanHint,
+    }),
   };
 }
 
@@ -219,6 +258,10 @@ function scoreTypeAffinity(
   if (hasConceptIntent && pageType === "concept") return 1;
   if (!hasConceptIntent && pageType === "entity") return 0.5;
   return 0;
+}
+
+function isHistoricalCyclePage(relPath: string, title: string): boolean {
+  return HISTORICAL_CYCLE_RE.test(`${relPath} ${title}`);
 }
 
 // ---------------------------------------------------------------------------

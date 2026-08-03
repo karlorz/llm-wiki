@@ -40,12 +40,46 @@ for script in "$INSTALL_SH" "$STATUS_SH" "$UNINSTALL_SH"; do
 done
 
 LIFECYCLE="${LOCAL_LIFECYCLE:-false}"
+LOCAL_STATUS_LIVE="${LOCAL_STATUS_LIVE:-false}"
+
+STATUS_FIXTURE_ROOT=""
+STATUS_FIXTURE_HOME=""
+STATUS_FIXTURE_VAULT=""
+STATUS_STUB_BIN=""
+STATUS_RCLONE_CALLS=""
+
+cleanup_status_fixture() {
+  if [ -n "$STATUS_FIXTURE_ROOT" ] && [ -d "$STATUS_FIXTURE_ROOT" ]; then
+    rm -rf "$STATUS_FIXTURE_ROOT"
+  fi
+}
+trap cleanup_status_fixture EXIT
+
+prepare_status_fixture() {
+  STATUS_FIXTURE_ROOT="$(mktemp -d)"
+  STATUS_FIXTURE_HOME="$STATUS_FIXTURE_ROOT/home"
+  STATUS_FIXTURE_VAULT="$STATUS_FIXTURE_ROOT/wiki"
+  STATUS_STUB_BIN="$STATUS_FIXTURE_ROOT/bin"
+  STATUS_RCLONE_CALLS="$STATUS_FIXTURE_ROOT/rclone.calls"
+  mkdir -p "$STATUS_FIXTURE_HOME" "$STATUS_FIXTURE_VAULT" "$STATUS_STUB_BIN"
+  : > "$STATUS_RCLONE_CALLS"
+
+  # The default local E2E status check must remain offline. If status.sh ever
+  # resolves a remote unexpectedly, fail fast and leave an auditable marker.
+  cat > "$STATUS_STUB_BIN/rclone" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$STATUS_RCLONE_CALLS"
+exit 97
+STUB
+  chmod +x "$STATUS_STUB_BIN/rclone"
+}
 
 printf "\n=== Vault Sync Local E2E (%s) ===\n" "$HOST_CLASS"
 printf "Host       : localhost\n"
 printf "Vault      : %s\n" "$VAULT_PATH"
 printf "Host env   : %s\n" "$HOST_ENV"
 printf "Mode       : %s\n" "$([ "$LIFECYCLE" = "true" ] && echo "FULL LIFECYCLE (touches launchctl)" || echo "DRY-RUN ONLY (safe for dev host)")"
+printf "Status     : %s\n" "$([ "$LOCAL_STATUS_LIVE" = "true" ] && echo "LIVE OPT-IN (may probe Git/S3)" || echo "HERMETIC FIXTURE (offline)")"
 
 # 1) Dry-run installer sanity (always runs)
 printf "\n--- Dry-run install ---\n"
@@ -54,13 +88,34 @@ assert_exit 0 "$RUN_RC" "vault-sync-install --dry-run succeeds"
 
 # 2) status.sh JSON + zero errors (always runs — read-only)
 printf "\n--- Status check (read-only) ---\n"
-run_cli bash "$STATUS_SH" --read-only --json
+if [ "$LOCAL_STATUS_LIVE" = "true" ]; then
+  printf "    WARNING: LOCAL_STATUS_LIVE=true enables host reachability probes.\n"
+  run_cli bash "$STATUS_SH" --read-only --json
+else
+  prepare_status_fixture
+  run_cli env -i \
+    HOME="$STATUS_FIXTURE_HOME" \
+    PATH="$STATUS_STUB_BIN:${PATH:-/usr/bin:/bin}" \
+    VS_VAULT_PATH="$STATUS_FIXTURE_VAULT" \
+    WIKI_PATH="$STATUS_FIXTURE_VAULT" \
+    VS_ROLE=leaf \
+    VS_SERVICE_SCOPE=user \
+    STATUS_RCLONE_CALLS="$STATUS_RCLONE_CALLS" \
+    bash "$STATUS_SH" --read-only --json
+fi
 assert_exit 0 "$RUN_RC" "vault-sync-status --read-only --json succeeds"
 if [ "$RUN_RC" -eq 0 ]; then
   if printf '%s' "$RUN_OUTPUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d.get("checks"), list)'; then
     PASS=$((PASS + 1)); printf "  ✓ status JSON valid\n"
   else
     FAIL=$((FAIL + 1)); printf "  ✗ status JSON invalid\n"
+  fi
+fi
+if [ "$LOCAL_STATUS_LIVE" != "true" ]; then
+  if [ -s "$STATUS_RCLONE_CALLS" ]; then
+    FAIL=$((FAIL + 1)); printf "  ✗ hermetic status invoked rclone\n"
+  else
+    PASS=$((PASS + 1)); printf "  ✓ hermetic status made no rclone calls\n"
   fi
 fi
 

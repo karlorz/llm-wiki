@@ -30,6 +30,7 @@ export interface SyncStatusInput {
 
 export interface StashEntry {
   ref: string;
+  oid: string;
   message: string;
   age_minutes: number;
 }
@@ -432,26 +433,26 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
 /**
  * Enumerate all stashes from git reflog, returning array of StashEntry.
  */
-function enumerateStashes(vault: string): StashEntry[] {
+function enumerateStashes(vault: string, nowMs: number = Date.now()): StashEntry[] {
   // Use git log -g to get reflog entries with commit timestamp
-  const output = git(vault, ["log", "--format=%gd%x09%s%x09%ct", "-g", "stash"]);
+  const output = git(vault, ["log", "--format=%gd%x09%H%x09%s%x09%ct", "-g", "stash"]);
   if (!output) return [];
 
-  const now = Date.now();
   const stashes: StashEntry[] = [];
   const lines = output.split("\n").filter((l) => l.trim().length > 0);
 
   for (const line of lines) {
     const parts = line.split("\t");
-    if (parts.length < 3) continue;
+    if (parts.length < 4) continue;
     const ref = parts[0]!;
-    const message = parts[1]!;
-    const ctStr = parts[2]!;
+    const oid = parts[1]!;
+    const message = parts[2]!;
+    const ctStr = parts[3]!;
     const ct = parseInt(ctStr, 10);
     if (isNaN(ct)) continue;
 
-    const age_minutes = Math.floor((now - ct * 1000) / (60 * 1000));
-    stashes.push({ ref, message, age_minutes });
+    const age_minutes = Math.floor((nowMs - ct * 1000) / (60 * 1000));
+    stashes.push({ ref, oid, message, age_minutes });
   }
 
   return stashes;
@@ -574,6 +575,10 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
 export interface SyncPeersInput {
   vault: string;
   sessionId?: string;
+  /** Test/host adapter override; never persisted in the result. */
+  processSnapshot?: string;
+  /** Read-only clock override for deterministic stash-age fixtures. */
+  nowMs?: number;
 }
 
 export interface PeerLock {
@@ -588,6 +593,7 @@ export interface PeerLock {
 
 export interface WikiSyncStash {
   ref: string;
+  oid: string;
   session_id: string;
   cwd_hash: string;
   timestamp: string;
@@ -595,10 +601,104 @@ export interface WikiSyncStash {
   age_minutes: number;
 }
 
+export type StashAuditClassification =
+  | "recent_known_peer_stash"
+  | "self_or_local_recovery_stash"
+  | "stale_stash_backlog"
+  | "unknown_stash_ownership";
+
+export interface StashAuditEntry {
+  ref: string;
+  oid: string;
+  age_minutes: number;
+  classification: StashAuditClassification;
+  format: "wiki-sync" | "vault-sync" | "manual" | "unknown";
+  session_id?: string;
+  operation_id?: string;
+}
+
+export interface ManagedWriterObservation {
+  count: number;
+  kinds: string[];
+  blocking: boolean;
+}
+
 export interface SyncPeersOutput {
   locks: PeerLock[];
   stashes: WikiSyncStash[];
+  stash_audit: StashAuditEntry[];
+  managed_writers: ManagedWriterObservation;
+  blocking: boolean;
   humanHint: string;
+}
+
+const STASH_RECENT_MINUTES = 120;
+const MANAGED_WRITER_PATTERNS = [
+  ["wiki-push", /(?:^|[\s/\\])wiki-push(?:\.[a-z0-9_-]+)?(?:\s|$)/i],
+  ["rclone", /(?:^|[\s/\\])rclone(?:\.[a-z0-9_-]+)?(?:\s|$)/i],
+  ["vault-sync", /(?:^|[\s/\\])vault-sync(?:\.[a-z0-9_-]+)?(?:\s|$)/i],
+] as const;
+
+export function classifyStash(
+  ageMinutes: number,
+  sessionId: string | undefined,
+  currentSession: string,
+): StashAuditClassification {
+  if (sessionId && sessionId === currentSession) return "self_or_local_recovery_stash";
+  if (sessionId && ageMinutes <= STASH_RECENT_MINUTES) return "recent_known_peer_stash";
+  if (ageMinutes > STASH_RECENT_MINUTES) return "stale_stash_backlog";
+  return "unknown_stash_ownership";
+}
+
+/** Classify process snapshots without persisting command lines or paths. */
+export function classifyManagedWriterProcesses(
+  snapshot: string,
+  currentPid: number = process.pid,
+): ManagedWriterObservation {
+  const kinds = new Set<string>();
+  let count = 0;
+  for (const line of snapshot.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // Unix uses `ps -axo pid=,command=`. Windows uses `tasklist /FO CSV /NH`,
+    // whose first two fields are image name and PID. Normalize both into a
+    // private kind token without retaining command lines or executable paths.
+    let pid: number | undefined;
+    let processName = "";
+    const csvMatch = trimmed.match(/^"([^"]*)","(\d+)"(?:,|$)/);
+    if (csvMatch) {
+      processName = csvMatch[1]!;
+      pid = Number(csvMatch[2]);
+    } else {
+      const pidMatch = trimmed.match(/^(\d+)\s+(.*)$/);
+      if (!pidMatch) continue;
+      pid = Number(pidMatch[1]);
+      processName = pidMatch[2]!;
+    }
+    if (pid === currentPid) continue;
+    const kind = MANAGED_WRITER_PATTERNS.find(([, pattern]) => pattern.test(processName))?.[0];
+    if (!kind) continue;
+    count += 1;
+    kinds.add(kind);
+  }
+  return { count, kinds: [...kinds].sort(), blocking: count > 0 };
+}
+
+function managedWriterSnapshot(): string {
+  try {
+    if (process.platform === "win32") {
+      return execFileSync("tasklist", ["/FO", "CSV", "/NH"], {
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    }
+    return execFileSync("ps", ["-axo", "pid=,command="], {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -606,18 +706,21 @@ export interface SyncPeersOutput {
  */
 export function runSyncPeers(input: SyncPeersInput): { exitCode: number; result: Result<SyncPeersOutput> } {
   const vault = input.vault;
+  const currentSession = input.sessionId ?? getSessionId();
 
   // 1. Read lock file if present
   const locks: PeerLock[] = [];
   const existingLock = readLock(vault);
   if (existingLock) {
-    const self = existingLock.session_id === (input.sessionId ?? getSessionId());
+    const self = existingLock.session_id === currentSession;
     locks.push({ ...existingLock, is_self: self });
   }
 
   // 2. Enumerate wiki-sync:* stashes
-  const allStashes = enumerateStashes(vault);
+  const allStashes = enumerateStashes(vault, input.nowMs);
   const stashes: WikiSyncStash[] = [];
+  const wikiSyncAudit: StashAuditEntry[] = [];
+  const otherStashAudit: StashAuditEntry[] = [];
 
   for (const stash of allStashes) {
     // The stash message includes "On <branch>: " prefix added by git
@@ -631,26 +734,76 @@ export function runSyncPeers(input: SyncPeersInput): { exitCode: number; result:
     // Parse wiki-sync:{session}:{cwd}:{timestamp}:{summary} format
     // The timestamp is ISO8601 (e.g., 2026-05-23T03:25:00Z) so we need a regex that matches it exactly
     const match = actualMessage.match(/^wiki-sync:([^:]+):([^:]+):(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z):(.*)$/);
-    if (!match) continue;
+    if (match) {
+      const session_id = match[1]!;
+      const cwd_hash = match[2]!;
+      const timestamp = match[3]!;
+      const summary = match[4]!;
 
-    const session_id = match[1]!;
-    const cwd_hash = match[2]!;
-    const timestamp = match[3]!;
-    const summary = match[4]!;
+      stashes.push({
+        ref: stash.ref,
+        oid: stash.oid,
+        session_id,
+        cwd_hash,
+        timestamp,
+        summary,
+        age_minutes: stash.age_minutes,
+      });
+      wikiSyncAudit.push({
+        ref: stash.ref,
+        oid: stash.oid,
+        age_minutes: stash.age_minutes,
+        classification: classifyStash(stash.age_minutes, session_id, currentSession),
+        format: "wiki-sync",
+        session_id,
+      });
+      continue;
+    }
 
-    stashes.push({
+    const vaultSyncMatch = actualMessage.match(/^vault-sync\s+op=([^\s]+)(?:\s+.*)?$/i);
+    const operationId = vaultSyncMatch?.[1];
+    const manualPeer = /^peer$/i.test(actualMessage.trim());
+    const format: StashAuditEntry["format"] = operationId
+      ? "vault-sync"
+      : manualPeer
+        ? "manual"
+        : "unknown";
+    // vault-sync operation IDs are stable transaction identifiers but do not
+    // carry the current session token. A recent parseable operation therefore
+    // fails closed as a foreign peer rather than being treated as harmless
+    // unknown ownership. Older operations remain visible backlog.
+    const classification = operationId
+      ? stash.age_minutes <= STASH_RECENT_MINUTES
+        ? "recent_known_peer_stash"
+        : "stale_stash_backlog"
+      : "unknown_stash_ownership";
+    otherStashAudit.push({
       ref: stash.ref,
-      session_id,
-      cwd_hash,
-      timestamp,
-      summary,
+      oid: stash.oid,
       age_minutes: stash.age_minutes,
+      classification,
+      format,
+      ...(operationId ? { operation_id: operationId } : {}),
     });
   }
+
+  // Preserve the historical output ordering: wiki-sync entries first, then
+  // the newer vault-sync/manual/unknown audit entries.
+  const stashAudit = [...wikiSyncAudit, ...otherStashAudit];
+
+  const managedWriters = classifyManagedWriterProcesses(
+    input.processSnapshot ?? managedWriterSnapshot(),
+  );
 
   const hintParts: string[] = [];
   if (locks.length > 0) hintParts.push(`${locks.length} lock(s)`);
   if (stashes.length > 0) hintParts.push(`${stashes.length} wiki-sync stash(es)`);
+  if (managedWriters.count > 0) hintParts.push(`${managedWriters.count} live writer overlap(s)`);
+  if (stashAudit.length > 0) hintParts.push(`${stashAudit.length} stash audit item(s)`);
+  const blocking =
+    locks.some((lock) => !lock.is_self) ||
+    managedWriters.blocking ||
+    stashAudit.some((entry) => entry.classification === "recent_known_peer_stash");
   const humanHint = hintParts.length > 0 ? hintParts.join(", ") : "no peers detected";
 
   return {
@@ -658,6 +811,9 @@ export function runSyncPeers(input: SyncPeersInput): { exitCode: number; result:
     result: ok({
       locks,
       stashes,
+      stash_audit: stashAudit,
+      managed_writers: managedWriters,
+      blocking,
       humanHint,
     }),
   };

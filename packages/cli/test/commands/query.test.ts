@@ -355,4 +355,89 @@ describe("query", () => {
     expect(normal.result.ok && normal.result.data.pending_sources).toBeUndefined();
     expect(included.result.ok && included.result.data.pending_sources?.map((item) => item.raw_path)).toEqual(["raw/articles/2026-08-02-pending.md"]);
   });
+
+  it("discounts repetitive historical maintenance-cycle pages when an operational seed exists", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    mkdirSync(join(v, "queries"), { recursive: true });
+    const fm = (title: string, type: string) =>
+      `---\ntitle: ${title}\ntype: ${type}\ncreated: 2026-08-02\nupdated: 2026-08-02\ntags: []\nsources: [raw/articles/ops.md]\n---\nS3 push operational evidence.\n`;
+    writeFileSync(join(v, "concepts", "s3-push.md"), fm("S3 Push", "concept"));
+    for (let i = 1; i <= 3; i += 1) {
+      writeFileSync(
+        join(v, "queries", `2026-07-0${i}-daily-maintenance-research-cycle-${i}.md`),
+        fm(`Daily maintenance research cycle ${i}`, "query"),
+      );
+    }
+
+    const r = await runQuery({ text: "S3 push", vault: v, limit: 4 });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.ranking_guardrails).toMatchObject({
+        repetitive_historical_cycles_suppressed: true,
+        historical_cycle_page_count: 3,
+      });
+      expect(r.result.data.results[0]?.path).toBe("concepts/s3-push.md");
+
+      const repeat = await runQuery({ text: "S3 push", vault: v, limit: 4 });
+      expect(repeat.result.ok).toBe(true);
+      if (repeat.result.ok) expect(repeat.result.data.results).toEqual(r.result.data.results);
+    }
+  });
+
+  it("does not suppress historical cycles when fewer than three are present", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    mkdirSync(join(v, "queries"), { recursive: true });
+    const fm = (title: string, type: string) =>
+      `---\ntitle: ${title}\ntype: ${type}\ncreated: 2026-08-02\nupdated: 2026-08-02\ntags: []\nsources: [raw/articles/ops.md]\n---\nS3 push operational evidence.\n`;
+    writeFileSync(join(v, "concepts", "s3-push.md"), fm("S3 Push", "concept"));
+    for (let i = 1; i <= 2; i += 1) {
+      writeFileSync(
+        join(v, "queries", `2026-07-0${i}-daily-maintenance-research-cycle-${i}.md`),
+        fm(`Daily maintenance research cycle ${i}`, "query"),
+      );
+    }
+    const r = await runQuery({ text: "S3 push", vault: v });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) expect(r.result.data.ranking_guardrails).toBeUndefined();
+  });
+
+  it("does not suppress cycles when no direct operational seed exists", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "queries"), { recursive: true });
+    const fm = (title: string) =>
+      `---\ntitle: ${title}\ntype: query\ncreated: 2026-08-02\nupdated: 2026-08-02\ntags: []\nsources: [raw/articles/ops.md]\n---\nS3 push historical evidence.\n`;
+    for (let i = 1; i <= 3; i += 1) {
+      writeFileSync(
+        join(v, "queries", `2026-07-0${i}-daily-maintenance-research-cycle-${i}.md`),
+        fm(`Daily maintenance research cycle ${i}`),
+      );
+    }
+    const r = await runQuery({ text: "S3 push", vault: v });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.ranking_guardrails).toBeUndefined();
+      expect(r.result.data.results.every((item) => item.path.startsWith("queries/"))).toBe(true);
+    }
+  });
+
+  it("does not classify daily maintenance notes as historical cycles", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    mkdirSync(join(v, "queries"), { recursive: true });
+    const fm = (title: string, type: string) =>
+      `---\ntitle: ${title}\ntype: ${type}\ncreated: 2026-08-02\nupdated: 2026-08-02\ntags: []\nsources: [raw/articles/ops.md]\n---\nS3 push operational evidence.\n`;
+    writeFileSync(join(v, "concepts", "s3-push.md"), fm("S3 Push", "concept"));
+    for (let i = 1; i <= 3; i += 1) {
+      writeFileSync(join(v, "queries", `daily-maintenance-notes-${i}.md`), fm(`Daily maintenance notes ${i}`, "query"));
+    }
+    const r = await runQuery({ text: "S3 push", vault: v });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) expect(r.result.data.ranking_guardrails).toBeUndefined();
+  });
 });

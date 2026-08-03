@@ -1884,9 +1884,10 @@ async function vaultMetrics(resolvedPath: string | undefined): Promise<CheckResu
   if (!scan.ok) return noVault();
 
   const tk = scan.data.typedKnowledge;
+  const typedCount = tk.length;
   const perType = METRIC_TYPES.map(d => `${d} ${tk.filter(p => p.relPath.startsWith(d + "/")).length}`).join(", ");
 
-  const adj = await buildWikilinkAdjacency(tk);
+  const adj = await buildWikilinkAdjacency(tk, undefined, scan.data.allMarkdown);
   const g = toUndirectedWeighted(adj);
   const nodes = [...g.keys()];
   const total = nodes.length;
@@ -1916,7 +1917,7 @@ async function vaultMetrics(resolvedPath: string | undefined): Promise<CheckResu
   try { logLines = readFileSync(join(scanRoot, "log.md"), "utf8").split("\n").length; } catch { /* no log.md */ }
 
   return [
-    check("info", "vault_metric_pages", "Vault pages by type", `${total} typed (${perType})`),
+    check("info", "vault_metric_pages", "Vault pages by type", `${total} graph node(s) (${typedCount} typed; ${perType})`),
     check("info", "vault_metric_orphans", "Vault orphan rate", `${orphanRate}% (${orphanCount}/${total} degree-0)`),
     check("info", "vault_metric_bridges", "Vault bridge count", `${bridges} page(s) link >= 3 communities`),
     check("info", "vault_metric_cohesion", "Mean community cohesion", `${meanCohesion} across ${cohesions.length} communities (size >= 2)`),

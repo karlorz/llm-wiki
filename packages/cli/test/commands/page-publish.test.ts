@@ -16,6 +16,7 @@ import {
   defaultPagePublishDeps,
   preparePagePublication,
   preparePagePublicationFromContent,
+  projectSlugsForPublication,
   runPagePublish,
 } from "../../src/commands/page-publish.js";
 import { lockPath, readLock } from "../../src/utils/sync-lock.js";
@@ -293,6 +294,159 @@ describe("page publish", () => {
 
     expect(result.exitCode).toBe(ExitCode.OK);
     expect(stages).toEqual(["schema", "page", "verify", "index", "unlock", "event", "log"]);
+  });
+
+  it("refreshes a project knowledge index for a provenance-linked typed page", async () => {
+    const vault = makeVault(["research"]);
+    mkdirSync(join(vault, "projects", "demo", "work", "2026-08-02-existing"), { recursive: true });
+    writeFileSync(
+      join(vault, "projects", "demo", "work", "2026-08-02-existing", "spec.md"),
+      "---\ntitle: Existing\nkind: issue\nstatus: completed\nproject: \"[[demo]]\"\n---\n# Existing\n",
+    );
+    writeFileSync(join(vault, "projects", "demo", "knowledge.md"), "# stale\n");
+    const draft = writeDraftBytes(queryDraft(["research", "novel"]).replace(
+      "sources: [raw/articles/source.md]",
+      "sources: [raw/articles/source.md]\nprovenance_projects: [\"[[demo]]\"]",
+    ));
+    const stages: string[] = [];
+    const deps = defaultPagePublishDeps({ afterStage: async (stage) => { stages.push(stage); } });
+
+    const preview = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/projected.md",
+      write: false,
+      now: NOW,
+    });
+    expect(preview.result).toMatchObject({ ok: true, data: { project_index_updated: true } });
+
+    const published = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/projected.md",
+      write: true,
+      now: NOW,
+    }, deps);
+    expect(published.exitCode).toBe(ExitCode.OK);
+    expect(stages).toContain("project-index");
+    expect(readFileSync(join(vault, "projects", "demo", "knowledge.md"), "utf8")).toContain(
+      "[[queries/projected]]",
+    );
+  });
+
+  it("derives a stable union of path and provenance project slugs", () => {
+    const content = queryDraft(["research", "novel"]).replace(
+      "sources: [raw/articles/source.md]",
+      "sources: [raw/articles/source.md]\nprovenance_projects: [\"[[beta]]\", \"[[alpha]]\", \"[[beta]]\", \"[[bad/slug]]\"]",
+    );
+    expect(projectSlugsForPublication("projects/demo/work/2026-08-02-item/spec.md", content)).toEqual([
+      "alpha",
+      "beta",
+      "demo",
+    ]);
+  });
+
+  it("refreshes every existing project in a multi-provenance publication", async () => {
+    const vault = makeVault(["research"]);
+    for (const slug of ["alpha", "beta"]) {
+      mkdirSync(join(vault, "projects", slug), { recursive: true });
+      writeFileSync(join(vault, "projects", slug, "knowledge.md"), "# stale\n");
+    }
+    const draft = writeDraftBytes(queryDraft(["research", "novel"]).replace(
+      "sources: [raw/articles/source.md]",
+      "sources: [raw/articles/source.md]\nprovenance_projects: [\"[[beta]]\", \"[[alpha]]\"]",
+    ));
+    const preview = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/multi-project.md",
+      write: false,
+      now: NOW,
+    });
+    expect(preview.result).toMatchObject({ ok: true, data: { project_index_updated: true } });
+
+    const published = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/multi-project.md",
+      write: true,
+      now: NOW,
+    });
+    expect(published.exitCode).toBe(ExitCode.OK);
+    for (const slug of ["alpha", "beta"]) {
+      expect(readFileSync(join(vault, "projects", slug, "knowledge.md"), "utf8")).toContain(
+        "[[queries/multi-project]]",
+      );
+    }
+  });
+
+  it("returns PROJECT_NOT_FOUND before mutating a missing provenance project", async () => {
+    const vault = makeVault(["research"]);
+    const draft = writeDraftBytes(queryDraft(["research", "novel"]).replace(
+      "sources: [raw/articles/source.md]",
+      "sources: [raw/articles/source.md]\nprovenance_projects: [\"[[missing]]\"]",
+    ));
+    const result = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/missing-project.md",
+      write: false,
+      now: NOW,
+    });
+    expect(result.exitCode).toBe(ExitCode.PROJECT_NOT_FOUND);
+    expect(existsSync(join(vault, "queries", "missing-project.md"))).toBe(false);
+    expect(indexLinks(vault, "queries/missing-project")).toBe(0);
+  });
+
+  it("surfaces a project-index write failure without pretending publication completed", async () => {
+    const vault = makeVault(["research"]);
+    mkdirSync(join(vault, "projects", "blocked"), { recursive: true });
+    mkdirSync(join(vault, "projects", "blocked", "knowledge.md"));
+    const draft = writeDraftBytes(queryDraft(["research", "novel"]).replace(
+      "sources: [raw/articles/source.md]",
+      "sources: [raw/articles/source.md]\nprovenance_projects: [\"[[blocked]]\"]",
+    ));
+    const result = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/blocked-project.md",
+      write: true,
+      now: NOW,
+    });
+    expect(result.exitCode).toBe(ExitCode.WRITE_FAILED);
+    expect(result.result).toMatchObject({ ok: false, detail: { stage: "project-index" } });
+  });
+
+  it("retries safely after a project-index stage failure", async () => {
+    const vault = makeVault(["research"]);
+    mkdirSync(join(vault, "projects", "retry"), { recursive: true });
+    writeFileSync(join(vault, "projects", "retry", "knowledge.md"), "# stale\n");
+    const draft = writeDraftBytes(queryDraft(["research", "novel"]).replace(
+      "sources: [raw/articles/source.md]",
+      "sources: [raw/articles/source.md]\nprovenance_projects: [\"[[retry]]\"]",
+    ));
+    const failing = defaultPagePublishDeps({
+      afterStage: async (stage) => {
+        if (stage === "project-index") throw new Error("injected project-index stop");
+      },
+    });
+    const input = {
+      vault,
+      draftPath: draft,
+      target: "queries/retry-project.md",
+      write: true,
+      now: NOW,
+    };
+    const failed = await runPagePublish(input, failing);
+    expect(failed.result).toMatchObject({
+      ok: false,
+      detail: { stage: "project-index", published: true, retry_safe: true },
+    });
+    const retried = await runPagePublish(input);
+    expect(retried.exitCode).toBe(ExitCode.OK);
+    expect(readFileSync(join(vault, "projects", "retry", "knowledge.md"), "utf8")).toContain(
+      "[[queries/retry-project]]",
+    );
   });
 
   it("leaves a harmless schema superset when publication stops before the page stage", async () => {
