@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VAULT_SYNC_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 STATUS_SH="$VAULT_SYNC_ROOT/skills/vault-sync-status/status.sh"
 RUNTIME_MANIFEST_LIB="$VAULT_SYNC_ROOT/scripts/lib/runtime-manifest.sh"
+PLATFORM_LIB="$VAULT_SYNC_ROOT/scripts/lib/platform.sh"
 
 PASS=0
 FAIL=0
@@ -56,6 +57,141 @@ prepare_home() {
 - .skillwiki/memory-topics.json
 - .claude/settings.local.json
 FILTERS
+}
+
+prepare_macos_home() {
+  local home="$1"
+  local share_dir="$home/Library/Application Support/vault-sync"
+  local bin_dir="$share_dir/bin"
+
+  mkdir -p "$bin_dir" "$bin_dir/lib" "$home/Library/LaunchAgents" \
+    "$home/.config/rclone" "$home/wiki/concepts"
+  cp "$VAULT_SYNC_ROOT/scripts/"*.sh "$bin_dir/"
+  cp "$VAULT_SYNC_ROOT/scripts/lib/"*.sh "$bin_dir/lib/"
+  cp "$VAULT_SYNC_ROOT/skills/vault-presync/wiki-sync.sh" "$bin_dir/wiki-sync.sh"
+  chmod +x "$bin_dir/"*.sh "$bin_dir/lib/"*.sh
+  printf '# Clean vault\n' > "$home/wiki/concepts/clean.md"
+  cat > "$home/.config/rclone/wiki-push-filters.txt" <<'FILTERS'
+- remotely-save/data.json
+- .skillwiki/sync.lock
+- .skillwiki/memory/**
+- .skillwiki/memory-topics.json
+- .claude/settings.local.json
+FILTERS
+}
+
+write_valid_launchd_plist() {
+  local path="$1" label="$2"
+  mkdir -p "$(dirname "$path")"
+  cat > "$path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>/tmp/wiki-sync-test.sh</string></array>
+</dict></plist>
+EOF
+}
+
+write_launchd_plist_without_program() {
+  local path="$1" label="$2"
+  mkdir -p "$(dirname "$path")"
+  cat > "$path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>Label</key><string>$label</string></dict></plist>
+EOF
+}
+
+write_launchd_plist_with_integer_program() {
+  local path="$1" label="$2"
+  mkdir -p "$(dirname "$path")"
+  cat > "$path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array><integer>1</integer></array>
+</dict></plist>
+EOF
+}
+
+write_launchd_plist_with_label_only_in_arguments() {
+  local path="$1" label="$2"
+  mkdir -p "$(dirname "$path")"
+  cat > "$path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$label</string></array>
+</dict></plist>
+EOF
+}
+
+write_macos_runtime_manifest_for_home() {
+  local home="$1"
+  local share_dir="$home/Library/Application Support/vault-sync"
+  local agents_dir="$home/Library/LaunchAgents"
+  vault_sync_write_runtime_manifest \
+    "$share_dir/runtime-manifest.json" \
+    "$share_dir" \
+    "$agents_dir" \
+    "0.0.0-test" \
+    "deadbeef" \
+    "0.0.0-test" \
+    "2026-01-01T00:00:00Z" \
+    "leaf" \
+    "test-host"
+}
+
+make_macos_status_bin() {
+  local root="$1"
+  mkdir -p "$root/bin"
+  cat > "$root/bin/uname" <<'STUB'
+#!/bin/sh
+if [ "${1:-}" = "-s" ]; then
+  echo Darwin
+else
+  /usr/bin/uname "$@"
+fi
+STUB
+  cat > "$root/bin/launchctl" <<'STUB'
+#!/bin/sh
+if [ "${1:-}" = "print" ]; then
+  exit "${TEST_LAUNCHCTL_PRINT_RC:-0}"
+fi
+exit 0
+STUB
+  chmod +x "$root/bin/uname" "$root/bin/launchctl"
+}
+
+make_no_plutil_bin() {
+  local root="$1" tool
+  mkdir -p "$root/bin"
+  for tool in awk cat; do
+    ln -s "$(command -v "$tool")" "$root/bin/$tool"
+  done
+}
+
+run_macos_status_json() {
+  local home="$1" fake_root="$2"
+  shift 2
+  env -u WIKI_REMOTE \
+    HOME="$home" \
+    WIKI_PATH="$home/wiki" \
+    PATH="$fake_root/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    bash "$STATUS_SH" "$@" --json
+}
+
+run_platform_launchd_validate_without_plutil() {
+  local fake_root="$1" label="$2" plist="$3"
+  PATH="$fake_root/bin" /bin/sh -c '
+    . "$1"
+    platform_launchd_plist_validate "$2" "$3"
+    rc=$?
+    printf "%s\n" "$PLATFORM_LAUNCHD_PLIST_REASON"
+    exit "$rc"
+  ' sh "$PLATFORM_LIB" "$label" "$plist"
 }
 
 write_runtime_manifest_for_home() {
@@ -240,6 +376,238 @@ test_status_warns_when_installed_script_differs_from_source() {
   status="$(check_status "$json" "vault_sync_script_drift")"
 
   assert_eq "status warns when installed script differs from source" "$status" "warn"
+}
+
+test_macos_read_only_status_errors_for_malformed_plist() {
+  local home="$TEST_ROOT/home-macos-malformed"
+  local fake="$TEST_ROOT/stub-macos-malformed"
+  local agents="$home/Library/LaunchAgents"
+  prepare_macos_home "$home"
+  write_valid_launchd_plist "$agents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch"
+  printf '[{"Label":"com.karlchow.wiki-push"}]\n' > "$agents/com.karlchow.wiki-push.plist"
+  make_macos_status_bin "$fake"
+
+  local json status detail
+  json="$(run_macos_status_json "$home" "$fake" --read-only)"
+  status="$(check_status "$json" "vault_sync_jobs_enabled")"
+  detail="$(check_detail "$json" "vault_sync_jobs_enabled")"
+
+  assert_eq "macOS read-only status errors on malformed plist" "$status" "error"
+  if printf '%s' "$detail" | grep -q 'com.karlchow.wiki-push.plist'; then
+    printf "PASS: malformed plist detail names push unit\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: malformed plist detail does not name push unit — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+test_macos_read_only_status_errors_for_empty_plist() {
+  local home="$TEST_ROOT/home-macos-empty"
+  local fake="$TEST_ROOT/stub-macos-empty"
+  local agents="$home/Library/LaunchAgents"
+  prepare_macos_home "$home"
+  write_valid_launchd_plist "$agents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch"
+  : > "$agents/com.karlchow.wiki-push.plist"
+  make_macos_status_bin "$fake"
+
+  local json status detail
+  json="$(run_macos_status_json "$home" "$fake" --read-only)"
+  status="$(check_status "$json" "vault_sync_jobs_enabled")"
+  detail="$(check_detail "$json" "vault_sync_jobs_enabled")"
+  assert_eq "macOS read-only status errors on empty plist" "$status" "error"
+  if printf '%s' "$detail" | grep -q 'com.karlchow.wiki-push.plist'; then
+    printf "PASS: empty plist detail names push unit\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: empty plist detail does not name push unit — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+test_macos_read_only_status_errors_for_structural_plist_problems() {
+  local home="$TEST_ROOT/home-macos-structural"
+  local fake="$TEST_ROOT/stub-macos-structural"
+  local agents="$home/Library/LaunchAgents"
+  prepare_macos_home "$home"
+  make_macos_status_bin "$fake"
+  write_valid_launchd_plist "$agents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch"
+  write_valid_launchd_plist "$agents/com.karlchow.wiki-push.plist" "com.karlchow.wrong-label"
+
+  local json status detail
+  json="$(run_macos_status_json "$home" "$fake" --read-only)"
+  status="$(check_status "$json" "vault_sync_jobs_enabled")"
+  detail="$(check_detail "$json" "vault_sync_jobs_enabled")"
+  assert_eq "macOS read-only status errors on wrong Label" "$status" "error"
+  if printf '%s' "$detail" | grep -q "expected 'com.karlchow.wiki-push'"; then
+    printf "PASS: wrong Label detail names expected label\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: wrong Label detail missing expected label — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+
+  write_launchd_plist_without_program "$agents/com.karlchow.wiki-push.plist" "com.karlchow.wiki-push"
+  json="$(run_macos_status_json "$home" "$fake" --read-only)"
+  status="$(check_status "$json" "vault_sync_jobs_enabled")"
+  detail="$(check_detail "$json" "vault_sync_jobs_enabled")"
+  assert_eq "macOS read-only status errors on missing ProgramArguments" "$status" "error"
+  if printf '%s' "$detail" | grep -q 'ProgramArguments\[0\] missing'; then
+    printf "PASS: missing ProgramArguments detail is explicit\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: missing ProgramArguments detail is incomplete — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+
+  write_launchd_plist_with_integer_program "$agents/com.karlchow.wiki-push.plist" "com.karlchow.wiki-push"
+  json="$(run_macos_status_json "$home" "$fake" --read-only)"
+  status="$(check_status "$json" "vault_sync_jobs_enabled")"
+  detail="$(check_detail "$json" "vault_sync_jobs_enabled")"
+  assert_eq "macOS read-only status errors on non-string ProgramArguments[0]" "$status" "error"
+  if printf '%s' "$detail" | grep -q 'ProgramArguments\[0\] must be a string'; then
+    printf "PASS: non-string ProgramArguments detail is explicit\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: non-string ProgramArguments detail is incomplete — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+test_macos_xml_fallback_rejects_hidden_label_text() {
+  local root="$TEST_ROOT/no-plutil-bin"
+  local plist="$TEST_ROOT/no-plutil-hidden-label.plist"
+  local output rc
+  make_no_plutil_bin "$root"
+
+  write_launchd_plist_with_label_only_in_arguments "$plist" "com.karlchow.wiki-push"
+  output="$(run_platform_launchd_validate_without_plutil "$root" "com.karlchow.wiki-push" "$plist")"
+  rc=$?
+  assert_eq "no-plutil fallback rejects label text hidden in ProgramArguments" "$rc" "1"
+  if printf '%s' "$output" | grep -q 'Label missing or is not a string'; then
+    printf "PASS: no-plutil fallback explains hidden Label rejection\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: no-plutil fallback hidden Label reason is incomplete — %s\n" "$output"
+    FAIL=$((FAIL + 1))
+  fi
+
+  write_launchd_plist_with_integer_program "$plist" "com.karlchow.wiki-push"
+  output="$(run_platform_launchd_validate_without_plutil "$root" "com.karlchow.wiki-push" "$plist")"
+  rc=$?
+  assert_eq "no-plutil fallback rejects non-string ProgramArguments[0]" "$rc" "1"
+  if printf '%s' "$output" | grep -q 'ProgramArguments\[0\] must be a string'; then
+    printf "PASS: no-plutil fallback explains non-string argument rejection\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: no-plutil fallback non-string argument reason is incomplete — %s\n" "$output"
+    FAIL=$((FAIL + 1))
+  fi
+
+  write_valid_launchd_plist "$plist" "com.karlchow.wiki-push"
+  printf '\n<garbage>\n' >> "$plist"
+  output="$(run_platform_launchd_validate_without_plutil "$root" "com.karlchow.wiki-push" "$plist")"
+  rc=$?
+  assert_eq "no-plutil fallback rejects trailing unknown XML" "$rc" "1"
+  if printf '%s' "$output" | grep -q 'plist XML structure is invalid'; then
+    printf "PASS: no-plutil fallback explains trailing unknown XML rejection\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: no-plutil fallback trailing unknown XML reason is incomplete — %s\n" "$output"
+    FAIL=$((FAIL + 1))
+  fi
+
+  write_valid_launchd_plist "$plist" "com.karlchow.wiki-push"
+  printf '\n</dict>\n' >> "$plist"
+  output="$(run_platform_launchd_validate_without_plutil "$root" "com.karlchow.wiki-push" "$plist")"
+  rc=$?
+  assert_eq "no-plutil fallback rejects unmatched trailing container" "$rc" "1"
+  if printf '%s' "$output" | grep -q 'plist XML structure is invalid'; then
+    printf "PASS: no-plutil fallback explains unmatched container rejection\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: no-plutil fallback unmatched container reason is incomplete — %s\n" "$output"
+    FAIL=$((FAIL + 1))
+  fi
+
+  write_valid_launchd_plist "$plist" "com.karlchow.wiki-push"
+  printf '\nTRAILING_TEXT\n' >> "$plist"
+  output="$(run_platform_launchd_validate_without_plutil "$root" "com.karlchow.wiki-push" "$plist")"
+  rc=$?
+  assert_eq "no-plutil fallback rejects trailing text" "$rc" "1"
+}
+
+test_macos_read_only_status_accepts_binary_plist() {
+  if [ "$(uname -s)" != "Darwin" ] || ! command -v plutil >/dev/null 2>&1; then
+    printf "PASS: macOS binary plist validation skipped (requires macOS plutil)\n"
+    PASS=$((PASS + 1))
+    return
+  fi
+
+  local home="$TEST_ROOT/home-macos-binary"
+  local fake="$TEST_ROOT/stub-macos-binary"
+  local agents="$home/Library/LaunchAgents"
+  local source_xml="$TEST_ROOT/macos-binary-source.xml"
+  prepare_macos_home "$home"
+  write_valid_launchd_plist "$agents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch"
+  write_valid_launchd_plist "$source_xml" "com.karlchow.wiki-push"
+  if ! plutil -convert binary1 -o "$agents/com.karlchow.wiki-push.plist" "$source_xml" >/dev/null 2>&1; then
+    printf "FAIL: macOS binary plist fixture conversion\n"
+    FAIL=$((FAIL + 1))
+    return
+  fi
+  make_macos_status_bin "$fake"
+
+  local json status
+  json="$(run_macos_status_json "$home" "$fake" --read-only)"
+  status="$(check_status "$json" "vault_sync_jobs_enabled")"
+  assert_eq "macOS read-only status accepts valid binary plist" "$status" "pass"
+}
+
+test_macos_live_status_rejects_stale_loaded_label_with_invalid_plist() {
+  local home="$TEST_ROOT/home-macos-stale-live"
+  local fake="$TEST_ROOT/stub-macos-stale-live"
+  local agents="$home/Library/LaunchAgents"
+  prepare_macos_home "$home"
+  write_valid_launchd_plist "$agents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch"
+  printf 'INVALID_PUSH_PLIST\n' > "$agents/com.karlchow.wiki-push.plist"
+  make_macos_status_bin "$fake"
+
+  local json status
+  # The launchctl stub reports both labels as loaded. Status must still reject
+  # the corrupt on-disk definition before trusting that live registration.
+  json="$(run_macos_status_json "$home" "$fake")"
+  status="$(check_status "$json" "vault_sync_jobs_enabled")"
+  assert_eq "macOS live status rejects stale loaded label with invalid plist" "$status" "error"
+}
+
+test_macos_runtime_manifest_detects_deployed_plist_drift() {
+  local home="$TEST_ROOT/home-macos-runtime-plist-drift"
+  local fake="$TEST_ROOT/stub-macos-runtime-plist-drift"
+  local agents="$home/Library/LaunchAgents"
+  prepare_macos_home "$home"
+  write_valid_launchd_plist "$agents/com.karlchow.wiki-push.plist" "com.karlchow.wiki-push"
+  write_valid_launchd_plist "$agents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch"
+  write_macos_runtime_manifest_for_home "$home"
+  # Whitespace after the XML document retains plist validity while changing
+  # bytes, exactly the runtime-drift condition the manifest must catch.
+  printf '\n' >> "$agents/com.karlchow.wiki-push.plist"
+  make_macos_status_bin "$fake"
+
+  local json match_status jobs_status detail
+  json="$(run_macos_status_json "$home" "$fake" --read-only)"
+  match_status="$(check_status "$json" "vault_sync_runtime_match")"
+  jobs_status="$(check_status "$json" "vault_sync_jobs_enabled")"
+  detail="$(check_detail "$json" "vault_sync_runtime_match")"
+  assert_eq "macOS runtime proof warns on deployed plist byte drift" "$match_status" "warn"
+  assert_eq "macOS valid plist drift does not make jobs check fail" "$jobs_status" "pass"
+  if printf '%s' "$detail" | grep -q 'LaunchAgents/com.karlchow.wiki-push.plist'; then
+    printf "PASS: runtime drift detail names deployed push plist\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: runtime drift detail missing deployed push plist — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
 }
 
 conflict_block_md() {
@@ -696,10 +1064,10 @@ test_status_runtime_registration_warns_when_jobs_enabled_and_mismatch() {
   prepare_home "$home"
   write_runtime_manifest_for_home "$home" "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 
-  # Seed launchd unit files so read-only jobs_enabled is pass on macOS
+  # Seed valid launchd unit files so read-only jobs_enabled is pass on macOS.
   mkdir -p "$home/Library/LaunchAgents"
-  : > "$home/Library/LaunchAgents/com.karlchow.wiki-push.plist"
-  : > "$home/Library/LaunchAgents/com.karlchow.wiki-fetch.plist"
+  write_valid_launchd_plist "$home/Library/LaunchAgents/com.karlchow.wiki-push.plist" "com.karlchow.wiki-push"
+  write_valid_launchd_plist "$home/Library/LaunchAgents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch"
   # Linux: seed systemd timers
   mkdir -p "$home/.config/systemd/user"
   : > "$home/.config/systemd/user/wiki-push.timer"
@@ -760,6 +1128,13 @@ STUB
 
 test_status_reports_installed_scripts_in_sync
 test_status_warns_when_installed_script_differs_from_source
+test_macos_read_only_status_errors_for_malformed_plist
+test_macos_read_only_status_errors_for_empty_plist
+test_macos_read_only_status_errors_for_structural_plist_problems
+test_macos_xml_fallback_rejects_hidden_label_text
+test_macos_read_only_status_accepts_binary_plist
+test_macos_live_status_rejects_stale_loaded_label_with_invalid_plist
+test_macos_runtime_manifest_detects_deployed_plist_drift
 test_conflict_markers_pass_on_clean_vault
 test_conflict_markers_error_on_conflict_block
 test_conflict_markers_pass_on_standalone_separator

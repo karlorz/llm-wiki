@@ -23,7 +23,8 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
    - Reports `vault_sync_conflict_markers` so poisoned Markdown is visible before
      push, pull, or snapshot workflows continue.
 3. **Read scheduler state**:
-   - leaf/full hosts: wiki-push and wiki-fetch.
+   - macOS leaf/full hosts: validate the deployed `wiki-push` and `wiki-fetch` plist syntax, expected `Label`, and `ProgramArguments[0]`; live mode then also checks their launchd registration. A loaded stale label cannot make invalid on-disk configuration pass.
+   - Linux leaf/full hosts: wiki-push and wiki-fetch timers.
    - snapshotter hosts: wiki-snapshot.
 4. **Check terminal helper state** for the installed `wiki-sync.sh` and the
    convenience `~/bin/wiki-sync.sh` symlink. Warn only; do not repair in status
@@ -33,7 +34,7 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
    - snapshotter hosts: skip leaf push/fetch/filter checks as not applicable; verify the configured `vault_sync.snapshot_script` or packaged `wiki-snapshot.sh` contains `--max-delete`.
 6. **Runtime proof checks** (read-only; never write markers):
    - `vault_sync_runtime_manifest` — `$(platform_share_dir)/runtime-manifest.json` present and parseable.
-   - `vault_sync_runtime_match` — SHA-256 of installed package-source scripts match the manifest and package sources under the vault-sync package root.
+   - `vault_sync_runtime_match` — SHA-256 of installed scripts match package sources, and recorded macOS LaunchAgent hashes match the actual deployed plist files.
    - `vault_sync_runtime_registration` — warn when scheduler jobs are enabled but runtime match is not pass.
    - `vault_sync_live_verify` — pass only when `$(platform_share_dir)/live-verify.ok` exists; otherwise warn. Status **never** creates this marker.
 7. **Resolve S3 reachability without guessing a host-local alias**:
@@ -99,7 +100,8 @@ After install, operators should see:
 | Check | Pass means |
 |-------|------------|
 | `vault_sync_runtime_manifest` | Install wrote a parseable inventory at `$(platform_share_dir)/runtime-manifest.json` |
-| `vault_sync_runtime_match` | Installed script hashes match package sources (not just "files exist") |
+| `vault_sync_jobs_enabled` | On macOS, both deployed plists are structurally valid; live mode also sees both registrations |
+| `vault_sync_runtime_match` | Installed script hashes match package sources and recorded macOS plist hashes match their deployed files (not just "files exist") |
 | `vault_sync_live_verify` | Attended rollout touched `$(platform_share_dir)/live-verify.ok` after a live pull cycle showed `op=` journal lines |
 
 Exact live-verify path:
@@ -115,7 +117,7 @@ When `--read-only` is passed:
 - No files are written (including never writing `live-verify.ok`).
 - No services are restarted.
 - No `launchctl` or `systemctl` commands that modify state.
-- Only read operations: file existence checks, log tailing, config reads, hash comparison.
+- Only read operations: plist validation, file existence checks, log tailing, config reads, hash comparison.
 
 This is the **safety lifeline for sg01**. Test ruthlessly.
 

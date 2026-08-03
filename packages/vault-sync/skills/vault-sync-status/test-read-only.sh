@@ -35,6 +35,18 @@ echo "PASS: --read-only refuses state-changing call (--restart-jobs)"
 home_dir="$(mktemp -d)"
 trap 'rm -rf "$home_dir"' EXIT
 
+write_valid_launchd_plist() {
+  local path="$1" label="$2"
+  cat > "$path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>/tmp/wiki-sync-test.sh</string></array>
+</dict></plist>
+EOF
+}
+
 case "$(uname -s)" in
   Darwin)
     share_bin="$home_dir/Library/Application Support/vault-sync/bin"
@@ -42,7 +54,8 @@ case "$(uname -s)" in
     unit_dir="$home_dir/Library/LaunchAgents"
     mkdir -p "$share_bin" "$log_dir" "$unit_dir" "$home_dir/.config/rclone" "$home_dir/bin" "$home_dir/wiki/concepts"
     printf '# Clean vault\n' > "$home_dir/wiki/concepts/clean.md"
-    touch "$unit_dir/com.karlchow.wiki-push.plist" "$unit_dir/com.karlchow.wiki-fetch.plist"
+    write_valid_launchd_plist "$unit_dir/com.karlchow.wiki-push.plist" "com.karlchow.wiki-push"
+    write_valid_launchd_plist "$unit_dir/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch"
     ;;
   Linux)
     share_bin="$home_dir/.local/share/vault-sync/bin"

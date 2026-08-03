@@ -187,39 +187,19 @@ launchd_emit_bootstrap_err() {
   sed 's/^/[vault-sync-install] launchctl: /' "$capture" >&2
 }
 
-launchd_validate_candidate() {
+launchd_validate_plist() {
   local label="$1"
   local plist="$2"
   local prog
 
-  if command -v plutil >/dev/null 2>&1; then
-    if ! plutil -lint "$plist" >/dev/null 2>&1; then
-      warn "plutil -lint failed for $plist"
-      return 1
-    fi
-  fi
-
-  if ! grep -Fq "<string>$label</string>" "$plist" 2>/dev/null; then
-    warn "candidate plist missing Label $label"
+  if ! platform_launchd_plist_validate "$label" "$plist"; then
+    warn "launchd plist invalid for $label at $plist: $PLATFORM_LAUNCHD_PLIST_REASON"
     return 1
   fi
 
-  # ProgramArguments[0] — first <string> after ProgramArguments key
-  prog="$(
-    awk '
-      /<key>ProgramArguments<\/key>/ { want=1; next }
-      want && /<string>/ {
-        sub(/.*<string>/, "")
-        sub(/<\/string>.*/, "")
-        print
-        exit
-      }
-    ' "$plist"
-  )"
-  if [ -z "$prog" ]; then
-    warn "candidate plist missing ProgramArguments[0]"
-    return 1
-  fi
+  # The shared validator guarantees this is a non-empty string. Keep the
+  # installer-only preflight warning for missing executable paths.
+  prog="$PLATFORM_LAUNCHD_PLIST_PROGRAM"
   if [ ! -x "$prog" ] && [ ! -x "$(command -v "$prog" 2>/dev/null || true)" ]; then
     # /bin/bash is normally present; warn-only if missing in hermetic tests
     if [ ! -e "$prog" ]; then
@@ -227,6 +207,53 @@ launchd_validate_candidate() {
     fi
   fi
   return 0
+}
+
+restore_launchd_rollback() {
+  local label="$1"
+  local original="$2"
+  local plist="$3"
+  local rollback_state="$4"
+
+  case "$rollback_state" in
+    valid)
+      ;;
+    invalid)
+      warn "previous plist was invalid; not restoring rollback artifact: $original"
+      return 0
+      ;;
+    unavailable)
+      warn "previous plist rollback artifact was unavailable or unverified; not restoring: $original"
+      return 0
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  if [ ! -f "$original" ]; then
+    warn "verified rollback artifact is missing; not restoring: $original"
+    return 0
+  fi
+  if ! platform_launchd_plist_validate "$label" "$original"; then
+    warn "rollback artifact failed validation; not restoring: $original ($PLATFORM_LAUNCHD_PLIST_REASON)"
+    return 0
+  fi
+  if ! cp "$original" "$plist"; then
+    warn "failed to restore rollback artifact to $plist"
+    return 0
+  fi
+  if ! cmp -s "$original" "$plist"; then
+    warn "restored rollback artifact does not match retained copy; not bootstrapping $plist"
+    return 0
+  fi
+  if ! platform_launchd_plist_validate "$label" "$plist"; then
+    warn "restored plist failed validation; not bootstrapping: $plist ($PLATFORM_LAUNCHD_PLIST_REASON)"
+    return 0
+  fi
+  if ! launchctl bootstrap "gui/$UID" "$plist" >/dev/null 2>&1; then
+    warn "failed to bootstrap restored rollback plist for $label"
+  fi
 }
 
 # Observed-state launchd unit install:
@@ -240,7 +267,7 @@ launchd_reload_unit() {
   local candidate="${3:-}"
   local domain="gui/$UID"
   local target="$domain/$label"
-  local rollback_dir old_basename
+  local rollback_dir old_basename rollback_state="none"
   local deadline_s="${VS_LAUNCHD_UNLOAD_DEADLINE_S:-5}"
   local present_poll_max="${VS_LAUNCHD_PRESENT_POLL_MAX:-25}"
   local polled=0
@@ -252,11 +279,11 @@ launchd_reload_unit() {
   fi
 
   if [ -n "$candidate" ]; then
-    if ! launchd_validate_candidate "$label" "$candidate"; then
+    if ! launchd_validate_plist "$label" "$candidate"; then
       return 1
     fi
   elif [ -f "$plist" ]; then
-    if ! launchd_validate_candidate "$label" "$plist"; then
+    if ! launchd_validate_plist "$label" "$plist"; then
       return 1
     fi
   fi
@@ -266,7 +293,26 @@ launchd_reload_unit() {
   mkdir -p "$rollback_dir"
   printf '%s\n' "$label" >"$rollback_dir/label"
   if [ -f "$plist" ]; then
-    cp "$plist" "$rollback_dir/$old_basename"
+    if ! cp "$plist" "$rollback_dir/$old_basename"; then
+      rollback_state="unavailable"
+      printf 'unavailable: failed to copy previous plist\n' >"$rollback_dir/previous-plist-integrity"
+      warn "could not retain verified rollback artifact for $label: failed to copy existing plist $plist"
+    elif ! cmp -s "$plist" "$rollback_dir/$old_basename"; then
+      rollback_state="unavailable"
+      printf 'unavailable: copied rollback artifact differs from previous plist\n' >"$rollback_dir/previous-plist-integrity"
+      warn "could not retain verified rollback artifact for $label: copied artifact differs from $plist"
+    elif ! platform_launchd_plist_validate "$label" "$plist"; then
+      rollback_state="invalid"
+      printf 'invalid: %s\n' "$PLATFORM_LAUNCHD_PLIST_REASON" >"$rollback_dir/previous-plist-integrity"
+      warn "existing plist is invalid; retaining it for diagnostics but not rollback: $plist ($PLATFORM_LAUNCHD_PLIST_REASON)"
+    elif ! platform_launchd_plist_validate "$label" "$rollback_dir/$old_basename"; then
+      rollback_state="unavailable"
+      printf 'unavailable: copied rollback artifact failed validation: %s\n' "$PLATFORM_LAUNCHD_PLIST_REASON" >"$rollback_dir/previous-plist-integrity"
+      warn "could not retain verified rollback artifact for $label: copied artifact failed validation ($PLATFORM_LAUNCHD_PLIST_REASON)"
+    else
+      rollback_state="valid"
+      printf 'valid\n' >"$rollback_dir/previous-plist-integrity"
+    fi
   fi
   if launchd_label_present "$label"; then
     printf 'present\n' >"$rollback_dir/pre_state"
@@ -330,11 +376,10 @@ launchd_reload_unit() {
           warn "launchctl bootstrap rc=$rc but label present; continuing"
           rm -f "$out"
         else
-          # rollback previous plist if we had one
-          if [ -f "$rollback_dir/$old_basename" ]; then
-            cp "$rollback_dir/$old_basename" "$plist"
-            launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1 || true
-          fi
+          # Restore only a prior artifact that passed the shared plist
+          # validation. A corrupt old plist must remain diagnostic evidence,
+          # not become the new on-disk deployment after a failed reinstall.
+          restore_launchd_rollback "$label" "$rollback_dir/$old_basename" "$plist" "$rollback_state"
           warn "launchctl bootstrap failed for $label after retry"
           launchd_emit_bootstrap_err "$out"
           rm -f "$out"
@@ -353,10 +398,7 @@ launchd_reload_unit() {
   done
   if ! launchd_label_present "$label"; then
     warn "launchd label $label not observable after bootstrap"
-    if [ -f "$rollback_dir/$old_basename" ]; then
-      cp "$rollback_dir/$old_basename" "$plist"
-      launchctl bootstrap "$domain" "$plist" >/dev/null 2>&1 || true
-    fi
+    restore_launchd_rollback "$label" "$rollback_dir/$old_basename" "$plist" "$rollback_state"
     return 1
   fi
 

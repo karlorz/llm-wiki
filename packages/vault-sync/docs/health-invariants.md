@@ -74,6 +74,20 @@ A release blocker found at canary produces a **new** immutable tag
 are release provenance; rewriting them breaks downstream update
 detection and audit trails.
 
+## H8 - macOS jobs require valid deployed plist definitions
+
+For macOS leaf hosts, `vault_sync_jobs_enabled=pass` means more than two
+LaunchAgent paths exist. Both deployed plist files must be structurally valid,
+carry their expected `Label`, and provide `ProgramArguments[0]`; live status
+also requires each label to be registered with launchd. A stale in-memory
+launchd registration must never mask malformed on-disk configuration.
+
+`runtime-manifest.json` records exact installed plist hashes. Status compares
+those entries to the deployed plist files, while the installer restores a
+previous plist after failure only when that previous artifact passed the same
+integrity validation. Regression coverage must include malformed files, stale
+loaded labels, manifest drift, valid rollback, and invalid-rollback refusal.
+
 ## Accepted differences between surfaces
 
 `vault-sync-status` (shell) and `doctor` (TS) share check IDs for the

@@ -247,6 +247,33 @@ fi
 echo "${TEST_FINDMNT_FSTYPE:-fuse.rclone}"
 EOF
 
+  cat > "$bin_dir/cp" <<'EOF'
+#!/bin/sh
+# Fail only the installer rollback-artifact copy when requested. All ordinary
+# package and fixture copies remain delegated to the platform cp.
+destination=""
+for argument in "$@"; do
+  destination="$argument"
+done
+case "$destination" in
+  */install-rollback/*)
+    if [ "${TEST_CP_FAIL_ROLLBACK:-0}" = "1" ]; then
+      echo "simulated rollback cp failure" >&2
+      exit 1
+    fi
+    ;;
+esac
+case "${1:-}" in
+  */install-rollback/*)
+    if [ "${TEST_CP_FAIL_RESTORE:-0}" = "1" ]; then
+      echo "simulated rollback restore cp failure" >&2
+      exit 1
+    fi
+    ;;
+esac
+exec /bin/cp "$@"
+EOF
+
   chmod +x "$bin_dir"/*
 }
 
@@ -358,6 +385,20 @@ assert_eq() {
     printf "FAIL: %s — expected '%s' got '%s'\n" "$label" "$expected" "$actual"
     FAIL=$((FAIL + 1))
   fi
+}
+
+write_valid_launchd_plist() {
+  local path="$1" label="$2" marker="${3:-}"
+  mkdir -p "$(dirname "$path")"
+  cat > "$path" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- $marker -->
+<plist version="1.0"><dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>/tmp/wiki-sync-test.sh</string></array>
+</dict></plist>
+EOF
 }
 
 FUSE_OUT="$TEST_ROOT/fuse-only.out"
@@ -545,11 +586,11 @@ assert_order "15: enable before bootstrap for push" "$MAC15_LOG" \
   "enable gui/$UID/com.karlchow.wiki-push" \
   "bootstrap gui/$UID $TEST_ROOT/home/Library/LaunchAgents/com.karlchow.wiki-push.plist"
 
-# --- Scenario 16a: rollback restores old plist on repeated failure ---
+# --- Scenario 16a: rollback restores valid old plist on repeated failure ---
 MAC16A_HOME="$TEST_ROOT/macos-16a-home"
 mkdir -p "$MAC16A_HOME/Library/LaunchAgents"
-printf 'OLD_PUSH_BODY_16A\n' > "$MAC16A_HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist"
-printf 'OLD_FETCH_BODY_16A\n' > "$MAC16A_HOME/Library/LaunchAgents/com.karlchow.wiki-fetch.plist"
+write_valid_launchd_plist "$MAC16A_HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist" "com.karlchow.wiki-push" "OLD_PUSH_BODY_16A"
+write_valid_launchd_plist "$MAC16A_HOME/Library/LaunchAgents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch" "OLD_FETCH_BODY_16A"
 MAC16A_OUT="$TEST_ROOT/macos-16a.out"
 make_fake_bin "$TEST_ROOT/fake-bin"
 fresh_launchctl_state
@@ -580,7 +621,7 @@ fi
 MAC16B_OUT="$TEST_ROOT/macos-16b.out"
 MAC16B_HOME="$TEST_ROOT/macos-16b-home"
 mkdir -p "$MAC16B_HOME/Library/LaunchAgents"
-printf 'OLD_PUSH_BODY_16B\n' > "$MAC16B_HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist"
+write_valid_launchd_plist "$MAC16B_HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist" "com.karlchow.wiki-push" "OLD_PUSH_BODY_16B"
 make_fake_bin "$TEST_ROOT/fake-bin"
 fresh_launchctl_state
 HOME="$MAC16B_HOME" \
@@ -598,6 +639,103 @@ MAC16B_RC=$?
 assert_exit "16b: rollback path still fails install" "$MAC16B_RC" 1
 assert_contains "16b: surfaces bootstrap/load failure" "$MAC16B_OUT" "failed to load launchd unit com.karlchow.wiki-push"
 assert_contains "16b: surfaces launchctl stderr" "$MAC16B_OUT" "Bootstrap failed: 5: Input/output error"
+
+# --- Scenario 16c: invalid old plist is retained for diagnostics, never restored ---
+MAC16C_OUT="$TEST_ROOT/macos-16c.out"
+MAC16C_HOME="$TEST_ROOT/macos-16c-home"
+mkdir -p "$MAC16C_HOME/Library/LaunchAgents"
+printf 'OLD_INVALID_PUSH_BODY_16C\n' > "$MAC16C_HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist"
+write_valid_launchd_plist "$MAC16C_HOME/Library/LaunchAgents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch" "OLD_FETCH_BODY_16C"
+make_fake_bin "$TEST_ROOT/fake-bin"
+fresh_launchctl_state
+HOME="$MAC16C_HOME" \
+USER=root \
+PATH="$TEST_ROOT/fake-bin:$NODE_DIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+VS_HOSTNAME=pvelxc-test \
+TEST_UNAME_S=Darwin \
+TEST_LAUNCHCTL_FAIL_ALL_BOOTSTRAP=1 \
+TEST_LAUNCHCTL_PRINT_RC=1 \
+TEST_LAUNCHCTL_PRESENT_FILE="$TEST_LAUNCHCTL_PRESENT_FILE" \
+VS_LAUNCHD_UNLOAD_DEADLINE_S=1 \
+VS_LAUNCHD_PRESENT_POLL_MAX=2 \
+bash "$INSTALL_SH" --role leaf --execute >"$MAC16C_OUT" 2>&1
+MAC16C_RC=$?
+MAC16C_PUSH="$MAC16C_HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist"
+assert_exit "16c: repeated bootstrap failure still fails install" "$MAC16C_RC" 1
+assert_not_contains "16c: invalid old push plist is not restored" "$MAC16C_PUSH" "OLD_INVALID_PUSH_BODY_16C"
+assert_contains "16c: validated candidate remains after failed rollback" "$MAC16C_PUSH" "<plist version=\"1.0\">"
+assert_contains "16c: invalid rollback is explicit" "$MAC16C_OUT" "previous plist was invalid; not restoring rollback artifact"
+MAC16C_INTEGRITY_FILE="$(find "$MAC16C_HOME/Library/Caches/vault-sync/install-rollback" -name previous-plist-integrity -type f -print -quit 2>/dev/null)"
+if [ -n "$MAC16C_INTEGRITY_FILE" ] && grep -q '^invalid:' "$MAC16C_INTEGRITY_FILE"; then
+  printf "PASS: %s\n" "16c: invalid rollback integrity evidence retained"
+  PASS=$((PASS + 1))
+else
+  printf "FAIL: %s\n" "16c: invalid rollback integrity evidence retained"
+  FAIL=$((FAIL + 1))
+fi
+
+# --- Scenario 16d: failed rollback-artifact copy is never treated as restorable ---
+MAC16D_OUT="$TEST_ROOT/macos-16d.out"
+MAC16D_HOME="$TEST_ROOT/macos-16d-home"
+mkdir -p "$MAC16D_HOME/Library/LaunchAgents"
+write_valid_launchd_plist "$MAC16D_HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist" "com.karlchow.wiki-push" "OLD_PUSH_BODY_16D"
+write_valid_launchd_plist "$MAC16D_HOME/Library/LaunchAgents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch" "OLD_FETCH_BODY_16D"
+make_fake_bin "$TEST_ROOT/fake-bin"
+fresh_launchctl_state
+HOME="$MAC16D_HOME" \
+USER=root \
+PATH="$TEST_ROOT/fake-bin:$NODE_DIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+VS_HOSTNAME=pvelxc-test \
+TEST_UNAME_S=Darwin \
+TEST_CP_FAIL_ROLLBACK=1 \
+TEST_LAUNCHCTL_FAIL_ALL_BOOTSTRAP=1 \
+TEST_LAUNCHCTL_PRINT_RC=1 \
+TEST_LAUNCHCTL_PRESENT_FILE="$TEST_LAUNCHCTL_PRESENT_FILE" \
+VS_LAUNCHD_UNLOAD_DEADLINE_S=1 \
+VS_LAUNCHD_PRESENT_POLL_MAX=2 \
+bash "$INSTALL_SH" --role leaf --execute >"$MAC16D_OUT" 2>&1
+MAC16D_RC=$?
+MAC16D_PUSH="$MAC16D_HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist"
+assert_exit "16d: failed rollback copy still fails install" "$MAC16D_RC" 1
+assert_not_contains "16d: failed rollback copy is not restored" "$MAC16D_PUSH" "OLD_PUSH_BODY_16D"
+assert_contains "16d: candidate remains after unavailable rollback" "$MAC16D_PUSH" "<plist version=\"1.0\">"
+assert_contains "16d: unavailable rollback copy is explicit" "$MAC16D_OUT" "could not retain verified rollback artifact"
+assert_contains "16d: unavailable rollback is refused" "$MAC16D_OUT" "rollback artifact was unavailable or unverified"
+MAC16D_INTEGRITY_FILE="$(find "$MAC16D_HOME/Library/Caches/vault-sync/install-rollback" -name previous-plist-integrity -type f -print -quit 2>/dev/null)"
+if [ -n "$MAC16D_INTEGRITY_FILE" ] && grep -q '^unavailable: failed to copy previous plist' "$MAC16D_INTEGRITY_FILE"; then
+  printf "PASS: %s\n" "16d: unavailable rollback integrity evidence retained"
+  PASS=$((PASS + 1))
+else
+  printf "FAIL: %s\n" "16d: unavailable rollback integrity evidence retained"
+  FAIL=$((FAIL + 1))
+fi
+
+# --- Scenario 16e: failed rollback restore copy leaves the validated candidate in place ---
+MAC16E_OUT="$TEST_ROOT/macos-16e.out"
+MAC16E_HOME="$TEST_ROOT/macos-16e-home"
+mkdir -p "$MAC16E_HOME/Library/LaunchAgents"
+write_valid_launchd_plist "$MAC16E_HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist" "com.karlchow.wiki-push" "OLD_PUSH_BODY_16E"
+write_valid_launchd_plist "$MAC16E_HOME/Library/LaunchAgents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch" "OLD_FETCH_BODY_16E"
+make_fake_bin "$TEST_ROOT/fake-bin"
+fresh_launchctl_state
+HOME="$MAC16E_HOME" \
+USER=root \
+PATH="$TEST_ROOT/fake-bin:$NODE_DIR:/usr/bin:/bin:/usr/sbin:/sbin" \
+VS_HOSTNAME=pvelxc-test \
+TEST_UNAME_S=Darwin \
+TEST_CP_FAIL_RESTORE=1 \
+TEST_LAUNCHCTL_FAIL_ALL_BOOTSTRAP=1 \
+TEST_LAUNCHCTL_PRINT_RC=1 \
+TEST_LAUNCHCTL_PRESENT_FILE="$TEST_LAUNCHCTL_PRESENT_FILE" \
+VS_LAUNCHD_UNLOAD_DEADLINE_S=1 \
+VS_LAUNCHD_PRESENT_POLL_MAX=2 \
+bash "$INSTALL_SH" --role leaf --execute >"$MAC16E_OUT" 2>&1
+MAC16E_RC=$?
+MAC16E_PUSH="$MAC16E_HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist"
+assert_exit "16e: failed rollback restore still fails install" "$MAC16E_RC" 1
+assert_not_contains "16e: failed rollback restore does not replace candidate" "$MAC16E_PUSH" "OLD_PUSH_BODY_16E"
+assert_contains "16e: candidate remains after failed restore" "$MAC16E_PUSH" "<plist version=\"1.0\">"
+assert_contains "16e: failed rollback restore is explicit" "$MAC16E_OUT" "failed to restore rollback artifact"
 
 # Rollback artifacts retained after successful install (must not delete on success)
 MAC_RB_OUT="$TEST_ROOT/macos-rollback-keep.out"

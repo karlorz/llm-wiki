@@ -474,7 +474,40 @@ check_installed_script_drift() {
   fi
 }
 
-# Compare runtime-manifest file hashes to package sources under VAULT_SYNC_ROOT.
+# Validate the two macOS leaf LaunchAgent definitions without invoking
+# launchctl. This is safe under --read-only and prevents a stale in-memory
+# registration from masking corrupt on-disk configuration.
+MACOS_LAUNCHD_PLIST_STATUS="pass"
+MACOS_LAUNCHD_PLIST_DETAIL=""
+
+check_macos_launchd_plists() {
+  local -a missing=()
+  local -a invalid=()
+  local label plist
+
+  for label in "com.karlchow.wiki-push" "com.karlchow.wiki-fetch"; do
+    plist="$HOME/Library/LaunchAgents/${label}.plist"
+    if [ ! -f "$plist" ]; then
+      missing+=("$(basename "$plist")")
+    elif ! platform_launchd_plist_validate "$label" "$plist"; then
+      invalid+=("$(basename "$plist"): $PLATFORM_LAUNCHD_PLIST_REASON")
+    fi
+  done
+
+  if [ "${#invalid[@]}" -gt 0 ]; then
+    MACOS_LAUNCHD_PLIST_STATUS="error"
+    MACOS_LAUNCHD_PLIST_DETAIL="invalid launchd plist(s): ${invalid[*]}"
+  elif [ "${#missing[@]}" -gt 0 ]; then
+    MACOS_LAUNCHD_PLIST_STATUS="warn"
+    MACOS_LAUNCHD_PLIST_DETAIL="launchd unit files missing: ${missing[*]}"
+  else
+    MACOS_LAUNCHD_PLIST_STATUS="pass"
+    MACOS_LAUNCHD_PLIST_DETAIL="launchd unit files valid"
+  fi
+}
+
+# Compare runtime-manifest script hashes to package sources and recorded
+# LaunchAgent hashes to their deployed macOS plist files.
 # Sets RUNTIME_MATCH_STATUS / RUNTIME_MATCH_DETAIL for later registration check.
 RUNTIME_MATCH_STATUS="warn"
 RUNTIME_MATCH_DETAIL=""
@@ -506,7 +539,7 @@ check_runtime_proof() {
       # Parse + compare in one python pass for reliability.
       local py_out
       py_out="$(
-        MANIFEST_PATH="$manifest_path" VAULT_SYNC_ROOT="$VAULT_SYNC_ROOT" python3 <<'PY'
+        MANIFEST_PATH="$manifest_path" VAULT_SYNC_ROOT="$VAULT_SYNC_ROOT" LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents" python3 <<'PY'
 import hashlib
 import json
 import os
@@ -514,6 +547,7 @@ import sys
 
 manifest_path = os.environ["MANIFEST_PATH"]
 root = os.environ["VAULT_SYNC_ROOT"]
+launch_agents_dir = os.environ["LAUNCH_AGENTS_DIR"]
 
 def sha256(path: str) -> str:
     h = hashlib.sha256()
@@ -552,6 +586,16 @@ compared = 0
 mismatches = []
 skipped = 0
 for rel, expected in sorted(files.items()):
+    if rel.startswith("LaunchAgents/"):
+        src = os.path.join(launch_agents_dir, rel[len("LaunchAgents/"):])
+        compared += 1
+        if not os.path.isfile(src):
+            mismatches.append(f"{rel}: expected {expected[:12]}… deployed file missing")
+            continue
+        actual = sha256(src)
+        if actual != expected:
+            mismatches.append(f"{rel}: expected {expected[:12]}… got {actual[:12]}…")
+        continue
     src = package_source(rel)
     if not src or not os.path.isfile(src):
         skipped += 1
@@ -589,11 +633,11 @@ PY
         elif [ "$mismatches" -gt 0 ]; then
           detail_bits="$(printf '%s\n' "$py_out" | sed -n 's/^DETAIL\t//p' | paste -sd '; ' -)"
           RUNTIME_MATCH_STATUS="warn"
-          RUNTIME_MATCH_DETAIL="${mismatches} hash mismatch(es) vs package sources: ${detail_bits}"
+          RUNTIME_MATCH_DETAIL="${mismatches} hash mismatch(es) vs package sources or deployed LaunchAgents: ${detail_bits}"
           add_check "vault_sync_runtime_match" "Vault sync runtime hash match" "warn" "$RUNTIME_MATCH_DETAIL"
         else
           RUNTIME_MATCH_STATUS="pass"
-          RUNTIME_MATCH_DETAIL="${compared} package-source file hash(es) match runtime manifest"
+          RUNTIME_MATCH_DETAIL="${compared} package-source/deployed LaunchAgent file hash(es) match runtime manifest"
           add_check "vault_sync_runtime_match" "Vault sync runtime hash match" "pass" "$RUNTIME_MATCH_DETAIL"
         fi
       fi
@@ -605,10 +649,10 @@ PY
   jobs_status="$(lookup_check_status "vault_sync_jobs_enabled")"
   if [ "$jobs_status" = "pass" ] && [ "$RUNTIME_MATCH_STATUS" != "pass" ]; then
     add_check "vault_sync_runtime_registration" "Vault sync runtime registration proof" "warn" \
-      "Jobs enabled but runtime hashes do not match package sources ($RUNTIME_MATCH_DETAIL)"
+      "Jobs enabled but runtime hashes do not match package sources/deployed LaunchAgents ($RUNTIME_MATCH_DETAIL)"
   elif [ "$RUNTIME_MATCH_STATUS" = "pass" ]; then
     add_check "vault_sync_runtime_registration" "Vault sync runtime registration proof" "pass" \
-      "Runtime hashes match package sources"
+      "Runtime hashes match package sources/deployed LaunchAgents"
   else
     add_check "vault_sync_runtime_registration" "Vault sync runtime registration proof" "warn" \
       "Runtime proof incomplete ($RUNTIME_MATCH_DETAIL); jobs_enabled=$jobs_status"
@@ -1070,16 +1114,25 @@ check_installed_script_drift
 # check_snapshotter_health above which produces vault_sync_jobs_enabled plus
 # the service-result, freshness, and consecutive-failure checks).
 if [ "$ROLE" != "snapshotter" ]; then
-  if [ "$READ_ONLY" -eq 1 ]; then
-    if [ "$VS_OS" = "macos" ]; then
-      push_plist="$HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist"
-      fetch_plist="$HOME/Library/LaunchAgents/com.karlchow.wiki-fetch.plist"
-      if [ -f "$push_plist" ] && [ -f "$fetch_plist" ]; then
-        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "launchd unit files present (read-only mode)"
-      else
-        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "launchd unit files missing (read-only mode)"
-      fi
+  if [ "$VS_OS" = "macos" ]; then
+    check_macos_launchd_plists
+    if [ "$READ_ONLY" -eq 1 ]; then
+      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "$MACOS_LAUNCHD_PLIST_STATUS" \
+        "$MACOS_LAUNCHD_PLIST_DETAIL (read-only mode)"
+    elif [ "$MACOS_LAUNCHD_PLIST_STATUS" != "pass" ]; then
+      add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "$MACOS_LAUNCHD_PLIST_STATUS" \
+        "$MACOS_LAUNCHD_PLIST_DETAIL; scheduler state not trusted"
     else
+      push_job_json=$(platform_job_status "com.karlchow.wiki-push")
+      fetch_job_json=$(platform_job_status "com.karlchow.wiki-fetch")
+      if printf '%s' "$push_job_json" | grep -q '"enabled": true' && printf '%s' "$fetch_job_json" | grep -q '"enabled": true'; then
+        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "launchd unit files valid; scheduler reports push+fetch enabled"
+      else
+        add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "warn" "launchd unit files valid; scheduler reports one or more jobs disabled"
+      fi
+    fi
+  elif [ "$READ_ONLY" -eq 1 ]; then
+    if [ "$VS_OS" = "linux" ]; then
       push_timer="$HOME/.config/systemd/user/wiki-push.timer"
       fetch_timer="$HOME/.config/systemd/user/wiki-fetch.timer"
       if [ -f "$push_timer" ] && [ -f "$fetch_timer" ]; then
@@ -1089,13 +1142,8 @@ if [ "$ROLE" != "snapshotter" ]; then
       fi
     fi
   else
-    if [ "$VS_OS" = "macos" ]; then
-      push_job_json=$(platform_job_status "com.karlchow.wiki-push")
-      fetch_job_json=$(platform_job_status "com.karlchow.wiki-fetch")
-    else
-      push_job_json=$(platform_job_status "wiki-push")
-      fetch_job_json=$(platform_job_status "wiki-fetch")
-    fi
+    push_job_json=$(platform_job_status "wiki-push")
+    fetch_job_json=$(platform_job_status "wiki-fetch")
 
     if printf '%s' "$push_job_json" | grep -q '"enabled": true' && printf '%s' "$fetch_job_json" | grep -q '"enabled": true'; then
       add_check "vault_sync_jobs_enabled" "Vault sync jobs enabled" "pass" "Scheduler reports push+fetch enabled"

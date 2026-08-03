@@ -51,7 +51,7 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    cp packages/vault-sync/filters/wiki-push-filters.txt $(platform_rclone_config_dir)/
    ```
 6. **Install scheduler units**:
-   - macOS: render `.plist.tmpl` files with `@SCRIPT_DIR@` → `$(platform_share_dir)/bin`, `@LOG_DIR@` → `$(platform_log_dir)`. Write to `~/Library/LaunchAgents/`. Run `launchctl bootstrap gui/$UID <plist>`.
+   - macOS: render `.plist.tmpl` files with `@SCRIPT_DIR@` → `$(platform_share_dir)/bin`, `@LOG_DIR@` → `$(platform_log_dir)`. Validate plist syntax plus `Label` / `ProgramArguments[0]`, write to `~/Library/LaunchAgents/`, then run `launchctl bootstrap gui/$UID <plist>`.
    - Linux leaf: render `.service` + `.timer` with `@SCRIPT_DIR@` → `$(platform_share_dir)/bin`. Write to `~/.config/systemd/user/`. Run `systemctl --user daemon-reload && systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer`.
    - Linux snapshotter: render `wiki-snapshot.service` + `wiki-snapshot.timer` plus `wiki-fuse-refresh.service` + `wiki-fuse-refresh.timer`. Write to `/etc/systemd/system/` for `--service-scope system` or `~/.config/systemd/user/` for `--service-scope user`. Enable `wiki-snapshot.timer` on a 30-minute cadence (`*:02` and `*:32`) plus the 5-minute FUSE refresh timer.
    - Linux post-check: run `wiki-fuse-refresh.sh --check-only --max-dir-cache 15m` and surface a warning if the active mount exceeds the freshness envelope.
@@ -107,7 +107,7 @@ On macOS, launchd install is an **observed-state** transaction:
 
 EIO from `launchctl` is **not special** — it is reconciled only when `launchctl print` shows the label present (exit status only; no field parsing of launchctl output). Candidate plists are staged and moved into place only after registration is proven absent.
 
-Rollback copies live under `$(platform_cache_dir)/install-rollback/<timestamp>/` and are **retained after success** until a later status/live-verify step clears them. Do not delete rollback dirs merely because bootstrap returned success.
+Rollback copies live under `$(platform_cache_dir)/install-rollback/<timestamp>/` and are **retained after success** until a later status/live-verify step clears them. Do not delete rollback dirs merely because bootstrap returned success. The installer records whether each previous macOS plist passed integrity validation; only a valid previous plist is eligible for automatic restoration after a failed bootstrap. Invalid prior files remain diagnostic evidence and are never reinstalled as rollback.
 
 After a successful non-dry-run install, `$(platform_share_dir)/runtime-manifest.json` records package/installer version, host role, and SHA-256 hashes of installed scripts and LaunchAgents plists.
 
@@ -132,7 +132,7 @@ Repository tests green ≠ install work complete. After deploying to a real host
    ```bash
    bash packages/vault-sync/skills/vault-sync-status/status.sh --read-only
    ```
-   Expect `vault_sync_runtime_match=pass` (and a parseable `runtime-manifest.json`).
+   Expect `vault_sync_jobs_enabled=pass` and `vault_sync_runtime_match=pass` (valid on-disk LaunchAgent plists plus a parseable `runtime-manifest.json`).
 3. Wait for a scheduled `wiki-fetch` cycle, or kickstart it / run the pull helper once so a live pull executes on the installed scripts.
 4. Confirm the pull log shows helper-owned journal lines (`op=…`) and **no** legacy `wiki-pull auto-stash` messages:
    ```bash
