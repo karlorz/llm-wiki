@@ -601,18 +601,23 @@ export interface WikiSyncStash {
   age_minutes: number;
 }
 
-export type StashAuditClassification =
-  | "recent_known_peer_stash"
-  | "self_or_local_recovery_stash"
-  | "stale_stash_backlog"
-  | "unknown_stash_ownership";
+export const STASH_AUDIT_CLASSIFICATIONS = [
+  "recent_known_peer_stash",
+  "self_or_local_recovery_stash",
+  "stale_stash_backlog",
+  "unknown_stash_ownership",
+] as const;
+
+export type StashAuditClassification = (typeof STASH_AUDIT_CLASSIFICATIONS)[number];
+
+export const STASH_AUDIT_FORMATS = ["wiki-sync", "vault-sync", "manual", "unknown"] as const;
 
 export interface StashAuditEntry {
   ref: string;
   oid: string;
   age_minutes: number;
   classification: StashAuditClassification;
-  format: "wiki-sync" | "vault-sync" | "manual" | "unknown";
+  format: (typeof STASH_AUDIT_FORMATS)[number];
   session_id?: string;
   operation_id?: string;
 }
@@ -633,11 +638,12 @@ export interface SyncPeersOutput {
 }
 
 const STASH_RECENT_MINUTES = 120;
-const MANAGED_WRITER_PATTERNS = [
+const MANAGED_WRITER_SPECS = [
   ["wiki-push", /(?:^|[\s/\\])wiki-push(?:\.[a-z0-9_-]+)?(?:\s|$)/i],
   ["rclone", /(?:^|[\s/\\])rclone(?:\.[a-z0-9_-]+)?(?:\s|$)/i],
   ["vault-sync", /(?:^|[\s/\\])vault-sync(?:\.[a-z0-9_-]+)?(?:\s|$)/i],
 ] as const;
+export const MANAGED_WRITER_KINDS = MANAGED_WRITER_SPECS.map(([kind]) => kind);
 
 export function classifyStash(
   ageMinutes: number,
@@ -676,7 +682,7 @@ export function classifyManagedWriterProcesses(
       processName = pidMatch[2]!;
     }
     if (pid === currentPid) continue;
-    const kind = MANAGED_WRITER_PATTERNS.find(([, pattern]) => pattern.test(processName))?.[0];
+    const kind = MANAGED_WRITER_SPECS.find(([, pattern]) => pattern.test(processName))?.[0];
     if (!kind) continue;
     count += 1;
     kinds.add(kind);

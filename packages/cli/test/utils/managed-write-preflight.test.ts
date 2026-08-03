@@ -12,9 +12,12 @@ import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { ExitCode, err, ok } from "@skillwiki/shared";
 import {
+  type ManagedWriteMode,
+  type ManagedWriteReceipt,
   runManagedWritePreflight,
   runManagedWriteTransaction,
 } from "../../src/utils/managed-write-preflight.js";
+import type { SyncPeersOutput } from "../../src/commands/sync.js";
 import { managedWriteLockPath } from "../../src/utils/managed-write-lock.js";
 
 const SG01_FLEET = `schema_version: 1
@@ -68,6 +71,37 @@ function writeManagedLockRecord(vault: string, record: Record<string, unknown>):
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function nonblockingPeerCheck() {
+  return {
+    exitCode: ExitCode.OK,
+    result: ok(makePeerOutput()),
+  };
+}
+
+function makePeerOutput(overrides: Partial<SyncPeersOutput> = {}): SyncPeersOutput {
+  return {
+    locks: [],
+    stashes: [],
+    stash_audit: [],
+    managed_writers: { count: 0, kinds: [], blocking: false },
+    blocking: false,
+    humanHint: "no peers detected",
+    ...overrides,
+  };
+}
+
+function makeReceipt(vault: string, mode: ManagedWriteMode): ManagedWriteReceipt {
+  const gitWriter = mode === "git-writer";
+  return {
+    mode,
+    mutation_vault: resolve(vault),
+    git_vault: gitWriter ? resolve(vault) : null,
+    base_oid: gitWriter ? "base-oid" : null,
+    converged: gitWriter,
+    convergence_source: "single-path",
+  };
 }
 
 function writeReviewJournal(
@@ -325,7 +359,7 @@ hosts:
         allowImmutableRecord: false,
         mutate,
       },
-      { converge },
+      { converge, syncPeers: nonblockingPeerCheck },
     );
     expect(run.exitCode).toBe(0);
     expect(run.result).toMatchObject({ ok: true, data: { published: true } });
@@ -362,7 +396,7 @@ hosts:
         command: "projections materialize",
         hostId: "sg01",
       },
-      { converge },
+      { converge, syncPeers: nonblockingPeerCheck },
     );
     expect(run.exitCode).toBe(0);
     expect(run.result).toMatchObject({
@@ -408,7 +442,7 @@ hosts:
         allowImmutableRecord: false,
         mutate,
       },
-      { converge },
+      { converge, syncPeers: nonblockingPeerCheck },
     );
 
     expect(run.exitCode).toBe(ExitCode.OK);
@@ -453,7 +487,7 @@ hosts:
         allowImmutableRecord: false,
         mutate,
       },
-      { converge },
+      { converge, syncPeers: nonblockingPeerCheck },
     );
 
     expect(run.exitCode).toBe(ExitCode.SYNC_LOCK_HELD);
@@ -489,7 +523,7 @@ hosts:
         allowImmutableRecord: false,
         mutate,
       },
-      { converge },
+      { converge, syncPeers: nonblockingPeerCheck },
     );
 
     expect(run.exitCode).toBe(ExitCode.SYNC_LOCK_HELD);
@@ -526,7 +560,7 @@ hosts:
         allowImmutableRecord: false,
         mutate,
       },
-      { converge },
+      { converge, syncPeers: nonblockingPeerCheck },
     );
 
     expect(run.exitCode).toBe(ExitCode.SYNC_LOCK_HELD);
@@ -803,5 +837,233 @@ hosts:
       ok: false,
       detail: { reason: "missing-head-after-converge" },
     });
+  });
+
+  it("runs exactly one peer check after preflight while the lock is held", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-peer-gate-order-"));
+    const lockPath = managedWriteLockPath(vault);
+    const events: string[] = [];
+    const preflight = vi.fn(async () => {
+      events.push("preflight");
+      return { exitCode: ExitCode.OK, result: ok(makeReceipt(vault, "standalone")) };
+    });
+    const syncPeers = vi.fn(() => {
+      events.push("peer");
+      expect(existsSync(lockPath)).toBe(true);
+      return nonblockingPeerCheck();
+    });
+    const mutate = vi.fn(async (receipt: ManagedWriteReceipt) => {
+      events.push("mutate");
+      expect(receipt.mode).toBe("standalone");
+      expect(existsSync(lockPath)).toBe(true);
+      return { exitCode: 77, result: ok({ accepted: true }) };
+    });
+
+    const run = await runManagedWriteTransaction(
+      {
+        vault,
+        command: "test peer gate",
+        allowImmutableRecord: false,
+        preflight,
+        mutate,
+      },
+      { converge: vi.fn(), syncPeers },
+    );
+
+    expect(run).toMatchObject({ exitCode: 77, result: { ok: true, data: { accepted: true } } });
+    expect(events).toEqual(["preflight", "peer", "mutate"]);
+    expect(syncPeers).toHaveBeenCalledTimes(1);
+    expect(syncPeers).toHaveBeenCalledWith({ vault: resolve(vault) });
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it.each(["standalone", "immutable-record", "git-writer"] as const)(
+    "gates the %s transaction mode",
+    async (mode) => {
+      const vault = mkdtempSync(join(tmpdir(), `managed-peer-gate-${mode}-`));
+      const syncPeers = vi.fn(nonblockingPeerCheck);
+      const mutate = vi.fn(async () => ({ exitCode: ExitCode.OK, result: ok({ mode }) }));
+      const run = await runManagedWriteTransaction(
+        {
+          vault,
+          command: "test peer gate mode",
+          allowImmutableRecord: mode === "immutable-record",
+          preflight: async () => ({
+            exitCode: ExitCode.OK,
+            result: ok(makeReceipt(vault, mode)),
+          }),
+          mutate,
+        },
+        { converge: vi.fn(), syncPeers },
+      );
+
+      expect(run).toMatchObject({ exitCode: ExitCode.OK, result: { ok: true, data: { mode } } });
+      expect(syncPeers).toHaveBeenCalledTimes(1);
+      expect(mutate).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    {
+      label: "live writer overlap",
+      output: makePeerOutput({
+        managed_writers: { count: 2, kinds: ["vault-sync"], blocking: true },
+        blocking: true,
+      }),
+      reason: "live-writer-overlap",
+    },
+    {
+      label: "foreign lock",
+      output: makePeerOutput({
+        locks: [
+          {
+            session_id: "peer-session",
+            pid: 42,
+            cwd: "/private/peer-vault",
+            summary: "secret peer command",
+            acquired: "2026-08-03T00:00:00.000Z",
+            expires: "2026-08-03T01:00:00.000Z",
+            is_self: false,
+          },
+        ],
+        blocking: true,
+      }),
+      reason: "peer-lock",
+    },
+    {
+      label: "recent peer stash",
+      output: makePeerOutput({
+        stash_audit: [
+          {
+            ref: "refs/stash@{0}",
+            oid: "stash-oid",
+            age_minutes: 5,
+            classification: "recent_known_peer_stash",
+            format: "vault-sync",
+            operation_id: "secret-operation-id",
+          },
+        ],
+        blocking: true,
+      }),
+      reason: "recent-peer-stash",
+    },
+    {
+      label: "other valid blocking result",
+      output: makePeerOutput({ blocking: true }),
+      reason: "peer-blocked",
+    },
+  ])("blocks mutation for $label with a stable reason", async ({ output, reason }) => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-peer-gate-blocked-"));
+    const mutate = vi.fn(async () => ({ exitCode: ExitCode.OK, result: ok({ mutated: true }) }));
+    const syncPeers = vi.fn(() => ({ exitCode: ExitCode.OK, result: ok(output) }));
+    const run = await runManagedWriteTransaction(
+      {
+        vault,
+        command: "test peer gate blocked",
+        allowImmutableRecord: false,
+        preflight: async () => ({
+          exitCode: ExitCode.OK,
+          result: ok(makeReceipt(vault, "standalone")),
+        }),
+        mutate,
+      },
+      { converge: vi.fn(), syncPeers },
+    );
+
+    expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+    expect(run.result).toMatchObject({
+      ok: false,
+      error: "PREFLIGHT_FAILED",
+      detail: { reason },
+    });
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "malformed output",
+      syncPeers: () => ({
+        exitCode: ExitCode.OK,
+        result: ok({ blocking: false } as unknown as SyncPeersOutput),
+      }),
+    },
+    {
+      label: "non-OK checker result",
+      syncPeers: () => ({
+        exitCode: ExitCode.INTERNAL_ERROR,
+        result: err("INTERNAL_ERROR", { command: "/private/secret/process" }),
+      }),
+    },
+    {
+      label: "throwing checker",
+      syncPeers: () => {
+        throw new Error("/private/secret/process --pid 42 stash-body");
+      },
+    },
+  ])("fails closed for a $label without leaking checker details", async ({ syncPeers }) => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-peer-gate-failed-"));
+    const mutate = vi.fn(async () => ({ exitCode: ExitCode.OK, result: ok({ mutated: true }) }));
+    const run = await runManagedWriteTransaction(
+      {
+        vault,
+        command: "test peer gate failed",
+        allowImmutableRecord: false,
+        preflight: async () => ({
+          exitCode: ExitCode.OK,
+          result: ok(makeReceipt(vault, "standalone")),
+        }),
+        mutate,
+      },
+      { converge: vi.fn(), syncPeers },
+    );
+
+    expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+    expect(run.result).toMatchObject({
+      ok: false,
+      error: "PREFLIGHT_FAILED",
+      detail: { reason: "peer-check-failed" },
+    });
+    expect(JSON.stringify(run.result)).not.toContain("/private/secret/process");
+    expect(JSON.stringify(run.result)).not.toContain("stash-body");
+    expect(JSON.stringify(run.result)).not.toContain("42");
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("allows stale nonblocking stash audits to reach mutation", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-peer-gate-stale-"));
+    const mutate = vi.fn(async () => ({ exitCode: ExitCode.OK, result: ok({ mutated: true }) }));
+    const syncPeers = vi.fn(() => ({
+      exitCode: ExitCode.OK,
+      result: ok(
+        makePeerOutput({
+          stash_audit: [
+            {
+              ref: "refs/stash@{0}",
+              oid: "stale-oid",
+              age_minutes: 121,
+              classification: "stale_stash_backlog",
+              format: "vault-sync",
+              operation_id: "old-operation",
+            },
+          ],
+        }),
+      ),
+    }));
+    const run = await runManagedWriteTransaction(
+      {
+        vault,
+        command: "test peer gate stale",
+        allowImmutableRecord: false,
+        preflight: async () => ({
+          exitCode: ExitCode.OK,
+          result: ok(makeReceipt(vault, "standalone")),
+        }),
+        mutate,
+      },
+      { converge: vi.fn(), syncPeers },
+    );
+
+    expect(run).toMatchObject({ exitCode: ExitCode.OK, result: { ok: true, data: { mutated: true } } });
+    expect(mutate).toHaveBeenCalledTimes(1);
   });
 });

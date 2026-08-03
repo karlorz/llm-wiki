@@ -2,6 +2,18 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ExitCode, err, ok, type Result } from "@skillwiki/shared";
 import { FLEET_REL_PATH, loadFleetManifestAndHost } from "../commands/fleet.js";
+import {
+  runSyncPeers,
+  MANAGED_WRITER_KINDS,
+  STASH_AUDIT_CLASSIFICATIONS,
+  STASH_AUDIT_FORMATS,
+  type ManagedWriterObservation,
+  type PeerLock,
+  type StashAuditEntry,
+  type SyncPeersInput,
+  type SyncPeersOutput,
+  type WikiSyncStash,
+} from "../commands/sync.js";
 import { git } from "./git.js";
 import {
   acquireManagedWriteLock,
@@ -59,6 +71,8 @@ export interface ManagedWritePreflightInput {
 export interface ManagedWritePreflightDeps {
   converge(input: VaultSyncPullHelperInput): Promise<Result<VaultSyncPullReceipt>>;
   resolveConfiguredSnapshotWorktree?(home: string): string | undefined;
+  /** Test/host adapter for the single pre-mutation peer observation. */
+  syncPeers?(input: SyncPeersInput): { exitCode: number; result: Result<SyncPeersOutput> };
 }
 
 export interface ManagedWriteTransactionInput<T> {
@@ -81,7 +95,185 @@ export interface ManagedWriteTransactionInput<T> {
 const DEFAULT_DEPS: ManagedWritePreflightDeps = {
   converge: (input) => runVaultSyncPullHelper(input),
   resolveConfiguredSnapshotWorktree,
+  syncPeers: runSyncPeers,
 };
+
+const SAFE_MANAGED_WRITER_KINDS = new Set<string>(MANAGED_WRITER_KINDS);
+const SAFE_STASH_AUDIT_CLASSIFICATIONS = new Set<string>(STASH_AUDIT_CLASSIFICATIONS);
+const SAFE_STASH_AUDIT_FORMATS = new Set<string>(STASH_AUDIT_FORMATS);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isPeerLock(value: unknown): value is PeerLock {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.session_id === "string" &&
+    isNonNegativeInteger(value.pid) &&
+    typeof value.cwd === "string" &&
+    typeof value.summary === "string" &&
+    typeof value.acquired === "string" &&
+    typeof value.expires === "string" &&
+    typeof value.is_self === "boolean"
+  );
+}
+
+function isWikiSyncStash(value: unknown): value is WikiSyncStash {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.ref === "string" &&
+    typeof value.oid === "string" &&
+    typeof value.session_id === "string" &&
+    typeof value.cwd_hash === "string" &&
+    typeof value.timestamp === "string" &&
+    typeof value.summary === "string" &&
+    isNonNegativeFiniteNumber(value.age_minutes)
+  );
+}
+
+function isStashAuditEntry(value: unknown): value is StashAuditEntry {
+  if (!isRecord(value)) return false;
+  if (
+    typeof value.ref !== "string" ||
+    typeof value.oid !== "string" ||
+    !isNonNegativeFiniteNumber(value.age_minutes) ||
+    typeof value.classification !== "string" ||
+    !SAFE_STASH_AUDIT_CLASSIFICATIONS.has(value.classification) ||
+    typeof value.format !== "string" ||
+    !SAFE_STASH_AUDIT_FORMATS.has(value.format)
+  ) {
+    return false;
+  }
+  if (value.session_id !== undefined && typeof value.session_id !== "string") return false;
+  if (value.operation_id !== undefined && typeof value.operation_id !== "string") return false;
+  return true;
+}
+
+function isManagedWriterObservation(value: unknown): value is ManagedWriterObservation {
+  if (!isRecord(value) || !Array.isArray(value.kinds)) return false;
+  if (
+    !isNonNegativeInteger(value.count) ||
+    typeof value.blocking !== "boolean" ||
+    value.kinds.some(
+      (kind) => typeof kind !== "string" || !SAFE_MANAGED_WRITER_KINDS.has(kind),
+    )
+  ) {
+    return false;
+  }
+  if (value.blocking !== (value.count > 0)) return false;
+  if (value.count === 0 && value.kinds.length > 0) return false;
+  if (value.count > 0 && value.kinds.length === 0) return false;
+  return true;
+}
+
+interface ValidatedSyncPeersOutput {
+  output: SyncPeersOutput;
+  foreignLockCount: number;
+  recentPeerStashCount: number;
+}
+
+function validateSyncPeersOutput(value: unknown): ValidatedSyncPeersOutput | null {
+  if (!isRecord(value)) return null;
+  if (
+    !Array.isArray(value.locks) ||
+    !Array.isArray(value.stashes) ||
+    !Array.isArray(value.stash_audit) ||
+    typeof value.humanHint !== "string" ||
+    typeof value.blocking !== "boolean" ||
+    !isManagedWriterObservation(value.managed_writers)
+  ) {
+    return null;
+  }
+  let foreignLockCount = 0;
+  for (const lock of value.locks) {
+    if (!isPeerLock(lock)) return null;
+    if (!lock.is_self) foreignLockCount += 1;
+  }
+  for (const stash of value.stashes) {
+    if (!isWikiSyncStash(stash)) return null;
+  }
+  let recentPeerStashCount = 0;
+  for (const entry of value.stash_audit) {
+    if (!isStashAuditEntry(entry)) return null;
+    if (entry.classification === "recent_known_peer_stash") recentPeerStashCount += 1;
+  }
+  return {
+    output: value as unknown as SyncPeersOutput,
+    foreignLockCount,
+    recentPeerStashCount,
+  };
+}
+
+function peerCheckFailure<T>(reason: string, detail: Record<string, unknown> = {}): {
+  exitCode: number;
+  result: Result<T>;
+} {
+  return {
+    exitCode: ExitCode.PREFLIGHT_FAILED,
+    result: err("PREFLIGHT_FAILED", { reason, ...detail }) as Result<T>,
+  };
+}
+
+function runManagedWritePeerGate<T>(
+  vault: string,
+  deps: ManagedWritePreflightDeps,
+): { exitCode: number; result: Result<T> } | null {
+  try {
+    const check = (deps.syncPeers ?? DEFAULT_DEPS.syncPeers!)({ vault });
+    if (check.exitCode !== ExitCode.OK || !check.result.ok) {
+      return peerCheckFailure<T>("peer-check-failed");
+    }
+    const validated = validateSyncPeersOutput(check.result.data);
+    if (!validated) {
+      return peerCheckFailure<T>("peer-check-failed");
+    }
+
+    const { output: peerOutput, foreignLockCount, recentPeerStashCount } = validated;
+    const hasKnownBlockingSignal =
+      foreignLockCount > 0 ||
+      peerOutput.managed_writers.blocking ||
+      recentPeerStashCount > 0;
+    if (!peerOutput.blocking) {
+      return hasKnownBlockingSignal ? peerCheckFailure<T>("peer-check-failed") : null;
+    }
+
+    if (peerOutput.managed_writers.blocking) {
+      return peerCheckFailure<T>("live-writer-overlap", {
+        managed_writer_count: peerOutput.managed_writers.count,
+        managed_writer_kinds: peerOutput.managed_writers.kinds.slice(0, 8),
+        blocking: true,
+      });
+    }
+
+    if (foreignLockCount > 0) {
+      return peerCheckFailure<T>("peer-lock", {
+        foreign_lock_count: foreignLockCount,
+        blocking: true,
+      });
+    }
+
+    if (recentPeerStashCount > 0) {
+      return peerCheckFailure<T>("recent-peer-stash", {
+        recent_peer_stash_count: recentPeerStashCount,
+        stash_classification: "recent_known_peer_stash",
+        blocking: true,
+      });
+    }
+
+    return peerCheckFailure<T>("peer-blocked", { blocking: true });
+  } catch {
+    return peerCheckFailure<T>("peer-check-failed");
+  }
+}
 
 function preflightBlocker(vault: string): { reason: string; operation_id?: string; unmerged_paths?: string[] } | null {
   const unmerged = hasUnmergedPaths(vault);
@@ -405,6 +597,8 @@ export async function runManagedWriteTransaction<T>(
         }) as Result<T>,
       };
     }
+    const peerGate = runManagedWritePeerGate<T>(mutationVault, deps);
+    if (peerGate) return peerGate;
     return await input.mutate(receipt);
   } finally {
     releaseManagedWriteLock(handle);
