@@ -9,7 +9,17 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../src/commands/sync.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/commands/sync.js")>();
+  return {
+    ...actual,
+    runSyncPeers: (input: Parameters<typeof actual.runSyncPeers>[0]) =>
+      actual.runSyncPeers({ ...input, processSnapshot: "" }),
+  };
+});
+
 import { ExitCode } from "@skillwiki/shared";
 import {
   defaultProjectPagePublishDeps,

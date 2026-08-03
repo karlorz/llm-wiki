@@ -1,8 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+
+vi.mock("../../src/commands/sync.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/commands/sync.js")>();
+  return {
+    ...actual,
+    runSyncPeers: (input: Parameters<typeof actual.runSyncPeers>[0]) =>
+      actual.runSyncPeers({ ...input, processSnapshot: "" }),
+  };
+});
+
 import { runIndexRebuild } from "../../src/commands/index-rebuild.js";
 
 const FM = (title: string, type: string) => `---

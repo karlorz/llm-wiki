@@ -10,7 +10,17 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../src/commands/sync.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/commands/sync.js")>();
+  return {
+    ...actual,
+    runSyncPeers: (input: Parameters<typeof actual.runSyncPeers>[0]) =>
+      actual.runSyncPeers({ ...input, processSnapshot: "" }),
+  };
+});
+
 import { ExitCode } from "@skillwiki/shared";
 import {
   defaultPagePublishDeps,
@@ -227,13 +237,16 @@ describe("page publish", () => {
     expect(snapshotFiles(vault)).toEqual(before);
   });
 
-  it("does not write or release a publication lock held by another owner", async () => {
+  it("rejects publication pre-mutation when a foreign peer lock is held", async () => {
     const vault = makeVault(["research"]);
     const before = snapshotFiles(vault);
     mkdirSync(dirname(lockPath(vault)), { recursive: true });
     const held = JSON.stringify({
       session_id: "other-publisher",
       owner_token: "other-owner",
+      pid: 0,
+      cwd: "fixture-vault",
+      summary: "fixture peer lock",
       acquired: NOW.toISOString(),
       expires: "2026-07-13T00:01:00.000Z",
     });
@@ -246,7 +259,16 @@ describe("page publish", () => {
       write: true,
     });
 
-    expect(result.exitCode).toBe(ExitCode.SYNC_LOCK_HELD);
+    expect(result.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+    expect(result.result).toMatchObject({
+      ok: false,
+      error: "PREFLIGHT_FAILED",
+      detail: {
+        reason: "peer-lock",
+        foreign_lock_count: 1,
+        blocking: true,
+      },
+    });
     expect(snapshotFiles(vault)).toEqual({ ...before, ".skillwiki/sync.lock": held });
     expect(readFileSync(lockPath(vault), "utf8")).toBe(held);
   });

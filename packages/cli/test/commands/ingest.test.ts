@@ -11,6 +11,16 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+vi.mock("../../src/commands/sync.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/commands/sync.js")>();
+  return {
+    ...actual,
+    runSyncPeers: (input: Parameters<typeof actual.runSyncPeers>[0]) =>
+      actual.runSyncPeers({ ...input, processSnapshot: "" }),
+  };
+});
+
 import { ExitCode } from "@skillwiki/shared";
 import { runIngest } from "../../src/commands/ingest.js";
 import { defaultPagePublishDeps } from "../../src/commands/page-publish.js";
@@ -58,14 +68,19 @@ function countPublicationLogs(vault: string, target: string): number {
   return (readFileSync(join(vault, "log.md"), "utf8").match(new RegExp(`page-publish \\| ${escaped}`, "g")) ?? []).length;
 }
 
-function holdPublicationLock(vault: string): void {
+function holdPublicationLock(vault: string): string {
   mkdirSync(join(vault, ".skillwiki"), { recursive: true });
-  writeFileSync(lockPath(vault), JSON.stringify({
+  const held = JSON.stringify({
     session_id: "other-publisher",
     owner_token: "other-owner",
+    pid: 0,
+    cwd: "fixture-vault",
+    summary: "fixture peer lock",
     acquired: "2026-07-13T00:00:00.000Z",
     expires: "2099-01-01T00:00:00.000Z",
-  }));
+  });
+  writeFileSync(lockPath(vault), held);
+  return held;
 }
 
 function snapshotFiles(root: string): Record<string, string> {
@@ -521,9 +536,9 @@ taxonomy:
     });
   });
 
-  it("leaves an immutable raw-only state when typed publication fails", async () => {
+  it("rejects ingest pre-mutation when a foreign peer lock is held", async () => {
     const fixture = makeIngestVault(["research"]);
-    holdPublicationLock(fixture.vault);
+    const held = holdPublicationLock(fixture.vault);
 
     const result = await runIngest({
       source: fixture.source,
@@ -533,8 +548,20 @@ taxonomy:
       tags: ["research", "blocked-novel"],
     });
 
-    expect(result.exitCode).toBe(ExitCode.SYNC_LOCK_HELD);
-    expect(existsSync(join(fixture.vault, "raw/articles/blocked-ingest.md"))).toBe(true);
+    expect(result).toMatchObject({
+      exitCode: ExitCode.PREFLIGHT_FAILED,
+      result: {
+        ok: false,
+        error: "PREFLIGHT_FAILED",
+        detail: {
+          reason: "peer-lock",
+          foreign_lock_count: 1,
+          blocking: true,
+        },
+      },
+    });
+    expect(readFileSync(lockPath(fixture.vault), "utf8")).toBe(held);
+    expect(existsSync(join(fixture.vault, "raw/articles/blocked-ingest.md"))).toBe(false);
     expect(existsSync(join(fixture.vault, "queries/blocked-ingest.md"))).toBe(false);
   });
 
@@ -735,11 +762,11 @@ taxonomy:
     expect(existsSync(join(fixture.vault, ".skillwiki/last-op.json"))).toBe(false);
   });
 
-  it("reuses the original capture date and operation ID after a midnight raw-only retry", async () => {
+  it("publishes a new post-midnight capture after a peer-blocked pre-mutation attempt", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-13T23:59:00.000Z"));
     const fixture = makeIngestVault(["research"]);
-    holdPublicationLock(fixture.vault);
+    const held = holdPublicationLock(fixture.vault);
     const input = {
       source: fixture.source,
       vault: fixture.vault,
@@ -750,13 +777,30 @@ taxonomy:
 
     const blocked = await runIngest(input);
     const rawPath = join(fixture.vault, "raw/articles/midnight-retry.md");
-    const raw = readFileSync(rawPath, "utf8");
+    const typedPath = join(fixture.vault, "queries/midnight-retry.md");
+
+    expect(blocked).toMatchObject({
+      exitCode: ExitCode.PREFLIGHT_FAILED,
+      result: {
+        ok: false,
+        error: "PREFLIGHT_FAILED",
+        detail: {
+          reason: "peer-lock",
+          foreign_lock_count: 1,
+          blocking: true,
+        },
+      },
+    });
+    expect(readFileSync(lockPath(fixture.vault), "utf8")).toBe(held);
+    expect(existsSync(rawPath)).toBe(false);
+    expect(existsSync(typedPath)).toBe(false);
+
     rmSync(lockPath(fixture.vault));
     vi.setSystemTime(new Date("2026-07-14T00:01:00.000Z"));
 
     const retried = await runIngest(input);
+    const raw = readFileSync(rawPath, "utf8");
 
-    expect(blocked).toMatchObject({ exitCode: ExitCode.SYNC_LOCK_HELD, result: { ok: false } });
     expect(retried).toMatchObject({
       exitCode: ExitCode.OK,
       result: {
@@ -768,6 +812,10 @@ taxonomy:
         },
       },
     });
+    expect(raw).toContain("created: 2026-07-14");
+    expect(raw).toContain("ingested: 2026-07-14");
+    expect(readFileSync(typedPath, "utf8")).toContain("created: 2026-07-14");
+
     vi.setSystemTime(new Date("2026-07-15T00:01:00.000Z"));
     const repeated = await runIngest(input);
     expect(repeated).toMatchObject({
@@ -777,6 +825,6 @@ taxonomy:
     if (!retried.result.ok || !repeated.result.ok) return;
     expect(repeated.result.data.publication.operation_id).toBe(retried.result.data.publication.operation_id);
     expect(readFileSync(rawPath, "utf8")).toBe(raw);
-    expect(readFileSync(join(fixture.vault, "queries/midnight-retry.md"), "utf8")).toContain("created: 2026-07-13");
+    expect(readFileSync(typedPath, "utf8")).toContain("created: 2026-07-14");
   });
 });
