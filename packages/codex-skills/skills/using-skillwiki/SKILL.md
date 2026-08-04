@@ -17,6 +17,17 @@ Use this section as procedural planning guidelines:
 3. If `prd_layer` is `manual` or `none`, do not force the gate; follow project policy.
 4. Always apply the PRD bridge: spec/plan outputs go to vault work-item paths, never `docs/superpowers/`.
 
+## Activation File (Cross-Harness Alternative to SessionStart)
+
+On harnesses where the SessionStart hook does not fire (Grok, Codex), SkillWiki activation context is delivered via a compact file installed at session start. Run `npm run install:activation` from the repo to install:
+
+- `~/.grok/skillwiki.md` and `~/.claude/skillwiki.md` - compact derivative (~31 lines) covering identity, CLI probe, skill map, PRD bridge, fail-closed boundary, and drift warning.
+- `~/.grok/AGENTS.md` and `~/.claude/CLAUDE.md` - prepended with a marker-wrapped reference: `Read @skillwiki.md for SkillWiki activation context.`
+
+The activation file is self-contained literal text (ADR-3). On harnesses with `@file` import support (Claude Code, Cursor, Gemini), the reference is inlined automatically. On harnesses without it (Grok, Codex), the agent reads the file manually.
+
+The template lives at `packages/skills/using-skillwiki/activation.md`. Run `npm run install:activation:check` to verify the installed copy matches the template.
+
 ## When to Use These Skills
 Invoke a skillwiki skill when the user:
 - Wants to create, build, or start a vault/wiki/knowledge base
