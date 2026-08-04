@@ -33,3 +33,4 @@
 - [Vault Git authority]({WIKI_PATH}/projects/llm-wiki/architecture/2026-06-08-vault-sync-git-authority.md)
 - [Vault delete and archive protocol]({WIKI_PATH}/projects/llm-wiki/architecture/2026-06-10-vault-sync-delete-archive-protocol.md)
 - [Agent memory architecture]({WIKI_PATH}/projects/llm-wiki/architecture/2026-06-19-agent-memory-architecture.md)
+- [Cross-harness SkillWiki context injection]({WIKI_PATH}/projects/llm-wiki/architecture/decisions/2026-08-04-skillwiki-context-injection-3.md) - activation file, ADRs 1-8, glossary, `install:activation`
