@@ -112,6 +112,11 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
   if (taskCaptures.length > 0 && input.manifest.outputs.taskCaptureRenderer !== "typescript") {
     issues.push("task captures must be rendered by TypeScript");
   }
+  for (const path of taskCaptures) {
+    if (!existsSync(join(input.vault, path))) {
+      issues.push(`task capture path ${path} declared in manifest but not found on disk (partial render failure)`);
+    }
+  }
   if ((input.manifest.webSources ?? []).length > 15) issues.push("expected max 15 web sources");
 
   const digestPaths = changedFiles.filter((path) => path === `queries/${input.runDate}-agent-memory-trends-digest.md`);

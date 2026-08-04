@@ -332,4 +332,48 @@ describe("agent-memory-trends generated-output allowlist", () => {
     expect(detail).toContain("concepts/unrelated.md [typed-knowledge] is not in generated-output allowlist");
     expect(detail).toContain("raw/articles/2026-06-11-agent-memory-trends-evidence.md [evidence] rewrites an existing raw file");
   });
+
+  it("rejects a manifest whose task capture paths do not exist on disk (partial render failure)", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
+    const missingCapturePath = "raw/transcripts/2026-06-11-task-missing-render.md";
+    const runManifest = manifest({
+      changedFiles: [
+        "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        "queries/2026-06-11-agent-memory-trends-digest.md",
+        missingCapturePath,
+        "meta/latest-session-brief.md",
+        ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        ".skillwiki/agent-memory-trends/latest-run.json",
+      ],
+      outputs: {
+        evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+        taskCapturePaths: [missingCapturePath],
+        taskCaptureRenderer: "typescript",
+        sessionBriefPath: "meta/latest-session-brief.md",
+        runStatePath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        latestRunPath: ".skillwiki/agent-memory-trends/latest-run.json",
+      },
+    });
+    // Write all changed files EXCEPT the missing capture path
+    for (const path of runManifest.changedFiles) {
+      if (path !== missingCapturePath) writeVaultFile(vault, path, `generated file ${path}\n`);
+    }
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("ALLOWLIST_REJECTED");
+      expect(result.detail).toContain("partial render failure");
+      expect(result.detail).toContain(missingCapturePath);
+    }
+  });
 });
