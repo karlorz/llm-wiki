@@ -116,25 +116,37 @@ export async function runQuery(
   // Identify seed pages — those with direct keyword match — and calculate the
   // ranking guardrail inputs in the same pass.
   const seedPaths = new Set<string>();
+  const operationalSeedPaths = new Set<string>();
   let historicalCyclePageCount = 0;
   let hasDirectOperationalSeed = false;
   for (const page of pages) {
     if (page.historicalCycle) historicalCyclePageCount += 1;
     if (page.keywordScore <= 0) continue;
     seedPaths.add(page.relPath);
-    if (!page.historicalCycle) hasDirectOperationalSeed = true;
+    if (!page.historicalCycle) {
+      operationalSeedPaths.add(page.relPath);
+      hasDirectOperationalSeed = true;
+    }
   }
   const suppressRepetitiveHistoricalCycles =
     historicalCyclePageCount >= 3 && hasDirectOperationalSeed;
+
+  // When historical-cycle suppression is active, structural signals must not
+  // use historical-cycle pages as seeds — otherwise large research-cycle
+  // clusters self-reinforce via source-overlap and drown operational pages
+  // even after HISTORICAL_CYCLE_FACTOR demotion.
+  const structuralSeedPaths = suppressRepetitiveHistoricalCycles
+    ? operationalSeedPaths
+    : seedPaths;
 
   // Composite scoring with 4 signals
   // Seed pages (keyword match > 0) always rank above non-seed pages
   // because non-seed structural signals are discounted by NON_SEED_FACTOR.
   const results: QueryResult[] = pages
     .map((page) => {
-      const sourceOverlap = scoreSourceOverlap(page, pages, seedPaths);
-      const wikilink = scoreWikilink(page.relPath, seedPaths, graph);
-      const aa = scoreAdamicAdar(page.relPath, seedPaths, graph);
+      const sourceOverlap = scoreSourceOverlap(page, pages, structuralSeedPaths);
+      const wikilink = scoreWikilink(page.relPath, structuralSeedPaths, graph);
+      const aa = scoreAdamicAdar(page.relPath, structuralSeedPaths, graph);
       const typeAffinity = scoreTypeAffinity(page.type, queryTerms);
       const isSeed = page.keywordScore > 0;
 

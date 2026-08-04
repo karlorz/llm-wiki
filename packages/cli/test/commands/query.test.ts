@@ -515,4 +515,50 @@ describe("query", () => {
       expect(top!.score).toBeGreaterThan(firstCycle!.score);
     }
   });
+
+  /**
+   * Real vault failure mode: hundreds of research-cycle pages become keyword
+   * seeds and self-reinforce via source-overlap. A modest 0.55 factor is not
+   * enough unless structural seeds exclude historical-cycle pages.
+   */
+  it("prevents large historical-cycle clusters from outranking operational seeds via source-overlap", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    mkdirSync(join(v, "queries"), { recursive: true });
+
+    writeFileSync(
+      join(v, "concepts", "project-index-operator-guide.md"),
+      "---\ntitle: Project index operator guide\ntype: concept\ncreated: 2026-08-04\nupdated: 2026-08-04\ntags: [operations]\nsources: [raw/articles/ops-only.md]\n---\nHow operators refresh the managed project index.\n",
+    );
+
+    // Shared provenance among cycle reports amplifies W_SOURCE_OVERLAP when
+    // every cycle is also a keyword seed (weak body match on both terms).
+    for (let i = 1; i <= 24; i += 1) {
+      const day = `2026-07-${String(10 + (i % 20)).padStart(2, "0")}`;
+      writeFileSync(
+        join(v, "queries", `${day}-research-cycle-${i}-report.md`),
+        `---\ntitle: Research Cycle ${i} Report - Remote MCP Queue Refresh\ntype: query\ncreated: ${day}\nupdated: ${day}\ntags: [research, agents]\nsources:\n  - queries/2026-07-04-knowledge-monetization-strategy.md\n  - raw/articles/shared-cycle-seed.md\n---\nBody mentions project index among many other topics for cycle ${i}.\n`,
+      );
+    }
+
+    const r = await runQuery({ text: "project index", vault: v, limit: 8 });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) throw new Error("expected query ok");
+
+    expect(r.result.data.ranking_guardrails).toMatchObject({
+      repetitive_historical_cycles_suppressed: true,
+    });
+    expect(r.result.data.ranking_guardrails!.historical_cycle_page_count).toBeGreaterThanOrEqual(20);
+
+    const top = r.result.data.results[0];
+    expect(top?.path).toBe("concepts/project-index-operator-guide.md");
+
+    const firstCycle = r.result.data.results.find((item) =>
+      item.path.includes("research-cycle-"),
+    );
+    expect(firstCycle).toBeDefined();
+    expect(top!.score).toBeGreaterThan(firstCycle!.score);
+  });
 });
