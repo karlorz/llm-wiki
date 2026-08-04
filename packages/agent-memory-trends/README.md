@@ -328,3 +328,16 @@ The workflow must preserve these constraints:
 - The systemd timer must invoke the guarded maintenance runner; use the direct package `daily` command only for manual debugging.
 - The heartbeat fires only after a successful push when the legacy direct publisher path is intentionally run manually.
 - `sg01` is read-only for this workflow.
+
+## Periodic Review
+
+The nightly pipeline collects and synthesizes GitHub candidates automatically.
+A quarterly attended research-distillation pass complements the automation:
+
+- When running a `$daily-wiki-sleep deep` cycle at quarter boundaries (roughly
+  every 90 days), review the latest 10 agent-memory-trends digests.
+- Distill transferable ideas and record findings as a query page.
+- Follow the July 19 idea-distillation page
+  (`queries/2026-07-19-agent-memory-trends-idea-distillation.md`) as the
+  template.
+- This step is optional and does not block the deep cycle.
