@@ -402,7 +402,10 @@ describe("query", () => {
     }
     const r = await runQuery({ text: "S3 push", vault: v });
     expect(r.result.ok).toBe(true);
-    if (r.result.ok) expect(r.result.data.ranking_guardrails).toBeUndefined();
+    if (r.result.ok) {
+      expect(r.result.data.ranking_guardrails).toBeUndefined();
+      expect(r.result.data.results[0]?.path).toBe("concepts/s3-push.md");
+    }
   });
 
   it("does not suppress cycles when no direct operational seed exists", async () => {
@@ -446,6 +449,7 @@ describe("query", () => {
    * operational probes (project index / memory review / daily wiki sleep)
    * must keep an operational seed above repetitive research-cycle pages when
    * the historical-cycle guardrail is active. Does not retune weights.
+   * Sub-threshold cycle counts are covered by the S3-push fixture above.
    */
   it("ranks operational pages above real-vault-shaped research-cycle noise", async () => {
     const v = makeVault();
@@ -453,26 +457,34 @@ describe("query", () => {
     mkdirSync(join(v, "concepts"), { recursive: true });
     mkdirSync(join(v, "queries"), { recursive: true });
 
+    const fm = (title: string, type: string, body: string, day: string) =>
+      `---\ntitle: ${title}\ntype: ${type}\ncreated: ${day}\nupdated: ${day}\ntags: [operations]\nsources: [raw/articles/ops-seed.md]\n---\n${body}\n`;
+
     // Operational seeds under typed roots (not historical-cycle classified).
-    // Path/title shapes mirror deep-run probes without requiring a full vault.
     writeFileSync(
       join(v, "concepts", "project-index-operator-guide.md"),
-      "---\ntitle: Project index operator guide\ntype: concept\ncreated: 2026-08-04\nupdated: 2026-08-04\ntags: [operations]\nsources: [raw/articles/ops-seed.md]\n---\nManaged project index projection. Refresh via skillwiki project-index.\n",
+      fm("Project index operator guide", "concept", "Managed project index projection. Refresh via skillwiki project-index.", "2026-08-04"),
     );
     writeFileSync(
       join(v, "concepts", "memory-review-operator-guide.md"),
-      "---\ntitle: Memory review operator guide\ntype: concept\ncreated: 2026-08-04\nupdated: 2026-08-04\ntags: [operations]\nsources: [raw/articles/ops-seed.md]\n---\nHow to run skillwiki memory review --dry-run and interpret cache drift.\n",
+      fm("Memory review operator guide", "concept", "How to run skillwiki memory review --dry-run and interpret cache drift.", "2026-08-04"),
     );
     writeFileSync(
       join(v, "concepts", "daily-wiki-sleep-skill.md"),
-      "---\ntitle: Daily wiki sleep skill\ntype: concept\ncreated: 2026-08-04\nupdated: 2026-08-04\ntags: [operations]\nsources: [raw/articles/ops-seed.md]\n---\nAttended Plane A maintenance and agent-memory sleep cycle skill.\n",
+      fm("Daily wiki sleep skill", "concept", "Attended Plane A maintenance and agent-memory sleep cycle skill.", "2026-08-04"),
     );
 
     // Repetitive historical research-cycle pages that also mention the same terms
     for (let i = 1; i <= 4; i += 1) {
+      const day = `2026-07-${10 + i}`;
       writeFileSync(
-        join(v, "queries", `2026-07-${10 + i}-daily-maintenance-research-cycle-${i}.md`),
-        `---\ntitle: Daily maintenance research cycle ${i}\ntype: query\ncreated: 2026-07-${10 + i}\nupdated: 2026-07-${10 + i}\ntags: [research]\nsources: [raw/articles/ops-seed.md]\n---\nProject index memory review daily wiki sleep research cycle run ${i}.\n`,
+        join(v, "queries", `${day}-daily-maintenance-research-cycle-${i}.md`),
+        fm(
+          `Daily maintenance research cycle ${i}`,
+          "query",
+          `Project index memory review daily wiki sleep research cycle run ${i}.`,
+          day,
+        ),
       );
     }
 
@@ -486,7 +498,7 @@ describe("query", () => {
       const r = await runQuery({ text: query, vault: v, limit: 6 });
       expect(r.exitCode).toBe(0);
       expect(r.result.ok).toBe(true);
-      if (!r.result.ok) continue;
+      if (!r.result.ok) throw new Error(`expected query ok for ${query}`);
 
       expect(r.result.data.ranking_guardrails).toMatchObject({
         repetitive_historical_cycles_suppressed: true,
@@ -501,29 +513,6 @@ describe("query", () => {
       );
       expect(firstCycle).toBeDefined();
       expect(top!.score).toBeGreaterThan(firstCycle!.score);
-    }
-  });
-
-  it("does not suppress when fewer than three cycle pages match real-vault naming", async () => {
-    const v = makeVault();
-    tmpDirs.push(v);
-    mkdirSync(join(v, "concepts"), { recursive: true });
-    mkdirSync(join(v, "queries"), { recursive: true });
-    writeFileSync(
-      join(v, "concepts", "project-index-ops.md"),
-      "---\ntitle: Project index ops\ntype: concept\ncreated: 2026-08-04\nupdated: 2026-08-04\ntags: []\nsources: []\n---\nProject index operator notes.\n",
-    );
-    for (let i = 1; i <= 2; i += 1) {
-      writeFileSync(
-        join(v, "queries", `2026-07-0${i}-daily-maintenance-research-cycle-${i}.md`),
-        `---\ntitle: Daily maintenance research cycle ${i}\ntype: query\ncreated: 2026-07-0${i}\nupdated: 2026-07-0${i}\ntags: []\nsources: []\n---\nProject index research cycle ${i}.\n`,
-      );
-    }
-    const r = await runQuery({ text: "project index", vault: v });
-    expect(r.result.ok).toBe(true);
-    if (r.result.ok) {
-      expect(r.result.data.ranking_guardrails).toBeUndefined();
-      expect(r.result.data.results[0]?.path).toBe("concepts/project-index-ops.md");
     }
   });
 });
