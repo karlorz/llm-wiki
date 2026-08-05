@@ -7,6 +7,7 @@
     "proj-*",
     "using-skillwiki",
     "skills",
+    "agents",
     ".claude-plugin",
     ".codex-plugin",
     "hooks",

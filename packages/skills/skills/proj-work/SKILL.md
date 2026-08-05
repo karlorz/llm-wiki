@@ -8,9 +8,16 @@ description: Open or run a work item under projects/{slug}/work/YYYY-MM-DD-{slug
 ## Model routing
 
 `proj-work` authors implementation specifications and plans, so its companion
-agent must run at the invoking main-agent model. Keep `model: inherit` in
-`packages/skills/agents/proj-work.md`; do not pin planning work to `sonnet`,
-`haiku`, or `opus`. Do not add a `model` field to this `SKILL.md` frontmatter.
+agent must run at the invoking main-agent model. Keep `model: inherit` in the
+plugin-root agent definition `agents/proj-work.md` (repository canonical source:
+`packages/skills/agents/proj-work.md`; root `agents/proj-work.md` is a
+materialized install mirror). Do not pin planning work to `sonnet`, `haiku`, or
+`opus`. Do not add a `model` field to this `SKILL.md` frontmatter.
+
+After plugin install the runtime path is
+`<installed-plugin-root>/agents/proj-work.md` (for example
+`~/.grok/installed-plugins/.../agents/proj-work.md`). Refresh a stale Grok
+install with `grok plugin update skillwiki`, not `skillwiki install`.
 
 ## When to invoke
 - User starts a feature, issue, refactor, or decision inside an existing project.

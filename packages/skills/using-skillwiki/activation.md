@@ -53,5 +53,6 @@ If `skillwiki doctor` mentions a version newer than this file, re-read the full 
 
 ## Canonical Paths
 
-- Full skill: `packages/skills/using-skillwiki/SKILL.md`
+- Full skill (logical): invoke `/using-skillwiki` or read the installed plugin skill at `<plugin-root>/using-skillwiki/SKILL.md` (repository source: `packages/skills/using-skillwiki/SKILL.md`)
 - Vault schema: `SCHEMA.md` at the vault root (run `skillwiki path` to resolve)
+- Frontier agents (`proj-work`, `proj-decide`): plugin-root `agents/<name>.md` with `model: inherit` — refresh with the active plugin channel (`grok plugin update skillwiki` on Grok)

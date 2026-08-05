@@ -8,10 +8,16 @@ description: Write an Architectural Decision Record (ADR). If the decision gener
 ## Model routing
 
 `proj-decide` authors architectural decisions and ADRs, so its companion
-agent must run at the invoking main-agent model. Keep `model: inherit` in
-`packages/skills/agents/proj-decide.md`; do not pin decision-making work to
-`sonnet`, `haiku`, or `opus`. Do not add a `model` field to this `SKILL.md`
-frontmatter.
+agent must run at the invoking main-agent model. Keep `model: inherit` in the
+plugin-root agent definition `agents/proj-decide.md` (repository canonical
+source: `packages/skills/agents/proj-decide.md`; root `agents/proj-decide.md` is
+a materialized install mirror). Do not pin decision-making work to `sonnet`,
+`haiku`, or `opus`. Do not add a `model` field to this `SKILL.md` frontmatter.
+
+After plugin install the runtime path is
+`<installed-plugin-root>/agents/proj-decide.md` (for example
+`~/.grok/installed-plugins/.../agents/proj-decide.md`). Refresh a stale Grok
+install with `grok plugin update skillwiki`, not `skillwiki install`.
 
 ## When to invoke
 - User commits to an architectural decision worth recording for future reference.
