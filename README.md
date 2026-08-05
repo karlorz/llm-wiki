@@ -151,6 +151,7 @@ and do not move referenced assets as a side effect of archive or dedup.
 ```bash
 npm install
 npm run materialize:plugins:check
+npm run test:plugin-metadata
 npm run -w @skillwiki/shared test
 npm run -w skillwiki build
 npm run -w skillwiki test
