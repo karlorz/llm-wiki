@@ -16,6 +16,8 @@ jobs:
         run: npm run test:release-lockfile
       - name: Validate manifest consistency
         run: bash scripts/verify-manifests.sh
+      - name: Run plugin metadata regression fixtures
+        run: npm run test:plugin-metadata
       - name: Verify plugin.json version bumped on main
         if: github.ref == 'refs/heads/main'
         run: |
