@@ -92,7 +92,7 @@ cat .agents/plugins/marketplace.json
 # 2) Codex plugin manifest (materialized root)
 cat packages/codex-skills/.codex-plugin/plugin.json
 
-# 3) Skill count served by plugin root (must be 18)
+# 3) Skill count served by plugin root (derive from command output)
 find packages/codex-skills/skills -mindepth 2 -maxdepth 2 -name SKILL.md -print | wc -l
 
 # 4) Mirror drift check

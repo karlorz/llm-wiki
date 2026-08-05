@@ -5,7 +5,7 @@
     "url": "https://github.com/karlorz"
   },
   "metadata": {
-    "description": "Single-plugin marketplace for skillwiki — project-aware Karpathy-style knowledge base for Claude Code.",
+    "description": "Two-plugin marketplace for skillwiki and vault-sync — project-aware knowledge workflows and cross-platform vault synchronization.",
     "version": "0.10.32"
   },
   "plugins": [

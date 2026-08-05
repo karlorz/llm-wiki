@@ -27,10 +27,15 @@ This copies 19 SKILL.md files into `~/.claude/skills/` and writes `.claude/skill
 agy plugin install https://github.com/karlorz/llm-wiki
 ```
 
-The repository root includes an `agy`-compatible `plugin.json` plus a matching `.claude-plugin/plugin.json` marker for GitHub URL installs. Root `skills/` and `agents/` are materialized mirrors of the canonical files under `packages/skills/`. Local validation should report 18 processed skills and 16 processed agents:
+The repository root includes an `agy`-compatible `plugin.json` plus a matching `.claude-plugin/plugin.json` marker for GitHub URL installs. Root `skills/` and `agents/` are materialized mirrors of the canonical files under `packages/skills/`. Derive the current skill and agent counts from those mirrors before validating:
 
 ```bash
 agy plugin validate .
+```
+
+```bash
+find skills -mindepth 2 -maxdepth 2 -name SKILL.md -print | wc -l
+find agents -mindepth 1 -maxdepth 1 -name '*.md' -print | wc -l
 ```
 
 After changing canonical skill, agent, or hook assets under `packages/skills/`,
@@ -45,7 +50,7 @@ npm run materialize:plugins:check
 
 | Namespace | Skills |
 |---|---|
-| `wiki-*` | `wiki-init`, `wiki-ingest`, `wiki-query`, `wiki-lint`, `wiki-crystallize`, `wiki-audit`, `wiki-archive`, `wiki-reingest`, `wiki-adapter-prd`, `wiki-add-task`, `wiki-sync`, `wiki-canvas`, `wiki-gate-plan-mode` |
+| `wiki-*` | `wiki-init`, `wiki-ingest`, `wiki-query`, `wiki-lint`, `wiki-crystallize`, `wiki-audit`, `wiki-archive`, `wiki-reingest`, `wiki-adapter-prd`, `wiki-add-task`, `wiki-sync`, `wiki-canvas`, `wiki-gate-plan-mode`, `wiki-remove` |
 | `proj-*` | `proj-init`, `proj-work`, `proj-distill`, `proj-decide` |
 | onboarding | `using-skillwiki` |
 
