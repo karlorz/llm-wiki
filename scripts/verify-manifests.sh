@@ -84,6 +84,28 @@ check_version() {
   fi
 }
 
+check_release_markers() {
+  local label="$1" description="$2" expected_version="$3" markers marker
+
+  markers="$(python3 - "$description" <<'PY'
+import re
+import sys
+
+description = sys.argv[1]
+for marker in sorted(set(re.findall(r"\bv([0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.]+)?):", description))):
+    print(marker)
+PY
+  )"
+
+  while IFS= read -r marker; do
+    [ -n "$marker" ] || continue
+    if [ "$marker" != "$expected_version" ]; then
+      echo "✗ $label release marker v$marker: expected current version v$expected_version" >&2
+      ERRORS=$((ERRORS + 1))
+    fi
+  done <<< "$markers"
+}
+
 check_version "packages/cli/package.json" "$CLI_VER"
 check_version "packages/skills/package.json" "$SKILLS_PKG_VER"
 check_version "packages/shared/package.json" "$SHARED_VER"
@@ -220,6 +242,118 @@ if [ "$MARKET_DESC_COUNT" != "$ACTUAL_COUNT" ]; then
   ERRORS=$((ERRORS + 1))
 else
   echo "✓ Claude marketplace.json skill count ($MARKET_DESC_COUNT) matches actual ($ACTUAL_COUNT)"
+fi
+
+SKILLWIKI_CODEX_LONG_DESC=$(python3 -c "import json; d=json.load(open('$SKILLS_DIR/.codex-plugin/plugin.json')); print(d.get('interface', {}).get('longDescription', ''))")
+SKILLWIKI_CODEX_LONG_COUNT=$(printf '%s' "$SKILLWIKI_CODEX_LONG_DESC" | grep -oE '[0-9]+ prompt-only skills' | head -1 | grep -oE '^[0-9]+' || echo "0")
+if [ "$SKILLWIKI_CODEX_LONG_COUNT" != "$ACTUAL_COUNT" ]; then
+  echo "✗ Codex plugin longDescription says $SKILLWIKI_CODEX_LONG_COUNT skills but found $ACTUAL_COUNT" >&2
+  ERRORS=$((ERRORS + 1))
+else
+  echo "✓ Codex plugin longDescription skill count ($SKILLWIKI_CODEX_LONG_COUNT) matches actual ($ACTUAL_COUNT)"
+fi
+
+VAULT_SYNC_SKILL_NAMES=$(find "$REPO_ROOT/packages/vault-sync/skills" -mindepth 1 -maxdepth 1 -type d -print | sed 's#.*/##' | sort)
+VAULT_SYNC_COUNT=$(printf '%s\n' "$VAULT_SYNC_SKILL_NAMES" | sed '/^$/d' | wc -l | tr -d ' ')
+VAULT_SYNC_MARKET_DESC=$(python3 -c "import json; d=json.load(open('$REPO_ROOT/.claude-plugin/marketplace.json')); p=next((x for x in d.get('plugins', []) if x.get('name') == 'vault-sync'), {}); print(p.get('description', ''))")
+VAULT_SYNC_CODEX_LONG_DESC=$(python3 -c "import json; d=json.load(open('$REPO_ROOT/packages/vault-sync/.codex-plugin/plugin.json')); print(d.get('interface', {}).get('longDescription', ''))")
+VAULT_SYNC_MARKET_COUNT=$(printf '%s' "$VAULT_SYNC_MARKET_DESC" | grep -oE '[0-9]+ skills' | head -1 | grep -oE '^[0-9]+' || echo "0")
+VAULT_SYNC_CODEX_COUNT=$(printf '%s' "$VAULT_SYNC_CODEX_LONG_DESC" | grep -oE '[0-9]+ skills' | head -1 | grep -oE '^[0-9]+' || echo "0")
+for descriptor in "Claude marketplace.json:$VAULT_SYNC_MARKET_COUNT" "Codex vault-sync longDescription:$VAULT_SYNC_CODEX_COUNT"; do
+  label="${descriptor%%:*}"
+  count="${descriptor#*:}"
+  if [ "$count" != "$VAULT_SYNC_COUNT" ]; then
+    echo "✗ $label says $count vault-sync skills but found $VAULT_SYNC_COUNT" >&2
+    ERRORS=$((ERRORS + 1))
+  fi
+done
+while IFS= read -r skill_name; do
+  [ -n "$skill_name" ] || continue
+  for descriptor in "Claude marketplace.json:$VAULT_SYNC_MARKET_DESC" "Codex vault-sync longDescription:$VAULT_SYNC_CODEX_LONG_DESC"; do
+    label="${descriptor%%:*}"
+    description="${descriptor#*:}"
+    if ! grep -Fq -- "$skill_name" <<< "$description"; then
+      echo "✗ $label is missing vault-sync skill name $skill_name" >&2
+      ERRORS=$((ERRORS + 1))
+    fi
+  done
+done <<< "$VAULT_SYNC_SKILL_NAMES"
+
+check_release_markers "skillwiki Claude plugin" "$(python3 -c "import json; print(json.load(open('$SKILLS_DIR/.claude-plugin/plugin.json')).get('description', ''))")" "$CLI_VER"
+check_release_markers "skillwiki Codex plugin" "$(python3 -c "import json; print(json.load(open('$SKILLS_DIR/.codex-plugin/plugin.json')).get('description', ''))")" "$CLI_VER"
+check_release_markers "skillwiki Codex root plugin" "$(python3 -c "import json; print(json.load(open('$CODEX_PLUGIN_ROOT/.codex-plugin/plugin.json')).get('description', ''))")" "$CLI_VER"
+check_release_markers "skillwiki root agy plugin" "$(python3 -c "import json; print(json.load(open('$REPO_ROOT/plugin.json')).get('description', ''))")" "$CLI_VER"
+check_release_markers "skillwiki root agy marker" "$(python3 -c "import json; print(json.load(open('$REPO_ROOT/.claude-plugin/plugin.json')).get('description', ''))")" "$CLI_VER"
+check_release_markers "vault-sync Claude plugin" "$(python3 -c "import json; print(json.load(open('$REPO_ROOT/packages/vault-sync/.claude-plugin/plugin.json')).get('description', ''))")" "$CLI_VER"
+check_release_markers "vault-sync Codex plugin" "$(python3 -c "import json; print(json.load(open('$REPO_ROOT/packages/vault-sync/.codex-plugin/plugin.json')).get('description', ''))")" "$CLI_VER"
+
+MARKETPLACE_DESCRIPTION_MARKERS=$(python3 -c "import json; d=json.load(open('$REPO_ROOT/.claude-plugin/marketplace.json')); [print(p.get('name', '') + '\\t' + str(p.get('version', '')) + '\\t' + p.get('description', '')) for p in d.get('plugins', [])]")
+while IFS=$'\t' read -r plugin_name plugin_version plugin_description; do
+  [ -n "$plugin_name" ] || continue
+  check_release_markers "Claude marketplace $plugin_name" "$plugin_description" "$plugin_version"
+done <<< "$MARKETPLACE_DESCRIPTION_MARKERS"
+
+# ---- 3a. Documentation inventory contract ----
+
+DOC_CONTRACT_OUTPUT=""
+DOC_CONTRACT_RC=0
+DOC_CONTRACT_OUTPUT=$(python3 - "$REPO_ROOT/README.md" "$REPO_ROOT/docs/codex-compatible-reference.md" "$SKILLS_DIR" <<'PY'
+import pathlib
+import re
+import sys
+
+readme_path, reference_path, skills_dir = map(pathlib.Path, sys.argv[1:])
+readme = readme_path.read_text()
+reference = reference_path.read_text()
+errors = []
+
+if re.search(r"[0-9]+ processed skills", readme):
+    errors.append("README contains a fixed processed-skill count")
+if re.search(r"\(must be [0-9]+\)", reference):
+    errors.append("Codex reference contains a fixed skill count")
+
+actual = {
+    directory.name
+    for directory in skills_dir.iterdir()
+    if directory.is_dir() and (directory / "SKILL.md").is_file()
+}
+
+documented = set()
+in_skills_section = False
+for line in readme.splitlines():
+    if line.strip() == "## Skills":
+        in_skills_section = True
+        continue
+    if in_skills_section and line.startswith("## "):
+        break
+    if not in_skills_section or not line.startswith("|"):
+        continue
+    for token in re.findall(r"`([^`]+)`", line):
+        if token.endswith("-*"):
+            continue
+        if token in actual:
+            documented.add(token)
+
+missing = sorted(actual - documented)
+extra = sorted(documented - actual)
+if missing:
+    errors.append("README skill table missing: " + ", ".join(missing))
+if extra:
+    errors.append("README skill table has unknown skills: " + ", ".join(extra))
+
+if errors:
+    print("\n".join(errors))
+    raise SystemExit(1)
+PY
+) || DOC_CONTRACT_RC=$?
+if [ "$DOC_CONTRACT_RC" -ne 0 ]; then
+  while IFS= read -r doc_error; do
+    [ -n "$doc_error" ] || continue
+    echo "✗ llm-wiki documentation: $doc_error" >&2
+    ERRORS=$((ERRORS + 1))
+  done <<< "$DOC_CONTRACT_OUTPUT"
+else
+  echo "✓ llm-wiki documentation inventory and count guidance are current"
 fi
 
 # ---- 3b. Root agy plugin manifest ----
@@ -465,39 +599,132 @@ else
   echo "✓ Root agy URL marker matches plugin.json"
 fi
 
-# ---- 4. Claude marketplace version matches Claude plugin version ----
+# ---- 4. Claude marketplace inventory and version contract ----
 
-MARKET_PLUGIN_VER=$(python3 -c "import json; d=json.load(open('$REPO_ROOT/.claude-plugin/marketplace.json')); print(d['plugins'][0]['version'])")
+MARKETPLACE_CONTRACT_OUTPUT=""
+MARKETPLACE_CONTRACT_RC=0
+MARKETPLACE_CONTRACT_OUTPUT=$(python3 - "$REPO_ROOT" <<'PY'
+import json
+import pathlib
+import sys
 
-if [ "$MARKET_PLUGIN_VER" != "$PLUGIN_VER" ]; then
-  echo "✗ marketplace.json plugin version ($MARKET_PLUGIN_VER) != plugin.json ($PLUGIN_VER)" >&2
-  ERRORS=$((ERRORS + 1))
+root = pathlib.Path(sys.argv[1])
+marketplace_path = root / ".claude-plugin/marketplace.json"
+data = json.loads(marketplace_path.read_text())
+plugins = data.get("plugins")
+errors = []
+expected_sources = {
+    "skillwiki": "./packages/skills",
+    "vault-sync": "./packages/vault-sync",
+}
+
+if not isinstance(plugins, list):
+    errors.append("marketplace plugins must be an array")
+    plugins = []
+
+names = [plugin.get("name") for plugin in plugins if isinstance(plugin, dict)]
+sources = [plugin.get("source") for plugin in plugins if isinstance(plugin, dict)]
+for value, label in ((names, "name"), (sources, "source")):
+    seen = set()
+    for item in value:
+        if item in seen:
+            errors.append(f"duplicate marketplace {label}: {item}")
+        seen.add(item)
+
+for plugin in plugins:
+    if not isinstance(plugin, dict):
+        errors.append("marketplace plugin entry must be an object")
+        continue
+    name = plugin.get("name")
+    source = plugin.get("source")
+    version = plugin.get("version")
+    expected_source = expected_sources.get(name)
+    if expected_source is None:
+        errors.append(f"unexpected marketplace plugin: {name}")
+        continue
+    if source != expected_source:
+        errors.append(f"{name} marketplace source is {source} (expected {expected_source})")
+    if not isinstance(source, str) or not source.startswith("./"):
+        errors.append(f"{name} marketplace source is not a relative path: {source}")
+        continue
+    plugin_root = root / source[2:]
+    if not plugin_root.is_dir():
+        errors.append(f"marketplace source directory missing: {source}")
+        continue
+    manifest_path = plugin_root / ".claude-plugin/plugin.json"
+    if not manifest_path.is_file():
+        errors.append(f"{name} marketplace source missing Claude manifest")
+        continue
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("name") != name:
+        errors.append(f"{name} marketplace/Claude name mismatch: {manifest.get('name')}")
+    if manifest.get("version") != version:
+        errors.append(f"{name} marketplace version {version} != Claude manifest version {manifest.get('version')}")
+
+for name, expected_source in expected_sources.items():
+    matches = [plugin for plugin in plugins if isinstance(plugin, dict) and plugin.get("name") == name]
+    if len(matches) != 1:
+        errors.append(f"{name} marketplace entry count is {len(matches)} (expected 1)")
+    elif matches[0].get("source") != expected_source:
+        errors.append(f"{name} marketplace source is {matches[0].get('source')} (expected {expected_source})")
+
+if errors:
+    print("\n".join(errors))
+    raise SystemExit(1)
+PY
+) || MARKETPLACE_CONTRACT_RC=$?
+if [ "$MARKETPLACE_CONTRACT_RC" -ne 0 ]; then
+  while IFS= read -r marketplace_error; do
+    [ -n "$marketplace_error" ] || continue
+    echo "✗ Claude marketplace: $marketplace_error" >&2
+    ERRORS=$((ERRORS + 1))
+  done <<< "$MARKETPLACE_CONTRACT_OUTPUT"
 else
-  echo "✓ marketplace.json plugin version matches plugin.json"
+  echo "✓ Claude marketplace inventory and versions match both plugin manifests"
 fi
 
 # ---- 5. Codex marketplace wiring ----
 
-CODEX_MARKET_STATUS=$(python3 -c "import json; d=json.load(open('$REPO_ROOT/.agents/plugins/marketplace.json')); p=next((x for x in d.get('plugins', []) if x.get('name') == 'skillwiki'), None); print('__MISSING__' if p is None else f\"{p.get('source', {}).get('source', '')}|{p.get('source', {}).get('path', '')}\")")
+check_codex_marketplace_entry() {
+  local name="$1" expected_path="$2" status source_type source_path
+  status=$(python3 - "$REPO_ROOT/.agents/plugins/marketplace.json" "$name" <<'PY'
+import json
+import sys
 
-if [ "$CODEX_MARKET_STATUS" = "__MISSING__" ]; then
-  echo "✗ Codex marketplace missing plugin entry: skillwiki" >&2
-  ERRORS=$((ERRORS + 1))
-else
-  CODEX_SOURCE_TYPE="${CODEX_MARKET_STATUS%%|*}"
-  CODEX_SOURCE_PATH="${CODEX_MARKET_STATUS#*|}"
-  if [ "$CODEX_SOURCE_TYPE" != "local" ]; then
-    echo "✗ Codex marketplace source type is $CODEX_SOURCE_TYPE (expected local)" >&2
+path, name = sys.argv[1:]
+data = json.load(open(path))
+plugin = next((entry for entry in data.get("plugins", []) if entry.get("name") == name), None)
+if plugin is None:
+    print("__MISSING__")
+else:
+    source = plugin.get("source", {})
+    print(f"{source.get('source', '')}|{source.get('path', '')}")
+PY
+  )
+
+  if [ "$status" = "__MISSING__" ]; then
+    echo "✗ Codex marketplace missing plugin entry: $name" >&2
+    ERRORS=$((ERRORS + 1))
+    return
+  fi
+
+  source_type="${status%%|*}"
+  source_path="${status#*|}"
+  if [ "$source_type" != "local" ]; then
+    echo "✗ Codex marketplace $name source type is $source_type (expected local)" >&2
     ERRORS=$((ERRORS + 1))
   fi
-  if [ "$CODEX_SOURCE_PATH" != "./packages/codex-skills" ]; then
-    echo "✗ Codex marketplace source path is $CODEX_SOURCE_PATH (expected ./packages/codex-skills)" >&2
+  if [ "$source_path" != "$expected_path" ]; then
+    echo "✗ Codex marketplace $name source path is $source_path (expected $expected_path)" >&2
     ERRORS=$((ERRORS + 1))
   fi
-  if [ "$CODEX_SOURCE_TYPE" = "local" ] && [ "$CODEX_SOURCE_PATH" = "./packages/codex-skills" ]; then
-    echo "✓ Codex marketplace points skillwiki to ./packages/codex-skills"
+  if [ "$source_type" = "local" ] && [ "$source_path" = "$expected_path" ]; then
+    echo "✓ Codex marketplace points $name to $expected_path"
   fi
-fi
+}
+
+check_codex_marketplace_entry "skillwiki" "./packages/codex-skills"
+check_codex_marketplace_entry "vault-sync" "./packages/vault-sync"
 
 # ---- 6. Codex plugin skill layout ----
 

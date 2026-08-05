@@ -148,18 +148,18 @@ $names
 EOF
 
   if [ -d "$dest" ]; then
-    for existing in "$dest"/*; do
-      [ -e "$existing" ] || continue
-      [ -d "$existing" ] || continue
+    while IFS= read -r -d '' existing; do
       existing_name="$(basename "$existing")"
+      # Finder metadata is an ignored macOS artifact, not a plugin asset.
+      [ "$existing_name" = ".DS_Store" ] && continue
       if ! contains_name "$names" "$existing_name"; then
         if [ "$MODE" = "apply" ]; then
-          rm -rf "$existing"
+          rm -rf -- "$existing"
         else
           fail "$label has extra skill mirror: $existing_name"
         fi
       fi
-    done
+    done < <(find "$dest" -mindepth 1 -maxdepth 1 -print0)
   fi
 
   if [ "$MODE" = "apply" ]; then
