@@ -773,5 +773,20 @@ assert_exit "install fails when runtime manifest cannot be written" "$MAC_MANIFE
 assert_contains "manifest failure is fatal" "$MAC_MANIFEST_FAIL_OUT" "runtime manifest write failed"
 assert_not_contains "no success banner without manifest" "$MAC_MANIFEST_FAIL_OUT" "vault-sync installed successfully."
 
+# --- Scenario 17: full install on a plutil-less host (Ubuntu CI) ---
+# On hosts without plutil (Ubuntu GitHub Actions runners), launchd plist
+# validation uses the awk fallback in scripts/lib/platform.sh. This scenario
+# runs the entire install end to end, so the fallback must accept the plists
+# rendered from the shipped templates or the install dies; on macOS (plutil
+# present) the same scenario exercises the plutil path.
+MAC17_OUT="$TEST_ROOT/macos-17-no-plutil.out"
+TEST_UNAME_S=Darwin TEST_EXTRA_PATH="$NODE_DIR" run_install "$MAC17_OUT" --role leaf --execute
+MAC17_RC=$?
+assert_exit "17: plutil-less-host install succeeds end to end" "$MAC17_RC" 0
+assert_contains "17: push plist rendered from shipped template" "$TEST_ROOT/home/Library/LaunchAgents/com.karlchow.wiki-push.plist" "com.karlchow.wiki-push"
+assert_contains "17: fetch plist rendered from shipped template" "$TEST_ROOT/home/Library/LaunchAgents/com.karlchow.wiki-fetch.plist" "com.karlchow.wiki-fetch"
+assert_contains "17: install reports success" "$MAC17_OUT" "vault-sync installed successfully."
+assert_not_contains "17: no plist validation failure" "$MAC17_OUT" "launchd plist invalid for"
+
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

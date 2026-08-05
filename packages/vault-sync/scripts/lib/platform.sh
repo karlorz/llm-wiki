@@ -251,7 +251,17 @@ platform_launchd_plist_validate() {
       function process(line) {
         line = trim(line)
         if (line == "") return
-        if (line ~ /^<!--.*-->$/) return
+        # Comments are ignorable XML; skip content until the closing -->.
+        # The shipped templates carry a multi-line comment, so a single-line
+        # /^<!--.*-->$/ match is not enough.
+        if (in_comment) {
+          if (line ~ /-->$/) in_comment = 0
+          return
+        }
+        if (line ~ /^<!--/) {
+          if (line !~ /-->$/) in_comment = 1
+          return
+        }
         if (line ~ /^<\?xml[[:space:]][^>]*\?>$/) {
           if (plist_seen || xml_declaration_seen) invalid()
           xml_declaration_seen = 1
@@ -359,7 +369,7 @@ platform_launchd_plist_validate() {
         if (program_wait_array) program_kind = "not-array"
         if (program_wait_first) program_kind = "missing"
         document_kind = (plist_seen && plist_closed && root_dict_seen && root_dict_closed &&
-                         dict_depth == 0 && container_depth == 0 && !invalid_token ? "valid" : "invalid")
+                         dict_depth == 0 && container_depth == 0 && !invalid_token && !in_comment ? "valid" : "invalid")
         printf "DOCUMENT_KIND=%s\n", document_kind
         printf "LABEL_KIND=%s\n", label_kind
         printf "LABEL_VALUE=%s\n", label_value

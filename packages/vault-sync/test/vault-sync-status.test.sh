@@ -537,6 +537,90 @@ test_macos_xml_fallback_rejects_hidden_label_text() {
   assert_eq "no-plutil fallback rejects trailing text" "$rc" "1"
 }
 
+# Renders a shipped launchd template exactly like install.sh's
+# replace_template() (same sed expression set), so the no-plutil fallback is
+# tested against the real shipped units rather than hand-written copies.
+render_shipped_launchd_template() {
+  local src="$1" dst="$2" bin_dir="$3" log_dir="$4" home="$5" launchd_path="$6"
+  local esc_script esc_log esc_home esc_launchd_path
+  esc_script=$(printf '%s' "$bin_dir" | sed -e 's/[\/&]/\\&/g')
+  esc_log=$(printf '%s' "$log_dir" | sed -e 's/[\/&]/\\&/g')
+  esc_home=$(printf '%s' "$home" | sed -e 's/[\/&]/\\&/g')
+  esc_launchd_path=$(printf '%s' "$launchd_path" | sed -e 's/[\/&]/\\&/g')
+  sed \
+    -e "s|@SCRIPT_DIR@|$esc_script|g" \
+    -e "s|@LOG_DIR@|$esc_log|g" \
+    -e "s|@HOME@|$esc_home|g" \
+    -e "s|@LAUNCHD_PATH@|$esc_launchd_path|g" \
+    -e "s|/Users/karlchow|$esc_home|g" \
+    "$src" > "$dst"
+}
+
+test_no_plutil_fallback_accepts_shipped_rendered_templates() {
+  local root="$TEST_ROOT/no-plutil-shipped"
+  local push_plist="$TEST_ROOT/shipped-push.plist"
+  local fetch_plist="$TEST_ROOT/shipped-fetch.plist"
+  local output rc
+  make_no_plutil_bin "$root"
+
+  render_shipped_launchd_template \
+    "$VAULT_SYNC_ROOT/service-units/launchd/com.karlchow.wiki-push.plist.tmpl" \
+    "$push_plist" \
+    "$HOME/.local/share/vault-sync/bin" \
+    "$HOME/Library/Logs" \
+    "/Users/karlchow" \
+    "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  render_shipped_launchd_template \
+    "$VAULT_SYNC_ROOT/service-units/launchd/com.karlchow.wiki-fetch.plist.tmpl" \
+    "$fetch_plist" \
+    "$HOME/.local/share/vault-sync/bin" \
+    "$HOME/Library/Logs" \
+    "/Users/karlchow" \
+    "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+  # The shipped templates carry a multi-line XML comment; the no-plutil
+  # fallback must skip it and accept the rendered plists, exactly as
+  # plutil -lint does on macOS.
+  output="$(run_platform_launchd_validate_without_plutil "$root" "com.karlchow.wiki-push" "$push_plist")"
+  rc=$?
+  assert_eq "no-plutil fallback accepts shipped rendered push plist" "$rc" "0"
+  if [ -n "$output" ]; then
+    printf "FAIL: no-plutil push validation reason should be empty — %s\n" "$output"
+    FAIL=$((FAIL + 1))
+  else
+    printf "PASS: no-plutil push validation reason is empty\n"
+    PASS=$((PASS + 1))
+  fi
+
+  output="$(run_platform_launchd_validate_without_plutil "$root" "com.karlchow.wiki-fetch" "$fetch_plist")"
+  rc=$?
+  assert_eq "no-plutil fallback accepts shipped rendered fetch plist" "$rc" "0"
+  if [ -n "$output" ]; then
+    printf "FAIL: no-plutil fetch validation reason should be empty — %s\n" "$output"
+    FAIL=$((FAIL + 1))
+  else
+    printf "PASS: no-plutil fetch validation reason is empty\n"
+    PASS=$((PASS + 1))
+  fi
+
+  # The same rendered templates must still pass on the plutil path where
+  # plutil exists (the validity standard is unchanged).
+  if command -v plutil >/dev/null 2>&1; then
+    # shellcheck source=/dev/null
+    . "$PLATFORM_LIB"
+    platform_launchd_plist_validate "com.karlchow.wiki-push" "$push_plist"
+    assert_eq "plutil path accepts shipped rendered push plist" "$?" "0"
+    platform_launchd_plist_validate "com.karlchow.wiki-fetch" "$fetch_plist"
+    assert_eq "plutil path accepts shipped rendered fetch plist" "$?" "0"
+  fi
+
+  # Guard against over-permissiveness: an unterminated comment is invalid XML.
+  printf '<!-- never closed\n' >> "$push_plist"
+  output="$(run_platform_launchd_validate_without_plutil "$root" "com.karlchow.wiki-push" "$push_plist")"
+  rc=$?
+  assert_eq "no-plutil fallback rejects unterminated comment" "$rc" "1"
+}
+
 test_macos_read_only_status_accepts_binary_plist() {
   if [ "$(uname -s)" != "Darwin" ] || ! command -v plutil >/dev/null 2>&1; then
     printf "PASS: macOS binary plist validation skipped (requires macOS plutil)\n"
@@ -1132,6 +1216,7 @@ test_macos_read_only_status_errors_for_malformed_plist
 test_macos_read_only_status_errors_for_empty_plist
 test_macos_read_only_status_errors_for_structural_plist_problems
 test_macos_xml_fallback_rejects_hidden_label_text
+test_no_plutil_fallback_accepts_shipped_rendered_templates
 test_macos_read_only_status_accepts_binary_plist
 test_macos_live_status_rejects_stale_loaded_label_with_invalid_plist
 test_macos_runtime_manifest_detects_deployed_plist_drift
