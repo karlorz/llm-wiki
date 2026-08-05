@@ -100,9 +100,11 @@ describe("SKILL.md structure", () => {
   it("using-skillwiki keeps plugin-managed skill refresh guidance explicit", () => {
     const text = readFileSync(join(SKILLS_DIR, "using-skillwiki", "SKILL.md"), "utf8");
 
-    expect(text).toContain("Plugin-managed skills are not refreshed with `skillwiki install`");
-    expect(text).toContain("Do not run `skillwiki install` just to refresh plugin-managed skills");
+    expect(text).toContain("Plugin-managed skills and agents are not refreshed with `skillwiki install`");
+    expect(text).toContain("Do not run `skillwiki install` just to refresh plugin-managed skills or agents");
     expect(text).toContain("Only use `skillwiki install --force`");
+    expect(text).toContain("grok plugin update skillwiki");
+    expect(text).toContain("<plugin-root>/agents/<name>.md");
   });
 
   it("root Antigravity plugin layout exposes Claude hooks under hooks/", () => {
