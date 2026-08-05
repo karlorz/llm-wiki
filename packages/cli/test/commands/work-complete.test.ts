@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import {
   mkdtempSync,
   mkdirSync,
@@ -16,6 +16,11 @@ import {
   runWorkComplete,
 } from "../../src/commands/work-complete.js";
 import { operationId } from "../../src/utils/operation-id.js";
+import { createNoManagedWritersEnv } from "../utils/no-managed-writers.js";
+
+const NO_MANAGED_WRITERS = createNoManagedWritersEnv();
+
+afterAll(() => NO_MANAGED_WRITERS.cleanup());
 
 const CLI_BIN = join(__dirname, "..", "..", "dist", "cli.js");
 
@@ -26,7 +31,11 @@ function runCli(
   try {
     const stdout = execFileSync(process.execPath, [CLI_BIN, ...args], {
       encoding: "utf8",
-      env: { ...process.env, AUTO_COMMIT: "false", ...env },
+      env: NO_MANAGED_WRITERS.withNoManagedWriters({
+        ...process.env,
+        AUTO_COMMIT: "false",
+        ...env,
+      }),
     });
     return { stdout, stderr: "", status: 0 };
   } catch (e: unknown) {

@@ -13,12 +13,17 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExitCode } from "@skillwiki/shared";
+import { createNoManagedWritersEnv } from "./utils/no-managed-writers.js";
 
 const BIN = join(__dirname, "..", "dist", "cli.js");
+const NO_MANAGED_WRITERS = createNoManagedWritersEnv();
 
 function run(args: string[], env: NodeJS.ProcessEnv = process.env): { stdout: string; status: number } {
   try {
-    const stdout = execFileSync("node", [BIN, ...args], { encoding: "utf8", env });
+    const stdout = execFileSync("node", [BIN, ...args], {
+      encoding: "utf8",
+      env: NO_MANAGED_WRITERS.withNoManagedWriters(env),
+    });
     return { stdout, status: 0 };
   } catch (e: any) {
     return { stdout: e.stdout?.toString() ?? "", status: e.status ?? 1 };
@@ -28,6 +33,7 @@ function run(args: string[], env: NodeJS.ProcessEnv = process.env): { stdout: st
 const TMP_VAULT = mkdtempSync(join(tmpdir(), "smoke-vault-"));
 const RICH_VAULT = mkdtempSync(join(tmpdir(), "smoke-rich-"));
 afterAll(() => {
+  NO_MANAGED_WRITERS.cleanup();
   // tmp dirs cleaned by OS; no explicit teardown needed
 });
 

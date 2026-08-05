@@ -2,9 +2,14 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterAll } from "vitest";
+import { createNoManagedWritersEnv } from "../utils/no-managed-writers.js";
 import { ExitCode } from "@skillwiki/shared";
 import { extractTaxonomy } from "../../src/parsers/taxonomy.js";
+
+const NO_MANAGED_WRITERS = createNoManagedWritersEnv();
+
+afterAll(() => NO_MANAGED_WRITERS.cleanup());
 
 const BIN = join(__dirname, "..", "..", "dist", "cli.js");
 const RAW_FIXTURE = `---
@@ -96,6 +101,7 @@ function spawnCli(args: string[]): Promise<CliProcessResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [BIN, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
+      env: NO_MANAGED_WRITERS.withNoManagedWriters(),
     });
     let stdout = "";
     let stderr = "";
@@ -144,7 +150,7 @@ describe("built page publication", () => {
       "--target", "queries/novel.md", "--write",
     ];
 
-    const first = spawnSync(process.execPath, [BIN, ...publicationArgs], { encoding: "utf8" });
+    const first = spawnSync(process.execPath, [BIN, ...publicationArgs], { encoding: "utf8", env: NO_MANAGED_WRITERS.withNoManagedWriters() });
     expect(first.status).toBe(ExitCode.OK);
     const parsed = JSON.parse(first.stdout);
     expect(parsed.ok).toBe(true);
@@ -153,7 +159,7 @@ describe("built page publication", () => {
     const lint = spawnSync(
       process.execPath,
       [BIN, "lint", vault, "--only", "tag_not_in_taxonomy", "--summary"],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: NO_MANAGED_WRITERS.withNoManagedWriters() },
     );
     expect(lint.status).toBe(ExitCode.OK);
     expect(JSON.parse(lint.stdout).data.summary.errors).toBe(0);
@@ -161,7 +167,7 @@ describe("built page publication", () => {
     const delta = spawnSync(
       process.execPath,
       [BIN, "sync", "lint-delta", vault, "--base-ref", "HEAD"],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: NO_MANAGED_WRITERS.withNoManagedWriters() },
     );
     const deltaJson = JSON.parse(delta.stdout);
     expect(deltaJson.ok).toBe(true);
@@ -175,7 +181,7 @@ describe("built page publication", () => {
       join(vault, "log.md"),
     ];
     const beforeReplay = snapshot(materialized);
-    const replay = spawnSync(process.execPath, [BIN, ...publicationArgs], { encoding: "utf8" });
+    const replay = spawnSync(process.execPath, [BIN, ...publicationArgs], { encoding: "utf8", env: NO_MANAGED_WRITERS.withNoManagedWriters() });
     expect(replay.status).toBe(ExitCode.OK);
     expect(JSON.parse(replay.stdout).data.files_changed).toEqual([]);
     expect(snapshot(materialized)).toEqual(beforeReplay);
@@ -237,7 +243,7 @@ describe("built page publication", () => {
     const bypassDelta = spawnSync(
       process.execPath,
       [BIN, "sync", "lint-delta", vault, "--base-ref", "HEAD"],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: NO_MANAGED_WRITERS.withNoManagedWriters() },
     );
     const bypassDeltaJson = JSON.parse(bypassDelta.stdout);
     expect(bypassDelta.status).toBe(ExitCode.LINT_HAS_ERRORS);
