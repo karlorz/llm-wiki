@@ -5,6 +5,14 @@ description: Write an Architectural Decision Record (ADR). If the decision gener
 
 # proj-decide
 
+## Model routing
+
+`proj-decide` authors architectural decisions and ADRs, so its companion
+agent must run at the invoking main-agent model. Keep `model: inherit` in
+`packages/skills/agents/proj-decide.md`; do not pin decision-making work to
+`sonnet`, `haiku`, or `opus`. Do not add a `model` field to this `SKILL.md`
+frontmatter.
+
 ## When to invoke
 - User commits to an architectural decision worth recording for future reference.
 

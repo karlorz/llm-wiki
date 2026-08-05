@@ -5,6 +5,13 @@ description: Open or run a work item under projects/{slug}/work/YYYY-MM-DD-{slug
 
 # proj-work
 
+## Model routing
+
+`proj-work` authors implementation specifications and plans, so its companion
+agent must run at the invoking main-agent model. Keep `model: inherit` in
+`packages/skills/agents/proj-work.md`; do not pin planning work to `sonnet`,
+`haiku`, or `opus`. Do not add a `model` field to this `SKILL.md` frontmatter.
+
 ## When to invoke
 - User starts a feature, issue, refactor, or decision inside an existing project.
 - User asks to "get work of X" or "run work item Y" to review/execute an existing item.

@@ -14,6 +14,7 @@ set -euo pipefail
 #   8. Codex plugin layout mirrors top-level skills under ./skills/ and uses native Codex hooks
 #   9. Root agy plugin layout materializes skills/, agents/, and hooks/ for direct GitHub URL install
 #   10. Per-host e2e env files match fleet maintenance metadata
+#   11. Planning and decision agents inherit the invoking main model
 #
 # Exit 0 if all pass, non-zero with descriptive errors if any fail.
 #
@@ -397,7 +398,58 @@ else
   fi
 fi
 
-# ---- 3c. Root agy URL-install marker ----
+# ---- 3c. Planning/decision agent model routing ----
+
+check_agent_inherits_parent_model() {
+  local name="$1"
+  local agent_file="$SKILLS_DIR/agents/$name.md"
+
+  if [ ! -f "$agent_file" ]; then
+    echo "✗ Planning/decision agent definition missing: packages/skills/agents/$name.md" >&2
+    ERRORS=$((ERRORS + 1))
+  elif awk '
+    BEGIN {
+      closed = 0
+      in_frontmatter = 0
+      model_count = 0
+      invalid = 0
+    }
+    NR == 1 {
+      if ($0 != "---") {
+        invalid = 1
+      } else {
+        in_frontmatter = 1
+      }
+      next
+    }
+    in_frontmatter && $0 == "---" {
+      in_frontmatter = 0
+      closed = 1
+      next
+    }
+    in_frontmatter && $0 ~ /^model:[[:space:]]*/ {
+      value = $0
+      sub(/^model:[[:space:]]*/, "", value)
+      model_count++
+      if (value != "inherit") {
+        invalid = 1
+      }
+    }
+    END {
+      exit !(closed && model_count == 1 && !invalid)
+    }
+  ' "$agent_file"; then
+    echo "✓ $name inherits the invoking parent model"
+  else
+    echo "✗ $name must declare exactly one frontmatter model: inherit" >&2
+    ERRORS=$((ERRORS + 1))
+  fi
+}
+
+check_agent_inherits_parent_model "proj-work"
+check_agent_inherits_parent_model "proj-decide"
+
+# ---- 3d. Root agy URL-install marker ----
 
 ROOT_AGY_REMOTE_PLUGIN="$REPO_ROOT/.claude-plugin/plugin.json"
 if [ ! -f "$ROOT_AGY_REMOTE_PLUGIN" ]; then

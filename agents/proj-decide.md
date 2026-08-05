@@ -1,7 +1,7 @@
 ---
 name: proj-decide
 description: Use this agent when recording architectural decisions during automated maintenance cycles. Typical triggers include dev-loop IDLE DISCOVERY maintenance, capturing design decisions from work items, or generalizing decisions into concept pages. See "When to invoke" in the agent body for worked scenarios.
-model: sonnet
+model: inherit
 color: yellow
 tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob"]
 ---

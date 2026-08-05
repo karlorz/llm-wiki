@@ -1,7 +1,7 @@
 ---
 name: proj-work
 description: Use this agent when creating or executing work items during automated development cycles. Typical triggers include dev-loop work item creation from captured tasks, executing existing work items, or managing status transitions. See "When to invoke" in the agent body for worked scenarios.
-model: sonnet
+model: inherit
 color: green
 tools: ["Read", "Write", "Edit", "Bash", "Grep", "Glob"]
 ---
