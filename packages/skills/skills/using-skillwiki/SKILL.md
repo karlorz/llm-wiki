@@ -19,14 +19,21 @@ Use this section as procedural planning guidelines:
 
 ## Activation File (Cross-Harness Alternative to SessionStart)
 
-On harnesses where the SessionStart hook does not fire (Grok, Codex), SkillWiki activation context is delivered via a compact file installed at session start. Run `npm run install:activation` from the repo to install:
+**Claude Code** and **Codex** activate SkillWiki via the plugin SessionStart hook (`hooks/session-start` / `hooks/session-start-codex`). Do **not** install activation markers into `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md` when the plugin is present — that double-injects context and pollutes user-scope instruction files.
 
-- `~/.grok/skillwiki.md` and `~/.claude/skillwiki.md` - compact derivative (~31 lines) covering identity, CLI probe, skill map, PRD bridge, fail-closed boundary, and drift warning.
-- `~/.grok/AGENTS.md` and `~/.claude/CLAUDE.md` - prepended with a marker-wrapped reference: `Read @skillwiki.md for SkillWiki activation context.`
+On harnesses where SessionStart `additionalContext` does **not** fire (**Grok**), SkillWiki activation context is delivered via a compact file. Run `npm run install:activation` from the repo to install:
 
-The activation file is self-contained literal text (ADR-3). On harnesses with `@file` import support (Claude Code, Cursor, Gemini), the reference is inlined automatically. On harnesses without it (Grok, Codex), the agent reads the file manually.
+- `~/.grok/skillwiki.md` — compact derivative covering identity, CLI probe, skill map, PRD bridge, fail-closed boundary, and drift warning.
+- `~/.grok/AGENTS.md` — prepended with a marker-wrapped reference: `Read @skillwiki.md for SkillWiki activation context.`
 
-The template lives at `packages/skills/using-skillwiki/activation.md`. Run `npm run install:activation:check` to verify the installed copy matches the template.
+Default install is **Grok only**. Re-running `install:activation` also **removes** any prior Claude/Codex activation marker and matching `skillwiki.md` (cleanup for the earlier dual-target installer). Opt-in fallbacks only when the plugin SessionStart path is unavailable:
+
+- `npm run install:activation -- --with-claude` — `~/.claude/skillwiki.md` + `CLAUDE.md` marker
+- `npm run install:activation -- --with-codex` — `~/.codex/skillwiki.md` + `AGENTS.md` marker
+
+The activation file is self-contained literal text (ADR-3). On harnesses with `@file` import support, the reference is inlined automatically. On Grok (no `@file` support), the agent reads the file manually when it sees the instructional reference.
+
+The template lives at `packages/skills/using-skillwiki/activation.md`. Run `npm run install:activation:check` to verify the Grok install matches the template and that Claude/Codex are not still carrying the activation block.
 
 ## When to Use These Skills
 Invoke a skillwiki skill when the user:

@@ -1,7 +1,7 @@
 {
   "name": "skillwiki-monorepo",
   "private": true,
-  "version": "0.10.33",
+  "version": "0.10.34",
   "workspaces": [
     "packages/shared",
     "packages/cli",
@@ -26,6 +26,7 @@
     "materialize:plugins:check": "bash scripts/materialize-plugin-assets.sh --check",
     "install:activation": "bash scripts/install-skillwiki-activation.sh",
     "install:activation:check": "bash scripts/install-skillwiki-activation.sh --check",
+    "test:install-activation": "bash scripts/test/install-activation.test.sh",
     "clean": "rm -rf packages/*/dist packages/*/.tsbuildinfo artifacts"
   },
   "engines": {
