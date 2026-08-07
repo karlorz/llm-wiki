@@ -38,7 +38,7 @@ export const RawSourceSchema = z.object({
   source_url: z.string().nullable(),
   created: isoDate.optional(),
   ingested: isoDate,
-  ingested_by: z.enum(["wiki-ingest", "proj-work", "manual"]).optional(),
+  ingested_by: z.enum(["wiki-ingest", "proj-work", "manual", "deep-research", "export-wiki"]).optional(),
   sha256: sha256Hex.optional(),
   project: wikilink.optional(),
   work_item: wikilink.optional(),

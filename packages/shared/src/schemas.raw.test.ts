@@ -94,4 +94,12 @@ describe("RawSourceSchema", () => {
   it("rejects malformed sha256 even when optional", () => {
     expect(() => RawSourceSchema.parse({ ...remote, sha256: "deadbeef" })).toThrow();
   });
+
+  it("accepts deep-research as ingested_by", () => {
+    expect(RawSourceSchema.parse({ ...remote, ingested_by: "deep-research" })).toMatchObject({ ingested_by: "deep-research" });
+  });
+
+  it("accepts export-wiki as ingested_by", () => {
+    expect(RawSourceSchema.parse({ ...remote, ingested_by: "export-wiki" })).toMatchObject({ ingested_by: "export-wiki" });
+  });
 });
