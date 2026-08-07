@@ -29,7 +29,7 @@ node packages/agent-memory-trends/dist/cli.js --help
 GitHub recall is lane-based rather than a single updated-first query list. The
 owned vault config at
 `{WIKI_PATH}/projects/llm-wiki/architecture/agent-memory-research-sources.yaml`
-defines four lanes:
+defines seven lanes:
 
 - `daily_fresh`: short pushed window, `sort=updated`, filtered by a low but real
   quality gate so minute-level 0-star noise does not flood the digest.
@@ -40,6 +40,33 @@ defines four lanes:
 - `emerging`: thirty-day created window, `sort=updated`, for low-authority
   projects with strong implementation evidence. These are usually inspection
   ideas, not direct implementation tasks.
+- `org_watchlist`: seven-day pushed window for specific high-signal GitHub orgs
+  (e.g., `yc-software`, `PrimeIntellect-ai`). Use for orgs whose repos have
+  short or non-descriptive names that keyword search would miss. Only include
+  orgs whose repos lack relevant topics; repos with `topic:agent-memory` are
+  covered by `topic_lane` instead.
+- `topic_lane`: seven-day pushed window using GitHub topic search
+  (e.g., `topic:agent-memory`, `topic:agent-harness`). Catches repos regardless
+  of name or description keywords.
+- `velocity`: thirty-day created window, `sort=stars`, with a high star floor
+  (1000+). Catches fast-rising new repos regardless of keyword match.
+
+### Query string rules
+
+Query strings in the config are sent to GitHub Search **as-is**. The collector's
+`qualifyQuery()` function automatically appends `${date_field}:>=<cutoff>` from
+the lane's `window_days` and `date_field` parameters. **Do not** add date
+qualifiers like `pushed:>{{7days}}` to query strings - they are not
+template-substituted and will be sent as literal text, causing zero results.
+
+Star/fork filtering is handled by the lane's `quality_gate` (`min_stars`,
+`min_forks`). Do not add `stars:>{{N}}` to query strings.
+
+Valid query examples:
+- `coding agent memory in:name,description,readme` (keyword search)
+- `org:yc-software` (org watchlist)
+- `topic:agent-memory` (topic search)
+- `agent` (broad velocity search; date and star filters come from lane params)
 
 Each selected candidate carries `lane_ids`, `query_ids`, `quality_gate`, and
 `evidence_families`. Duplicate repositories returned by multiple lanes merge by
@@ -61,7 +88,7 @@ suppresses duplicate raw transcript creation.
 Digest-only duplicate suppression is age-bounded. Repositories already present
 in `queries/*-agent-memory-trends-digest.md` are suppressed only while the
 matching digest is inside `dedupe.digest_ttl_days` from the owned research
-config; the default is 14 days. Raw task captures and active work items remain
+config; the current value is 7 days. Raw task captures and active work items remain
 hard suppressions because they represent explicit ownership, not historical
 trend coverage. For controlled real-candidate debugging, use
 `--dedupe-digest-ttl-days <n>` to shorten or lengthen only the current CLI run;
@@ -332,6 +359,21 @@ The workflow must preserve these constraints:
 ## Periodic Review
 
 The nightly pipeline collects and synthesizes GitHub candidates automatically.
+Two attended review cadences complement the automation:
+
+### Weekly: deep-research coverage sweep
+
+When the collector returns zero candidates for multiple consecutive nights, or
+when a major release is announced outside GitHub Search (X/Twitter, HN, company
+blogs), run a `deep-research` agent to sweep the landscape. The deep-research
+agent's grok-search MCP can find sources that keyword-based GitHub Search
+structurally misses: blog-first announcements, org-launched repos with short
+names, non-English ecosystems. See the deep-research skill's
+`references/vault-pipeline.md` "Worked Example: Coverage-Sweep Pattern" for the
+prompt template and expected artifacts.
+
+### Quarterly: idea distillation
+
 A quarterly attended research-distillation pass complements the automation:
 
 - When running a `$daily-wiki-sleep deep` cycle at quarter boundaries (roughly
