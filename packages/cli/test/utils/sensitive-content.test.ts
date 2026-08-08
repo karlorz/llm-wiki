@@ -162,4 +162,55 @@ describe("sensitive-content", () => {
       expect(result.findings).toEqual([]);
     });
   });
+
+  describe("2026-08-09 regression fixtures (structural shapes)", () => {
+    it("ignores the English noun 'pass' with a colon and a bolded verdict (password FP)", () => {
+      const text = "- Decision for this pass: **KEEP** every OID as audit backlog\n";
+      expect(scanSensitiveContent(text)).toEqual([]);
+      const result = redactSensitiveContent(text);
+      expect(result.changed).toBe(false);
+    });
+
+    it("still detects password and passwd labels (regression)", () => {
+      const secret = "dev-only-" + "A".repeat(16);
+      const passwordFindings = scanSensitiveContent(`password: ${secret}\n`);
+      const passwdFindings = scanSensitiveContent(`passwd: ${secret}\n`);
+      expect(passwordFindings.map(f => f.kind)).toEqual(["password"]);
+      expect(passwdFindings.map(f => f.kind)).toEqual(["password"]);
+      expect(JSON.stringify([...passwordFindings, ...passwdFindings])).not.toContain(secret);
+    });
+
+    it("ignores dotted/alphanumeric model names after Session: (token FP)", () => {
+      const text = "# Session: gpt-5.6-luna-max encrypted thinking content blocks\n";
+      expect(scanSensitiveContent(text)).toEqual([]);
+      const result = redactSensitiveContent(text);
+      expect(result.changed).toBe(false);
+    });
+
+    it("still captures sess_ session identifiers (policy: conservative)", () => {
+      const text = "session: sess_0msegsr5x_3a6d6110a72a2f16d492\n";
+      const findings = scanSensitiveContent(text);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.kind).toBe("token");
+      expect(findings[0]!.preview).toContain("[REDACTED:token:");
+      expect(JSON.stringify(findings)).not.toContain("sess_0msegsr5x_3a6d6110a72a2f16d492");
+    });
+
+    it("still captures pure-hex hyphenated session UUIDs (policy: conservative)", () => {
+      const text = "Parent session: 019fda67-1858-7851-aad6-fb7ef06e4d96 (grok-4.5)\n";
+      const findings = scanSensitiveContent(text);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.kind).toBe("token");
+      expect(findings[0]!.preview).toContain("[REDACTED:token:");
+      expect(JSON.stringify(findings)).not.toContain("019fda67-1858-7851-aad6-fb7ef06e4d96");
+    });
+
+    it("still captures mixed-case hyphenated values that are not model-name shaped", () => {
+      const secret = "A1b2-C3d4-E5f6-G7h8-I9j0K1l2";
+      const findings = scanSensitiveContent(`session: ${secret}\n`);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]!.kind).toBe("token");
+      expect(JSON.stringify(findings)).not.toContain(secret);
+    });
+  });
 });

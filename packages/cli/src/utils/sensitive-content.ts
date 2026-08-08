@@ -1,5 +1,19 @@
 import { createHash } from "node:crypto";
 
+/**
+ * Sensitive-content scanning policy.
+ *
+ * - Real credential shapes (private keys, Authorization headers, cookies,
+ *   JWTs, provider keys, access keys, api_key/secret/client_secret
+ *   assignments, labeled passwords) are always captured.
+ * - Session identifiers (sess_ tokens, session UUIDs) are captured by
+ *   design (conservative): they are not credentials, but their presence
+ *   after "session"/"token" labels is deliberately still flagged.
+ * - Prose-like values that merely LOOK like tokens (dotted/alphanumeric
+ *   hyphenated compounds such as gpt-5.6-luna-max or pure lowercase
+ *   compounds, and session:// URL captures) are filtered (G1/G3).
+ * - Already-redacted markers and synthetic placeholders are ignored.
+ */
 export type SensitiveKind =
   | "access_key"
   | "api_key"
@@ -89,7 +103,7 @@ const MATCHERS: Matcher[] = [
   },
   {
     kind: "password",
-    re: /\b(?:pass(?:word|wd)?)["']?\s*[:=]\s*["']?([^\s`"']{8,})["']?/gi,
+    re: /\b(?:password|passwd)["']?\s*[:=]\s*["']?([^\s`"']{8,})["']?/gi,
     valueGroup: 1,
   },
   {
@@ -121,13 +135,16 @@ function isSyntheticPlaceholder(value: string): boolean {
 }
 
 /**
- * Token-only value filters (G1/G2).
+ * Token-only value filters (G1/G3).
  * G1: session://… captures as //… under the token matcher.
- * G2: pure lowercase hyphenated English compounds are not credentials.
+ * G3: dotted/alphanumeric hyphenated compounds (English prose, model
+ *     names like gpt-5.6-luna-max) are not credentials — unless the
+ *     shape is pure hex (session UUIDs and hex identifiers stay
+ *     captured). Subsumes the former G2 pure-lowercase rule.
  */
 function isNonSecretTokenCapture(value: string): boolean {
   if (value.startsWith("//")) return true;
-  if (/^[a-z]{2,}(?:-[a-z]{2,})+$/.test(value)) return true;
+  if (/^[a-z0-9.]+(?:-[a-z0-9.]+)+$/.test(value) && !/^[0-9a-f]+(?:-[0-9a-f]+)+$/.test(value)) return true;
   return false;
 }
 
