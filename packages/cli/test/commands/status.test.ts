@@ -126,6 +126,7 @@ describe("runStatus", () => {
     const h = makeHome();
     const v = makeVault();
     writeFileSync(join(v, "entities", "foo.md"), "---\ntitle: foo\n---\nbody");
+    writeFileSync(join(v, "entities", "bar.md"), "---\ntitle: bar\n---\nbody");
 
     // Create a mirror vault with SCHEMA.md so resolveReadOnlyVaultRoot picks it up
     const mirror = `${v}-git`;
@@ -143,7 +144,8 @@ describe("runStatus", () => {
       if (r.result.ok) {
         expect(r.result.data.read_source).toBe("mirror");
         expect(r.result.data.humanHint).toContain("read source: mirror");
-        // Page count should come from the mirror, which has mirror-page.md
+        // Live vault has 2 entities (foo.md + bar.md); mirror has 1 (mirror-page.md).
+        // entities === 1 proves the mirror was scanned, not the live vault.
         expect(r.result.data.page_counts.entities).toBe(1);
         expect(r.result.data.total_pages).toBe(1);
       }
