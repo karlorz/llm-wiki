@@ -122,6 +122,57 @@ describe("runStatus", () => {
     }
   });
 
+  it("reports read_source=mirror when SKILLWIKI_VAULT_READ_MIRROR is set", async () => {
+    const h = makeHome();
+    const v = makeVault();
+    writeFileSync(join(v, "entities", "foo.md"), "---\ntitle: foo\n---\nbody");
+
+    // Create a mirror vault with SCHEMA.md so resolveReadOnlyVaultRoot picks it up
+    const mirror = `${v}-git`;
+    mkdirSync(mirror, { recursive: true });
+    writeFileSync(join(mirror, "SCHEMA.md"), "# Schema\n");
+    mkdirSync(join(mirror, "entities"), { recursive: true });
+    writeFileSync(join(mirror, "entities", "mirror-page.md"), "---\ntitle: mirror-page\n---\nbody");
+
+    const prior = process.env.SKILLWIKI_VAULT_READ_MIRROR;
+    process.env.SKILLWIKI_VAULT_READ_MIRROR = mirror;
+    try {
+      const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
+      expect(r.exitCode).toBe(0);
+      expect(r.result.ok).toBe(true);
+      if (r.result.ok) {
+        expect(r.result.data.read_source).toBe("mirror");
+        expect(r.result.data.humanHint).toContain("read source: mirror");
+        // Page count should come from the mirror, which has mirror-page.md
+        expect(r.result.data.page_counts.entities).toBe(1);
+        expect(r.result.data.total_pages).toBe(1);
+      }
+    } finally {
+      if (prior === undefined) delete process.env.SKILLWIKI_VAULT_READ_MIRROR;
+      else process.env.SKILLWIKI_VAULT_READ_MIRROR = prior;
+    }
+  });
+
+  it("reports read_source=live for local vault without mirror", async () => {
+    const h = makeHome();
+    const v = makeVault();
+    writeFileSync(join(v, "entities", "foo.md"), "---\ntitle: foo\n---\nbody");
+
+    // Ensure no mirror env is set
+    const prior = process.env.SKILLWIKI_VAULT_READ_MIRROR;
+    delete process.env.SKILLWIKI_VAULT_READ_MIRROR;
+    try {
+      const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
+      expect(r.result.ok).toBe(true);
+      if (r.result.ok) {
+        expect(r.result.data.read_source).toBe("live");
+        expect(r.result.data.humanHint).not.toContain("read source: mirror");
+      }
+    } finally {
+      if (prior !== undefined) process.env.SKILLWIKI_VAULT_READ_MIRROR = prior;
+    }
+  });
+
   it("counts work items correctly", async () => {
     const h = makeHome();
     const v = makeVault();
