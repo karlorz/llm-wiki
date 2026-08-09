@@ -96,7 +96,7 @@ export async function runSessionBrief(
       loadSatelliteHealth(input.vault),
       loadSessionPins(input.vault, project),
       project ? loadMemoryTopics(input.vault, project) : Promise.resolve([]),
-      loadPendingSources(input.vault, today),
+      loadPendingSources(scanRoot, today),
     ]);
     const healthWarnings = [
       ...baseHealthWarnings,
