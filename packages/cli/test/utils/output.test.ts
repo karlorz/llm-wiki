@@ -32,7 +32,7 @@ describe("output", () => {
     const spy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     printHuman(ok({ humanHint: "3 skills installed", count: 3 }));
     const arg = (spy.mock.calls[0][0] as string);
-    expect(arg).toContain("3 skills installed");
+    expect(arg).toBe("3 skills installed\n");
     expect(arg).not.toContain("OK");
     spy.mockRestore();
   });

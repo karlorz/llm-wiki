@@ -101,6 +101,9 @@ async function emit<T>(r: { exitCode: number; result: Result<T> }, vault?: strin
     printJson(r.result);
   }
   if (vault && opts?.postCommit !== false) await postCommit(vault, r.exitCode);
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write("", (error) => error ? reject(error) : resolve());
+  });
   process.exit(r.exitCode);
 }
 
