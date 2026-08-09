@@ -3,6 +3,7 @@ import { Command } from "commander";
 import type { Result, ErrResult } from "@skillwiki/shared";
 import { ExitCode, err } from "@skillwiki/shared";
 import { printJson, printHuman } from "./utils/output.js";
+import { healthLintDetailHints, lintDetailHints } from "./utils/lint-detail-hints.js";
 import { getDeprecatedWarnings } from "./utils/deprecation.js";
 import { runHash } from "./commands/hash.js";
 import { runFetchGuard } from "./commands/fetch-guard.js";
@@ -87,9 +88,22 @@ const program = new Command();
 program.name("skillwiki").description("Deterministic helpers for CodeWiki skills").version(pkg.version);
 program.option("--human", "render terminal-readable output instead of JSON");
 
-async function emit<T>(r: { exitCode: number; result: Result<T> }, vault?: string, opts?: { postCommit?: boolean }): Promise<never> {
-  if (program.opts().human) printHuman(r.result); else printJson(r.result);
+interface EmitOptions<T> {
+  postCommit?: boolean;
+  humanDetailHints?: (data: T) => readonly string[];
+}
+
+async function emit<T>(r: { exitCode: number; result: Result<T> }, vault?: string, opts?: EmitOptions<T>): Promise<never> {
+  if (program.opts().human) {
+    const detailHints = r.result.ok ? opts?.humanDetailHints?.(r.result.data) : undefined;
+    printHuman(r.result, { detailHints });
+  } else {
+    printJson(r.result);
+  }
   if (vault && opts?.postCommit !== false) await postCommit(vault, r.exitCode);
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write("", (error) => error ? reject(error) : resolve());
+  });
   process.exit(r.exitCode);
 }
 
@@ -128,7 +142,7 @@ async function emitGuardedVaultWrite<T>(
   vault: string,
   command: string,
   run: () => Promise<{ exitCode: number; result: Result<T> }> | { exitCode: number; result: Result<T> },
-  opts?: { postCommit?: boolean }
+  opts?: EmitOptions<T>
 ): Promise<never> {
   const guard = await guardProtectedVaultWrite({
     vault,
@@ -861,6 +875,7 @@ program
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
+    const humanDetailHints = opts.only ? undefined : lintDetailHints;
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else if (opts.fix && opts.summary) return emitGuardedVaultWrite(
       v.vault,
@@ -875,7 +890,8 @@ program
         only: opts.only,
         summary: true,
         examplesLimit: opts.examples,
-      })
+      }),
+      { humanDetailHints },
     );
     else if (opts.fix) return emitGuardedVaultWrite(
       v.vault,
@@ -889,7 +905,8 @@ program
         fix: true,
         only: opts.only,
         summary: false,
-      })
+      }),
+      { humanDetailHints },
     );
     else if (opts.summary) emit(await runLint({
       vault: v.vault,
@@ -901,7 +918,7 @@ program
       only: opts.only,
       summary: true,
       examplesLimit: opts.examples,
-    }), v.vault);
+    }), v.vault, { humanDetailHints });
     else emit(await runLint({
       vault: v.vault,
       source: vault ? "flag" : undefined,
@@ -910,7 +927,7 @@ program
       logThreshold: opts.logThreshold,
       fix: false,
       only: opts.only,
-    }), v.vault);
+    }), v.vault, { humanDetailHints });
   });
 
 program
@@ -940,7 +957,7 @@ program
       noFail: opts.fail === false,
       out: opts.out,
       examplesLimit: opts.examples,
-    }), undefined, { postCommit: false });
+    }), undefined, { postCommit: false, humanDetailHints: healthLintDetailHints });
   });
 
 // config — grouped under a parent command
