@@ -44,7 +44,7 @@ behavior is unchanged.
 `StatusOutput` gains a `read_source` field:
 
 ```typescript
-read_source: "live" | "mirror";
+read_source: "live" | "mirror" | "fuse-no-mirror";
 ```
 
 When mirrored, `humanHint` gains a line:
@@ -53,7 +53,12 @@ When mirrored, `humanHint` gains a line:
 read source: mirror (/root/wiki-git) - page counts may lag up to 30m
 ```
 
-When the vault is a FUSE mount but **no mirror exists**, `humanHint` gains:
+When the vault is a FUSE mount but **no mirror exists**, `resolveReadOnlyVaultRoot()`
+returns `{ root: originalPath, mirrored: false }` - which is the same as a non-FUSE
+vault. To distinguish these cases, call `detectFuseMount()` from
+`packages/cli/src/utils/s3-mount-health.ts` (already used by `doctor`) when
+`mirrored === false`. If FUSE is detected but no mirror resolved, set `read_source`
+to `"fuse-no-mirror"` and `humanHint` gains:
 
 ```
 FUSE vault with no read mirror - status scan may be slow
@@ -71,7 +76,7 @@ whose output is consumed by the agent, not displayed to users.
 
 | File | Change |
 |---|---|
-| `packages/cli/src/commands/status.ts` | Import `resolveReadOnlyVaultRoot`. Call it before `scanVault()`. Add `read_source` to `StatusOutput`. Update `humanHint`. |
+| `packages/cli/src/commands/status.ts` | Import `resolveReadOnlyVaultRoot` and `detectFuseMount`. Call `resolveReadOnlyVaultRoot()` before `scanVault()`. Call `detectFuseMount()` when not mirrored to detect FUSE-without-mirror. Add `read_source` to `StatusOutput`. Update `humanHint`. |
 | `packages/cli/src/commands/session-brief.ts` | Import `resolveReadOnlyVaultRoot`. Call it before `scanVault()`. No output change. |
 
 ## What does NOT change
