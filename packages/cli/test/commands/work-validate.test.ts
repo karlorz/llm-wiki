@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runWorkValidate } from "../../src/commands/work-validate.js";
 
 function vaultWith(workRel: string, files: Record<string, string>): string {
@@ -10,7 +10,9 @@ function vaultWith(workRel: string, files: Record<string, string>): string {
   const abs = join(dir, workRel);
   mkdirSync(abs, { recursive: true });
   for (const [name, body] of Object.entries(files)) {
-    writeFileSync(join(abs, name), body);
+    const target = join(abs, name);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, body);
   }
   return dir;
 }
@@ -49,6 +51,106 @@ status: completed
     const r = await runWorkValidate({ vault: dir, workItem: work, requireComplete: true });
     expect(r.exitCode).toBe(0);
     expect(r.result).toMatchObject({ ok: true, data: { valid: true, evidence_present: true } });
+  });
+
+  it("passes a completed goal-plan item with plan.md and build-report.md", async () => {
+    const work = "projects/demo/work/2026-08-09-goal-plan";
+    const dir = vaultWith(work, {
+      "plan.md": `---
+status: complete
+mode: goal-plan
+---
+
+# Goal plan
+
+- [x] shipped
+`,
+      "build-report.md": `---
+status: complete
+mode: goal-plan
+---
+
+# Build report
+`,
+    });
+
+    const r = await runWorkValidate({ vault: dir, workItem: work, requireComplete: true });
+
+    expect(r.exitCode).toBe(0);
+    expect(r.result).toMatchObject({
+      ok: true,
+      data: {
+        valid: true,
+        findings: [],
+        status: { plan: "complete" },
+        evidence_present: true,
+      },
+    });
+  });
+
+  it("accepts the goal alias with an evidence directory", async () => {
+    const work = "projects/demo/work/2026-08-09-goal-alias";
+    const dir = vaultWith(work, {
+      "plan.md": `---
+status: done
+mode: goal
+---
+
+# Goal
+`,
+      "evidence/proof.txt": "verified\n",
+    });
+
+    const r = await runWorkValidate({ vault: dir, workItem: work, requireComplete: true });
+
+    expect(r.exitCode).toBe(0);
+    expect(r.result).toMatchObject({ ok: true, data: { valid: true, evidence_present: true } });
+  });
+
+  it("does not accept a regular file named evidence as an evidence directory", async () => {
+    const work = "projects/demo/work/2026-08-09-goal-bad-evidence-dir";
+    const dir = vaultWith(work, {
+      "plan.md": `---
+status: complete
+mode: goal-plan
+---
+
+# Goal plan
+`,
+      evidence: "not a directory\n",
+    });
+
+    const r = await runWorkValidate({ vault: dir, workItem: work, requireComplete: true });
+
+    expect(r.exitCode).toBe(13);
+    if (r.result.ok) {
+      expect(r.result.data.evidence_present).toBe(false);
+      expect(r.result.data.findings.map((finding) => finding.code)).toEqual(["missing_evidence"]);
+    }
+  });
+
+  it("keeps the standard spec and evidence requirements", async () => {
+    const work = "projects/demo/work/2026-08-09-standard-build-report";
+    const dir = vaultWith(work, {
+      "plan.md": `---
+status: completed
+---
+
+# Standard plan
+`,
+      "build-report.md": "# Build report\n",
+    });
+
+    const r = await runWorkValidate({ vault: dir, workItem: work });
+
+    expect(r.exitCode).toBe(13);
+    if (r.result.ok) {
+      expect(r.result.data.evidence_present).toBe(false);
+      expect(r.result.data.findings.map((finding) => finding.code)).toEqual([
+        "missing_spec",
+        "missing_evidence",
+      ]);
+    }
   });
 
   it("fails on missing evidence when requireComplete", async () => {

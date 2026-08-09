@@ -26,6 +26,13 @@ Four shapes: typed-knowledge, raw, work-item, compound. See spec for full Zod sc
 Work-item statuses are `planned`, `in-progress`, `completed`, and `abandoned`.
 `status: proposed` is not supported by the current SkillWiki schema. Non-executing queued findings use raw `task` or `bug` captures under `raw/transcripts/` with a `project` wikilink; humans promote them into `planned` work items.
 
+### Work Item Validation Shapes
+
+- **Standard:** `spec.md` is the specification source. A completed item provides `evidence.md` or `retro.md`.
+- **Goal-plan:** frontmatter `mode: goal-plan` (or the compatibility alias `mode: goal`) makes `plan.md` the specification source. Completion evidence may be `build-report.md`, an `evidence/` directory, `evidence.md`, or `retro.md`; `spec.md` is optional for this shape.
+
+`skillwiki work-validate --require-complete` accepts `completed`, `complete`, or `done` on the active specification source. Goal-plan handling does not relax the standard shape: without a goal mode, `spec.md` and the standard completion evidence remain required.
+
 ## Tag Taxonomy
 
 ```yaml

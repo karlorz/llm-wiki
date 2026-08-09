@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
@@ -31,6 +31,11 @@ export interface WorkValidateOutput {
 }
 
 type Run = { exitCode: number; result: Result<WorkValidateOutput> };
+type MarkdownFileRecord =
+  | { file: string; text: string; frontmatter: ReturnType<typeof extractFrontmatter> }
+  | { file: string; text: null; frontmatter: null };
+
+const GOAL_PLAN_MODE_FILES = new Set(["spec.md", "plan.md", "build-report.md"]);
 
 /** Normalize work-item paths to vault-relative POSIX form. */
 export function normalizeWorkItemRel(workItem: string): string {
@@ -43,6 +48,28 @@ function scanFileConflicts(relPath: string, text: string): number {
 
 function countUnchecked(text: string): number {
   return [...text.matchAll(/^- \[ \]/gm)].length;
+}
+
+function isGoalPlanMode(value: unknown): boolean {
+  return typeof value === "string" && ["goal-plan", "goal"].includes(value.trim().toLowerCase());
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isCompletedStatus(status: string | undefined): boolean {
+  return status === "completed" || status === "complete" || status === "done";
+}
+
+function planClaimsCompletion(status: string | undefined, goalPlanMode: boolean): boolean {
+  return goalPlanMode
+    ? isCompletedStatus(status)
+    : status === "completed" || status === "complete";
 }
 
 function extractPrMetadata(fm: Record<string, unknown>): Record<string, unknown> | null {
@@ -108,23 +135,36 @@ export async function runWorkValidate(input: WorkValidateInput): Promise<Run> {
 
   const findings: WorkValidateFinding[] = [];
   const status: { spec?: string; plan?: string } = {};
-  let evidencePresent = false;
   let unchecked = 0;
   let conflicts = 0;
   let decisionsPresent = false;
   let prMetadata: Record<string, unknown> | null = null;
 
   const files = readdirSync(workDir).filter((f) => f.endsWith(".md"));
-  if (!files.includes("spec.md")) {
+  const markdownFiles: MarkdownFileRecord[] = files.map((file) => {
+    try {
+      const text = readFileSync(join(workDir, file), "utf8");
+      return { file, text, frontmatter: extractFrontmatter(text) };
+    } catch {
+      return { file, text: null, frontmatter: null };
+    }
+  });
+  const goalPlanMode = markdownFiles.some(
+    ({ file, frontmatter }) =>
+      GOAL_PLAN_MODE_FILES.has(file) && frontmatter?.ok && isGoalPlanMode(frontmatter.data.mode),
+  );
+  let evidencePresent =
+    goalPlanMode && (files.includes("build-report.md") || isDirectory(join(workDir, "evidence")));
+
+  if (!files.includes("spec.md") && !goalPlanMode) {
     findings.push({ code: "missing_spec", path: `${rel}/spec.md`, message: "spec.md is required" });
   }
+  if (goalPlanMode && !files.includes("plan.md")) {
+    findings.push({ code: "missing_plan", path: `${rel}/plan.md`, message: "goal-plan mode requires plan.md" });
+  }
 
-  for (const file of files) {
-    const abs = join(workDir, file);
-    let text: string;
-    try {
-      text = readFileSync(abs, "utf8");
-    } catch {
+  for (const { file, text, frontmatter } of markdownFiles) {
+    if (text === null || frontmatter === null) {
       findings.push({ code: "unreadable", path: `${rel}/${file}`, message: "cannot read file" });
       continue;
     }
@@ -139,14 +179,17 @@ export async function runWorkValidate(input: WorkValidateInput): Promise<Run> {
     }
     unchecked += countUnchecked(text);
 
-    const fm = extractFrontmatter(text);
-    if (file === "spec.md" && fm.ok) {
-      status.spec = typeof fm.data.status === "string" ? fm.data.status : undefined;
-      prMetadata = extractPrMetadata(fm.data as Record<string, unknown>);
-      validatePrMetadata(prMetadata, findings);
-    }
-    if (file === "plan.md" && fm.ok) {
-      status.plan = typeof fm.data.status === "string" ? fm.data.status : undefined;
+    if (frontmatter.ok) {
+      if (file === "spec.md") {
+        status.spec = typeof frontmatter.data.status === "string" ? frontmatter.data.status : undefined;
+      }
+      if (file === "plan.md") {
+        status.plan = typeof frontmatter.data.status === "string" ? frontmatter.data.status : undefined;
+      }
+      if (file === (goalPlanMode ? "plan.md" : "spec.md")) {
+        prMetadata = extractPrMetadata(frontmatter.data as Record<string, unknown>);
+        validatePrMetadata(prMetadata, findings);
+      }
     }
     if (file === "evidence.md" || file === "retro.md") {
       evidencePresent = true;
@@ -161,25 +204,29 @@ export async function runWorkValidate(input: WorkValidateInput): Promise<Run> {
   }
 
   if (input.requireComplete) {
-    if (status.spec && status.spec !== "completed" && status.spec !== "complete" && status.spec !== "done") {
+    const specSource = goalPlanMode ? "plan" : "spec";
+    const specSourceStatus = goalPlanMode ? status.plan : status.spec;
+    if (specSourceStatus && !isCompletedStatus(specSourceStatus)) {
       findings.push({
         code: "spec_not_completed",
-        path: `${rel}/spec.md`,
-        message: `spec status is ${status.spec}, expected completed`,
+        path: `${rel}/${specSource}.md`,
+        message: `${specSource} status is ${specSourceStatus}, expected completed`,
       });
     }
-    if (!status.spec) {
+    if (!specSourceStatus) {
       findings.push({
         code: "spec_status_missing",
-        path: `${rel}/spec.md`,
-        message: "spec frontmatter status missing for completion",
+        path: `${rel}/${specSource}.md`,
+        message: `${specSource} frontmatter status missing for completion`,
       });
     }
     if (!evidencePresent) {
       findings.push({
         code: "missing_evidence",
         path: rel,
-        message: "completion requires evidence.md or retro.md",
+        message: goalPlanMode
+          ? "completion requires build-report.md, evidence/, evidence.md, or retro.md"
+          : "completion requires evidence.md or retro.md",
       });
     }
     if (unchecked > 0) {
@@ -192,12 +239,14 @@ export async function runWorkValidate(input: WorkValidateInput): Promise<Run> {
   }
 
   // When plan claims completed, require evidence
-  if (status.plan === "completed" || status.plan === "complete") {
-    if (!evidencePresent) {
+  if (planClaimsCompletion(status.plan, goalPlanMode)) {
+    if (!evidencePresent && !(goalPlanMode && input.requireComplete)) {
       findings.push({
         code: "missing_evidence",
         path: rel,
-        message: "plan is completed but evidence/retro is missing",
+        message: goalPlanMode
+          ? "plan is completed but build-report.md, evidence/, evidence.md, or retro.md is missing"
+          : "plan is completed but evidence/retro is missing",
       });
     }
   }
@@ -223,4 +272,3 @@ export async function runWorkValidate(input: WorkValidateInput): Promise<Run> {
     }),
   };
 }
-
