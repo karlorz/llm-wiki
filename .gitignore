@@ -6,6 +6,7 @@ dist/
 .claude/dev-loop-work/
 .claude/dev-loop-debug/
 .claude/dev-loop/status/
+.claude/dev-loop/lint/
 .claude/settings.local.json
 *.tsbuildinfo
 coverage/
