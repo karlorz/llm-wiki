@@ -1,16 +1,45 @@
 #!/usr/bin/env bash
 # Shared SessionStart context helpers for skillwiki hook entrypoints.
 
-read_config_value() {
+read_workflow_config() {
     local file="$1"
-    local key="$2"
-    local line
 
-    line=$(grep -E "^[[:space:]]*${key}:" "$file" 2>/dev/null | head -n 1 || true)
-    [[ -n "$line" ]] || return 0
-
-    printf '%s' "$line" \
-        | sed -E "s/^[[:space:]]*${key}:[[:space:]]*//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//; s/^['\"]//; s/['\"]$//"
+    awk '
+        BEGIN {
+            count = 6
+            keys[1] = "workflow_selection"
+            keys[2] = "workflow_profile"
+            keys[3] = "workflow_capability"
+            keys[4] = "workflow_risk"
+            keys[5] = "prd_layer"
+            keys[6] = "prd_pipeline"
+            for (i = 1; i <= count; i += 1) allowed[keys[i]] = 1
+        }
+        /^[[:space:]]*```(yaml|yml)[[:space:]]*$/ { in_yaml = 1; next }
+        in_yaml && /^[[:space:]]*```[[:space:]]*$/ { in_yaml = 0; next }
+        in_yaml && /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:/ {
+            line = $0
+            key = line
+            sub(/[[:space:]]*:.*/, "", key)
+            if (!(key in allowed)) next
+            value = line
+            sub(/^[^:]*:[[:space:]]*/, "", value)
+            sub(/[[:space:]]+#.*$/, "", value)
+            sub(/^[[:space:]]+/, "", value)
+            sub(/[[:space:]]+$/, "", value)
+            if ((substr(value, 1, 1) == "\"" && substr(value, length(value), 1) == "\"") ||
+                (substr(value, 1, 1) == "\047" && substr(value, length(value), 1) == "\047")) {
+                value = substr(value, 2, length(value) - 2)
+            }
+            values[key] = value
+        }
+        END {
+            for (i = 1; i <= count; i += 1) {
+                key = keys[i]
+                if (key in values) printf "%s\t%s\n", key, values[key]
+            }
+        }
+    ' "$file" 2>/dev/null
 }
 
 find_dev_loop_config() {
@@ -27,29 +56,199 @@ find_dev_loop_config() {
     return 0
 }
 
-build_project_prd_context() {
-    local config_path
+build_project_workflow_context() {
+    local config_path=""
     config_path=$(find_dev_loop_config)
-    [[ -n "$config_path" ]] || return 0
+    local workflow_selection=""
+    local configured_profile=""
+    local workflow_capability=""
+    local workflow_risk=""
+    local prd_layer=""
+    local prd_pipeline=""
+    if [[ -n "$config_path" ]]; then
+        while IFS=$'\t' read -r key value; do
+            case "$key" in
+                workflow_selection) workflow_selection="$value" ;;
+                workflow_profile) configured_profile="$value" ;;
+                workflow_capability) workflow_capability="$value" ;;
+                workflow_risk) workflow_risk="$value" ;;
+                prd_layer) prd_layer="$value" ;;
+                prd_pipeline) prd_pipeline="$value" ;;
+            esac
+        done < <(read_workflow_config "$config_path")
+    fi
 
-    local prd_layer
-    local prd_pipeline
-    prd_layer=$(read_config_value "$config_path" "prd_layer")
-    prd_pipeline=$(read_config_value "$config_path" "prd_pipeline")
+    local authority="builtin_adaptive"
+    local resolved_profile=""
+    local resolved_pipeline=""
+    local workflow_status="resolved"
+    local reason=""
+    local has_policy="false"
+    local legacy_profile=""
 
-    [[ -n "$prd_layer" || -n "$prd_pipeline" ]] || return 0
+    prd_layer="${prd_layer:-manual}"
+    workflow_capability="${workflow_capability:-unknown}"
+    workflow_risk="${workflow_risk:-routine}"
 
-    prd_layer="${prd_layer:-unspecified}"
-    prd_pipeline="${prd_pipeline:-unspecified}"
+    if [[ -n "$prd_pipeline" ]]; then
+        case "$prd_pipeline" in
+            full) legacy_profile="full" ;;
+            tdd-first) legacy_profile="guided" ;;
+            single-pass|debug-only|manual) legacy_profile="native" ;;
+            *)
+                workflow_status="unresolved"
+                reason="prd_pipeline must be one of: full, tdd-first, single-pass, debug-only, manual"
+                ;;
+        esac
+    fi
+
+    if [[ -n "$workflow_selection" || -n "$configured_profile" || \
+          "$workflow_capability" != "unknown" || "$workflow_risk" != "routine" ]]; then
+        has_policy="true"
+        authority="project"
+        if [[ -z "$workflow_selection" ]]; then
+            if [[ -n "$configured_profile" ]]; then
+                workflow_selection="fixed"
+            else
+                workflow_selection="adaptive"
+            fi
+        fi
+    elif [[ -n "$prd_pipeline" ]]; then
+        workflow_selection="fixed"
+        authority="project_legacy"
+        resolved_profile="$legacy_profile"
+        if [[ "$workflow_status" == "resolved" ]]; then
+            reason="legacy explicit prd_pipeline ${prd_pipeline} maps to the ${resolved_profile} workflow profile"
+        fi
+    elif [[ -n "${DEV_LOOP_WORKFLOW_SELECTION:-}" || -n "${DEV_LOOP_WORKFLOW_PROFILE:-}" || \
+            -n "${DEV_LOOP_WORKFLOW_CAPABILITY:-}" || -n "${DEV_LOOP_WORKFLOW_RISK:-}" ]]; then
+        has_policy="true"
+        authority="user_default"
+        workflow_selection="${DEV_LOOP_WORKFLOW_SELECTION:-}"
+        configured_profile="${DEV_LOOP_WORKFLOW_PROFILE:-}"
+        workflow_capability="${DEV_LOOP_WORKFLOW_CAPABILITY:-unknown}"
+        workflow_risk="${DEV_LOOP_WORKFLOW_RISK:-routine}"
+        if [[ -z "$workflow_selection" ]]; then
+            if [[ -n "$configured_profile" ]]; then
+                workflow_selection="fixed"
+            else
+                workflow_selection="adaptive"
+            fi
+        fi
+    else
+        workflow_selection="adaptive"
+    fi
+
+    if [[ "$has_policy" == "true" ]]; then
+        case "$workflow_selection" in
+            fixed|adaptive) ;;
+            *)
+                workflow_status="unresolved"
+                reason="workflow_selection must be one of: fixed, adaptive"
+                ;;
+        esac
+        case "$configured_profile" in
+            ""|native|guided|full) ;;
+            *)
+                workflow_status="unresolved"
+                reason="workflow_profile must be one of: native, guided, full"
+                ;;
+        esac
+        case "$workflow_capability" in
+            self-directed|needs-guidance|unknown) ;;
+            *)
+                workflow_status="unresolved"
+                reason="workflow_capability must be one of: self-directed, needs-guidance, unknown"
+                ;;
+        esac
+        case "$workflow_risk" in
+            routine|elevated) ;;
+            *)
+                workflow_status="unresolved"
+                reason="workflow_risk must be one of: routine, elevated"
+                ;;
+        esac
+
+        if [[ "$workflow_status" == "resolved" && "$workflow_selection" == "fixed" && -z "$configured_profile" ]]; then
+            workflow_status="unresolved"
+            reason="fixed selection requires \`workflow_profile\`"
+        elif [[ "$workflow_status" == "resolved" && "$workflow_selection" == "adaptive" && -n "$configured_profile" ]]; then
+            workflow_status="unresolved"
+            reason="adaptive selection must not set \`workflow_profile\`; use fixed for an explicit profile"
+        elif [[ "$workflow_status" == "resolved" && "$workflow_selection" == "fixed" ]]; then
+            resolved_profile="$configured_profile"
+            reason="${authority} explicitly selected the ${resolved_profile} workflow profile"
+        elif [[ "$workflow_status" == "resolved" ]]; then
+            if [[ "$workflow_capability" == "needs-guidance" || "$workflow_risk" == "elevated" ]]; then
+                resolved_profile="guided"
+            else
+                resolved_profile="native"
+            fi
+            reason="adaptive selection chose ${resolved_profile} from capability=${workflow_capability}, risk=${workflow_risk}"
+        fi
+    elif [[ "$authority" == "builtin_adaptive" ]]; then
+        resolved_profile="native"
+        reason="built-in adaptive default chose native from capability=unknown, risk=routine"
+    fi
+
+    if [[ "$workflow_status" == "resolved" ]]; then
+        if [[ -n "$prd_pipeline" ]]; then
+            resolved_pipeline="$prd_pipeline"
+        else
+            case "$resolved_profile" in
+                native) resolved_pipeline="single-pass" ;;
+                guided) resolved_pipeline="tdd-first" ;;
+                full) resolved_pipeline="full" ;;
+            esac
+        fi
+    else
+        resolved_profile="unresolved"
+        resolved_pipeline="unresolved"
+    fi
+
+    local config_detection
+    if [[ -n "$config_path" ]]; then
+        config_detection="Detected \`.claude/dev-loop.config.md\` for this workspace."
+    else
+        config_detection="No \`.claude/dev-loop.config.md\` was found; using the built-in adaptive default."
+    fi
 
     cat <<EOF
-## Project PRD Mode
+## Project Workflow Profile
 
-Detected \`.claude/dev-loop.config.md\` for this workspace:
+${config_detection}
+- workflow status: \`${workflow_status}\`
+- \`workflow_selection\`: \`${workflow_selection}\`
+- \`workflow_profile\`: \`${resolved_profile}\`
+- \`workflow_capability\`: \`${workflow_capability}\`
+- \`workflow_risk\`: \`${workflow_risk}\`
+- authority: \`${authority}\`
+- reason: ${reason}
 - \`prd_layer\`: \`${prd_layer}\`
-- \`prd_pipeline\`: \`${prd_pipeline}\`
+- \`prd_pipeline\`: \`${resolved_pipeline}\`
 
-Use this detected PRD mode as the source of truth. Route generated spec/plan artifacts through \`proj-work\`, and do not write them under \`docs/superpowers/\`. If \`prd_layer\` is \`superpowers\` or \`tdd\`, ensure \`EnterPlanMode\` is gated with \`wiki-gate-plan-mode\`. Do not assume \`superpowers/full\` unless the config says so.
+EOF
+
+    if [[ "$workflow_status" == "unresolved" ]]; then
+        cat <<EOF
+Fail closed for workflow execution until the policy is corrected. Do not infer \`full\`, do not force Superpowers, and do not enable \`EnterPlanMode\` gating from availability evidence.
+EOF
+    elif [[ "$resolved_profile" == "full" ]]; then
+        cat <<EOF
+Explicit full compatibility workflow is active. If the configured provider uses Superpowers or TDD planning, ensure \`EnterPlanMode\` is gated with \`wiki-gate-plan-mode\`. Run the complete configured provider/pipeline flow.
+EOF
+    elif [[ "$resolved_profile" == "guided" ]]; then
+        cat <<EOF
+Use only targeted guidance for enabled stages; do not run the complete Superpowers sequence or force \`EnterPlanMode\` gating. Installed providers are optional capability sources.
+EOF
+    else
+        cat <<EOF
+Use host-native planning, implementation, tools, and subagents. Do not force Superpowers or \`EnterPlanMode\` gating. Installation proves availability, never activation.
+EOF
+    fi
+
+    cat <<EOF
+Route every generated spec/plan artifact through \`proj-work\`, and never write it under \`docs/superpowers/\`. SkillWiki remains the knowledge and provenance layer; workflow selection does not change managed-write authority.
 EOF
 }
 
@@ -254,12 +453,12 @@ resolve_skill_path() {
 
 build_skillwiki_session_context() {
     local skill_content="$1"
-    local project_prd_context
+    local project_workflow_context
     local dynamic_session_memory
     local runtime_host_context
     local session_context
 
-    project_prd_context=$(build_project_prd_context)
+    project_workflow_context=$(build_project_workflow_context)
     dynamic_session_memory=$(build_dynamic_session_memory)
     runtime_host_context=$(build_runtime_host_context)
 
@@ -272,9 +471,9 @@ build_skillwiki_session_context() {
         session_context+=$'\n\n'
         session_context+="$dynamic_session_memory"
     fi
-    if [[ -n "$project_prd_context" ]]; then
+    if [[ -n "$project_workflow_context" ]]; then
         session_context+=$'\n\n'
-        session_context+="$project_prd_context"
+        session_context+="$project_workflow_context"
     fi
     session_context+=$'\n\n'
     session_context+="$skill_content"

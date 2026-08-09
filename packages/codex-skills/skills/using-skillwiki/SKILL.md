@@ -1,21 +1,30 @@
 ---
 name: using-skillwiki
-description: Invoke at session start or when knowledge-base tasks arise — maps skillwiki skills, dev-loop alignment, and PRD/TDD routing with plan-mode gate checks
+description: Invoke at session start or when knowledge-base tasks arise — maps skillwiki skills, dev-loop alignment, adaptive workflow profiles, and vault routing
 ---
 *Note: If executing as a background subagent, skip this skill section.*
 
 # using-skillwiki
-You have skillwiki — a project-aware Karpathy-style knowledge base for Claude Code.
+You have skillwiki — a project-aware Karpathy-style knowledge base for agent harnesses.
 
 ## Last Hook Gate (SessionStart)
 
-This skill is activated by the plugin during `startup|clear|compact` lifecycle events.
+This skill is activated by the plugin during startup and clear lifecycle
+events, plus the harness-specific resume/compact event where supported.
 Use this section as procedural planning guidelines:
 
-1. If the task requires spec/plan work, route through PRD skills (not built-in plan mode).
-2. If `prd_layer` is `superpowers` or `tdd`, ensure `EnterPlanMode` is gated (`wiki-gate-plan-mode on` or `status` if uncertain).
-3. If `prd_layer` is `manual` or `none`, do not force the gate; follow project policy.
-4. Always apply the PRD bridge: spec/plan outputs go to vault work-item paths, never `docs/superpowers/`.
+1. Read the injected Project Workflow Profile before choosing orchestration or
+   provider skills. Installation proves availability, never activation.
+2. For `native`, use the host agent's built-in planning and execution. For
+   `guided`, add only targeted structure. Neither profile forces Superpowers
+   or `EnterPlanMode` gating.
+3. For explicit `full`, run the complete configured provider/pipeline. Gate
+   `EnterPlanMode` with `wiki-gate-plan-mode` only when that explicit workflow
+   uses Superpowers or TDD planning.
+4. If workflow status is unresolved, fail closed for workflow execution; do
+   not infer `full` from installed skills or provider names.
+5. Always apply the PRD bridge: spec/plan outputs go to vault work-item paths,
+   never `docs/superpowers/`.
 
 ## Activation File (Cross-Harness Alternative to SessionStart)
 
@@ -177,8 +186,9 @@ The vault is shared across hosts, so host-local absolute paths are not durable s
 
 ## dev-loop Alignment
 
-Use these skills as the knowledge layer in dev-loop. The loop remains capability-based:
-branch on capabilities (`BACKEND_CAPS`, `PRD_CAPS`), not backend names.
+Use these skills as the knowledge layer in dev-loop. The loop remains
+capability-based: resolve `WORKFLOW_PROFILE` first, then branch on capabilities
+(`BACKEND_CAPS`, `PRD_CAPS`), not backend names.
 
 Typical sequence with PRD enabled:
 `REFRESH → QUERY → WORK → SPEC → PLAN → EXECUTE → SIMPLIFY → MERGE → SAVE → RETRO`.
@@ -187,17 +197,33 @@ Typical sequence with PRD enabled:
 - `SIMPLIFY` is a quality gate before merge; keep it in the loop even for small changes.
 - For no-work cycles, run maintenance (`wiki-lint`, `wiki-audit`, `proj-distill`, `dev-loop:research`).
 
-## PRD/TDD Compatibility
+## Workflow Profile Compatibility
 
-Use `prd_layer` + `prd_pipeline` from `.claude/dev-loop.config.md` as source of truth:
+Use the resolved workflow policy from `.claude/dev-loop.config.md` and the
+SessionStart context as the source of truth:
 
-- `superpowers` + `full`: brainstorming/spec/plan/execute/review; route spec+plan through `proj-work`.
-- `tdd` + `tdd-first`: plan-first then test-driven execute; still route artifacts through `proj-work`.
-- `single-pass` or `debug-only`: may skip formal spec/plan, but if generated they still belong in vault work items.
-- `manual` / `none`: no forced PRD skills; preserve skillwiki logging and provenance discipline.
+- `native` defaults to `single-pass` and uses host-native planning,
+  implementation, tools, and subagents. Installed providers stay inactive
+  unless explicitly selected for a stage.
+- `guided` defaults to `tdd-first` and adds only targeted planning, TDD, or
+  provider capabilities. It does not imply the complete Superpowers sequence.
+- `full` defaults to `full` and runs the complete compatibility workflow. It
+  is explicit-only, including the legacy compatibility signal
+  `prd_pipeline: full` when no newer workflow policy overrides it.
+- `workflow_selection: adaptive` may choose `native` or `guided`, never
+  `full`. `workflow_selection: fixed` requires `workflow_profile`.
+- Invalid policy is unresolved and fail-closed. Goal, headless, CI, and
+  satellite sessions do not prompt for a replacement policy.
+
+`prd_layer` remains an independent provider-capability registry and
+`prd_pipeline` remains an independent stage-template override. Provider or
+cache discovery cannot select a workflow profile. Regardless of profile,
+route generated spec and plan artifacts through `proj-work`, preserve
+SkillWiki provenance, and keep the independent `simplify:simplify` review gate
+for code changes.
 
 ## CLI Backbone
-All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, health reporting, and linting. Skills invoke it via Bash for the mechanical parts and use Claude for the creative parts.
+All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, health reporting, and linting. Skills invoke it via Bash for the mechanical parts and use the active agent for the creative parts.
 Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `query`, `sources pending`, `sources disposition`, `sources dispose`, `archive`, `remove`, `drift`, `dedup`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `observe`, `canvas generate`.
 Run `skillwiki health <vault> --out /tmp/skillwiki-health.json --no-fail` for a bounded whole-system report that includes the nonblocking source-lifecycle backlog. Pending captures are informational and do not make health fail. Run `skillwiki lint <vault> --summary` for lint-only bucket counts with capped examples and details commands. Run `skillwiki doctor` to diagnose setup/runtime issues only. Run `skillwiki config list` to see current configuration.
 

@@ -121,39 +121,96 @@ exit 64
 }
 
 describe("SessionStart hook", () => {
-  it("injects detected PRD mode from project dev-loop config", () => {
+  it("defaults to the built-in adaptive native workflow without project config", () => {
     const project = tempProject();
-    writeDevLoopConfig(project, "prd_layer: tdd\nprd_pipeline: tdd-first");
 
     const context = runClaudeHook(project);
 
-    expect(context).toContain("## Project PRD Mode");
-    expect(context).toContain("Detected `.claude/dev-loop.config.md`");
-    expect(context).toContain("- `prd_layer`: `tdd`");
-    expect(context).toContain("- `prd_pipeline`: `tdd-first`");
-    expect(context).toContain("Do not assume `superpowers/full` unless the config says so.");
+    expect(context).toContain("## Project Workflow Profile");
+    expect(context).toContain("- `workflow_selection`: `adaptive`");
+    expect(context).toContain("- `workflow_profile`: `native`");
+    expect(context).toContain("- authority: `builtin_adaptive`");
+    expect(context).toContain("- `prd_layer`: `manual`");
+    expect(context).toContain("- `prd_pipeline`: `single-pass`");
+    expect(context).toContain("Do not force Superpowers or `EnterPlanMode` gating.");
   });
 
-  it("finds dev-loop config from a project subdirectory", () => {
+  it("keeps installed or configured providers inactive under fixed native", () => {
+    const project = tempProject();
+    writeDevLoopConfig(
+      project,
+      "workflow_selection: fixed\nworkflow_profile: native\nprd_layer: superpowers",
+    );
+
+    const context = runClaudeHook(project);
+
+    expect(context).toContain("## Project Workflow Profile");
+    expect(context).toContain("Detected `.claude/dev-loop.config.md`");
+    expect(context).toContain("- `workflow_selection`: `fixed`");
+    expect(context).toContain("- `workflow_profile`: `native`");
+    expect(context).toContain("- `prd_layer`: `superpowers`");
+    expect(context).toContain("- `prd_pipeline`: `single-pass`");
+    expect(context).toContain("Installation proves availability, never activation.");
+    expect(context).toContain("Do not force Superpowers or `EnterPlanMode` gating.");
+  });
+
+  it("selects guided adaptively from durable capability evidence", () => {
+    const project = tempProject();
+    writeDevLoopConfig(
+      project,
+      "workflow_selection: adaptive\nworkflow_capability: needs-guidance\nworkflow_risk: routine\nprd_layer: tdd",
+    );
+
+    const context = runClaudeHook(project);
+
+    expect(context).toContain("- `workflow_selection`: `adaptive`");
+    expect(context).toContain("- `workflow_profile`: `guided`");
+    expect(context).toContain("- `workflow_capability`: `needs-guidance`");
+    expect(context).toContain("- `prd_pipeline`: `tdd-first`");
+    expect(context).toContain("Use only targeted guidance");
+    expect(context).toContain("do not run the complete Superpowers sequence");
+  });
+
+  it("activates full only from an explicit fixed profile", () => {
+    const project = tempProject();
+    writeDevLoopConfig(
+      project,
+      "workflow_selection: fixed\nworkflow_profile: full\nprd_layer: superpowers\nprd_pipeline: full",
+    );
+
+    const context = runClaudeHook(project);
+
+    expect(context).toContain("- `workflow_profile`: `full`");
+    expect(context).toContain("- authority: `project`");
+    expect(context).toContain("Explicit full compatibility workflow is active.");
+    expect(context).toContain("ensure `EnterPlanMode` is gated with `wiki-gate-plan-mode`");
+  });
+
+  it("keeps explicit legacy superpowers full configuration compatible", () => {
     const project = tempProject();
     mkdirSync(join(project, "packages", "cli"), { recursive: true });
     writeDevLoopConfig(project, "prd_layer: superpowers\nprd_pipeline: full");
 
     const context = runClaudeHook(join(project, "packages", "cli"));
 
-    expect(context).toContain("## Project PRD Mode");
+    expect(context).toContain("- `workflow_selection`: `fixed`");
+    expect(context).toContain("- `workflow_profile`: `full`");
+    expect(context).toContain("- authority: `project_legacy`");
     expect(context).toContain("- `prd_layer`: `superpowers`");
     expect(context).toContain("- `prd_pipeline`: `full`");
   });
 
-  it("does not fail when one PRD config value is omitted", () => {
+  it("fails closed for fixed selection without a profile", () => {
     const project = tempProject();
-    writeDevLoopConfig(project, "prd_layer: tdd");
+    writeDevLoopConfig(project, "workflow_selection: fixed\nprd_layer: superpowers");
 
     const context = runClaudeHook(project);
 
-    expect(context).toContain("- `prd_layer`: `tdd`");
-    expect(context).toContain("- `prd_pipeline`: `unspecified`");
+    expect(context).toContain("- `workflow_profile`: `unresolved`");
+    expect(context).toContain("- workflow status: `unresolved`");
+    expect(context).toContain("fixed selection requires `workflow_profile`");
+    expect(context).toContain("Fail closed");
+    expect(context).not.toContain("Explicit full compatibility workflow is active.");
   });
 
   it("declares a Codex-specific SessionStart hook entrypoint", () => {
@@ -165,17 +222,29 @@ describe("SessionStart hook", () => {
     expect(hook.command).toContain("session-start-codex");
   });
 
-  it("Codex hook injects detected PRD mode without CLAUDE_PLUGIN_ROOT", () => {
+  it("Claude and Codex inject the same resolved workflow policy", () => {
     const project = tempProject();
-    writeDevLoopConfig(project, "prd_layer: tdd\nprd_pipeline: tdd-first");
+    writeDevLoopConfig(
+      project,
+      "workflow_selection: adaptive\nworkflow_risk: elevated\nprd_layer: tdd",
+    );
 
-    const context = runCodexHook(project);
+    const claudeContext = runClaudeHook(project);
+    const codexContext = runCodexHook(project);
 
-    expect(context).toContain("## Project PRD Mode");
-    expect(context).toContain("- `prd_layer`: `tdd`");
-    expect(context).toContain("- `prd_pipeline`: `tdd-first`");
-    expect(context).toContain("Skillwiki is active for this workspace.");
-    expect(context).toContain("name: using-skillwiki");
+    for (const expected of [
+      "- `workflow_selection`: `adaptive`",
+      "- `workflow_profile`: `guided`",
+      "- `workflow_risk`: `elevated`",
+      "- authority: `project`",
+      "- `prd_layer`: `tdd`",
+      "- `prd_pipeline`: `tdd-first`",
+    ]) {
+      expect(claudeContext).toContain(expected);
+      expect(codexContext).toContain(expected);
+    }
+    expect(codexContext).toContain("Skillwiki is active for this workspace.");
+    expect(codexContext).toContain("name: using-skillwiki");
   });
 
   it("root Antigravity hook reads using-skillwiki from the root skills mirror", () => {

@@ -39,6 +39,19 @@ Invoke a SkillWiki skill when the user: wants vault/wiki/knowledge-base operatio
 
 Route PRD/spec/plan work to `wiki-adapter-prd` and `proj-work`, not `docs/superpowers/`. Spec and plan outputs must land in vault work-item paths. Never create `docs/superpowers/` in any repo.
 
+## Workflow Profiles
+
+Resolve workflow policy before loading provider skills. Profiles are `native`,
+`guided`, and explicit-only `full`; selection is `adaptive` or `fixed`.
+Adaptive chooses only native or guided. Installation and cache discovery prove
+availability, never activation. Native and guided do not force Superpowers or
+plan-mode gating. Explicit full may use the complete configured provider flow;
+gate plan mode only when that flow actually uses Superpowers/TDD planning.
+Invalid fixed policy is unresolved and fail-closed. Noninteractive sessions do
+not prompt. Keep workflow profile, `prd_layer` provider, `prd_pipeline` stage
+template, SkillWiki provenance, and the independent simplify review gate as
+separate concerns.
+
 ## Fail-Closed Boundary
 
 Never write typed pages, `index.md`, or `log.md` directly. Never bare `rm` or `git rm` as a fleet delete (snapshot resurrects from S3). Never auto `npm install -g skillwiki` in headless/goal/satellite sessions. If `skillwiki page publish --help` is unavailable, fail closed.
