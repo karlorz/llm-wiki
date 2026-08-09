@@ -1,13 +1,20 @@
 import type { Result } from "@skillwiki/shared";
 
+export interface HumanOutputOptions {
+  detailHints?: readonly string[];
+}
+
 export function printJson<T>(r: Result<T>): void {
   process.stdout.write(JSON.stringify(r) + "\n");
 }
 
-export function printHuman<T>(r: Result<T>): void {
+export function printHuman<T>(r: Result<T>, opts: HumanOutputOptions = {}): void {
   if (r.ok) {
     if (typeof r.data === "object" && r.data !== null && "humanHint" in r.data) {
-      process.stdout.write(`${(r.data as { humanHint: string }).humanHint}\n`);
+      const humanHint = (r.data as { humanHint: string }).humanHint;
+      const existingLines = new Set(humanHint.split("\n"));
+      const detailLines = (opts.detailHints ?? []).filter((line) => !existingLines.has(line));
+      process.stdout.write(`${[humanHint, ...detailLines].join("\n")}\n`);
     } else {
       process.stdout.write(`OK\n${formatData(r.data)}\n`);
     }

@@ -32,6 +32,7 @@ function run(args: string[], env: NodeJS.ProcessEnv = process.env): { stdout: st
 
 const TMP_VAULT = mkdtempSync(join(tmpdir(), "smoke-vault-"));
 const RICH_VAULT = mkdtempSync(join(tmpdir(), "smoke-rich-"));
+const DETAIL_VAULT = mkdtempSync(join(tmpdir(), "smoke-detail-"));
 afterAll(() => {
   NO_MANAGED_WRITERS.cleanup();
   // tmp dirs cleaned by OS; no explicit teardown needed
@@ -53,8 +54,19 @@ function setupRichVault() {
   writeFileSync(join(RICH_VAULT, "index.md"), "# Index\n\n## Concepts\n\n- [Test](concepts/test.md)\n");
   writeFileSync(join(RICH_VAULT, "log.md"), "# Vault Log\n");
 }
+
+function setupDetailVault() {
+  writeFileSync(join(DETAIL_VAULT, "SCHEMA.md"), `# Vault Schema\n\n## Tag Taxonomy\n\n\`\`\`yaml\ntaxonomy:\n  - model\n\`\`\`\n`);
+  mkdirSync(join(DETAIL_VAULT, "raw", "articles"), { recursive: true });
+  mkdirSync(join(DETAIL_VAULT, "concepts"), { recursive: true });
+  writeFileSync(join(DETAIL_VAULT, "concepts", "bad-tag.md"), `---\ntitle: Bad tag\ntype: concept\ntags: [rogue]\nsources: []\nprovenance: research\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\n## Overview\n\nBad tag page [[bad-tag]].\n\n## Related\n\n- [[bad-tag]]\n`);
+  writeFileSync(join(DETAIL_VAULT, "concepts", "bad-source.md"), `---\ntitle: Bad source\ntype: concept\ntags: [model]\nsources: [raw/articles/missing.md]\nprovenance: research\ncreated: 2026-01-01\nupdated: 2026-01-01\n---\n\n## Overview\n\nBad source page [[bad-source]].\n\n## Related\n\n- [[bad-source]]\n`);
+  writeFileSync(join(DETAIL_VAULT, "index.md"), "# Index\n\n## Concepts\n\n- [[bad-tag]]\n- [[bad-source]]\n");
+  writeFileSync(join(DETAIL_VAULT, "log.md"), "# Vault Log\n");
+}
 setupTmpVault();
 setupRichVault();
+setupDetailVault();
 
 function makePublicationSmokeFixture(): { vault: string; draft: string; home: string } {
   const vault = mkdtempSync(join(tmpdir(), "publish-smoke-vault-"));
@@ -213,6 +225,23 @@ describe("cli smoke", () => {
     expect(human.stdout.length).toBeGreaterThan(0);
   });
 
+  it("lint human output adds error-bucket detail commands without changing JSON", () => {
+    const json = run(["lint", DETAIL_VAULT]);
+    const human = run(["lint", DETAIL_VAULT, "--human"]);
+    const summaryHuman = run(["lint", DETAIL_VAULT, "--summary", "--human"]);
+
+    expect(json.status).toBe(23);
+    expect(human.status).toBe(json.status);
+    expect(summaryHuman.status).toBe(json.status);
+    const parsed = JSON.parse(json.stdout);
+    expect(parsed.data.humanHint).not.toContain("detail: skillwiki lint");
+    expect(json.stdout).not.toContain("detail: skillwiki lint");
+    for (const output of [human.stdout, summaryHuman.stdout]) {
+      expect(output).toContain("detail: skillwiki lint --only broken_sources --examples 3");
+      expect(output).toContain("detail: skillwiki lint --only tag_not_in_taxonomy --examples 3");
+    }
+  });
+
   it("lint --summary emits bounded buckets without full item arrays", () => {
     const r = run(["lint", RICH_VAULT, "--summary"]);
     expect([0, 22, 23]).toContain(r.status);
@@ -236,6 +265,23 @@ describe("cli smoke", () => {
     expect(parsed.data.components.vault_sync.blocking).toBe(false);
     expect(parsed.data.mutated).toBe(false);
     expect(parsed.data.post_commit_ran).toBe(false);
+  });
+
+  it("health human output adds lint error-bucket detail commands without changing JSON", () => {
+    const home = mkdtempSync(join(tmpdir(), "smoke-health-detail-home-"));
+    mkdirSync(join(home, ".skillwiki"), { recursive: true });
+    const env = { ...process.env, HOME: home };
+    const args = ["health", DETAIL_VAULT, "--sync", "off", "--no-fail"];
+    const json = run(args, env);
+    const human = run([...args, "--human"], env);
+
+    expect(json.status).toBe(0);
+    expect(human.status).toBe(json.status);
+    const parsed = JSON.parse(json.stdout);
+    expect(parsed.data.humanHint).not.toContain("detail: skillwiki lint");
+    expect(json.stdout).not.toContain("detail: skillwiki lint");
+    expect(human.stdout).toContain("detail: skillwiki lint --only broken_sources --examples 3");
+    expect(human.stdout).toContain("detail: skillwiki lint --only tag_not_in_taxonomy --examples 3");
   });
 
   it("health --out does not trigger auto-commit even when report is inside the vault", () => {
