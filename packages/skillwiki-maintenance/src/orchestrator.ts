@@ -172,6 +172,7 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
           vaultPath: parsed.data.vaultPath,
           repoPath: parsed.data.repoPath,
           runCommand,
+          healthFindingsAreAdvisory: profile.data.healthFindingsAreAdvisory,
         });
         checks.push(healthSummary);
         emit({ ts: ts(), event: "job", host_id: input.hostId, job: healthSummary.job, status: healthSummary.status, reason: healthSummary.reason, details: healthSummary.details });

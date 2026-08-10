@@ -18,6 +18,7 @@ export interface ResolvedWorkflowProfile {
   runsPreflight: boolean;
   runsSelfUpdateApply: boolean;
   pushAfterCommittedWriter: boolean;
+  healthFindingsAreAdvisory: boolean;
 }
 
 interface WorkflowProfileDefinition {
@@ -29,6 +30,7 @@ interface WorkflowProfileDefinition {
   runsPreflight: boolean;
   runsSelfUpdateApply: boolean;
   pushAfterCommittedWriter: boolean;
+  healthFindingsAreAdvisory: boolean;
 }
 
 const PROFILE_DEFINITIONS: Record<MaintenanceMode, WorkflowProfileDefinition> = {
@@ -41,6 +43,7 @@ const PROFILE_DEFINITIONS: Record<MaintenanceMode, WorkflowProfileDefinition> = 
     runsPreflight: true,
     runsSelfUpdateApply: false,
     pushAfterCommittedWriter: false,
+    healthFindingsAreAdvisory: false,
   },
   daily: {
     id: "unattended-daily",
@@ -51,6 +54,7 @@ const PROFILE_DEFINITIONS: Record<MaintenanceMode, WorkflowProfileDefinition> = 
     runsPreflight: true,
     runsSelfUpdateApply: false,
     pushAfterCommittedWriter: true,
+    healthFindingsAreAdvisory: true,
   },
   "self-update": {
     id: "self-update-check",
@@ -61,6 +65,7 @@ const PROFILE_DEFINITIONS: Record<MaintenanceMode, WorkflowProfileDefinition> = 
     runsPreflight: false,
     runsSelfUpdateApply: false,
     pushAfterCommittedWriter: false,
+    healthFindingsAreAdvisory: false,
   },
   "self-update-apply": {
     id: "self-update-apply",
@@ -71,6 +76,7 @@ const PROFILE_DEFINITIONS: Record<MaintenanceMode, WorkflowProfileDefinition> = 
     runsPreflight: true,
     runsSelfUpdateApply: true,
     pushAfterCommittedWriter: false,
+    healthFindingsAreAdvisory: false,
   },
   "session-brief-refresh": {
     id: "session-brief-refresh",
@@ -81,6 +87,7 @@ const PROFILE_DEFINITIONS: Record<MaintenanceMode, WorkflowProfileDefinition> = 
     runsPreflight: true,
     runsSelfUpdateApply: false,
     pushAfterCommittedWriter: true,
+    healthFindingsAreAdvisory: false,
   },
 };
 
@@ -118,5 +125,6 @@ export function resolveWorkflowProfile(config: MaintenanceConfig, mode: Maintena
     runsPreflight: definition.runsPreflight,
     runsSelfUpdateApply: definition.runsSelfUpdateApply,
     pushAfterCommittedWriter: definition.pushAfterCommittedWriter,
+    healthFindingsAreAdvisory: definition.healthFindingsAreAdvisory,
   });
 }
