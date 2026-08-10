@@ -171,6 +171,83 @@ describe("runHealthSummary", () => {
     expect(check.status).toBe("fail");
     expect(check.reason).toContain("health status unknown");
   });
+
+  it("maps blocking error to warn when healthFindingsAreAdvisory is true", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-health-advisory-blocking-"));
+    const repo = join(root, "repo");
+    const vault = join(root, "vault");
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(vault, { recursive: true });
+
+    const check = await runHealthSummary({
+      vaultPath: vault,
+      repoPath: repo,
+      runCommand: async (command, args) => {
+        if (command !== "skillwiki") return result("", 127, `unexpected command: ${command}`);
+        writeHealthEnvelope(outputPath(args), {
+          overall_status: "error",
+          blocking_status: "error",
+          advisory_status: "error",
+          risk_flags: [{ id: "content_integrity_risk", status: "error", blocking: true }],
+          humanHint: "blocking health error detected",
+        });
+        return result("");
+      },
+      healthFindingsAreAdvisory: true,
+    });
+
+    expect(check.status).toBe("warn");
+    expect(check.reason).toContain("blocking findings are non-gating for this profile");
+    expect(check.details.blockingStatus).toBe("error");
+    expect(check.details.overallStatus).toBe("error");
+    expect(check.details.riskFlags).toEqual([
+      { id: "content_integrity_risk", status: "error", blocking: true },
+    ]);
+  });
+
+  it("still fails on unknown overall status even when healthFindingsAreAdvisory is true", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-health-advisory-unknown-"));
+    const repo = join(root, "repo");
+    const vault = join(root, "vault");
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(vault, { recursive: true });
+
+    const check = await runHealthSummary({
+      vaultPath: vault,
+      repoPath: repo,
+      runCommand: async (command, args) => {
+        if (command !== "skillwiki") return result("", 127, `unexpected command: ${command}`);
+        writeHealthEnvelope(outputPath(args), {
+          overall_status: "unknown",
+          blocking_status: "pass",
+          advisory_status: "pass",
+          humanHint: "self-check failed",
+        });
+        return result("");
+      },
+      healthFindingsAreAdvisory: true,
+    });
+
+    expect(check.status).toBe("fail");
+  });
+
+  it("still fails on health command execution error even when healthFindingsAreAdvisory is true", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-health-advisory-cmdfail-"));
+    const repo = join(root, "repo");
+    const vault = join(root, "vault");
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(vault, { recursive: true });
+
+    const check = await runHealthSummary({
+      vaultPath: vault,
+      repoPath: repo,
+      runCommand: async () => result("", 1, "skillwiki not found"),
+      healthFindingsAreAdvisory: true,
+    });
+
+    expect(check.status).toBe("fail");
+    expect(check.reason).toContain("health command failed");
+  });
 });
 
 function outputPath(args: string[]): string {

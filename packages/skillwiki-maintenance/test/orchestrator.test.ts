@@ -63,12 +63,13 @@ describe("runStage1Maintenance", () => {
     expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
   });
 
-  it("preserves successful latest-run when health-summary fails after a successful daily writer", async () => {
-    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-health-fail-state-"));
+  it("preserves successful latest-run when health-summary reports blocking error after a successful daily writer (advisory policy)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-health-advisory-"));
     const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
     const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
     const fleetPath = join(root, "fleet.yaml");
     writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const events: MaintenanceEvent[] = [];
 
     const result = await runStage1Maintenance({
       fleetPath,
@@ -76,6 +77,7 @@ describe("runStage1Maintenance", () => {
       lockDir: join(root, "lock"),
       mode: "daily",
       now: new Date("2026-06-13T00:00:00Z"),
+      emit: (event) => events.push(event),
       runCommand: async (command, args, options) => {
         if (command === "agent-memory-trends" && args[0] === "daily") {
           writeGeneratedTrendOutputs(vault);
@@ -130,15 +132,82 @@ describe("runStage1Maintenance", () => {
       },
     });
 
-    expect(result.ok).toBe(false);
+    // With the advisory policy, daily mode succeeds despite blocking health findings.
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(JSON.stringify(result, null, 2));
+
+    // latest-run.json remains success (writer was healthy).
     const latestPath = join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json");
     const latest = JSON.parse(readFileSync(latestPath, "utf8"));
     expect(latest.status).toBe("success");
     expect(latest.failure_class).toBeNull();
-    expect(latest.heartbeat).toEqual({ status: "skipped", reason: "generate-only" });
+
+    // health-summary check is warn (not fail), retains blockingStatus: error.
+    const healthCheck = result.data.checks.find((c) => c.job === "health-summary");
+    expect(healthCheck).toBeDefined();
+    expect(healthCheck!.status).toBe("warn");
+    expect((healthCheck!.details as { blockingStatus: string }).blockingStatus).toBe("error");
+    expect(healthCheck!.reason).toContain("non-gating for this profile");
+
+    // Final event is finish: pass.
+    const finishEvent = events.find((e) => e.event === "finish");
+    expect(finishEvent).toBeDefined();
+    expect(finishEvent!.status).toBe("pass");
+
+    // Vault remains clean and synchronized.
     expect(git(vault, "status", "--porcelain", "--untracked-files=all")).toBe("");
     git(vault, "fetch", "origin", "main");
     expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
+  });
+
+  it("still fails on blocking health findings in attended full mode (strict policy)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-health-strict-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "full",
+      now: new Date("2026-06-13T00:00:00Z"),
+      runCommand: async (command, args, options) => {
+        if (command === "npm" && args.join(" ") === "view skillwiki version") return commandResult("0.8.10\n");
+        if (command === "skillwiki" && args.join(" ") === "--version") return commandResult("0.8.10\n");
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          writeGeneratedTrendOutputs(vault);
+          return commandResult(JSON.stringify({
+            ok: true,
+            data: { mutations: [] },
+          }) + "\n");
+        }
+        if (command === "skillwiki" && args[0] === "session-brief") {
+          writeSessionBriefOutputs(vault);
+          return commandResult(JSON.stringify({ ok: true }) + "\n");
+        }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args), {
+            overall_status: "error",
+            blocking_status: "error",
+            advisory_status: "error",
+            risk_flags: [{ id: "content_integrity_risk", status: "error", blocking: true }],
+            humanHint: "vault health failed",
+          });
+          return commandResult("");
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure in full mode with blocking health findings");
+    const failedCheck = result.detail as { job: string; status: string };
+    expect(failedCheck.job).toBe("health-summary");
+    expect(failedCheck.status).toBe("fail");
   });
 
   it("runs session-brief-refresh as a dedicated writing profile and pushes its commit", async () => {

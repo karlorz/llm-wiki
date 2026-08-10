@@ -7,6 +7,8 @@ export interface HealthSummaryInput {
   vaultPath: string;
   repoPath: string;
   runCommand: CommandRunner;
+  /** When true, parsed blocking health findings are mapped to "warn" instead of "fail". */
+  healthFindingsAreAdvisory?: boolean;
 }
 
 type HealthStatus = "pass" | "info" | "warn" | "error" | "unknown";
@@ -72,8 +74,8 @@ export async function runHealthSummary(input: HealthSummaryInput): Promise<JobCh
     const report = parsed.data.data;
     return {
       job: "health-summary",
-      status: mapHealthReportStatus(report),
-      reason: summarize(report),
+      status: mapHealthReportStatus(report, input.healthFindingsAreAdvisory ?? false),
+      reason: summarize(report, input.healthFindingsAreAdvisory ?? false),
       details: {
         overallStatus: report.overallStatus,
         blockingStatus: report.blockingStatus,
@@ -166,11 +168,13 @@ function mapHealthStatus(status: HealthStatus): "pass" | "warn" | "fail" {
   return "pass";
 }
 
-function mapHealthReportStatus(report: ParsedHealthReport): "pass" | "warn" | "fail" {
+function mapHealthReportStatus(report: ParsedHealthReport, healthFindingsAreAdvisory: boolean): "pass" | "warn" | "fail" {
   if (report.overallStatus === "unknown") return "fail";
 
   const blocking = mapHealthStatus(report.blockingStatus);
-  if (blocking === "fail") return "fail";
+  if (blocking === "fail") {
+    return healthFindingsAreAdvisory ? "warn" : "fail";
+  }
   if (blocking === "warn") return "warn";
 
   const advisory = mapHealthStatus(report.advisoryStatus);
@@ -180,13 +184,16 @@ function mapHealthReportStatus(report: ParsedHealthReport): "pass" | "warn" | "f
   return overall === "fail" ? "warn" : overall;
 }
 
-function summarize(report: ParsedHealthReport): string {
+function summarize(report: ParsedHealthReport, healthFindingsAreAdvisory: boolean): string {
   const status = `health status ${report.overallStatus} (blocking ${report.blockingStatus}, advisory ${report.advisoryStatus})`;
+  const advisoryNote = healthFindingsAreAdvisory && report.blockingStatus === "error"
+    ? "; blocking findings are non-gating for this profile"
+    : "";
   const flagged = report.riskFlags.slice(0, 2).map((flag) => flag.id);
-  if (flagged.length > 0) return `${status}; flags: ${flagged.join(", ")}`;
+  if (flagged.length > 0) return `${status}${advisoryNote}; flags: ${flagged.join(", ")}`;
   const warned = report.warnings.slice(0, 2).map((warning) => warning.id);
-  if (warned.length > 0) return `${status}; warnings: ${warned.join(", ")}`;
-  return status;
+  if (warned.length > 0) return `${status}${advisoryNote}; warnings: ${warned.join(", ")}`;
+  return `${status}${advisoryNote}`;
 }
 
 function fail(reason: string, details: HealthSummaryDetails): JobCheck<HealthSummaryDetails> {
