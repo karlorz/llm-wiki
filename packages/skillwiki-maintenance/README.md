@@ -11,13 +11,13 @@ internal profiles while preserving the existing CLI surface:
 
 ## Current Profile Rules
 
-| CLI mode | Internal profile | Self-update check | Vault preflight | Selected jobs | Writes allowed |
-| --- | --- | --- | --- | --- | --- |
-| `full` | `attended-full` | yes | yes | `agent-memory-trends-daily`, `session-brief-refresh`, `health-summary` | yes |
-| `daily` | `unattended-daily` | no | yes | `agent-memory-trends-daily`, `health-summary` | yes, one vault writer max |
-| `self-update` | `self-update-check` | yes | no | none | no |
-| `self-update-apply` | `self-update-apply` | no | yes | none | yes, but no vault-writer jobs |
-| `session-brief-refresh` | `session-brief-refresh` | no | yes | `session-brief-refresh` | yes, one vault writer |
+| CLI mode | Internal profile | Self-update check | Vault preflight | Selected jobs | Writes allowed | Blocking health findings |
+| --- | --- | --- | --- | --- | --- | --- |
+| `full` | `attended-full` | yes | yes | `agent-memory-trends-daily`, `session-brief-refresh`, `health-summary` | yes | fatal (`fail`) |
+| `daily` | `unattended-daily` | no | yes | `agent-memory-trends-daily`, `health-summary` | yes, one vault writer max | advisory (`warn`) |
+| `self-update` | `self-update-check` | yes | no | none | no | n/a (no health job) |
+| `self-update-apply` | `self-update-apply` | no | yes | none | yes, but no vault-writer jobs | n/a (no health job) |
+| `session-brief-refresh` | `session-brief-refresh` | no | yes | `session-brief-refresh` | yes, one vault writer | n/a (no health job) |
 
 Safety invariants:
 
@@ -26,6 +26,13 @@ Safety invariants:
 - Only the declared writer jobs may mutate the vault, and later writers are skipped once one commit succeeds or fails.
 - Dedicated single-writer profiles such as `session-brief-refresh` may push their committed writer output immediately.
 - Protected hosts must reject mutating profiles.
+- `healthFindingsAreAdvisory` is a profile-level exit policy, not a health
+  tooling change: on `unattended-daily`, a successfully executed and parsed
+  health report with blocking findings maps to `warn` so pre-existing vault
+  content debt does not overturn a successful writer/push transaction. Health
+  command execution failures, missing/unreadable reports, and JSON parse
+  failures remain `fail` in every profile. `attended-full` keeps the strict
+  mapping (`fail`).
 
 ## Add A Satellite Job Safely
 
@@ -53,6 +60,9 @@ Safety invariants:
    - writer jobs
    - whether self-update check, preflight, or self-update apply runs
    - whether a committed writer should push immediately
+   - whether parsed blocking health findings are advisory for the exit outcome
+     (`healthFindingsAreAdvisory`; enable only for unattended profiles that
+     must not be overturned by pre-existing content debt)
 4. Add tests for:
    - resolved profile metadata
    - protected-host behavior
