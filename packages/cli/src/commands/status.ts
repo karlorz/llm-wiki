@@ -2,8 +2,11 @@ import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { scanVault } from "../utils/vault.js";
+import { scanVault, resolveReadOnlyVaultRoot } from "../utils/vault.js";
+import { detectFuseMount } from "../utils/s3-mount-health.js";
 import { resolveLang } from "../utils/lang.js";
+
+const FUSE_NO_MIRROR_NOTE = "FUSE vault with no read mirror - status scan may be slow";
 
 export interface StatusInput {
   vault: string;
@@ -28,6 +31,7 @@ export interface StatusOutput {
   };
   total_pages: number;
   last_modified: string;
+  read_source: "live" | "mirror" | "fuse-no-mirror";
   humanHint: string;
 }
 
@@ -38,7 +42,22 @@ export async function runStatus(
     return { exitCode: ExitCode.VAULT_PATH_INVALID, result: err("VAULT_PATH_INVALID", { vault: input.vault }) };
   }
 
-  const scan = await scanVault(input.vault);
+  // Redirect reads to the sibling git worktree on FUSE mounts (e.g. sg01's
+  // /root/wiki -> /root/wiki-git). doctor and lint already do this; status
+  // and session-brief were missing it, causing hangs on cold rclone VFS.
+  const { root: scanRoot, mirrored } = resolveReadOnlyVaultRoot(input.vault);
+  let readSource: StatusOutput["read_source"] = "live";
+  if (mirrored) {
+    readSource = "mirror";
+  } else if (detectFuseMount(input.vault)) {
+    readSource = "fuse-no-mirror";
+  }
+
+  if (readSource === "fuse-no-mirror") {
+    process.stderr.write(`warning: ${FUSE_NO_MIRROR_NOTE}\n`);
+  }
+
+  const scan = await scanVault(scanRoot);
   if (!scan.ok) {
     return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
   }
@@ -68,7 +87,7 @@ export async function runStatus(
   // Read schema version from SCHEMA.md (default "v1")
   let schemaVersion = "v1";
   try {
-    const schemaContent = await readFile(join(input.vault, "SCHEMA.md"), "utf8");
+    const schemaContent = await readFile(join(scanRoot, "SCHEMA.md"), "utf8");
     const versionMatch = schemaContent.match(/version:\s*["']?([^"'\s\n]+)/i);
     if (versionMatch) schemaVersion = versionMatch[1];
   } catch { /* default to v1 */ }
@@ -110,14 +129,20 @@ export async function runStatus(
   const totalPages = Object.values(pageCounts).reduce((a, b) => a + b, 0);
   const rawTotal = rawArticles + rawTranscripts;
 
-  const humanHint = [
+  const hintLines = [
     `vault: ${input.vault}`,
     `lang: ${langResult.value}`,
     `total: ${totalPages} pages`,
     `  entities: ${pageCounts.entities}  concepts: ${pageCounts.concepts}  comparisons: ${pageCounts.comparisons}  queries: ${pageCounts.queries}  meta: ${pageCounts.meta}`,
     `  raw: ${rawTotal}  work_items: ${workItems}  compound: ${compound}`,
     `last modified: ${lastModified.slice(0, 10)}`,
-  ].join("\n");
+  ];
+  if (readSource === "mirror") {
+    hintLines.push(`read source: mirror (${scanRoot}) - page counts may lag up to 30m`);
+  } else if (readSource === "fuse-no-mirror") {
+    hintLines.push(FUSE_NO_MIRROR_NOTE);
+  }
+  const humanHint = hintLines.join("\n");
 
   return {
     exitCode: ExitCode.OK,
@@ -128,6 +153,7 @@ export async function runStatus(
       page_counts: pageCounts,
       total_pages: totalPages,
       last_modified: lastModified,
+      read_source: readSource,
       humanHint,
     }),
   };

@@ -3,7 +3,7 @@ import { join, relative, sep } from "node:path";
 import { err, ok, ExitCode, MetaSchema, type Result } from "@skillwiki/shared";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { runLogAppend } from "./log-append.js";
-import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
+import { scanVault, readPage, resolveReadOnlyVaultRoot, type VaultPage } from "../utils/vault.js";
 import { appendLastOp } from "../utils/last-op.js";
 import { renderRootIndex, writeRootIndexProjection } from "../utils/index-projection.js";
 import { evaluateSatelliteRunHealth, satelliteLatestRunPath } from "../utils/satellite-run-health.js";
@@ -65,7 +65,10 @@ const MAX_WORDS = 900;
 export async function runSessionBrief(
   input: SessionBriefInput
 ): Promise<{ exitCode: number; result: Result<SessionBriefOutput> }> {
-  const scan = await scanVault(input.vault);
+  // Redirect reads to the sibling git worktree on FUSE mounts (same as
+  // doctor, lint, and status). Prevents hangs on sg01's rclone FUSE vault.
+  const { root: scanRoot } = resolveReadOnlyVaultRoot(input.vault);
+  const scan = await scanVault(scanRoot);
   if (!scan.ok) {
     return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
   }
@@ -93,7 +96,7 @@ export async function runSessionBrief(
       loadSatelliteHealth(input.vault),
       loadSessionPins(input.vault, project),
       project ? loadMemoryTopics(input.vault, project) : Promise.resolve([]),
-      loadPendingSources(input.vault, today),
+      loadPendingSources(scanRoot, today),
     ]);
     const healthWarnings = [
       ...baseHealthWarnings,

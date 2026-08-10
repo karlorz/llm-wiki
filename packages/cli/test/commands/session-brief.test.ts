@@ -389,6 +389,75 @@ Review a new memory source candidate.
     expect(result.result.data.brief).not.toMatch(/agent-memory-trends: last run failed/);
     expect(result.result.data.brief).not.toMatch(/agent-memory-trends: no run in/);
   });
+
+  it("uses read mirror when SKILLWIKI_VAULT_READ_MIRROR is set", async () => {
+    const vault = await makeVault();
+    mkdirSync(join(vault, "entities"), { recursive: true });
+    writeFileSync(join(vault, "entities", "foo.md"), "---\ntitle: foo\n---\nbody");
+    // Live-vault-only pending source: must NOT appear when reads go through the mirror
+    mkdirSync(join(vault, "raw", "articles"), { recursive: true });
+    writeFileSync(join(vault, "raw", "articles", "2026-08-04-live-clip.md"), `---
+title: Live-Only Clip
+source_url: https://example.com/live-clip
+ingested: 2026-08-04
+ingested_by: manual
+---
+
+Live-vault-only pending article.
+`);
+
+    // Create a mirror vault with SCHEMA.md and same structure
+    const mirror = `${vault}-git`;
+    mkdirSync(mirror, { recursive: true });
+    writeFileSync(join(mirror, "SCHEMA.md"), "# Schema\n");
+    writeFileSync(join(mirror, "index.md"), "# Index\n\n## Meta\n");
+    writeFileSync(join(mirror, "log.md"), "# Log\n");
+    mkdirSync(join(mirror, "meta"), { recursive: true });
+    mkdirSync(join(mirror, "queries"), { recursive: true });
+    mkdirSync(join(mirror, "raw", "transcripts"), { recursive: true });
+    mkdirSync(join(mirror, "projects", "llm-wiki", "work", "2026-06-11-agent-memory-trends-workflow"), { recursive: true });
+    // Mirror-only session log: proves reads come from the mirror, not the live vault
+    writeFileSync(join(mirror, "raw", "transcripts", "2026-06-12-session-log-mirror.md"), `---
+source_url:
+ingested: 2026-06-12
+kind: session-log
+---
+
+Mirror-only session log body.
+`);
+    // Mirror-only pending source: proves loadPendingSources scans the mirror, not the live vault
+    mkdirSync(join(mirror, "raw", "articles"), { recursive: true });
+    writeFileSync(join(mirror, "raw", "articles", "2026-08-05-mirror-clip.md"), `---
+title: Mirror-Only Clip
+source_url: https://example.com/mirror-clip
+ingested: 2026-08-05
+ingested_by: manual
+---
+
+Mirror-only pending article.
+`);
+
+    const prior = process.env.SKILLWIKI_VAULT_READ_MIRROR;
+    process.env.SKILLWIKI_VAULT_READ_MIRROR = mirror;
+    try {
+      const r = await runSessionBrief({ vault, project: undefined });
+      expect(r.exitCode).toBe(0);
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) throw new Error("brief failed");
+      // Live vault has 2026-06-10-session-log-cli; mirror has 2026-06-12-session-log-mirror.
+      // Brief containing the mirror log (and not the live one) proves the mirror was scanned.
+      expect(r.result.data.brief).toContain("2026-06-12-session-log-mirror");
+      expect(r.result.data.brief).not.toContain("2026-06-10-session-log-cli");
+      // Pending sources: live vault has Live-Only Clip; mirror has Mirror-Only Clip.
+      // Brief containing the mirror clip (and not the live one) proves loadPendingSources
+      // (inventorySources -> scanVault) also scans the mirror.
+      expect(r.result.data.brief).toContain("Mirror-Only Clip");
+      expect(r.result.data.brief).not.toContain("Live-Only Clip");
+    } finally {
+      if (prior === undefined) delete process.env.SKILLWIKI_VAULT_READ_MIRROR;
+      else process.env.SKILLWIKI_VAULT_READ_MIRROR = prior;
+    }
+  });
 });
 
 describe("session-brief memory authority ordering", () => {
