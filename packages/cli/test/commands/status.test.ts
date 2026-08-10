@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStatus } from "../../src/commands/status.js";
 
-// Restore all mocks after each test to prevent spy leakage into other test files.
+// Restore all mocks and env stubs after each test to prevent leakage.
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 function makeVault(): string {
@@ -28,6 +29,14 @@ function makeHome(): string {
   const h = mkdtempSync(join(tmpdir(), "home-"));
   mkdirSync(join(h, ".skillwiki"), { recursive: true });
   return h;
+}
+
+/** Create a sibling mirror vault with SCHEMA.md so resolveReadOnlyVaultRoot picks it up. */
+function makeMirror(vault: string): string {
+  const mirror = `${vault}-git`;
+  mkdirSync(mirror, { recursive: true });
+  writeFileSync(join(mirror, "SCHEMA.md"), "# Schema\n");
+  return mirror;
 }
 
 describe("runStatus", () => {
@@ -133,30 +142,21 @@ describe("runStatus", () => {
     writeFileSync(join(v, "entities", "foo.md"), "---\ntitle: foo\n---\nbody");
     writeFileSync(join(v, "entities", "bar.md"), "---\ntitle: bar\n---\nbody");
 
-    // Create a mirror vault with SCHEMA.md so resolveReadOnlyVaultRoot picks it up
-    const mirror = `${v}-git`;
-    mkdirSync(mirror, { recursive: true });
-    writeFileSync(join(mirror, "SCHEMA.md"), "# Schema\n");
+    const mirror = makeMirror(v);
     mkdirSync(join(mirror, "entities"), { recursive: true });
     writeFileSync(join(mirror, "entities", "mirror-page.md"), "---\ntitle: mirror-page\n---\nbody");
 
-    const prior = process.env.SKILLWIKI_VAULT_READ_MIRROR;
-    process.env.SKILLWIKI_VAULT_READ_MIRROR = mirror;
-    try {
-      const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
-      expect(r.exitCode).toBe(0);
-      expect(r.result.ok).toBe(true);
-      if (r.result.ok) {
-        expect(r.result.data.read_source).toBe("mirror");
-        expect(r.result.data.humanHint).toContain("read source: mirror");
-        // Live vault has 2 entities (foo.md + bar.md); mirror has 1 (mirror-page.md).
-        // entities === 1 proves the mirror was scanned, not the live vault.
-        expect(r.result.data.page_counts.entities).toBe(1);
-        expect(r.result.data.total_pages).toBe(1);
-      }
-    } finally {
-      if (prior === undefined) delete process.env.SKILLWIKI_VAULT_READ_MIRROR;
-      else process.env.SKILLWIKI_VAULT_READ_MIRROR = prior;
+    vi.stubEnv("SKILLWIKI_VAULT_READ_MIRROR", mirror);
+    const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.read_source).toBe("mirror");
+      expect(r.result.data.humanHint).toContain("read source: mirror");
+      // Live vault has 2 entities (foo.md + bar.md); mirror has 1 (mirror-page.md).
+      // entities === 1 proves the mirror was scanned, not the live vault.
+      expect(r.result.data.page_counts.entities).toBe(1);
+      expect(r.result.data.total_pages).toBe(1);
     }
   });
 
@@ -165,18 +165,12 @@ describe("runStatus", () => {
     const v = makeVault();
     writeFileSync(join(v, "entities", "foo.md"), "---\ntitle: foo\n---\nbody");
 
-    // Ensure no mirror env is set
-    const prior = process.env.SKILLWIKI_VAULT_READ_MIRROR;
-    delete process.env.SKILLWIKI_VAULT_READ_MIRROR;
-    try {
-      const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
-      expect(r.result.ok).toBe(true);
-      if (r.result.ok) {
-        expect(r.result.data.read_source).toBe("live");
-        expect(r.result.data.humanHint).not.toContain("read source: mirror");
-      }
-    } finally {
-      if (prior !== undefined) process.env.SKILLWIKI_VAULT_READ_MIRROR = prior;
+    vi.stubEnv("SKILLWIKI_VAULT_READ_MIRROR", "");
+    const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.read_source).toBe("live");
+      expect(r.result.data.humanHint).not.toContain("read source: mirror");
     }
   });
 
@@ -326,25 +320,18 @@ describe("runStatus", () => {
     writeFileSync(join(v, "entities", "foo.md"), "---\ntitle: foo\n---\nbody");
 
     // Live vault has default SCHEMA.md (no version). Mirror has version: v3.
-    const mirror = `${v}-git`;
-    mkdirSync(mirror, { recursive: true });
+    const mirror = makeMirror(v);
     writeFileSync(join(mirror, "SCHEMA.md"), "# Schema\nversion: v3\n");
     mkdirSync(join(mirror, "entities"), { recursive: true });
     writeFileSync(join(mirror, "entities", "mirror-page.md"), "---\ntitle: mirror-page\n---\nbody");
 
-    const prior = process.env.SKILLWIKI_VAULT_READ_MIRROR;
-    process.env.SKILLWIKI_VAULT_READ_MIRROR = mirror;
-    try {
-      const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
-      expect(r.result.ok).toBe(true);
-      if (r.result.ok) {
-        // schema_version should come from the mirror's SCHEMA.md (v3),
-        // not the live vault's SCHEMA.md (no version -> default v1).
-        expect(r.result.data.schema_version).toBe("v3");
-      }
-    } finally {
-      if (prior === undefined) delete process.env.SKILLWIKI_VAULT_READ_MIRROR;
-      else process.env.SKILLWIKI_VAULT_READ_MIRROR = prior;
+    vi.stubEnv("SKILLWIKI_VAULT_READ_MIRROR", mirror);
+    const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      // schema_version should come from the mirror's SCHEMA.md (v3),
+      // not the live vault's SCHEMA.md (no version -> default v1).
+      expect(r.result.data.schema_version).toBe("v3");
     }
   });
 
@@ -357,28 +344,21 @@ describe("runStatus", () => {
     // resolveReadOnlyVaultRoot returns the live path (no mirror env set),
     // but detectFuseMount returns a non-null result -> fuse-no-mirror.
     const fuseModule = await import("../../src/utils/s3-mount-health.js");
-    const spy = vi.spyOn(fuseModule, "detectFuseMount").mockReturnValue({
+    vi.spyOn(fuseModule, "detectFuseMount").mockReturnValue({
       mountPoint: v,
       fsType: "fuse.rclone",
     });
 
     const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-    const prior = process.env.SKILLWIKI_VAULT_READ_MIRROR;
-    delete process.env.SKILLWIKI_VAULT_READ_MIRROR;
-    try {
-      const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
-      expect(r.result.ok).toBe(true);
-      if (r.result.ok) {
-        expect(r.result.data.read_source).toBe("fuse-no-mirror");
-        // stderr warning should have been written before the scan completed
-        const stderrCalls = stderrWrite.mock.calls.map((c) => String(c[0]));
-        expect(stderrCalls.some((s) => s.includes("FUSE vault with no read mirror"))).toBe(true);
-      }
-    } finally {
-      if (prior !== undefined) process.env.SKILLWIKI_VAULT_READ_MIRROR = prior;
-      spy.mockRestore();
-      stderrWrite.mockRestore();
+    vi.stubEnv("SKILLWIKI_VAULT_READ_MIRROR", "");
+    const r = await runStatus({ vault: v, home: h, langEnvValue: undefined });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.read_source).toBe("fuse-no-mirror");
+      // stderr warning should have been written before the scan completed
+      const stderrCalls = stderrWrite.mock.calls.map((c) => String(c[0]));
+      expect(stderrCalls.some((s) => s.includes("FUSE vault with no read mirror"))).toBe(true);
     }
   });
 });

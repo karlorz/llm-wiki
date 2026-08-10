@@ -6,6 +6,8 @@ import { scanVault, resolveReadOnlyVaultRoot } from "../utils/vault.js";
 import { detectFuseMount } from "../utils/s3-mount-health.js";
 import { resolveLang } from "../utils/lang.js";
 
+const FUSE_NO_MIRROR_NOTE = "FUSE vault with no read mirror - status scan may be slow";
+
 export interface StatusInput {
   vault: string;
   home: string;
@@ -52,7 +54,7 @@ export async function runStatus(
   }
 
   if (readSource === "fuse-no-mirror") {
-    process.stderr.write("warning: FUSE vault with no read mirror - status scan may be slow\n");
+    process.stderr.write(`warning: ${FUSE_NO_MIRROR_NOTE}\n`);
   }
 
   const scan = await scanVault(scanRoot);
@@ -138,7 +140,7 @@ export async function runStatus(
   if (readSource === "mirror") {
     hintLines.push(`read source: mirror (${scanRoot}) - page counts may lag up to 30m`);
   } else if (readSource === "fuse-no-mirror") {
-    hintLines.push(`FUSE vault with no read mirror - status scan may be slow`);
+    hintLines.push(FUSE_NO_MIRROR_NOTE);
   }
   const humanHint = hintLines.join("\n");
 
