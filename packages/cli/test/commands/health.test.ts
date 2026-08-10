@@ -139,7 +139,17 @@ describe("runHealth", () => {
       sync: "off",
       noFail: false,
     });
-    writeFileSync(join(vault, "raw", "articles", "2026-08-02-pending.md"), "---\ntitle: Pending\nsource_url: https://example.com/pending\ningested: 2026-08-02\ningested_by: manual\n---\nBody\n");
+    // Use a relative date so the fixture stays within the 7-day "fresh" window
+    // regardless of when the suite runs (absolute dates go stale and fail CI).
+    const pendingDate = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    writeFileSync(join(vault, "raw", "articles", `${pendingDate}-pending.md`), `---
+title: Pending
+source_url: https://example.com/pending
+ingested: ${pendingDate}
+ingested_by: manual
+---
+Body
+`);
     const result = await runHealth({
       vault,
       home,
@@ -154,7 +164,7 @@ describe("runHealth", () => {
     expect(result.result.data.components.source_lifecycle).toMatchObject({
       status: "info",
       blocking: false,
-      summary: { pending: 1, fresh_pending_examples: ["raw/articles/2026-08-02-pending.md"] },
+      summary: { pending: 1, fresh_pending_examples: [`raw/articles/${pendingDate}-pending.md`] },
     });
     expect(result.result.data.coverage.source_lifecycle.state).toBe("checked");
     expect(result.result.data.risk_flags.some(flag => flag.id.includes("pending"))).toBe(false);
