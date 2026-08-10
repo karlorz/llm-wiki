@@ -51,6 +51,10 @@ export async function runStatus(
     readSource = "fuse-no-mirror";
   }
 
+  if (readSource === "fuse-no-mirror") {
+    process.stderr.write("warning: FUSE vault with no read mirror - status scan may be slow\n");
+  }
+
   const scan = await scanVault(scanRoot);
   if (!scan.ok) {
     return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
@@ -81,7 +85,7 @@ export async function runStatus(
   // Read schema version from SCHEMA.md (default "v1")
   let schemaVersion = "v1";
   try {
-    const schemaContent = await readFile(join(input.vault, "SCHEMA.md"), "utf8");
+    const schemaContent = await readFile(join(scanRoot, "SCHEMA.md"), "utf8");
     const versionMatch = schemaContent.match(/version:\s*["']?([^"'\s\n]+)/i);
     if (versionMatch) schemaVersion = versionMatch[1];
   } catch { /* default to v1 */ }
