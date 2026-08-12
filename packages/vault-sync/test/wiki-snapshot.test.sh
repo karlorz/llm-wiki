@@ -213,6 +213,9 @@ test_snapshot_preflight_refreshes_origin_main_ref_explicitly
 test_snapshot_live_materializes_with_built_cli_before_sync() {
   local root
   root="$(mktemp -d)"
+  # Remove the temp root even on unexpected exit; guard the var because the
+  # function-local `root` is unset again by the time the EXIT trap fires.
+  trap 'if [ -n "${root:-}" ]; then rm -rf "$root"; fi' EXIT
   local git_dir="$root/wiki-git"
   local bin_dir="$root/bin"
   local out_file="$root/out.txt"
@@ -237,6 +240,25 @@ STUB
 #!/bin/bash
 exit 0
 STUB
+  # The real CLI's managed-write peer gate scans ALL host processes for live
+  # managed writers; a developer's own background wiki-push/rclone/vault-sync
+  # would otherwise false-positive "live-writer-overlap" against this
+  # throwaway temp vault. Forward to the real ps, dropping only those lines.
+  cat > "$bin_dir/ps" <<'STUB'
+#!/bin/bash
+real_ps=""
+for cand in /bin/ps /usr/bin/ps; do
+  if [ -x "$cand" ]; then
+    real_ps="$cand"
+    break
+  fi
+done
+if [ -z "$real_ps" ]; then
+  exit 0
+fi
+"$real_ps" "$@" | grep -Ev '(^|[ /\\])(wiki-push|rclone|vault-sync)(\.[a-z0-9_-]+)?([[:space:]]|$)'
+exit "${PIPESTATUS[0]}"
+STUB
   cat > "$bin_dir/skillwiki" <<'STUB'
 #!/bin/bash
 exec node "$SNAPSHOT_REPO_ROOT/packages/cli/dist/cli.js" "$@"
@@ -260,7 +282,15 @@ if [ "$1" = "sync" ]; then
 fi
 exit 99
 STUB
-  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/skillwiki" "$bin_dir/rclone"
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/ps" "$bin_dir/skillwiki" "$bin_dir/rclone"
+
+  # Clean any stale managed-write lock state (HOME- or vault-local) before the
+  # real CLI's preflight runs, so a leftover lock from an earlier run cannot
+  # fail "projections materialize" with PREFLIGHT_FAILED.
+  rm -f "$root/home/.skillwiki/managed-write.lock" \
+    "$root/home/.skillwiki/sync.lock" \
+    "$root/wiki/.skillwiki/managed-write.lock" \
+    "$root/wiki/.skillwiki/sync.lock"
 
   HOME="$root/home" \
     SNAPSHOT_REPO_ROOT="$SNAPSHOT_REPO_ROOT" \
