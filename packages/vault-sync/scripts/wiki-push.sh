@@ -294,7 +294,7 @@ remote_prune_tombstoned_paths() {
         return 0
     fi
     if [ "$planned_count" -gt "$max_remote_deletes" ]; then
-        log "FAIL tombstone prune cap exceeded: $planned_count > $max_remote_deletes"
+        log "WARN tombstone prune cap exceeded: $planned_count > $max_remote_deletes (skipped $planned_count paths)"
         sed 's/^/tombstone prune skipped: /' "$plan_file" >> "$LOG_FILE"
         rm -rf "$tmp_dir"
         return 1
@@ -459,7 +459,7 @@ if [ "$RC" -eq 0 ]; then
         log "FAIL remote prune failed after rclone copy"
     fi
     if ! remote_prune_tombstoned_paths; then
-        log "FAIL tombstone prune failed after rclone copy"
+        log "WARN tombstone prune skipped (cap exceeded or deletefile failed)"
     fi
     # P1: a successful push proves markers are gone. conflict_marker_guard
     # already cleared the dedup state on the scan-success path. The pause

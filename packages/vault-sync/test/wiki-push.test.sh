@@ -693,8 +693,61 @@ test_tombstone_prunes_remote_path_after_copy() {
   rm -rf "$root"
 }
 
+# The 11 tombstones observed in production (2026-08-12T04:30Z incident) exceed
+# the default prune cap of 10. The cap is a configurable safety rail doing its
+# job — the trip must log WARN, not FAIL, and must NOT block the push.
+test_tombstone_prune_cap_exceeded_logs_warn_not_fail() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone" "$vault/meta/delete-intents"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  # 11 tombstone intents (11 > default cap of 10); remote inventory has all 11.
+  local i
+  : > "$root/remote-files.txt"
+  for i in $(seq -w 1 11); do
+    printf '{\n  "schema": "vault-delete-intent/v1",\n  "path": "projects/agent-skills/work/2026-08-11-deep-research-dev-eval-matrix/runs/smoke-2026-08-11/file-%s.md",\n  "action": "remove",\n  "created": "2026-08-12T00:00:00.000Z",\n  "host": "test",\n  "actor": "test",\n  "source": "cli",\n  "expires": null\n}\n' "$i" \
+      > "$vault/meta/delete-intents/smoke-2026-08-11__file-$i.md.json"
+    printf 'projects/agent-skills/work/2026-08-11-deep-research-dev-eval-matrix/runs/smoke-2026-08-11/file-%s.md\n' "$i" \
+      >> "$root/remote-files.txt"
+  done
+
+  local log_file
+  log_file="$(wiki_push_log_file "$home")"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_LSF_FILE="$root/remote-files.txt" \
+    RCLONE_CALLS_FILE="$root/rclone.calls" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  assert_file_contains "cap-exceeded prune logs WARN" "$log_file" "WARN tombstone prune cap exceeded"
+  if grep -q 'FAIL tombstone prune cap exceeded' "$log_file"; then
+    printf "FAIL: cap-exceeded prune must not log FAIL\n"
+    FAIL=$((FAIL + 1))
+  else
+    printf "PASS: cap-exceeded prune does not log FAIL\n"
+    PASS=$((PASS + 1))
+  fi
+  assert_eq "all 11 paths logged as tombstone prune skipped" \
+    "$(grep -c 'tombstone prune skipped:' "$log_file" 2>/dev/null || echo 0)" "11"
+  assert_eq "rclone copy runs when prune cap exceeded" \
+    "$(head -1 "$root/rclone.calls" 2>/dev/null | awk '{print $1}')" "copy"
+  rm -rf "$root"
+}
+
 test_archive_move_prunes_stale_remote_source_path_after_copy
 test_tombstone_prunes_remote_path_after_copy
+test_tombstone_prune_cap_exceeded_logs_warn_not_fail
 test_memory_cache_dirty_does_not_block_s3_push
 test_case_only_collision_blocks_publish
 test_long_path_fix_runs_before_rclone
