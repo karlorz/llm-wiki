@@ -210,6 +210,49 @@ describe("runStage1Maintenance", () => {
     expect(failedCheck.status).toBe("fail");
   });
 
+  it("attended full mode fails without committing or pushing failure state after a failed writer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-fail-full-boundary-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const fullEvents: MaintenanceEvent[] = [];
+
+    const beforeFull = readFailureState(vault);
+    const fullResult = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "full",
+      now: new Date("2026-06-13T00:00:00Z"),
+      emit: (event) => fullEvents.push(event),
+      runCommand: async (command, args, options) => {
+        if (command === "npm" && args.join(" ") === "view skillwiki version") return commandResult("0.8.10\n");
+        if (command === "skillwiki" && args.join(" ") === "--version") return commandResult("0.8.10\n");
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          return commandResult("", 1, "simulated agent-memory-trends daily failure");
+        }
+        if (command === "skillwiki" && args[0] === "session-brief") {
+          writeSessionBriefOutputs(vault);
+          return commandResult(JSON.stringify({ ok: true }) + "\n");
+        }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args));
+          return commandResult("");
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    expect(fullResult.ok).toBe(false);
+    expect(readFailureState(vault)).toEqual(beforeFull);
+    expect(git(vault, "status", "--porcelain", "--untracked-files=all")).toBe("");
+    expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
+    expect(fullEvents.find((event) => event.job === "vault-push")).toBeUndefined();
+  });
+
   it("runs session-brief-refresh as a dedicated writing profile and pushes its commit", async () => {
     const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-session-brief-mode-"));
     const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
@@ -493,6 +536,7 @@ describe("runStage1Maintenance", () => {
       fleetPath,
       hostId: "sg02",
       lockDir: join(root, "lock"),
+      mode: "daily",
       now: new Date("2026-06-13T00:00:00Z"),
       runCommand: async (command, args, options) => {
         if (command === "npm" && args.join(" ") === "view skillwiki version") return commandResult("0.8.10\n");
@@ -519,6 +563,200 @@ describe("runStage1Maintenance", () => {
     expect(latest.failure_class).toBe("AGENT_MEMORY_TRENDS_DAILY_FAILED");
     expect(latest.heartbeat).toEqual({ status: "skipped", reason: "writer failed" });
     expect(latest.changed_files).toEqual([]);
+  });
+
+  it("daily mode commits and pushes the tracked failure state after a failed writer", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-fail-recovery-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const events: MaintenanceEvent[] = [];
+
+    const first = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "daily",
+      now: new Date("2026-06-13T00:00:00Z"),
+      emit: (event) => events.push(event),
+      runCommand: async (command, args, options) => {
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          writeFailedTrendOutputs(vault);
+          return commandResult("", 1, "simulated agent-memory-trends daily failure");
+        }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args));
+          return commandResult("");
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    expect(first.ok).toBe(false);
+    expect(readFailureState(vault)).toMatchObject({
+      status: "fail",
+      failure_class: "AGENT_MEMORY_TRENDS_DAILY_FAILED",
+      changed_files: [],
+      heartbeat: { status: "skipped", reason: "writer failed" },
+    });
+    expect(git(vault, "status", "--porcelain", "--untracked-files=all")).toBe("");
+    expect(git(vault, "log", "-1", "--pretty=%s")).toBe("chore(agent-memory): record failed daily run");
+    expect(git(vault, "show", "--format=", "--name-only", "HEAD").trim().split("\n")).toEqual([
+      ".skillwiki/agent-memory-trends/latest-run.json",
+    ]);
+    expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
+    expect(events.find((event) => event.event === "job" && event.job === "agent-memory-trends-daily")?.status).toBe("fail");
+    expect(events.find((event) => event.event === "job" && event.job === "vault-push")?.status).toBe("pass");
+  });
+
+  it("returns MAINTENANCE_PUSH_FAILED when the committed daily failure state cannot be pushed", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-fail-recovery-push-error-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+
+    const gitCalls: string[][] = [];
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "daily",
+      now: new Date("2026-06-13T00:00:00Z"),
+      runCommand: async (command, args, options) => {
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          writeFailedTrendOutputs(vault);
+          return commandResult("", 1, "simulated agent-memory-trends daily failure");
+        }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args));
+          return commandResult("");
+        }
+        if (command === "git") {
+          gitCalls.push(args);
+          if (args.includes("push") && !args.includes("--dry-run")) {
+            return commandResult("", 1, "simulated git push failure");
+          }
+          if (args.includes("fetch") && gitCalls.some((call) => call.includes("push") && !call.includes("--dry-run"))) {
+            return commandResult("", 1, "simulated git fetch failure");
+          }
+          return runGit(args, options.cwd);
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    expect(gitCalls.filter((args) => args.includes("push") && !args.includes("--dry-run"))).toHaveLength(1);
+    expect(result).toMatchObject({
+      ok: false,
+      error: "MAINTENANCE_PUSH_FAILED",
+      detail: { detail: expect.stringContaining("fetch before retry failed") },
+    });
+    expect(git(vault, "log", "-1", "--pretty=%s")).toBe("chore(agent-memory): record failed daily run");
+    expect(git(vault, "status", "--porcelain", "--untracked-files=all")).toBe("");
+    expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("1\t0");
+  });
+
+  it("surfaces a failure-state persistence failure without masking the original writer failure", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-fail-persist-error-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const events: MaintenanceEvent[] = [];
+
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir: join(root, "lock"),
+      mode: "daily",
+      now: new Date("2026-06-13T00:00:00Z"),
+      emit: (event) => events.push(event),
+      runCommand: async (command, args, options) => {
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          return commandResult("", 1, "simulated agent-memory-trends daily failure");
+        }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args));
+          return commandResult("");
+        }
+        if (command === "git" && args.includes("add")) return commandResult("", 1, "simulated git add failure");
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected maintenance to fail");
+    // The original writer failure stays the primary maintenance failure.
+    expect(result.detail).toMatchObject({ job: "agent-memory-trends-daily", status: "fail" });
+    expect((result.detail as { reason: string }).reason).toBe("writing job failed before commit");
+    // The persistence failure is surfaced explicitly, not silently ignored.
+    const persistenceError = events.find((event) => event.event === "error");
+    expect(persistenceError).toBeDefined();
+    expect(persistenceError?.status).toBe("fail");
+    expect(persistenceError?.reason).toContain("failure-state persistence failed");
+    expect(persistenceError?.reason).toContain("simulated git add failure");
+    expect(git(vault, "status", "--porcelain", "--untracked-files=all")).toBe("M .skillwiki/agent-memory-trends/latest-run.json");
+    expect(events.find((event) => event.job === "vault-push")).toBeUndefined();
+  });
+
+  it("does not wedge the next daily run after a failed writer persisted failure state", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-fail-recovery-next-run-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+
+    const runDaily = async (trendsSucceeds: boolean, now: Date) =>
+      runStage1Maintenance({
+        fleetPath,
+        hostId: "sg02",
+        lockDir: join(root, "lock"),
+        mode: "daily",
+        now,
+        runCommand: async (command, args, options) => {
+          if (command === "agent-memory-trends" && args[0] === "daily") {
+            if (!trendsSucceeds) return commandResult("", 1, "simulated agent-memory-trends daily failure");
+            writeGeneratedTrendOutputs(vault);
+            return commandResult(JSON.stringify({
+              ok: true,
+              data: {
+                mutations: [
+                  ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+                  ".skillwiki/agent-memory-trends/latest-run.json",
+                  "queries/2026-06-13-agent-memory-trends-digest.md",
+                ],
+              },
+            }) + "\n");
+          }
+          if (command === "skillwiki" && args[0] === "health") {
+            writeHealthReport(outputPath(args));
+            return commandResult("");
+          }
+          if (command === "node") return runNode(args, options.cwd);
+          if (command === "git") return runGit(args, options.cwd);
+          return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+        },
+      });
+
+    const first = await runDaily(false, new Date("2026-06-13T00:00:00Z"));
+    const second = await runDaily(true, new Date("2026-06-14T00:00:00Z"));
+
+    expect(first.ok).toBe(false);
+    expect(second.ok).toBe(true);
+    expect(git(vault, "status", "--porcelain", "--untracked-files=all")).toBe("");
+    expect(git(vault, "rev-list", "--left-right", "--count", "HEAD...origin/main")).toBe("0\t0");
+    expect(readFailureState(vault).status).not.toBe("fail");
+    expect(git(vault, "log", "--format=%s", "-2").split("\n")).toEqual([
+      "research(agent-memory): daily digest",
+      "chore(agent-memory): record failed daily run",
+    ]);
   });
 
   it("does not run later writing jobs after agent-memory-trends-daily fails", async () => {
@@ -633,10 +871,27 @@ function createSyncedVault(origin: string, vault: string): string {
   git(vault, "config", "user.email", "skillwiki-maintenance@example.invalid");
   git(vault, "config", "user.name", "SkillWiki Maintenance Test");
   mkdirSync(join(vault, "meta"), { recursive: true });
-  mkdirSync(join(vault, ".skillwiki"), { recursive: true });
+  mkdirSync(join(vault, ".skillwiki", "agent-memory-trends"), { recursive: true });
   writeFileSync(join(vault, "index.md"), "# Index\n\n## Meta\n", "utf8");
   writeFileSync(join(vault, "log.md"), "# Log\n", "utf8");
-  git(vault, "add", "index.md", "log.md");
+  // Commit a previous latest-run.json so failure-state tests exercise a tracked state file.
+  writeFileSync(
+    join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"),
+    JSON.stringify({
+      run_date: "2026-06-12",
+      run_id: "2026-06-12T00-00-00Z",
+      status: "success",
+      started_at: "2026-06-12T00:00:00Z",
+      finished_at: "2026-06-12T00:00:01Z",
+      selected_candidate_count: 0,
+      task_capture_count: 0,
+      changed_files: [],
+      failure_class: null,
+      heartbeat: { status: "skipped", reason: "generate-only" },
+    }, null, 2) + "\n",
+    "utf8"
+  );
+  git(vault, "add", "index.md", "log.md", ".skillwiki/agent-memory-trends/latest-run.json");
   git(vault, "commit", "-m", "initial");
   git(vault, "branch", "-M", "main");
   git(vault, "remote", "add", "origin", origin);
@@ -661,6 +916,12 @@ function writeGeneratedTrendOutputs(vault: string): void {
   writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-13-run.json"), "{}\n", "utf8");
   writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"), "{}\n", "utf8");
   writeFileSync(join(vault, "queries", "2026-06-13-agent-memory-trends-digest.md"), "# Digest\n", "utf8");
+}
+
+function writeFailedTrendOutputs(vault: string): void {
+  mkdirSync(join(vault, ".skillwiki", "agent-memory-trends"), { recursive: true });
+  writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-13-run.json"), "{\"status\":\"failure\"}\n", "utf8");
+  writeFileSync(join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"), "{\"status\":\"failure\"}\n", "utf8");
 }
 
 function writeHealthReport(
@@ -746,4 +1007,8 @@ function git(repo: string, ...args: string[]): string {
 
 function commandResult(stdout = "", exitCode = 0, stderr = ""): CommandRunResult {
   return { exitCode, stdout, stderr };
+}
+
+function readFailureState(vault: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"), "utf8")) as Record<string, unknown>;
 }

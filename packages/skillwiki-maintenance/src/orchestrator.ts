@@ -10,6 +10,7 @@ import { runSessionBriefRefresh } from "./jobs/session-brief-refresh.js";
 import { runVaultSyncPreflight } from "./jobs/vault-sync-preflight.js";
 import { acquireLock } from "./lock.js";
 import { resolveWorkflowProfile } from "./profiles.js";
+import { runWriteTransaction, type WriteTransactionDetails } from "./write-transaction.js";
 import { err, ok, type CommandRunner, type JobCheck, type MaintenanceMode, type Result } from "./types.js";
 
 export interface RunMaintenanceInput {
@@ -127,22 +128,23 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
           runCommand,
         });
         checks.push(trendsDaily);
-        if (trendsDaily.status === "fail") {
-          const jobError = trendsDaily.details.jobError;
-          writeLatestRunStateOnly(
-            parsed.data.vaultPath,
-            latestRunFailEntry({
-              now: input.now,
-              startedAt: trendsStartedAt,
-              failureClassCode: jobError?.error ?? "AGENT_MEMORY_TRENDS_DAILY_FAILED",
-              heartbeatReason: "writer failed",
-            })
-          );
-        }
         writeFailed = trendsDaily.status === "fail";
         writeCommitted = trendsDaily.details.committed;
+        let persisted: JobCheck<WriteTransactionDetails<{ latestRunPath: string }>> | undefined;
+        if (trendsDaily.status === "fail" && profile.data.id === "unattended-daily") {
+          persisted = await persistFailedTrendsRunState({
+            vaultPath: parsed.data.vaultPath,
+            runCommand,
+            now: input.now,
+            startedAt: trendsStartedAt,
+            failureClassCode: trendsDaily.details.jobError?.error ?? "AGENT_MEMORY_TRENDS_DAILY_FAILED",
+          });
+        }
         emit({ ts: ts(), event: "job", host_id: input.hostId, job: trendsDaily.job, status: trendsDaily.status, reason: trendsDaily.reason, details: trendsDaily.details });
-        if (profile.data.pushAfterCommittedWriter && trendsDaily.status === "pass" && trendsDaily.details.committed) {
+        if (persisted?.status === "fail") {
+          checks.push(persisted);
+          emit({ ts: ts(), event: "error", host_id: input.hostId, job: persisted.job, status: "fail", reason: `failure-state persistence failed: ${persisted.reason}`, details: persisted.details });
+        } else if (profile.data.pushAfterCommittedWriter && (trendsDaily.details.committed || persisted?.details.committed)) {
           const pushed = await pushVaultChanges(parsed.data.vaultPath, runCommand);
           emit({ ts: ts(), event: "job", host_id: input.hostId, job: "vault-push", status: pushed.ok ? "pass" : "fail", reason: pushed.ok ? "pushed maintenance commit to origin/main" : pushed.detail, details: pushed.ok ? {} : pushed });
           if (!pushed.ok) return err("MAINTENANCE_PUSH_FAILED", pushed);
@@ -289,4 +291,37 @@ function writeLatestRunStateOnly(vault: string, entry: LatestRunFailureEntry): R
   } catch (error) {
     return err("RUN_STATE_WRITE_FAILED", error instanceof Error ? error.message : String(error));
   }
+}
+
+/**
+ * Persist a failed trends run's state through the write transaction so the
+ * vault stays clean and the failure is recoverable on the next unattended
+ * daily run. Recovery metadata only: the writer failure remains the primary
+ * maintenance failure, and the single-file allowlist must not publish any
+ * leftover artifacts from the failed writer.
+ */
+async function persistFailedTrendsRunState(input: {
+  vaultPath: string;
+  runCommand: CommandRunner;
+  now: Date;
+  startedAt: string;
+  failureClassCode: string;
+}): Promise<JobCheck<WriteTransactionDetails<{ latestRunPath: string }>>> {
+  return runWriteTransaction({
+    job: "agent-memory-trends-daily",
+    repoPath: input.vaultPath,
+    allowlist: [".skillwiki/agent-memory-trends/latest-run.json"],
+    commitMessage: "chore(agent-memory): record failed daily run",
+    runCommand: input.runCommand,
+    run: async () =>
+      writeLatestRunStateOnly(
+        input.vaultPath,
+        latestRunFailEntry({
+          now: input.now,
+          startedAt: input.startedAt,
+          failureClassCode: input.failureClassCode,
+          heartbeatReason: "writer failed",
+        })
+      ),
+  });
 }
