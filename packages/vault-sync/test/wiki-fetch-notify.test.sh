@@ -400,5 +400,363 @@ test_non_executable_pull_helper_runs_via_bash
 test_pull_on_delta_respects_existing_sync_lock
 test_existing_handoff_skips_pull_and_backs_off_notification
 
+# ---------------------------------------------------------------------------
+# P2 handoff hard-pause (2026-08-12 design)
+# Verifies: WIKI_FETCH_HANDOFF_HARD_PAUSE=0 disables the hard pause
+# (legacy behavior); WIKI_FETCH_HANDOFF_HARD_PAUSE_CYCLES threshold triggers
+# the persistent-handoff log line and writes the .paused marker.
+# ---------------------------------------------------------------------------
+
+# (f) no handoff, no pause. The script should log "OK behind=N delta=..."
+# and not write the .paused marker.
+test_p2_no_handoff_no_pause() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local remote="$root/origin.git"
+  local vault="$root/wiki"
+  local script_dir="$root/scripts"
+  mkdir -p "$vault" "$script_dir/lib"
+  git init --bare "$remote" >/dev/null
+  git -C "$vault" init >/dev/null
+  git -C "$vault" branch -M main
+  git -C "$vault" remote add origin "$remote"
+  printf 'base\n' > "$vault/note.md"
+  git_commit "$vault" init
+  git -C "$vault" push -u origin main >/dev/null
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"; }
+STUB
+  cat > "$script_dir/lib/lockfile.sh" <<'STUB'
+lockfile_acquire() { return 0; }
+STUB
+
+  mkdir -p "$home/cache/wiki-fetch"
+  printf '0' > "$home/cache/wiki-fetch/last-behind"
+  printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
+
+  HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_HANDOFF_HARD_PAUSE=1 \
+    WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
+    "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+
+  local log
+  log="$home/logs/wiki-fetch.log"
+  if [ -f "$log" ] && grep -q 'OK behind' "$log"; then
+    printf "PASS: P2(f) no handoff produces an OK behind line\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P2(f) no handoff should produce an OK behind line (log=%s)\n" "$log"
+    FAIL=$((FAIL + 1))
+  fi
+  if [ ! -f "$home/cache/wiki-fetch/wiki-fetch.paused" ]; then
+    printf "PASS: P2(f) pause marker is absent when there is no handoff\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P2(f) pause marker should not exist when there is no handoff\n"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+# (g) handoff present → reminder-backoff. The first invocation of the
+# handoff case emits a NOTIFY line; subsequent invocations emit SKIP PULL
+# reminder-backoff lines. The cycle counter starts at 0 and increments.
+test_p2_handoff_present_reminder_backoff() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local remote="$root/origin.git"
+  local vault="$root/wiki"
+  local script_dir="$root/scripts"
+  local notify_log="$root/notify.log"
+  mkdir -p "$vault" "$script_dir/lib"
+  git init --bare "$remote" >/dev/null
+  git -C "$vault" init >/dev/null
+  git -C "$vault" branch -M main
+  git -C "$vault" remote add origin "$remote"
+  printf 'base\n' > "$vault/note.md"
+  git_commit "$vault" init
+  git -C "$vault" push -u origin main >/dev/null
+  local head
+  head="$(git -C "$vault" rev-parse HEAD)"
+
+  # Advance the remote so BEHIND > 0.
+  git clone --branch main "$remote" "$root/remote-work" >/dev/null
+  printf 'remote\n' > "$root/remote-work/remote.md"
+  git_commit "$root/remote-work" "remote advance"
+  git -C "$root/remote-work" push origin main >/dev/null
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  cp "$(cd "$(dirname "$SOURCE_SCRIPT")" && pwd)/lib/git-operation-journal.sh" \
+    "$script_dir/lib/git-operation-journal.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"; }
+STUB
+  cat > "$script_dir/lib/lockfile.sh" <<'STUB'
+lockfile_acquire() { return 0; }
+STUB
+  cat > "$script_dir/wiki-pull-with-auto-resolve.sh" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+  chmod +x "$script_dir/wiki-pull-with-auto-resolve.sh"
+
+  # shellcheck source=/dev/null
+  . "$script_dir/lib/git-operation-journal.sh"
+  vault_sync_op_begin "$vault" "op-p2g" "main" "$head" "$head" "lock:test" "test" "hash"
+  vault_sync_op_mark_review_required "$vault" "op-p2g" "semantic-conflict"
+
+  mkdir -p "$home/cache/wiki-fetch"
+  printf '1' > "$home/cache/wiki-fetch/last-behind"
+  printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
+
+  # First invocation - NOTIFY line.
+  HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+    WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
+    WIKI_FETCH_HANDOFF_HARD_PAUSE=1 WIKI_FETCH_HANDOFF_HARD_PAUSE_CYCLES=12 \
+    NOTIFY_LOG="$notify_log" \
+    "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+
+  local log
+  log="$home/logs/wiki-fetch.log"
+  if grep -q 'NOTIFY handoff identity' "$log"; then
+    printf "PASS: P2(g) first invocation emits a NOTIFY line for the handoff\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P2(g) first invocation should emit a NOTIFY line (log=%s)\n" "$log"
+    FAIL=$((FAIL + 1))
+  fi
+  if [ -f "$home/cache/wiki-fetch/handoff-cycle-counter" ]; then
+    local counter
+    counter="$(cat "$home/cache/wiki-fetch/handoff-cycle-counter" 2>/dev/null | tr -d '[:space:]')"
+    assert_eq "P2(g) counter is reset to 0 on the first NOTIFY" "$counter" "0"
+  else
+    printf "FAIL: P2(g) counter file should be created on the first NOTIFY\n"
+    FAIL=$((FAIL + 1))
+  fi
+
+  # Subsequent invocations within the backoff - SKIP PULL reminder-backoff.
+  for _ in 1 2 3; do
+    HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+      WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
+      WIKI_FETCH_HANDOFF_HARD_PAUSE=1 WIKI_FETCH_HANDOFF_HARD_PAUSE_CYCLES=12 \
+      NOTIFY_LOG="$notify_log" \
+      "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+  done
+
+  if [ -f "$home/cache/wiki-fetch/handoff-cycle-counter" ]; then
+    local counter
+    counter="$(cat "$home/cache/wiki-fetch/handoff-cycle-counter" 2>/dev/null | tr -d '[:space:]')"
+    assert_eq "P2(g) counter increments to 3 after 3 reminder-backoff cycles" "$counter" "3"
+  else
+    printf "FAIL: P2(g) counter file should exist after reminder-backoff cycles\n"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+# (h) handoff persists past the threshold cycles. After 3 cycles of
+# reminder-backoff (threshold=3), the script logs the persistent-handoff
+# line and writes the .paused marker.
+test_p2_handoff_persists_writes_pause_marker() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local remote="$root/origin.git"
+  local vault="$root/wiki"
+  local script_dir="$root/scripts"
+  local notify_log="$root/notify.log"
+  mkdir -p "$vault" "$script_dir/lib"
+  git init --bare "$remote" >/dev/null
+  git -C "$vault" init >/dev/null
+  git -C "$vault" branch -M main
+  git -C "$vault" remote add origin "$remote"
+  printf 'base\n' > "$vault/note.md"
+  git_commit "$vault" init
+  git -C "$vault" push -u origin main >/dev/null
+  local head
+  head="$(git -C "$vault" rev-parse HEAD)"
+
+  # Advance the remote so BEHIND > 0.
+  git clone --branch main "$remote" "$root/remote-work" >/dev/null
+  printf 'remote\n' > "$root/remote-work/remote.md"
+  git_commit "$root/remote-work" "remote advance"
+  git -C "$root/remote-work" push origin main >/dev/null
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  cp "$(cd "$(dirname "$SOURCE_SCRIPT")" && pwd)/lib/git-operation-journal.sh" \
+    "$script_dir/lib/git-operation-journal.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"; }
+STUB
+  cat > "$script_dir/lib/lockfile.sh" <<'STUB'
+lockfile_acquire() { return 0; }
+STUB
+  cat > "$script_dir/wiki-pull-with-auto-resolve.sh" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+  chmod +x "$script_dir/wiki-pull-with-auto-resolve.sh"
+
+  # shellcheck source=/dev/null
+  . "$script_dir/lib/git-operation-journal.sh"
+  vault_sync_op_begin "$vault" "op-p2h" "main" "$head" "$head" "lock:test" "test" "hash"
+  vault_sync_op_mark_review_required "$vault" "op-p2h" "semantic-conflict"
+
+  mkdir -p "$home/cache/wiki-fetch"
+  printf '1' > "$home/cache/wiki-fetch/last-behind"
+  printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
+
+  # First invocation - NOTIFY.
+  HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+    WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
+    WIKI_FETCH_HANDOFF_HARD_PAUSE=1 WIKI_FETCH_HANDOFF_HARD_PAUSE_CYCLES=3 \
+    NOTIFY_LOG="$notify_log" \
+    "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+
+  # Three more reminder-backoff cycles (threshold = 3, so 3 should trigger).
+  for _ in 1 2 3; do
+    HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+      WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
+      WIKI_FETCH_HANDOFF_HARD_PAUSE=1 WIKI_FETCH_HANDOFF_HARD_PAUSE_CYCLES=3 \
+      NOTIFY_LOG="$notify_log" \
+      "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+  done
+
+  local log
+  log="$home/logs/wiki-fetch.log"
+  if grep -q 'handoff persistent — pausing fetch' "$log"; then
+    printf "PASS: P2(h) persistent-handoff line is logged after threshold cycles\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P2(h) persistent-handoff line is missing (log=%s)\n" "$log"
+    FAIL=$((FAIL + 1))
+  fi
+  if [ -f "$home/cache/wiki-fetch/wiki-fetch.paused" ]; then
+    printf "PASS: P2(h) pause marker file is written when the threshold is reached\n"
+    PASS=$((PASS + 1))
+    if grep -q 'handoff-persistent-past-threshold' "$home/cache/wiki-fetch/wiki-fetch.paused"; then
+      printf "PASS: P2(h) pause marker has the expected reason field\n"
+      PASS=$((PASS + 1))
+    else
+      printf "FAIL: P2(h) pause marker is missing the expected reason\n"
+      FAIL=$((FAIL + 1))
+    fi
+  else
+    printf "FAIL: P2(h) pause marker file is missing after the threshold\n"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+# (i) WIKI_FETCH_HANDOFF_HARD_PAUSE=0 bypasses the hard pause. The counter
+# is not created and the persistent-handoff line is never logged, even after
+# many cycles.
+test_p2_disable_env_var_bypasses_hard_pause() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local remote="$root/origin.git"
+  local vault="$root/wiki"
+  local script_dir="$root/scripts"
+  local notify_log="$root/notify.log"
+  mkdir -p "$vault" "$script_dir/lib"
+  git init --bare "$remote" >/dev/null
+  git -C "$vault" init >/dev/null
+  git -C "$vault" branch -M main
+  git -C "$vault" remote add origin "$remote"
+  printf 'base\n' > "$vault/note.md"
+  git_commit "$vault" init
+  git -C "$vault" push -u origin main >/dev/null
+  local head
+  head="$(git -C "$vault" rev-parse HEAD)"
+
+  # Advance the remote so BEHIND > 0.
+  git clone --branch main "$remote" "$root/remote-work" >/dev/null
+  printf 'remote\n' > "$root/remote-work/remote.md"
+  git_commit "$root/remote-work" "remote advance"
+  git -C "$root/remote-work" push origin main >/dev/null
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  cp "$(cd "$(dirname "$SOURCE_SCRIPT")" && pwd)/lib/git-operation-journal.sh" \
+    "$script_dir/lib/git-operation-journal.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"; }
+STUB
+  cat > "$script_dir/lib/lockfile.sh" <<'STUB'
+lockfile_acquire() { return 0; }
+STUB
+  cat > "$script_dir/wiki-pull-with-auto-resolve.sh" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+  chmod +x "$script_dir/wiki-pull-with-auto-resolve.sh"
+
+  # shellcheck source=/dev/null
+  . "$script_dir/lib/git-operation-journal.sh"
+  vault_sync_op_begin "$vault" "op-p2i" "main" "$head" "$head" "lock:test" "test" "hash"
+  vault_sync_op_mark_review_required "$vault" "op-p2i" "semantic-conflict"
+
+  mkdir -p "$home/cache/wiki-fetch"
+  printf '1' > "$home/cache/wiki-fetch/last-behind"
+  printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
+
+  for _ in 1 2 3 4 5; do
+    HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+      WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
+      WIKI_FETCH_HANDOFF_HARD_PAUSE=0 \
+      NOTIFY_LOG="$notify_log" \
+      "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+  done
+
+  local log
+  log="$home/logs/wiki-fetch.log"
+  if [ ! -f "$home/cache/wiki-fetch/handoff-cycle-counter" ]; then
+    printf "PASS: P2(i) counter file is not created when hard pause is disabled\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P2(i) counter file should not exist when hard pause is disabled\n"
+    FAIL=$((FAIL + 1))
+  fi
+  if [ ! -f "$home/cache/wiki-fetch/wiki-fetch.paused" ]; then
+    printf "PASS: P2(i) pause marker is not written when hard pause is disabled\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P2(i) pause marker should not exist when hard pause is disabled\n"
+    FAIL=$((FAIL + 1))
+  fi
+  if ! grep -q 'handoff persistent — pausing fetch' "$log"; then
+    printf "PASS: P2(i) persistent-handoff line is not logged when hard pause is disabled\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P2(i) persistent-handoff line should not appear when hard pause is disabled\n"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_p2_no_handoff_no_pause
+test_p2_handoff_present_reminder_backoff
+test_p2_handoff_persists_writes_pause_marker
+test_p2_disable_env_var_bypasses_hard_pause
+
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

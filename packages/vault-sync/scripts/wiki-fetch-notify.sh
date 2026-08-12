@@ -32,6 +32,21 @@ HANDOFF_NOTIFY_AFTER_SECONDS="${WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS:-3600}"
 case "$HANDOFF_NOTIFY_AFTER_SECONDS" in
   ''|*[!0-9]*) HANDOFF_NOTIFY_AFTER_SECONDS=3600 ;;
 esac
+# P2 handoff hard-pause (2026-08-12 design, see projects/llm-wiki/architecture/2026-08-12-wiki-push-fail-dedup-design.md)
+# WIKI_FETCH_HANDOFF_HARD_PAUSE=1 enables the hard pause; default is 0 (opt-in
+# per design Q3) so the legacy reminder-backoff behavior is preserved.
+# WIKI_FETCH_HANDOFF_HARD_PAUSE_CYCLES controls the threshold of consecutive
+# 5-min cycles of the same handoff identity before pausing the fetch job
+# (default 13 cycles — one past the 1h HANDOFF_NOTIFY_AFTER_SECONDS mark at
+# StartInterval=300, so the counter can reach the threshold before the
+# notify resets it; the design's "1-hour hard pause" intent is preserved).
+FETCH_HARD_PAUSE="${WIKI_FETCH_HANDOFF_HARD_PAUSE:-0}"
+FETCH_HARD_PAUSE_CYCLES="${WIKI_FETCH_HANDOFF_HARD_PAUSE_CYCLES:-13}"
+case "$FETCH_HARD_PAUSE_CYCLES" in
+  ''|*[!0-9]*) FETCH_HARD_PAUSE_CYCLES=13 ;;
+esac
+FETCH_HARD_PAUSE_COUNTER_FILE="$STATE_DIR/handoff-cycle-counter"
+FETCH_HARD_PAUSE_MARKER="$STATE_DIR/wiki-fetch.paused"
 # Opt-in: when enabled, a positive delta triggers `git pull --rebase` so the
 # local working tree consumes sg01 Snapshot commits automatically. This
 # replaces the git pull that was previously bundled inside wiki-push.sh's
@@ -43,6 +58,15 @@ LOG_FILE="$(platform_log_dir)/wiki-fetch.log"
 
 mkdir -p "$STATE_DIR" "$(dirname "$LOG_FILE")"
 
+# Terminal-state check: if the pause marker exists from a prior incident,
+# the launchd job is already unloaded. Honor the pause — log once and exit
+# without re-fetching or re-notifying. The user clears this by removing
+# the marker and re-loading the plist (per design Q1, B).
+if [ -f "$FETCH_HARD_PAUSE_MARKER" ]; then
+  log "PAUSED fetch job is paused; marker present at $FETCH_HARD_PAUSE_MARKER — exiting"
+  exit 0
+fi
+
 log() {
   printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"
 }
@@ -50,7 +74,7 @@ log() {
 handle_existing_handoff() {
   local blocker reason op identity previous_identity notified_at now
   blocker="$(vault_sync_op_preflight_blocker "$WIKI_DIR" 2>/dev/null || true)"
-  [ -n "$blocker" ] || { rm -f "$HANDOFF_STATE_FILE" 2>/dev/null || true; return 1; }
+  [ -n "$blocker" ] || { rm -f "$HANDOFF_STATE_FILE" "$FETCH_HARD_PAUSE_COUNTER_FILE" 2>/dev/null || true; return 1; }
 
   reason="${blocker%%	*}"
   op="${blocker#*	}"
@@ -69,8 +93,34 @@ handle_existing_handoff() {
     platform_notify "wiki" "review-required handoff ${op:-none} still blocks sync"
     printf 'identity=%s\nnotified_at=%s\n' "$identity" "$now" > "$HANDOFF_STATE_FILE"
     log "NOTIFY handoff identity=$identity"
+    # P2: a new handoff identity (or a fresh notify) resets the cycle counter.
+    if [ "$FETCH_HARD_PAUSE" = "1" ]; then
+      printf '0\n' > "$FETCH_HARD_PAUSE_COUNTER_FILE" 2>/dev/null || true
+    fi
   else
     log "SKIP PULL handoff identity=$identity reminder-backoff"
+    # P2: increment the cycle counter for this identity. When the counter
+    # reaches FETCH_HARD_PAUSE_CYCLES, write the persistent-handoff log line
+    # and unload the launchd job (with marker-file fallback for non-macOS).
+    if [ "$FETCH_HARD_PAUSE" = "1" ]; then
+      local cycle_count
+      cycle_count=0
+      if [ -f "$FETCH_HARD_PAUSE_COUNTER_FILE" ]; then
+        cycle_count="$(cat "$FETCH_HARD_PAUSE_COUNTER_FILE" 2>/dev/null || echo 0)"
+        case "$cycle_count" in ''|*[!0-9]*) cycle_count=0 ;; esac
+      fi
+      cycle_count=$((cycle_count + 1))
+      printf '%s\n' "$cycle_count" > "$FETCH_HARD_PAUSE_COUNTER_FILE" 2>/dev/null || true
+      if [ "$cycle_count" -ge "$FETCH_HARD_PAUSE_CYCLES" ]; then
+        log "handoff persistent — pausing fetch (identity=$identity cycles=$cycle_count threshold=$FETCH_HARD_PAUSE_CYCLES)"
+        printf 'paused_at=%s\nidentity=%s\ncycles=%s\nthreshold=%s\nreason=handoff-persistent-past-threshold\n' \
+          "$(date -u +%FT%TZ)" "$identity" "$cycle_count" "$FETCH_HARD_PAUSE_CYCLES" \
+          > "$FETCH_HARD_PAUSE_MARKER" 2>/dev/null || true
+        if [ "$(platform_scheduler)" = "launchd" ]; then
+          launchctl unload "$HOME/Library/LaunchAgents/com.karlchow.wiki-fetch.plist" 2>/dev/null || true
+        fi
+      fi
+    fi
   fi
   return 0
 }

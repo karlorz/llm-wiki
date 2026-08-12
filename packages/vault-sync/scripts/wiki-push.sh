@@ -37,20 +37,122 @@ LOCK_FILE="$(platform_cache_dir)/wiki-push.lock"
 LOG_FILE="$(platform_log_dir)/wiki-push.log"
 LOG_MAX_SIZE=1048576  # 1 MB
 LOG_KEEP=5
+# P1 conflict-marker dedup (2026-08-12 design, see projects/llm-wiki/architecture/2026-08-12-wiki-push-fail-dedup-design.md)
+# WIKI_PUSH_FAIL_DEDUP_DISABLE=1 disables the dedup entirely (rollback to legacy behavior).
+# WIKI_PUSH_FAIL_DEDUP_COOLDOWN_SECONDS controls the per-incident cooldown window (default 900s = 15min).
+PUSH_DEDUP_DISABLE="${WIKI_PUSH_FAIL_DEDUP_DISABLE:-0}"
+PUSH_DEDUP_COOLDOWN_SECONDS="${WIKI_PUSH_FAIL_DEDUP_COOLDOWN_SECONDS:-900}"
+PUSH_DEDUP_STATE_FILE="$(platform_cache_dir)/wiki-push-fail-dedup.state"
+PUSH_DEDUP_PAUSE_MARKER="$(platform_cache_dir)/wiki-push.paused"
 
 mkdir -p "$(dirname "$LOCK_FILE")" "$(dirname "$LOG_FILE")"
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"; }
 
+# Terminal-state check: if the pause marker exists from a prior incident,
+# the launchd job is already unloaded. Honor the pause — log once and exit
+# without re-scanning or re-attempting the push. The user clears this by
+# removing the marker and re-loading the plist (per design Q1, B).
+if [ "$PUSH_DEDUP_DISABLE" != "1" ] && [ -f "$PUSH_DEDUP_PAUSE_MARKER" ]; then
+    log "PAUSED push job is paused; marker present at $PUSH_DEDUP_PAUSE_MARKER — exiting"
+    exit 0
+fi
+
+# P1 dedup state check: read the dedup state file's mtime and compare against
+# the cooldown window. Echoes one of: "disabled" (dedup turned off, caller
+# must not touch state), "first" (no prior incident, standard guard should
+# run), "cooldown" (within window, suppress duplicate FAIL line + skip the
+# new FAIL log), "expired" (past window, escalate to pause).
+push_dedup_cooldown_check() {
+    if [ "$PUSH_DEDUP_DISABLE" = "1" ]; then
+        printf '%s\n' "disabled"
+        return 0
+    fi
+    if [ ! -f "$PUSH_DEDUP_STATE_FILE" ]; then
+        printf '%s\n' "first"
+        return 0
+    fi
+    local state_ctime now elapsed
+    state_ctime="$(platform_stat_ctime "$PUSH_DEDUP_STATE_FILE" 2>/dev/null || echo 0)"
+    now="$(date +%s)"
+    elapsed=$((now - state_ctime))
+    if [ "$elapsed" -lt "$PUSH_DEDUP_COOLDOWN_SECONDS" ]; then
+        printf '%s\n' "cooldown"
+        return 0
+    fi
+    printf '%s\n' "expired"
+    return 0
+}
+
+# Touch (or create) the dedup state file so subsequent invocations see the
+# incident's first-detection timestamp. Uses a single `touch` to avoid races
+# with parallel invocations (which are guarded by the lockfile above).
+push_dedup_touch_state() {
+    touch "$PUSH_DEDUP_STATE_FILE" 2>/dev/null || true
+}
+
+# Clear the dedup state file (used on a successful push, when markers are gone).
+push_dedup_clear_state() {
+    rm -f "$PUSH_DEDUP_STATE_FILE" 2>/dev/null || true
+}
+
+# Write a pause marker file as a portable stand-in for `launchctl unload`.
+# On a real macOS host, the launchd plist is the actual unpause target; this
+# marker is a portable test surface and a cross-platform indicator.
+push_dedup_write_pause_marker() {
+    local now
+    now="$(date -u +%FT%TZ)"
+    printf 'paused_at=%s reason=conflict-markers-persist-past-cooldown cooldown_seconds=%s\n' \
+        "$now" "$PUSH_DEDUP_COOLDOWN_SECONDS" > "$PUSH_DEDUP_PAUSE_MARKER" 2>/dev/null || true
+    if [ "$(platform_scheduler)" = "launchd" ]; then
+        # Best-effort launchd unload. Failure is non-fatal — the marker file is
+        # the canonical pause signal. This matches the design doc's rollback
+        # semantics: the marker is the test surface, launchctl is the production
+        # surface, both can be present.
+        launchctl unload "$HOME/Library/LaunchAgents/com.karlchow.wiki-push.plist" 2>/dev/null || true
+    fi
+}
+
 conflict_marker_guard() {
     local findings
     findings="$(mktemp)" || { log "FAIL could not create conflict-marker scan temp file"; return 1; }
     if ! vault_sync_scan_conflict_markers "$WIKI_DIR" "$findings"; then
-        log "FAIL conflict marker blocks present; refusing S3 push"
-        vault_sync_log_conflict_marker_findings "$findings" "$LOG_FILE"
+        local dedup_state
+        dedup_state="$(push_dedup_cooldown_check)"
+        case "$dedup_state" in
+            first)
+                # First detection: log the FAIL line, mark the state file so
+                # subsequent invocations within the cooldown window are silent.
+                log "FAIL conflict marker blocks present; refusing S3 push"
+                vault_sync_log_conflict_marker_findings "$findings" "$LOG_FILE"
+                push_dedup_touch_state
+                ;;
+            expired)
+                # Past the cooldown: log the FAIL line + escalation notice,
+                # write the pause marker, refresh the state file so the next
+                # cooldown starts from this moment.
+                log "FAIL conflict marker blocks present; refusing S3 push"
+                vault_sync_log_conflict_marker_findings "$findings" "$LOG_FILE"
+                log "cooldown expired — pausing push (markers persist past ${PUSH_DEDUP_COOLDOWN_SECONDS}s)"
+                push_dedup_write_pause_marker
+                push_dedup_touch_state
+                ;;
+            cooldown)
+                # Within cooldown: suppress the duplicate FAIL line. The first
+                # FAIL line in the incident (state=first) is already logged;
+                # subsequent invocations within the cooldown are silent.
+                ;;
+            disabled)
+                # Dedup is off: log the FAIL line (legacy behavior), do not
+                # touch any state file or pause marker.
+                log "FAIL conflict marker blocks present; refusing S3 push"
+                vault_sync_log_conflict_marker_findings "$findings" "$LOG_FILE"
+                ;;
+        esac
         rm -f "$findings"
         return 1
     fi
+    push_dedup_clear_state
     rm -f "$findings"
     return 0
 }
@@ -359,6 +461,11 @@ if [ "$RC" -eq 0 ]; then
     if ! remote_prune_tombstoned_paths; then
         log "FAIL tombstone prune failed after rclone copy"
     fi
+    # P1: a successful push proves markers are gone. conflict_marker_guard
+    # already cleared the dedup state on the scan-success path. The pause
+    # marker rm is defensive: it covers the case where the user manually
+    # unpaused the launchd job without removing the marker file.
+    rm -f "$PUSH_DEDUP_PAUSE_MARKER" 2>/dev/null || true
 fi
 
 exit 0

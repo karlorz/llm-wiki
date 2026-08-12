@@ -45,6 +45,36 @@ wiki_push_log_file() {
   ' _ "$PLATFORM_UNDER_TEST"
 }
 
+# Same resolution as wiki_push_log_file, but with a hard-coded fallback that
+# also tries the linux default path. Returns the first path that exists;
+# echoes the resolved path so tests can assert on it.
+test_push_log_file() {
+  local home="$1"
+  local log
+  log="$(wiki_push_log_file "$home")"
+  if [ -f "$log" ]; then
+    printf '%s\n' "$log"
+  else
+    printf '%s\n' "$home/.local/state/vault-sync/log/wiki-push.log"
+  fi
+}
+
+# Compute the platform-aware cache directory under a given $HOME. This is
+# the directory wiki-push.sh uses for the dedup state file and the pause
+# marker. Mirrors platform.sh: macos -> ~/Library/Caches/vault-sync,
+# linux -> ~/.cache/vault-sync. We force linux here for cross-platform
+# determinism in the test environment (the real production host picks the
+# correct path via platform_detect_os, but the test asserts on absolute
+# paths the test can resolve directly without sourcing the platform lib).
+test_push_cache_dir() {
+  local home="$1"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    printf '%s/Library/Caches/vault-sync\n' "$home"
+  else
+    printf '%s/.cache/vault-sync\n' "$home"
+  fi
+}
+
 assert_file_contains "push filter excludes local logs directory" "$FILTER_UNDER_TEST" "- logs/"
 assert_file_contains "push filter excludes managed-write coordination lock" \
   "$FILTER_UNDER_TEST" \
@@ -674,6 +704,350 @@ test_standalone_equals_line_does_not_block_push
 test_lint_delta_inherited_allows_s3_push
 test_lint_delta_new_errors_block_s3_push
 test_lint_delta_malformed_blocks_s3_push
+
+# ---------------------------------------------------------------------------
+# P1 conflict-marker dedup (2026-08-12 design)
+# Verifies: WIKI_PUSH_FAIL_DEDUP_COOLDOWN_SECONDS / WIKI_PUSH_FAIL_DEDUP_DISABLE
+# env vars, push_dedup_cooldown_check() state-machine behavior, the
+# .paused marker file as the cross-platform pause signal.
+# ---------------------------------------------------------------------------
+
+# (a) cold-path OK push is unchanged when no markers are present and no prior
+# dedup state exists. The script should log "OK push" and not write a dedup
+# state file or a pause marker.
+test_p1_cold_path_ok_push_unchanged() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  printf 'local\n' > "$vault/local.md"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  local pushed_log
+  pushed_log="$(test_push_log_file "$home")"
+  assert_eq "P1(a) cold-path rclone is called" "$(cat "$root/rclone-called" 2>/dev/null || true)" "called"
+  if [ -f "$pushed_log" ]; then
+    if grep -q 'OK push' "$pushed_log"; then
+      printf "PASS: P1(a) cold-path OK push line is present\n"
+      PASS=$((PASS + 1))
+    else
+      printf "FAIL: P1(a) cold-path OK push line is missing in %s\n" "$pushed_log"
+      FAIL=$((FAIL + 1))
+    fi
+    if grep -q 'FAIL conflict marker' "$pushed_log"; then
+      printf "FAIL: P1(a) cold-path must not log conflict-marker FAIL when no markers are present\n"
+      FAIL=$((FAIL + 1))
+    else
+      printf "PASS: P1(a) cold-path does not log spurious conflict-marker FAIL\n"
+      PASS=$((PASS + 1))
+    fi
+  else
+    printf "FAIL: P1(a) could not locate wiki-push.log to inspect (tried %s)\n" "$pushed_log"
+    FAIL=$((FAIL + 1))
+  fi
+  local cache_dir
+  cache_dir="$(test_push_cache_dir "$home")"
+  local state_file="$cache_dir/wiki-push-fail-dedup.state"
+  if [ -f "$state_file" ]; then
+    printf "FAIL: P1(a) dedup state file should not be created on a clean push\n"
+    FAIL=$((FAIL + 1))
+  else
+    printf "PASS: P1(a) dedup state file is absent on a clean push\n"
+    PASS=$((PASS + 1))
+  fi
+  local pause_marker="$cache_dir/wiki-push.paused"
+  if [ -f "$pause_marker" ]; then
+    printf "FAIL: P1(a) pause marker should not be created on a clean push\n"
+    FAIL=$((FAIL + 1))
+  else
+    printf "PASS: P1(a) pause marker is absent on a clean push\n"
+    PASS=$((PASS + 1))
+  fi
+  rm -rf "$root"
+}
+
+# (b) conflict markers present on first detection: one FAIL line + dedup
+# state file created. rclone must NOT be called.
+test_p1_first_detection_writes_state_and_one_fail() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  # Inject a real conflict-marker file into the working tree.
+  cat > "$vault/conflict.md" <<'EOF'
+hello
+<<<<<<< HEAD
+ours
+=======
+theirs
+>>>>>>> branch
+EOF
+  # We need vault_sync_scan_conflict_markers to find this. It scans tracked +
+  # untracked .md. The file is untracked; that is fine for the scan.
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  local pushed_log
+  pushed_log="$(test_push_log_file "$home")"
+  if [ -f "$pushed_log" ] && grep -q 'FAIL conflict marker' "$pushed_log"; then
+    printf "PASS: P1(b) first-detection FAIL conflict marker line is written\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P1(b) first-detection FAIL conflict marker line is missing (log=%s)\n" "$pushed_log"
+    FAIL=$((FAIL + 1))
+  fi
+  local fail_count
+  fail_count="$(grep -c 'FAIL conflict marker' "$pushed_log" 2>/dev/null || echo 0)"
+  assert_eq "P1(b) exactly one FAIL conflict marker line on first detection" "$fail_count" "1"
+  local cache_dir
+  cache_dir="$(test_push_cache_dir "$home")"
+  local state_file="$cache_dir/wiki-push-fail-dedup.state"
+  if [ -f "$state_file" ]; then
+    printf "PASS: P1(b) dedup state file is created on first detection\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P1(b) dedup state file is missing after first detection (cache_dir=%s)\n" "$cache_dir"
+    FAIL=$((FAIL + 1))
+  fi
+  if [ ! -f "$root/rclone-called" ]; then
+    printf "PASS: P1(b) rclone is not called when conflict markers are present\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P1(b) rclone must not be called when conflict markers are present\n"
+    FAIL=$((FAIL + 1))
+  fi
+  if [ ! -f "$cache_dir/wiki-push.paused" ]; then
+    printf "PASS: P1(b) pause marker is not written on first detection (cooldown not yet expired)\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P1(b) pause marker should not exist on first detection\n"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+# (c) cooldown active: a second invocation within the cooldown window must
+# NOT log a duplicate FAIL line. The dedup state file persists.
+test_p1_cooldown_active_suppresses_duplicate_fail() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  cat > "$vault/conflict.md" <<'EOF'
+<<<<<<< HEAD
+ours
+=======
+theirs
+>>>>>>> branch
+EOF
+
+  # First invocation — establishes the dedup state.
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  # Second invocation within the cooldown — should NOT log a duplicate.
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  local pushed_log
+  pushed_log="$(test_push_log_file "$home")"
+  local fail_count
+  fail_count="$(grep -c 'FAIL conflict marker' "$pushed_log" 2>/dev/null || echo 0)"
+  assert_eq "P1(c) cooldown suppresses duplicate FAIL across two invocations" "$fail_count" "1"
+  local cache_dir
+  cache_dir="$(test_push_cache_dir "$home")"
+  if [ -f "$cache_dir/wiki-push-fail-dedup.state" ]; then
+    printf "PASS: P1(c) dedup state file persists across invocations in the same cooldown\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P1(c) dedup state file is missing after two invocations (cache_dir=%s)\n" "$cache_dir"
+    FAIL=$((FAIL + 1))
+  fi
+  if [ ! -f "$cache_dir/wiki-push.paused" ]; then
+    printf "PASS: P1(c) pause marker is not written while cooldown is active\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P1(c) pause marker should not exist while cooldown is active\n"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+# (d) markers persist past the cooldown: a single "cooldown expired — pausing
+# push" line is written, the .paused marker file is created. We force the
+# cooldown to a 1-second window to keep the test fast.
+test_p1_cooldown_expired_writes_pause_marker() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  cat > "$vault/conflict.md" <<'EOF'
+<<<<<<< HEAD
+ours
+=======
+theirs
+>>>>>>> branch
+EOF
+
+  # First invocation with a 1-second cooldown.
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    WIKI_PUSH_FAIL_DEDUP_COOLDOWN_SECONDS=1 \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  # Sleep just over the cooldown so the next invocation sees the state as
+  # "expired" rather than "cooldown".
+  sleep 2
+
+  # Second invocation past the cooldown.
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    WIKI_PUSH_FAIL_DEDUP_COOLDOWN_SECONDS=1 \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  local pushed_log
+  pushed_log="$(test_push_log_file "$home")"
+  if grep -q 'cooldown expired — pausing push' "$pushed_log" 2>/dev/null; then
+    printf "PASS: P1(d) cooldown expired line is logged when markers persist past the window\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P1(d) cooldown expired line is missing (log=%s)\n" "$pushed_log"
+    FAIL=$((FAIL + 1))
+  fi
+  local pause_marker
+  cache_dir="$(test_push_cache_dir "$home")"
+  pause_marker="$cache_dir/wiki-push.paused"
+  if [ -f "$pause_marker" ]; then
+    printf "PASS: P1(d) pause marker file is written on cooldown expiry\n"
+    PASS=$((PASS + 1))
+    if grep -q 'conflict-markers-persist-past-cooldown' "$pause_marker"; then
+      printf "PASS: P1(d) pause marker has the expected reason\n"
+      PASS=$((PASS + 1))
+    else
+      printf "FAIL: P1(d) pause marker is missing the expected reason field\n"
+      FAIL=$((FAIL + 1))
+    fi
+  else
+    printf "FAIL: P1(d) pause marker file is missing after cooldown expiry (cache_dir=%s)\n" "$cache_dir"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+# (e) WIKI_PUSH_FAIL_DEDUP_DISABLE=1 bypasses the dedup entirely. Every
+# invocation logs the FAIL line (legacy behavior).
+test_p1_disable_env_var_bypasses_dedup() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  cat > "$vault/conflict.md" <<'EOF'
+<<<<<<< HEAD
+ours
+=======
+theirs
+>>>>>>> branch
+EOF
+
+  for i in 1 2 3; do
+    HOME="$home" \
+      WIKI_DIR="$vault" \
+      WIKI_REMOTE="stub:wiki" \
+      WIKI_PUSH_FAIL_DEDUP_DISABLE=1 \
+      PATH="$bin_dir:$PATH" \
+      "$script_dir/wiki-push.sh" >/dev/null 2>&1
+  done
+
+  local pushed_log
+  pushed_log="$(test_push_log_file "$home")"
+  local fail_count
+  fail_count="$(grep -c 'FAIL conflict marker' "$pushed_log" 2>/dev/null || echo 0)"
+  assert_eq "P1(e) dedup-disabled logs a FAIL on every invocation" "$fail_count" "3"
+  local cache_dir
+  cache_dir="$(test_push_cache_dir "$home")"
+  if [ ! -f "$cache_dir/wiki-push-fail-dedup.state" ]; then
+    printf "PASS: P1(e) dedup state file is not created when dedup is disabled\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P1(e) dedup state file should not exist when dedup is disabled\n"
+    FAIL=$((FAIL + 1))
+  fi
+  if [ ! -f "$cache_dir/wiki-push.paused" ]; then
+    printf "PASS: P1(e) pause marker is not written when dedup is disabled (within test window)\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: P1(e) pause marker should not exist when dedup is disabled\n"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_p1_cold_path_ok_push_unchanged
+test_p1_first_detection_writes_state_and_one_fail
+test_p1_cooldown_active_suppresses_duplicate_fail
+test_p1_cooldown_expired_writes_pause_marker
+test_p1_disable_env_var_bypasses_dedup
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
