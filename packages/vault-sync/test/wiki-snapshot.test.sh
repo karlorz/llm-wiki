@@ -256,7 +256,7 @@ done
 if [ -z "$real_ps" ]; then
   exit 0
 fi
-"$real_ps" "$@" | grep -Ev '(^|[ /\\])(wiki-push|rclone|vault-sync)(\.[a-z0-9_-]+)?([[:space:]]|$)'
+"$real_ps" "$@" | grep -Ev 'wiki-push(\.sh)?|rclone[[:space:]]+(copy|sync|move|delete|purge|deletefile|copyto|moveto|dedupe|mkdir|rmdir|rmdirs|touch|settier|bisync|copyurl)([[:space:]]|$)|wiki-(snapshot|pull-with-auto-resolve|git-repair-v3)(\.sh)?'
 exit "${PIPESTATUS[0]}"
 STUB
   cat > "$bin_dir/skillwiki" <<'STUB'

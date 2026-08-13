@@ -225,6 +225,7 @@ function peerCheckFailure<T>(reason: string, detail: Record<string, unknown> = {
 
 function runManagedWritePeerGate<T>(
   vault: string,
+  mode: ManagedWriteMode,
   deps: ManagedWritePreflightDeps,
 ): { exitCode: number; result: Result<T> } | null {
   try {
@@ -238,15 +239,22 @@ function runManagedWritePeerGate<T>(
     }
 
     const { output: peerOutput, foreignLockCount, recentPeerStashCount } = validated;
+    const nonWriterBlockingSignal = foreignLockCount > 0 || recentPeerStashCount > 0;
+    const writerOnly = peerOutput.managed_writers.blocking && !nonWriterBlockingSignal;
+    // Process snapshots are machine-wide, so they are meaningful only for a
+    // fleet-managed Git writer. Locks and stash audits remain vault-scoped.
+    if (mode !== "git-writer" && writerOnly) return null;
+
+    const managedWriterBlocking = mode === "git-writer" && peerOutput.managed_writers.blocking;
     const hasKnownBlockingSignal =
       foreignLockCount > 0 ||
-      peerOutput.managed_writers.blocking ||
+      managedWriterBlocking ||
       recentPeerStashCount > 0;
     if (!peerOutput.blocking) {
       return hasKnownBlockingSignal ? peerCheckFailure<T>("peer-check-failed") : null;
     }
 
-    if (peerOutput.managed_writers.blocking) {
+    if (managedWriterBlocking) {
       return peerCheckFailure<T>("live-writer-overlap", {
         managed_writer_count: peerOutput.managed_writers.count,
         managed_writer_kinds: peerOutput.managed_writers.kinds.slice(0, 8),
@@ -346,6 +354,14 @@ export async function runManagedWritePreflight(
   });
 
   if (!fleet) {
+    // fleet.yaml present but unreadable/unparseable must fail closed; only a
+    // truly absent fleet means standalone.
+    if (hasFleetManifest(mutationVault)) {
+      return {
+        exitCode: ExitCode.PREFLIGHT_FAILED,
+        result: err("PREFLIGHT_FAILED", { reason: "fleet-unreadable" }),
+      };
+    }
     const gitVault = isGitVault(mutationVault) ? mutationVault : null;
     const head = gitVault ? git(gitVault, ["rev-parse", "HEAD"]) || null : null;
     return {
@@ -356,7 +372,8 @@ export async function runManagedWritePreflight(
         git_vault: gitVault,
         base_oid: head,
         converged: false,
-        convergence_source: "single-path",
+        ...(convergenceVault ? { convergence_vault: convergenceVault } : {}),
+        convergence_source: convergenceSource,
       }),
     };
   }
@@ -597,7 +614,7 @@ export async function runManagedWriteTransaction<T>(
         }) as Result<T>,
       };
     }
-    const peerGate = runManagedWritePeerGate<T>(mutationVault, deps);
+    const peerGate = runManagedWritePeerGate<T>(mutationVault, receipt.mode, deps);
     if (peerGate) return peerGate;
     return await input.mutate(receipt);
   } finally {

@@ -62,6 +62,9 @@ export function isManagedWriteLockOwnerAlive(pid: unknown): boolean {
 }
 
 function hasUnsafeGitState(vault: string): boolean {
+  // Non-Git vaults (FUSE/S3 standalone) have no repository state to be unsafe
+  // about; a failed rev-parse there is expected, not evidence of danger.
+  if (!isGitBackedVault(vault)) return false;
   const gitDirRaw = git(vault, ["rev-parse", "--git-dir"]);
   if (!gitDirRaw) return true;
   const gitDir = gitDirRaw.startsWith("/") ? gitDirRaw : join(vault, gitDirRaw);

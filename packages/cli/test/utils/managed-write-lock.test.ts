@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import {
@@ -97,5 +97,69 @@ describe("managed write lock", () => {
     const reclaimed = reclaimDeadManagedWriteLockOwner(vault);
     expect(reclaimed.ok).toBe(false);
     expect(existsSync(path)).toBe(true);
+  });
+
+  it("reclaims a dead lock on a non-Git standalone vault when the owner hostname matches", () => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-write-lock-nongit-"));
+    const path = managedWriteLockPath(vault);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        pid: 999999999,
+        owner_hostname: hostname(),
+        owner_token: "deadtoken",
+        acquired: "2026-07-17T00:00:00.000Z",
+        command: "wiki-pull",
+      })}\n`,
+    );
+    const reclaimed = reclaimDeadManagedWriteLockOwner(vault);
+    expect(reclaimed.ok).toBe(true);
+    if (!reclaimed.ok) throw new Error("expected reclaim");
+    expect(reclaimed.data.reclaimed).toBe(true);
+    expect(existsSync(path)).toBe(false);
+    const next = acquireManagedWriteLock(vault, "page publish");
+    expect(next.ok).toBe(true);
+    if (next.ok) releaseManagedWriteLock(next.data);
+  });
+
+  it("does not reclaim a dead foreign-host lock on a non-Git standalone vault", () => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-write-lock-nongit-foreign-"));
+    const path = managedWriteLockPath(vault);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        pid: 999999999,
+        owner_hostname: "another-writer.example.invalid",
+        owner_token: "foreigntoken",
+        acquired: "2026-07-17T00:00:00.000Z",
+        command: "wiki-pull",
+      })}\n`,
+    );
+    const reclaimed = reclaimDeadManagedWriteLockOwner(vault);
+    expect(reclaimed).toMatchObject({ ok: false, error: "SYNC_LOCK_HELD" });
+    expect(existsSync(path)).toBe(true);
+  });
+
+  it("does not reclaim a live lock on a non-Git standalone vault even with a matching hostname", () => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-write-lock-nongit-live-"));
+    const path = managedWriteLockPath(vault);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({
+        pid: process.pid,
+        owner_hostname: hostname(),
+        owner_token: "livetoken",
+        acquired: "2026-07-17T00:00:00.000Z",
+        command: "wiki-pull",
+      })}\n`,
+    );
+    const reclaimed = reclaimDeadManagedWriteLockOwner(vault);
+    expect(reclaimed.ok).toBe(false);
+    expect(existsSync(path)).toBe(true);
+    const next = acquireManagedWriteLock(vault, "page publish");
+    expect(next).toMatchObject({ ok: false, error: "SYNC_LOCK_HELD" });
   });
 });

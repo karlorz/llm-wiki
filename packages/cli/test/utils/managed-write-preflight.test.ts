@@ -252,6 +252,79 @@ hosts:
     expect(converge).not.toHaveBeenCalled();
   });
 
+  it("fails closed when the mutation vault fleet.yaml cannot be loaded", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-preflight-fleet-unreadable-"));
+    writeFileSync(join(vault, "SCHEMA.md"), "# Schema\n");
+    writeFleet(vault, "schema_version: [unclosed");
+    const converge = vi.fn();
+    const run = await runManagedWritePreflight(
+      { vault, command: "page publish", hostId: "macos-dev" },
+      { converge },
+    );
+    expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+    expect(run.result).toMatchObject({
+      ok: false,
+      error: "PREFLIGHT_FAILED",
+      detail: { reason: "fleet-unreadable" },
+    });
+    expect(converge).not.toHaveBeenCalled();
+  });
+
+  it("treats a truly absent fleet as standalone", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-preflight-no-fleet-"));
+    writeFileSync(join(vault, "SCHEMA.md"), "# Schema\n");
+    const converge = vi.fn();
+    const run = await runManagedWritePreflight(
+      { vault, command: "page publish", hostId: "macos-dev" },
+      { converge },
+    );
+    expect(run.exitCode).toBe(ExitCode.OK);
+    expect(run.result).toMatchObject({
+      ok: true,
+      data: {
+        mode: "standalone",
+        mutation_vault: resolve(vault),
+        git_vault: null,
+        base_oid: null,
+        converged: false,
+        convergence_source: "single-path",
+      },
+    });
+    expect(converge).not.toHaveBeenCalled();
+  });
+
+  it("keeps a distinct explicit convergence vault in a standalone receipt", async () => {
+    const mutationVault = mkdtempSync(join(tmpdir(), "managed-preflight-standalone-explicit-"));
+    writeFileSync(join(mutationVault, "SCHEMA.md"), "# Schema\n");
+    const { vault: convergenceVault } = makeGitConvergenceVault(
+      "managed-preflight-standalone-explicit-git",
+    );
+    const converge = vi.fn();
+    const run = await runManagedWritePreflight(
+      {
+        vault: mutationVault,
+        convergenceVault,
+        command: "page publish",
+        hostId: "macos-dev",
+      },
+      { converge },
+    );
+    expect(run.exitCode).toBe(ExitCode.OK);
+    expect(run.result).toMatchObject({
+      ok: true,
+      data: {
+        mode: "standalone",
+        mutation_vault: resolve(mutationVault),
+        git_vault: null,
+        base_oid: null,
+        converged: false,
+        convergence_vault: resolve(convergenceVault),
+        convergence_source: "explicit",
+      },
+    });
+    expect(converge).not.toHaveBeenCalled();
+  });
+
   it("refuses unmerged state before convergence", async () => {
     const unmergedVault = makeUnmergedFleetVault();
     const converge = vi.fn();
@@ -903,6 +976,36 @@ hosts:
     },
   );
 
+  it("ignores live writer overlap for standalone vaults", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "managed-peer-gate-standalone-writer-"));
+    const mutate = vi.fn(async () => ({ exitCode: ExitCode.OK, result: ok({ mutated: true }) }));
+    const syncPeers = vi.fn(() => ({
+      exitCode: ExitCode.OK,
+      result: ok(
+        makePeerOutput({
+          managed_writers: { count: 1, kinds: ["wiki-push"], blocking: true },
+          blocking: true,
+        }),
+      ),
+    }));
+    const run = await runManagedWriteTransaction(
+      {
+        vault,
+        command: "test standalone writer scope",
+        allowImmutableRecord: false,
+        preflight: async () => ({
+          exitCode: ExitCode.OK,
+          result: ok(makeReceipt(vault, "standalone")),
+        }),
+        mutate,
+      },
+      { converge: vi.fn(), syncPeers },
+    );
+
+    expect(run).toMatchObject({ exitCode: ExitCode.OK, result: { ok: true, data: { mutated: true } } });
+    expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       label: "live writer overlap",
@@ -963,7 +1066,7 @@ hosts:
         allowImmutableRecord: false,
         preflight: async () => ({
           exitCode: ExitCode.OK,
-          result: ok(makeReceipt(vault, "standalone")),
+          result: ok(makeReceipt(vault, "git-writer")),
         }),
         mutate,
       },
