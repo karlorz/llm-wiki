@@ -118,8 +118,16 @@ export async function fixPathTooLong(input: PathTooLongInput): Promise<{ exitCod
   for (const f of fixed) hintLines.push(`  ${f.from} -> ${f.to}`);
   for (const u of unresolved) hintLines.push(`  unresolved: ${u}`);
 
+  // Raw/ paths are unfixable by design (structural lifecycle operation).
+  // When the only unresolved paths are raw/, treat them as inherited debt
+  // (WARN) rather than LINT_HAS_ERRORS — mirrors the lint-delta inherited-debt
+  // precedent (wiki-push.sh:410-417). The unattended push timer must not wedge
+  // forever on raw/ violations that require an attended raw transaction.
+  const nonRawUnresolved = unresolved.filter(p => !p.startsWith("raw/"));
+  const rawUnresolved = unresolved.filter(p => p.startsWith("raw/"));
+
   return {
-    exitCode: unresolved.length > 0 ? ExitCode.LINT_HAS_ERRORS : ExitCode.OK,
+    exitCode: nonRawUnresolved.length > 0 ? ExitCode.LINT_HAS_ERRORS : ExitCode.OK,
     result: ok({ fixed, unresolved, rewired, humanHint: hintLines.join("\n") }),
   };
 }

@@ -30,7 +30,7 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
    convenience `~/bin/wiki-sync.sh` symlink. Warn only; do not repair in status
    mode.
 5. **Role-specific checks**:
-   - leaf/full hosts: tail last 20 lines of `wiki-push.log` and `wiki-fetch.log`; check `wiki-push-filters.txt`.
+   - leaf/full hosts: tail last 20 lines of `wiki-push.log` and `wiki-fetch.log`; check `wiki-push-filters.txt`; read `wiki-push-result.state` (durable terminal state, H9) as `vault_sync_last_push_result` — the authoritative last push outcome (OK / refused+reason), since log rotation and P1 cooldown suppression can hide refusals from the log tail.
    - snapshotter hosts: skip leaf push/fetch/filter checks as not applicable; verify the configured `vault_sync.snapshot_script` or packaged `wiki-snapshot.sh` contains `--max-delete`.
 6. **Runtime proof checks** (read-only; never write markers):
    - `vault_sync_runtime_manifest` — `$(platform_share_dir)/runtime-manifest.json` present and parseable.

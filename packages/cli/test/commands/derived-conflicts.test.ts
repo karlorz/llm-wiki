@@ -110,14 +110,16 @@ updated: 2026-07-15
     expect(git(vault, ["diff", "--name-only", "--diff-filter=U"])).toBe("");
   });
 
-  it("rolls back completely when a semantic path is mixed in", async () => {
+  it("partial-declines: resolves derived subset, leaves unknown conflicted (M4)", async () => {
     const vault = mkdtempSync(join(tmpdir(), "derived-rb-"));
     git(vault, ["init"]);
     git(vault, ["branch", "-M", "main"]);
     git(vault, ["config", "user.email", "t@t"]);
     git(vault, ["config", "user.name", "t"]);
     writeFileSync(join(vault, "SCHEMA.md"), "# Schema\n");
-    mkdirSync(join(vault, "queries"), { recursive: true });
+    for (const d of ["entities", "concepts", "comparisons", "queries", "meta"]) {
+      mkdirSync(join(vault, d), { recursive: true });
+    }
     writeFileSync(join(vault, "index.md"), "# Index\nbase\n");
     writeFileSync(join(vault, "log.md"), "# Log\n");
     writeFileSync(join(vault, "queries", "semantic.md"), "# S\nbase\n");
@@ -140,21 +142,25 @@ updated: 2026-07-15
       /* expected */
     }
 
-    const originalOursIndex = git(vault, ["show", ":2:index.md"]);
-    const originalTheirsIndex = git(vault, ["show", ":3:index.md"]);
     writeJournal(vault, "op-semantic");
 
     const run = await runDerivedConflictResolution({ vault, operationId: "op-semantic" });
-    expect(run.result).toMatchObject({
-      ok: true,
-      data: { resolved: false, unknown_paths: ["queries/semantic.md"] },
-    });
-    expect(git(vault, ["diff", "--name-only", "--diff-filter=U"]).split("\n").sort()).toEqual([
-      "index.md",
-      "log.md",
-      "queries/semantic.md",
-    ]);
-    expect(git(vault, ["show", ":2:index.md"])).toBe(originalOursIndex);
-    expect(git(vault, ["show", ":3:index.md"])).toBe(originalTheirsIndex);
+
+    // M4: partial-decline — the resolver resolves the derived subset (index.md,
+    // log.md) and returns exit 60 (SYNC_PARTIAL_DECLINE) with resolved_paths
+    // and unknown_paths. The unknown path (queries/semantic.md) remains
+    // conflicted for manual resolution.
+    expect(run.exitCode).toBe(60); // SYNC_PARTIAL_DECLINE
+    if (run.result.ok) {
+      expect(run.result.data.resolved).toBe(false);
+      expect(run.result.data.unknown_paths).toEqual(["queries/semantic.md"]);
+      // resolved_paths should contain the derived paths that were resolved
+      expect(run.result.data.resolved_paths.length).toBeGreaterThan(0);
+      expect(run.result.data.resolved_paths).toContain("log.md");
+    }
+
+    // The unknown path must remain unmerged; the derived paths must be staged.
+    const unmerged = git(vault, ["diff", "--name-only", "--diff-filter=U"]);
+    expect(unmerged.split("\n").filter(Boolean).sort()).toEqual(["queries/semantic.md"]);
   });
 });

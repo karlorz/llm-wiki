@@ -201,7 +201,18 @@ export async function runDerivedConflictResolution(
 
   const classes = paths.map((p) => ({ path: p, klass: classifyDerivedPath(p) }));
   const unknown = classes.filter((c) => c.klass === "unknown").map((c) => c.path);
-  if (unknown.length > 0) {
+  const derived = classes.filter((c) => c.klass !== "unknown");
+
+  // M4: Partial-decline. When unknown paths exist alongside derived paths,
+  // resolve the derived subset (git-add them) and return with exit 60
+  // (SYNC_PARTIAL_DECLINE) plus resolved_paths + unknown_paths. The shell
+  // helper uses resolved_paths to feed the inventory skip set and hands off
+  // only the unknown paths for manual resolution. This prevents one unknown
+  // path from blocking resolution of all derived conflicts, which was the
+  // root cause of the permanent handoff lockout (derived-conflicts.ts:200-214).
+  if (unknown.length > 0 && derived.length === 0) {
+    // No derived paths to resolve — pure unknown set. Decline immediately
+    // (legacy behavior) so the helper takes the manual path.
     return {
       exitCode: ExitCode.SYNC_PULL_FAILED,
       result: ok({
@@ -212,6 +223,59 @@ export async function runDerivedConflictResolution(
         humanHint: `review-required: unknown conflict paths ${unknown.join(", ")}`,
       }),
     };
+  }
+
+  if (unknown.length > 0 && derived.length > 0) {
+    // Mixed set: resolve the derived subset, leave unknowns conflicted.
+    const snapshots = new Map<string, { stage2: string; stage3: string }>();
+    for (const { path } of derived) {
+      snapshots.set(path, {
+        stage2: stageOid(vault, 2, path),
+        stage3: stageOid(vault, 3, path),
+      });
+    }
+
+    const staged: string[] = [];
+    try {
+      for (const { path, klass } of derived) {
+        const resolved = await resolveOne(vault, path, klass);
+        if (!resolved.ok) throw new Error(`${path}: ${resolved.error}`);
+        if (hasMarkers(path, resolved.data)) {
+          throw new Error(`${path}: conflict markers remain after resolve`);
+        }
+        writeFileSync(join(vault, path), resolved.data, "utf8");
+        execFileSync("git", ["add", "--", path], { cwd: vault, stdio: ["pipe", "pipe", "pipe"] });
+        staged.push(path);
+      }
+
+      return {
+        exitCode: ExitCode.SYNC_PARTIAL_DECLINE,
+        result: ok({
+          resolved: false,
+          resolved_paths: staged,
+          unknown_paths: unknown,
+          rolled_back: false,
+          humanHint: `partial-decline: resolved ${staged.length} derived path(s), ${unknown.length} unknown path(s) need manual review: ${unknown.join(", ")}`,
+        }),
+      };
+    } catch (error: unknown) {
+      // Roll back staged derived paths on failure — leave the full conflict
+      // set in its original conflicted state.
+      for (const path of staged) {
+        const snap = snapshots.get(path);
+        if (snap) rollbackPath(vault, path, snap.stage2, snap.stage3);
+      }
+      return {
+        exitCode: ExitCode.SYNC_PULL_FAILED,
+        result: ok({
+          resolved: false,
+          resolved_paths: [],
+          unknown_paths: unknown,
+          rolled_back: true,
+          humanHint: `partial-decline resolve failed: ${String(error)}`,
+        }),
+      };
+    }
   }
 
   const snapshots = new Map<string, { stage2: string; stage3: string }>();

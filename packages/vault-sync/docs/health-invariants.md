@@ -88,6 +88,21 @@ previous plist after failure only when that previous artifact passed the same
 integrity validation. Regression coverage must include malformed files, stale
 loaded labels, manifest drift, valid rollback, and invalid-rollback refusal.
 
+## H9 - Push refusals are durable terminal state, not log lines
+
+`wiki-push.sh` writes every push outcome (OK or refused+reason) to a
+terminal-state file (`wiki-push-result.state` in the platform cache dir) and
+exits non-zero on guard failure. Log tails (`classify_log_tail`) alone are not
+a push-health surface: the 1 MB x5 rotation can erase the last refusal, and
+the P1 dedup cooldown deliberately suppresses duplicate `FAIL` lines. Health
+must read the state file (`vault_sync_last_push_result`) as the authoritative
+last-outcome record. `raw/` path-too-long violations are inherited debt (exit
+0, WARN) and must never re-wedge the push timer.
+
+Regression coverage: `wiki-push.test.sh` M3 cases (result file written on OK
+and on refusal, >50-dirty push proceeds, dedup suppresses duplicate FAIL for
+non-marker refuse classes).
+
 ## Accepted differences between surfaces
 
 `vault-sync-status` (shell) and `doctor` (TS) share check IDs for the
@@ -100,6 +115,7 @@ ops-only checks that doctor does not:
 | `vault_sync_runtime_manifest` / `vault_sync_runtime_match` / `vault_sync_runtime_registration` | Install-time manifest proof; doctor is runtime health |
 | `vault_sync_presync_helper` / `vault_sync_live_verify` | Pre-push hooks; not doctor's scope |
 | `vault_sync_script_drift` / `vault_sync_conflict_markers` / `vault_sync_scan_conflict_markers` | Source-tree integrity; doctor is deployment health |
+| `vault_sync_last_push_result` | Reads `wiki-push-result.state` (durable terminal-state file) for the last push outcome (OK / refused+reason); log tails miss refusals under rotation and P1 cooldown suppression (H9) |
 
 These are accepted differences, not regressions. The shared IDs
 (`vault_sync_jobs_enabled`, `vault_sync_snapshot_service_result`,

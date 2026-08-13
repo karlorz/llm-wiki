@@ -116,7 +116,7 @@ describe("fixPathTooLong", () => {
     }
   });
 
-  it("leaves raw path repair report-only instead of deleting an identical source", async () => {
+  it("leaves raw path repair report-only instead of deleting an identical source (inherited debt, exit 0)", async () => {
     const v = vault();
     mkdirSync(join(v, "raw", "articles", "obsidian-import"), { recursive: true });
     const longStem = "duplicate-windows-hostile-note-name-".repeat(6);
@@ -128,7 +128,10 @@ describe("fixPathTooLong", () => {
     writeFileSync(join(v, "index.md"), `# Index\n\n## Concepts\n- [[${longStem}]]\n`);
 
     const r = await fixPathTooLong({ vault: v });
-    expect(r.exitCode).toBe(23);
+    // M2: raw/ violations are inherited debt (WARN), not LINT_HAS_ERRORS.
+    // The fix verb reports them as unresolved but exits 0 so the push timer
+    // does not wedge forever on raw/ paths that require an attended raw transaction.
+    expect(r.exitCode).toBe(0);
     if (r.result.ok) {
       expect(r.result.data.fixed).toEqual([]);
       expect(r.result.data.unresolved).toContain(relPath);
@@ -142,7 +145,7 @@ describe("fixPathTooLong", () => {
     }
   });
 
-  it("does not autonomously rename raw content when a shortened target collides", async () => {
+  it("does not autonomously rename raw content when a shortened target collides (inherited debt, exit 0)", async () => {
     const v = vault();
     mkdirSync(join(v, "raw", "articles", "obsidian-import"), { recursive: true });
     const longStem = "collision-windows-hostile-note-name-".repeat(6);
@@ -152,7 +155,8 @@ describe("fixPathTooLong", () => {
     writeFileSync(join(v, preferred), "---\ntitle: t\n---\n\ndifferent body\n");
 
     const r = await fixPathTooLong({ vault: v });
-    expect(r.exitCode).toBe(23);
+    // M2: raw/ violations are inherited debt (WARN), not LINT_HAS_ERRORS.
+    expect(r.exitCode).toBe(0);
     if (r.result.ok) {
       expect(r.result.data.fixed).toEqual([]);
       expect(r.result.data.unresolved).toContain(relPath);

@@ -59,6 +59,7 @@ export const ExitCode = {
   APPROVAL_MISMATCH: 57,
   TARGET_DRIFT: 58,
   RECOVERY_EVIDENCE_MISSING: 59,
+  SYNC_PARTIAL_DECLINE: 60,
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -124,6 +125,7 @@ const NAMES: Record<number, string> = {
   57: "APPROVAL_MISMATCH",
   58: "TARGET_DRIFT",
   59: "RECOVERY_EVIDENCE_MISSING",
+  60: "SYNC_PARTIAL_DECLINE",
 };
 
 export function exitCodeName(code: number): string {

@@ -33,6 +33,34 @@ an explicitly resolved remote fails.
 
 **Warning:** do not treat `sg01` as data authority. It is a worker that can be rebuilt from the GitHub repo, S3 remote, vault-sync package, and `fleet.yaml`.
 
+## Push refusal states (S3 push is gated beyond reachability)
+
+`wiki-push.sh` can refuse the S3 push for reasons unrelated to S3
+reachability: missing wiki dir/filters, case-only path collisions,
+path_too_long fix failure, conflict markers, and lint-delta new errors.
+Since the 2026-08-13 exit-honesty refactor, refusals:
+
+- exit non-zero (the launchd plist uses `StartInterval`, so exit codes are
+  signal, not backoff triggers), and
+- write a durable terminal-state record at
+  `<platform_cache_dir>/wiki-push-result.state` (`result=ok` /
+  `result=refused reason=<class> timestamp=<ISO>`), which
+  `vault-sync-status` surfaces as `vault_sync_last_push_result` and which
+  survives log rotation.
+
+The S3 push and git convergence state are coupled: a pull-side
+review-required handoff blocks pulls, the dirty backlog grows, and the M1
+dirty-volume gate (threshold 50) refuses non-hygiene writes. `lint --fix`
+is hygiene-classified (not gated) and `raw/` long paths are inherited debt
+(WARN, non-blocking), so a `result=refused reason=path-fix-failed` record
+means a non-raw path could not be renamed — inspect the push log for the
+unresolved path.
+
+Recovery is attended: fix the refusal cause, remove `wiki-push.paused` if
+the P1 pause triggered (and `launchctl load` the plist if unloaded); the
+next 60 s cycle retries. `WIKI_PUSH_FAIL_DEDUP_DISABLE=1` restores legacy
+per-cycle FAIL logging as a first-line rollback.
+
 ## Related: stale managed-write lock on FUSE snapshotter
 
 If `wiki-snapshot.service` fails root projection with `SYNC_LOCK_HELD` because

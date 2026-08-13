@@ -759,6 +759,188 @@ test_lint_delta_new_errors_block_s3_push
 test_lint_delta_malformed_blocks_s3_push
 
 # ---------------------------------------------------------------------------
+# M3: exit honesty + terminal-state file + P1 dedup wired to all refuse classes
+# Verifies: wiki-push-result.state is written on OK and on refusal; guard
+# failures exit non-zero; P1 dedup suppresses duplicate FAIL lines for all
+# refuse classes (not just conflict markers).
+# ---------------------------------------------------------------------------
+
+# (M3-a) A successful push writes result=ok to the terminal-state file.
+test_m3_ok_push_writes_result_file() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  printf 'local\n' > "$vault/local.md"
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  local cache_dir result_file
+  cache_dir="$(test_push_cache_dir "$home")"
+  result_file="$cache_dir/wiki-push-result.state"
+  assert_eq "M3(a) result file exists on OK push" "$(test -f "$result_file" && echo present || echo absent)" "present"
+  assert_eq "M3(a) result=ok in state file" "$(grep '^result=' "$result_file" 2>/dev/null || echo missing)" "result=ok"
+  rm -rf "$root"
+}
+
+# (M3-b) A path-fix failure writes result=refused and exits non-zero.
+test_m3_path_fix_failure_writes_refused_result() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  mkdir -p "$bin_dir" "$home/.config/rclone"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "path_too_long" ] && [ "$5" = "--fix" ]; then
+  exit 23
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/skillwiki"
+
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+echo called > "$RCLONE_CALLED_FILE"
+exit 0
+STUB
+  chmod +x "$bin_dir/rclone"
+
+  local rc=0
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1 || rc=$?
+
+  local cache_dir result_file
+  cache_dir="$(test_push_cache_dir "$home")"
+  result_file="$cache_dir/wiki-push-result.state"
+  assert_eq "M3(b) path-fix failure exits non-zero" "$rc" "1"
+  assert_eq "M3(b) result=refused in state file" "$(grep '^result=' "$result_file" 2>/dev/null || echo missing)" "result=refused"
+  assert_eq "M3(b) reason=path-fix-failed in state file" "$(grep '^reason=' "$result_file" 2>/dev/null || echo missing)" "reason=path-fix-failed"
+  assert_eq "M3(b) rclone not called on refusal" "$(test -f "$root/rclone-called" && echo called || echo skipped)" "skipped"
+  rm -rf "$root"
+}
+
+# (M3-c) The >50-dirty incident scenario: lint --fix is now hygiene-classified
+# (M1), so the dirty gate does NOT block the path-fix step. The push proceeds
+# normally even with >50 dirty files. The stub skillwiki returns exit 0 (clean)
+# for path_too_long --fix, simulating the gate bypass.
+test_m3_dirty_over_50_does_not_block_path_fix() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  write_stub_rclone "$bin_dir"
+  mkdir -p "$home/.config/rclone"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  # Create >50 dirty files to trigger the M1 dirty-volume gate scenario.
+  local i
+  for i in $(seq 1 60); do
+    printf 'noise %s\n' "$i" > "$vault/noise-$i.md"
+  done
+
+  HOME="$home" \
+    WIKI_DIR="$vault" \
+    WIKI_REMOTE="stub:wiki" \
+    RCLONE_CALLED_FILE="$root/rclone-called" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  # The push must succeed despite >50 dirty files because the stub skillwiki
+  # returns exit 0 for path_too_long --fix (simulating M1 hygiene classification).
+  assert_eq "M3(c) >50-dirty push proceeds (M1 unblock)" "$(cat "$root/rclone-called" 2>/dev/null || true)" "called"
+  local cache_dir result_file
+  cache_dir="$(test_push_cache_dir "$home")"
+  result_file="$cache_dir/wiki-push-result.state"
+  assert_eq "M3(c) result=ok despite >50 dirty" "$(grep '^result=' "$result_file" 2>/dev/null || echo missing)" "result=ok"
+  rm -rf "$root"
+}
+
+# (M3-d) P1 dedup suppresses duplicate FAIL lines for non-marker refuse classes.
+# A path-fix failure on two consecutive invocations within the cooldown should
+# produce only ONE FAIL line (the dedup is now wired to all refuse classes).
+test_m3_dedup_suppresses_duplicate_path_fix_fail() {
+  local root
+  root="$(mktemp -d)"
+  local home="$root/home"
+  local vault
+  vault="$(make_repo "$root")"
+  local script_dir
+  script_dir="$(make_script_dir "$root")"
+  local bin_dir="$root/bin"
+  mkdir -p "$bin_dir" "$home/.config/rclone"
+  printf '%s\n' '+ *' '- /index.md' '- /log.md' > "$home/.config/rclone/wiki-push-filters.txt"
+
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "lint" ] && [ "$3" = "--only" ] && [ "$4" = "path_too_long" ] && [ "$5" = "--fix" ]; then
+  exit 23
+fi
+exit 99
+STUB
+  chmod +x "$bin_dir/skillwiki"
+
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+echo called > "$RCLONE_CALLED_FILE"
+exit 0
+STUB
+  chmod +x "$bin_dir/rclone"
+
+  local log_file
+  log_file="$(wiki_push_log_file "$home")"
+  mkdir -p "$(dirname "$log_file")"
+
+  # First invocation -- establishes dedup state.
+  HOME="$home" WIKI_DIR="$vault" WIKI_REMOTE="stub:wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  # Second invocation within cooldown -- should suppress duplicate FAIL.
+  HOME="$home" WIKI_DIR="$vault" WIKI_REMOTE="stub:wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$script_dir/wiki-push.sh" >/dev/null 2>&1
+
+  local pushed_log fail_count
+  pushed_log="$(test_push_log_file "$home")"
+  fail_count="$(grep -c 'FAIL.*path_too_long fix failed' "$pushed_log" 2>/dev/null || echo 0)"
+  assert_eq "M3(d) dedup suppresses duplicate path-fix FAIL across two invocations" "$fail_count" "1"
+  rm -rf "$root"
+}
+
+test_m3_ok_push_writes_result_file
+test_m3_path_fix_failure_writes_refused_result
+test_m3_dirty_over_50_does_not_block_path_fix
+test_m3_dedup_suppresses_duplicate_path_fix_fail
+
+# ---------------------------------------------------------------------------
 # P1 conflict-marker dedup (2026-08-12 design)
 # Verifies: WIKI_PUSH_FAIL_DEDUP_COOLDOWN_SECONDS / WIKI_PUSH_FAIL_DEDUP_DISABLE
 # env vars, push_dedup_cooldown_check() state-machine behavior, the

@@ -44,10 +44,71 @@ PUSH_DEDUP_DISABLE="${WIKI_PUSH_FAIL_DEDUP_DISABLE:-0}"
 PUSH_DEDUP_COOLDOWN_SECONDS="${WIKI_PUSH_FAIL_DEDUP_COOLDOWN_SECONDS:-900}"
 PUSH_DEDUP_STATE_FILE="$(platform_cache_dir)/wiki-push-fail-dedup.state"
 PUSH_DEDUP_PAUSE_MARKER="$(platform_cache_dir)/wiki-push.paused"
+# M3: durable terminal-state file for health checks. Survives log rotation
+# (1 MB x5) and is readable by status.sh / doctor at any time. Records the
+# outcome of the most recent push attempt: OK or refused+reason.
+PUSH_RESULT_FILE="$(platform_cache_dir)/wiki-push-result.state"
 
-mkdir -p "$(dirname "$LOCK_FILE")" "$(dirname "$LOG_FILE")"
+mkdir -p "$(dirname "$LOCK_FILE")" "$(dirname "$LOG_FILE")" "$(dirname "$PUSH_RESULT_FILE")"
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"; }
+
+# M3: Write a machine-readable push result record. This is the durable
+# terminal-state file that status.sh / doctor read to determine push health.
+# Format: key=value lines (same .env convention as operation journals).
+#   result=ok|refused
+#   reason=<refuse class, or empty for ok>
+#   timestamp=<ISO 8601 UTC>
+#   duration=<seconds, or empty>
+write_push_result() {
+    local result="$1" reason="$2" duration="${3:-}"
+    local ts
+    ts="$(date -u +%FT%TZ)"
+    {
+        printf 'result=%s\n' "$result"
+        printf 'reason=%s\n' "$reason"
+        printf 'timestamp=%s\n' "$ts"
+        if [ -n "$duration" ]; then
+            printf 'duration=%s\n' "$duration"
+        fi
+    } > "$PUSH_RESULT_FILE" 2>/dev/null || true
+}
+
+# M3: Unified refuse handler. Logs the FAIL line, writes the terminal-state
+# record, runs the P1 dedup cooldown check (wired to ALL refuse classes, not
+# just conflict markers), and exits non-zero so the scheduler/monitoring can
+# see the refusal. The P1 dedup suppresses duplicate FAIL lines within the
+# cooldown window and escalates to a pause marker when the cooldown expires.
+#
+# Exit codes: 1 for guard refusals (the launchd plist uses StartInterval, not
+# KeepAlive, so non-zero exits are pure signal -- no backoff/disable loops).
+refuse_push() {
+    local reason="$1" message="$2"
+    local dedup_state
+    dedup_state="$(push_dedup_cooldown_check)"
+    case "$dedup_state" in
+        first)
+            log "FAIL $message"
+            push_dedup_touch_state
+            ;;
+        expired)
+            log "FAIL $message"
+            log "cooldown expired — pausing push (refusal persists past ${PUSH_DEDUP_COOLDOWN_SECONDS}s)"
+            push_dedup_write_pause_marker
+            push_dedup_touch_state
+            ;;
+        cooldown)
+            # Within cooldown: suppress the duplicate FAIL line. The first
+            # FAIL line in the incident is already logged; subsequent
+            # invocations within the cooldown are silent.
+            ;;
+        disabled)
+            log "FAIL $message"
+            ;;
+    esac
+    write_push_result "refused" "$reason"
+    exit 1
+}
 
 # Terminal-state check: if the pause marker exists from a prior incident,
 # the launchd job is already unloaded. Honor the pause — log once and exit
@@ -117,40 +178,10 @@ conflict_marker_guard() {
     local findings
     findings="$(mktemp)" || { log "FAIL could not create conflict-marker scan temp file"; return 1; }
     if ! vault_sync_scan_conflict_markers "$WIKI_DIR" "$findings"; then
-        local dedup_state
-        dedup_state="$(push_dedup_cooldown_check)"
-        case "$dedup_state" in
-            first)
-                # First detection: log the FAIL line, mark the state file so
-                # subsequent invocations within the cooldown window are silent.
-                log "FAIL conflict marker blocks present; refusing S3 push"
-                vault_sync_log_conflict_marker_findings "$findings" "$LOG_FILE"
-                push_dedup_touch_state
-                ;;
-            expired)
-                # Past the cooldown: log the FAIL line + escalation notice,
-                # write the pause marker, refresh the state file so the next
-                # cooldown starts from this moment.
-                log "FAIL conflict marker blocks present; refusing S3 push"
-                vault_sync_log_conflict_marker_findings "$findings" "$LOG_FILE"
-                log "cooldown expired — pausing push (markers persist past ${PUSH_DEDUP_COOLDOWN_SECONDS}s)"
-                push_dedup_write_pause_marker
-                push_dedup_touch_state
-                ;;
-            cooldown)
-                # Within cooldown: suppress the duplicate FAIL line. The first
-                # FAIL line in the incident (state=first) is already logged;
-                # subsequent invocations within the cooldown are silent.
-                ;;
-            disabled)
-                # Dedup is off: log the FAIL line (legacy behavior), do not
-                # touch any state file or pause marker.
-                log "FAIL conflict marker blocks present; refusing S3 push"
-                vault_sync_log_conflict_marker_findings "$findings" "$LOG_FILE"
-                ;;
-        esac
+        # M3: delegate to the unified refuse_push handler (dedup + result file + non-zero exit).
+        vault_sync_log_conflict_marker_findings "$findings" "$LOG_FILE"
         rm -f "$findings"
-        return 1
+        refuse_push "conflict-markers" "conflict marker blocks present; refusing S3 push"
     fi
     push_dedup_clear_state
     rm -f "$findings"
@@ -327,19 +358,16 @@ fi
 
 # Guard: wiki dir present.
 if [ ! -d "$WIKI_DIR" ]; then
-    log "ERROR: WIKI_DIR not found at $WIKI_DIR"
-    exit 0
+    refuse_push "wiki-dir-missing" "WIKI_DIR not found at $WIKI_DIR"
 fi
 
 # Guard: filter file present (it's not strictly required, but missing it would push .git/).
 if [ ! -f "$FILTERS" ]; then
-    log "ERROR: filter file missing at $FILTERS — refusing to push without exclusions"
-    exit 0
+    refuse_push "filter-file-missing" "filter file missing at $FILTERS -- refusing to push without exclusions"
 fi
 # Projection-authority transport: non-authority leaves must not push root aggregates.
 if ! grep -qxF -- '- /index.md' "$FILTERS" || ! grep -qxF -- '- /log.md' "$FILTERS"; then
-    log "ERROR: filter file missing root aggregate exclusions (- /index.md and - /log.md)"
-    exit 1
+    refuse_push "filter-root-aggregate-missing" "filter file missing root aggregate exclusions (- /index.md and - /log.md)"
 fi
 
 # Acquire lockfile (non-blocking).
@@ -355,9 +383,8 @@ fi
 START=$(date +%s)
 
 if ! CASE_CONFLICTS=$(cd "$WIKI_DIR" && git_case_conflicts); then
-    log "ERROR: case-only path collision detected — refusing rclone push"
     printf '%s\n' "$CASE_CONFLICTS" >>"$LOG_FILE"
-    exit 0
+    refuse_push "case-collision" "case-only path collision detected -- refusing rclone push"
 fi
 
 # Fix Windows-hostile markdown paths before publishing to S3.
@@ -368,17 +395,13 @@ if command -v skillwiki >/dev/null 2>&1; then
     PATH_FIX_RC=$?
     printf '%s\n' "$PATH_FIX_OUTPUT" >>"$LOG_FILE"
     if [ "$PATH_FIX_RC" -ne 0 ]; then
-        log "ERROR: path_too_long fix failed exit=$PATH_FIX_RC — refusing rclone push"
-        exit 0
+        refuse_push "path-fix-failed" "path_too_long fix failed exit=$PATH_FIX_RC -- refusing rclone push"
     fi
 else
-    log "ERROR: skillwiki CLI not found — refusing push because path_too_long guard cannot run"
-    exit 0
+    refuse_push "skillwiki-not-found" "skillwiki CLI not found -- refusing push because path_too_long guard cannot run"
 fi
 
-if ! conflict_marker_guard; then
-    exit 1
-fi
+conflict_marker_guard
 
 # Lint delta gate: block S3 publication only on newly introduced lint errors.
 # Inherited debt is logged. Malformed/missing delta evidence fails closed.
@@ -402,20 +425,17 @@ except Exception:
     print("DELTA_RESOLVED=-1")
 ' 2>/dev/null)" || { DELTA_FULL=-1; DELTA_BASE=-1; DELTA_NEW=-1; DELTA_RESOLVED=-1; }
     if [ "${DELTA_NEW:--1}" = "-1" ] || [ "${DELTA_FULL:--1}" = "-1" ]; then
-        log "FAIL lint-delta evidence missing or malformed — refusing S3 push"
-        exit 1
+        refuse_push "lint-delta-malformed" "lint-delta evidence missing or malformed -- refusing S3 push"
     fi
     log "LINT-DELTA full=$DELTA_FULL base=$DELTA_BASE new=$DELTA_NEW resolved=$DELTA_RESOLVED"
     if [ "$DELTA_NEW" -gt 0 ]; then
-        log "FAIL lint-delta new_errors=$DELTA_NEW blocks S3 push (full=$DELTA_FULL)"
-        exit 1
+        refuse_push "lint-delta-new-errors" "lint-delta new_errors=$DELTA_NEW blocks S3 push (full=$DELTA_FULL)"
     fi
     if [ "$DELTA_FULL" -gt 0 ]; then
         log "WARN inherited lint debt full_errors=$DELTA_FULL (new_errors=0) — push allowed"
     fi
 else
-    log "FAIL skillwiki CLI not found — lint-delta gate cannot run; refusing S3 push"
-    exit 1
+    refuse_push "skillwiki-not-found" "skillwiki CLI not found -- lint-delta gate cannot run; refusing S3 push"
 fi
 
 # rclone copy (NOT sync) → never bulk-deletes on remote.
@@ -449,9 +469,11 @@ if [ "$RC" -eq 0 ]; then
     else
         log "OK push (no changes) duration=${DURATION}s"
     fi
+    write_push_result "ok" "" "$DURATION"
 else
     log "FAIL rclone exit=$RC duration=${DURATION}s"
     printf '%s\n' "$OUTPUT" >>"$LOG_FILE"
+    write_push_result "refused" "rclone-failed" "$DURATION"
 fi
 
 if [ "$RC" -eq 0 ]; then
@@ -468,4 +490,10 @@ if [ "$RC" -eq 0 ]; then
     rm -f "$PUSH_DEDUP_PAUSE_MARKER" 2>/dev/null || true
 fi
 
+# M3: exit non-zero on rclone failure so the scheduler/monitoring sees it.
+# The launchd plist uses StartInterval (not KeepAlive), so non-zero exits
+# are pure signal -- no backoff/disable loops.
+if [ "$RC" -ne 0 ]; then
+    exit 1
+fi
 exit 0

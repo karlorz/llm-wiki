@@ -199,28 +199,64 @@ verify_no_tracked_conflict_markers() {
 # Composite derived-artifact resolver (log, root index, project index, taxonomy).
 # Delegates the complete conflict set to skillwiki sync resolve-derived; no
 # blanket checkout --ours for archive/snapshot mixed sets.
+#
+# M4: Returns 0 on full resolve (all paths resolved), 60 on partial-decline
+# (derived subset resolved, unknown paths remain), 1 on failure/decline.
+# On partial-decline (60), sets RESOLVED_PATHS to the newline-separated list
+# of paths the resolver actually rewrote (for the inventory skip set).
 try_auto_resolve_derived_conflicts() {
     local op_id="$1"
     local cli_ts="${SCRIPT_DIR}/../../cli/src/cli.ts"
     local cmd_rc=1
+    local resolver_out
+    RESOLVED_PATHS=""
     if [ -z "$op_id" ]; then
         return 1
     fi
     # Prefer monorepo CLI when present (packaged install uses adjacent dist later).
     if [ -f "$cli_ts" ] && command -v npx >/dev/null 2>&1; then
-        if VAULT_SYNC_OPERATION_ID="$op_id" \
-          npx --yes tsx "$cli_ts" sync resolve-derived "$WIKI_DIR" --operation-id "$op_id" >>"$LOG_FILE" 2>&1; then
+        resolver_out="$(VAULT_SYNC_OPERATION_ID="$op_id" \
+          npx --yes tsx "$cli_ts" sync resolve-derived "$WIKI_DIR" --operation-id "$op_id" 2>>"$LOG_FILE")"
+        cmd_rc=$?
+        printf '%s\n' "$resolver_out" >>"$LOG_FILE"
+        if [ "$cmd_rc" -eq 0 ]; then
             log "AUTO-RESOLVE composite derived artifacts op=$op_id"
             return 0
+        elif [ "$cmd_rc" -eq 60 ]; then
+            RESOLVED_PATHS="$(printf '%s\n' "$resolver_out" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    data=d.get("data") or {}
+    for p in (data.get("resolved_paths") or []):
+        print(p)
+except: pass
+' 2>/dev/null)"
+            log "PARTIAL-RESOLVE derived artifacts op=$op_id unknowns remain"
+            return 60
         fi
-        cmd_rc=$?
         log "WARN monorepo resolve-derived failed rc=$cmd_rc op=$op_id"
     fi
     if command -v skillwiki >/dev/null 2>&1; then
-        if VAULT_SYNC_OPERATION_ID="$op_id" \
-          skillwiki sync resolve-derived "$WIKI_DIR" --operation-id "$op_id" >>"$LOG_FILE" 2>&1; then
+        resolver_out="$(VAULT_SYNC_OPERATION_ID="$op_id" \
+          skillwiki sync resolve-derived "$WIKI_DIR" --operation-id "$op_id" 2>>"$LOG_FILE")"
+        cmd_rc=$?
+        printf '%s\n' "$resolver_out" >>"$LOG_FILE"
+        if [ "$cmd_rc" -eq 0 ]; then
             log "AUTO-RESOLVE composite derived artifacts op=$op_id (skillwiki)"
             return 0
+        elif [ "$cmd_rc" -eq 60 ]; then
+            RESOLVED_PATHS="$(printf '%s\n' "$resolver_out" | python3 -c '
+import json,sys
+try:
+    d=json.load(sys.stdin)
+    data=d.get("data") or {}
+    for p in (data.get("resolved_paths") or []):
+        print(p)
+except: pass
+' 2>/dev/null)"
+            log "PARTIAL-RESOLVE derived artifacts op=$op_id unknowns remain (skillwiki)"
+            return 60
         fi
     fi
     return 1
@@ -588,6 +624,26 @@ while [ $REBASE_RC -ne 0 ]; do
         continue
     fi
 
+    # M4: Partial-decline — derived subset resolved, unknown paths remain.
+    # The unknown paths must go through the manual-conflict path (retry/handoff).
+    # The derived paths are already git-added; rebase --continue will fail on
+    # the remaining unknowns, so we go straight to handle_manual_conflict.
+    if [ "$?" -eq 60 ]; then
+        local unknown_conflicts
+        unknown_conflicts="$(git diff --name-only --diff-filter=U 2>/dev/null)"
+        if [ -n "$unknown_conflicts" ]; then
+            STOPPED_SHA=$(cat "$WIKI_DIR/.git/rebase-merge/stopped-sha" 2>/dev/null || echo "")
+            if [ -z "$STOPPED_SHA" ]; then
+                vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "missing-stopped-sha-partial"
+                log "WARN cannot determine stopped-sha — surfacing partial-decline conflicts"
+                exit 1
+            fi
+            COMMIT_MSG=$(git log --format=%s -1 "$STOPPED_SHA" 2>/dev/null || echo "")
+            handle_manual_conflict "$COMMIT_MSG" "$unknown_conflicts"
+            continue
+        fi
+    fi
+
     # Composite resolver declined (unknown paths or failure). Manual path:
     # one owned stale-target retry, else handoff — no blanket --ours.
     STOPPED_SHA=$(cat "$WIKI_DIR/.git/rebase-merge/stopped-sha" 2>/dev/null || echo "")
@@ -634,6 +690,33 @@ if [ -n "$OWNED_STASH_OID" ]; then
 
       vault_sync_op_stash_drop_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE" || true
       log "STASH apply derived conflicts auto-resolved"
+    elif [ -n "$CONFLICTS" ] && [ "$?" -eq 60 ]; then
+      # M4: Partial-decline during stash-apply. The resolver resolved the
+      # derived subset and returned resolved_paths. Unknown paths remain
+      # conflicted — surface as review-required.
+      if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+        vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "stash-restore-partial-decline"
+        log "FAIL stash apply partial-decline left unknown conflicts"
+        exit 1
+      fi
+      # Merge resolved_paths (from the resolver) into the skip set so the
+      # inventory byte-equality check does not fail on content-transformed
+      # derived paths. The conflict set alone is insufficient because the
+      # resolver regenerates derived files that may not have been in the
+      # stash-apply conflict set (derived-conflicts.ts:100-134).
+      SKIP_CONTENT="$(printf '%s\n' $CONFLICTS)"
+      if [ -n "${RESOLVED_PATHS:-}" ]; then
+        SKIP_CONTENT="${SKIP_CONTENT}
+${RESOLVED_PATHS}"
+      fi
+      if ! vault_sync_op_verify_inventory "$WIKI_DIR" "$OP_ID" "$OWNED_STASH_OID" "$SKIP_CONTENT" 2>>"$LOG_FILE"; then
+        vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "inventory-verify-failed-partial"
+        log "FAIL inventory verification after partial-decline oid=$OWNED_STASH_OID"
+        exit 1
+      fi
+
+      vault_sync_op_stash_drop_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE" || true
+      log "STASH apply partial-decline resolved derived subset"
     else
       vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "semantic-conflict"
       log "FAIL stash apply after rebase oid=$OWNED_STASH_OID"

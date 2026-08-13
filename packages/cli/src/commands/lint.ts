@@ -1338,6 +1338,23 @@ export async function runLint(input: LintInput | LintSummaryInput): Promise<{ ex
         if (remaining.length > 0) buckets.path_too_long = remaining;
         else delete buckets.path_too_long;
       }
+
+      // Raw/ path violations are unfixable by design (structural lifecycle op).
+      // Move remaining raw/ violations to unresolved (inherited debt) and drop
+      // them from the error bucket so --only path_too_long --fix exits OK when
+      // the only remaining violations are raw/. Mirrors the lint-delta
+      // inherited-debt precedent (wiki-push.sh:410-417).
+      if (buckets.path_too_long) {
+        const rawRemaining = (buckets.path_too_long as Array<{ relPath: string; length: number }>)
+          .filter(v => v.relPath.startsWith("raw/"));
+        if (rawRemaining.length > 0) {
+          unresolved.push(...rawRemaining.map(v => v.relPath));
+          const nonRaw = (buckets.path_too_long as Array<{ relPath: string; length: number }>)
+            .filter(v => !v.relPath.startsWith("raw/"));
+          if (nonRaw.length > 0) buckets.path_too_long = nonRaw;
+          else delete buckets.path_too_long;
+        }
+      }
     }
 
     if (shouldFix("frontmatter_yaml_invalid") && buckets.frontmatter_yaml_invalid) {

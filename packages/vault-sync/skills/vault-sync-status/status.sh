@@ -1191,6 +1191,27 @@ else
   # Check 3: last push recency/result
   classify_log_tail "$LOG_DIR/wiki-push.log" "vault_sync_last_push_age" "Vault sync last push recency" 'OK push'
 
+  # M6: last push result from the durable terminal-state file (wiki-push-result.state).
+  # This survives log rotation (1 MB x5) and records the outcome of the most
+  # recent push attempt: OK or refused+reason. The log-tail check above can
+  # miss refusals when the log rotates or when FAIL lines are suppressed by the
+  # P1 dedup cooldown. This check reads the machine-readable state file directly.
+  PUSH_RESULT_FILE="$(platform_cache_dir)/wiki-push-result.state"
+  if [ -f "$PUSH_RESULT_FILE" ]; then
+    push_result_value="$(grep '^result=' "$PUSH_RESULT_FILE" 2>/dev/null | cut -d= -f2 || true)"
+    push_result_reason="$(grep '^reason=' "$PUSH_RESULT_FILE" 2>/dev/null | cut -d= -f2 || true)"
+    push_result_ts="$(grep '^timestamp=' "$PUSH_RESULT_FILE" 2>/dev/null | cut -d= -f2 || true)"
+    if [ "$push_result_value" = "ok" ]; then
+      add_check "vault_sync_last_push_result" "Vault sync last push result" "pass" "result=ok timestamp=$push_result_ts"
+    elif [ "$push_result_value" = "refused" ]; then
+      add_check "vault_sync_last_push_result" "Vault sync last push result" "error" "result=refused reason=$push_result_reason timestamp=$push_result_ts"
+    else
+      add_check "vault_sync_last_push_result" "Vault sync last push result" "warn" "malformed state file: $PUSH_RESULT_FILE"
+    fi
+  else
+    add_check "vault_sync_last_push_result" "Vault sync last push result" "warn" "no push result state file (push may not have run yet): $PUSH_RESULT_FILE"
+  fi
+
   # Additional fetch log status for operator visibility
   classify_log_tail "$LOG_DIR/wiki-fetch.log" "vault_sync_last_fetch_status" "Vault sync last fetch status" 'NOTIFY|OK behind'
 

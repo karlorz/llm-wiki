@@ -253,12 +253,10 @@ remote note change" "remote-note-edit"
   HOME="$home" WIKI_DIR="$vault" "$SCRIPT_UNDER_TEST" origin main >/dev/null 2>&1
   rc=$?
 
-  # Non-archive commit with mixed log+non-log conflict must surface as
-  # MANUAL-RESOLVE-NEEDED (exit 1), not silently union-merge log.md while
-  # leaving note.md conflicted. The union resolver must decline the whole
-  # set when any path is not a log.md.
+  # M4: partial-decline — the resolver resolves log.md (derived) and returns
+  # SYNC_PARTIAL_DECLINE (exit 60). The helper hands off only note.md (unknown)
+  # for manual resolution. log.md is resolved (staged), note.md remains conflicted.
   assert_eq "mixed log+non-log conflict surfaces as manual" "$rc" "1"
-  assert_eq "log.md left conflicted (not partially union-merged)" "$(git -C "$vault" status --short log.md | cut -c1-2)" "UU"
   assert_eq "note.md left conflicted" "$(git -C "$vault" status --short note.md | cut -c1-2)" "UU"
 
   rm -rf "$root"
@@ -793,9 +791,10 @@ test_aa_log_mixed_with_plan_still_manual() {
 
   assert_eq "AA mixed log+plan surfaces manual" "$rc" "1"
   assert_eq "plan still unmerged" "$(git -C "$vault" status --short projects/demo/work/item/plan.md | cut -c1-2)" "AA"
-  # Log may still be unmerged because union declines the whole set
-  assert_eq "log still unmerged in mixed set" \
-    "$(git -C "$vault" diff --name-only --diff-filter=U | grep -c 'log.md' | tr -d ' ')" "1"
+  # M4: partial-decline resolves log.md (derived) and leaves plan.md (unknown) unmerged.
+  # log.md is no longer expected to remain unmerged — only the unknown path stays.
+  assert_eq "plan is the only unmerged path" \
+    "$(git -C "$vault" diff --name-only --diff-filter=U | grep -c 'plan.md' | tr -d ' ')" "1"
 
   git -C "$vault" rebase --abort >/dev/null 2>&1 || true
   rm -rf "$root"

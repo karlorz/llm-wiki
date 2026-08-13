@@ -74,6 +74,34 @@ describe("M1 dirty volume gate", () => {
     if (gate.allowed) expect(gate.reason).toBe("hygiene");
   });
 
+  it("allows 'lint --fix' even when dirty count exceeds threshold (incident root cause)", () => {
+    const vault = makeGitVault("dirty-lint-fix");
+    for (let i = 0; i < 60; i++) {
+      writeFileSync(join(vault, `noise-${i}.md`), "n\n");
+    }
+    const gate = evaluateDirtyVolumeGate({
+      vault,
+      threshold: 50,
+      command: "lint --fix",
+    });
+    expect(gate.allowed).toBe(true);
+    if (gate.allowed) expect(gate.reason).toBe("hygiene");
+  });
+
+  it("allows 'lint' (report-only) as hygiene even when over threshold", () => {
+    const vault = makeGitVault("dirty-lint-report");
+    for (let i = 0; i < 60; i++) {
+      writeFileSync(join(vault, `noise-${i}.md`), "n\n");
+    }
+    const gate = evaluateDirtyVolumeGate({
+      vault,
+      threshold: 50,
+      command: "lint",
+    });
+    expect(gate.allowed).toBe(true);
+    if (gate.allowed) expect(gate.reason).toBe("hygiene");
+  });
+
   it("expands untracked directories (porcelain under-report)", () => {
     const vault = makeGitVault("dirty-expand");
     mkdirSync(join(vault, "projects", "playground", "work", "2026-07-21-pilot-q-cycle-504"), {

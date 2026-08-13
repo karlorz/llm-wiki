@@ -55,6 +55,7 @@ describe("exit-codes", () => {
     expect(ExitCode.APPROVAL_MISMATCH).toBe(57);
     expect(ExitCode.TARGET_DRIFT).toBe(58);
     expect(ExitCode.RECOVERY_EVIDENCE_MISSING).toBe(59);
+    expect(ExitCode.SYNC_PARTIAL_DECLINE).toBe(60);
     expect(ExitCode.SYNC_LOCK_HELD).toBe(48);
     expect(ExitCode.LOG_APPEND_LOCK_HELD).toBe(49);
   });
@@ -72,5 +73,6 @@ describe("exit-codes", () => {
     expect(exitCodeName(57)).toBe("APPROVAL_MISMATCH");
     expect(exitCodeName(58)).toBe("TARGET_DRIFT");
     expect(exitCodeName(59)).toBe("RECOVERY_EVIDENCE_MISSING");
+    expect(exitCodeName(60)).toBe("SYNC_PARTIAL_DECLINE");
   });
 });

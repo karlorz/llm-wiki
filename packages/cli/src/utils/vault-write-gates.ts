@@ -56,6 +56,7 @@ export const HYGIENE_COMMANDS = new Set([
   "doctor",
   "health",
   "lint",
+  "lint --fix",
   "status",
   "path",
   "fleet context",
