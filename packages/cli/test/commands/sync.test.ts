@@ -960,12 +960,48 @@ describe("runSyncPeers", () => {
 
   it("treats live managed writers as blocking without exposing command lines", () => {
     const observation = classifyManagedWriterProcesses(
-      "123 /usr/local/bin/wiki-push --vault /private/user/wiki\n124 rclone mount remote:/vault /private/user/wiki\n125 unrelated",
+      "123 /usr/local/bin/wiki-push.sh --vault /private/user/wiki\n124 rclone copy remote:/vault /private/user/wiki\n125 rclone mount remote:/vault /private/user/wiki\n126 unrelated",
       999,
     );
     expect(observation).toEqual({
       count: 2,
       kinds: ["rclone", "wiki-push"],
+      blocking: true,
+    });
+  });
+
+  it("ignores read-only rclone and bare-text mentions", () => {
+    const observation = classifyManagedWriterProcesses(
+      "123 rclone lsf seaweed-wiki:cloud/wiki\n124 rclone mount remote:/vault /private/user/wiki\n125 bash packages/vault-sync/skills/vault-sync-status/status.sh\n126 grep -r wiki-push .\n127 bash -c 'echo vault-sync blocks'\n128 unrelated",
+      999,
+    );
+    expect(observation).toEqual({
+      count: 0,
+      kinds: [],
+      blocking: false,
+    });
+  });
+
+  it("snapshot and pull helpers remain blocking", () => {
+    const observation = classifyManagedWriterProcesses(
+      "123 /root/.local/share/vault-sync/bin/wiki-snapshot.sh\n124 bash /opt/vault-sync/bin/wiki-pull-with-auto-resolve.sh\n125 wiki-fuse-refresh.sh\n126 unrelated",
+      999,
+    );
+    expect(observation).toEqual({
+      count: 2,
+      kinds: ["vault-sync"],
+      blocking: true,
+    });
+  });
+
+  it("treats rclone write verbs as managed writers", () => {
+    const observation = classifyManagedWriterProcesses(
+      "123 rclone bisync remote:/vault /private/user/wiki\n124 rclone copyurl https://example.test/wiki.md remote:/vault/wiki.md\n125 unrelated",
+      999,
+    );
+    expect(observation).toEqual({
+      count: 2,
+      kinds: ["rclone"],
       blocking: true,
     });
   });
@@ -986,7 +1022,7 @@ describe("runSyncPeers", () => {
     const dir = makeTempDir();
     const { result } = runSyncPeers({
       vault: dir,
-      processSnapshot: "123 /usr/local/bin/vault-sync --mode push\n124 unrelated",
+      processSnapshot: "123 /root/.local/share/vault-sync/bin/wiki-snapshot.sh\n124 unrelated",
     });
     expect(result.ok).toBe(true);
     if (result.ok) {

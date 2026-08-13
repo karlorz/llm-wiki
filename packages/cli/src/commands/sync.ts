@@ -639,9 +639,15 @@ export interface SyncPeersOutput {
 
 const STASH_RECENT_MINUTES = 120;
 const MANAGED_WRITER_SPECS = [
-  ["wiki-push", /(?:^|[\s/\\])wiki-push(?:\.[a-z0-9_-]+)?(?:\s|$)/i],
-  ["rclone", /(?:^|[\s/\\])rclone(?:\.[a-z0-9_-]+)?(?:\s|$)/i],
-  ["vault-sync", /(?:^|[\s/\\])vault-sync(?:\.[a-z0-9_-]+)?(?:\s|$)/i],
+  // Real runner only: wiki-push.sh on Unix, wiki-push/wiki-push.exe as a
+  // Windows image name. Bare text mentions never match.
+  ["wiki-push", /(?:^wiki-push(?:\.exe)?$)|(?:wiki-push\.sh(?:\s|$))/i],
+  // Write verbs only on Unix; Windows image name only (tasklist exposes
+  // no arguments). Read-only verbs and `rclone mount` (FUSE consumer)
+  // never match.
+  ["rclone", /(?:^rclone(?:\.exe)?$)|(?:\brclone(?:\.exe)?\s+(?:copy|sync|move|delete|purge|deletefile|copyto|moveto|dedupe|mkdir|rmdir|rmdirs|touch|settier|bisync|copyurl)(?:\s|$))/i],
+  // Writing helper scripts on Unix; Windows image name only.
+  ["vault-sync", /(?:^vault-sync(?:\.exe)?$)|(?:wiki-(?:snapshot|pull-with-auto-resolve|git-repair-v3)\.sh(?:\s|$))/i],
 ] as const;
 export const MANAGED_WRITER_KINDS = MANAGED_WRITER_SPECS.map(([kind]) => kind);
 

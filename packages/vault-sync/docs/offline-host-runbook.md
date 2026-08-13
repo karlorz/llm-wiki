@@ -58,7 +58,7 @@ unresolved path.
 
 Recovery is attended: fix the refusal cause, remove `wiki-push.paused` if
 the P1 pause triggered (and `launchctl load` the plist if unloaded); the
-next 60 s cycle retries. `WIKI_PUSH_FAIL_DEDUP_DISABLE=1` restores legacy
+next 300 s cycle retries. `WIKI_PUSH_FAIL_DEDUP_DISABLE=1` restores legacy
 per-cycle FAIL logging as a first-line rollback.
 
 ## Related: stale managed-write lock on FUSE snapshotter
