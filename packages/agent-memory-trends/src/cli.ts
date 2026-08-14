@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DiscoverySnapshot } from "./discovery-contracts.js";
+import { collectCommunityReferences, createFetchJsonClient } from "./discovery-community.js";
+import { mergeCommunityReferences } from "./discovery-community-normalize.js";
 import { collectDiscoveryCandidates } from "./discovery-github.js";
 import { buildDiscoveryQueue } from "./discovery-score.js";
 import { applyDiscoveryDeltas, loadDiscoveryHistory, pruneDiscoverySnapshots, writeDiscoveryQueue, writeDiscoverySnapshot } from "./discovery-snapshots.js";
@@ -1283,8 +1285,11 @@ interface DiscoverOutput {
  * runPublish, buildAgentInput, and writeAgentInput: it never invokes
  * synthesis, capture rendering, session brief refresh, publish, heartbeat,
  * the legacy collector, or any input/run-state writer. Writes only the
- * deterministic discovery snapshot/latest/queue files. The queue's
- * promotionEligible field is informational only and never acted upon.
+ * deterministic discovery snapshot/latest/queue files. Community source
+ * failures are warnings and never fail the run; community references only
+ * merge onto GitHub-discovered candidates and never create candidates. The
+ * queue's promotionEligible field is informational only and never acted
+ * upon.
  */
 async function runDiscover(
   options: ParsedCliOptions,
@@ -1303,9 +1308,37 @@ async function runDiscover(
   const collection = await collector(config.data, { runGh: runner, now: context.now });
   if (!collection.ok) return collection;
 
+  const warnings = [...collection.data.warnings];
+  // Community collection runs only after the GitHub collector succeeded,
+  // which for v1/disabled discovery never happens (fail-closed above).
+  const communityCollector = context.runCommunityCollection ?? collectCommunityReferences;
+  let mergedCandidates = collection.data.candidates;
+  try {
+    const community = await communityCollector(config.data, {
+      fetchJson: context.fetchJson ?? createFetchJsonClient(),
+    });
+    if (community.ok) {
+      warnings.push(...community.data.warnings);
+      const enabledCommunityIds = config.data.discovery.communitySources
+        .filter((source) => source.enabled)
+        .map((source) => source.id);
+      mergedCandidates = collection.data.candidates.map((candidate) =>
+        mergeCommunityReferences({
+          candidate,
+          references: community.data.references,
+          validSourceIds: enabledCommunityIds,
+        })
+      );
+    } else {
+      warnings.push(`community collection failed: ${String(community.detail ?? community.error)}`);
+    }
+  } catch (error) {
+    warnings.push(`community collection failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   const discoveryDir = join(resolved.vault, DISCOVERY_OUTPUT_DIRECTORY);
   const history = loadDiscoveryHistory(discoveryDir, context.now, config.data.discovery.retentionDays);
-  const withDeltas = applyDiscoveryDeltas(collection.data.candidates, history, context.now);
+  const withDeltas = applyDiscoveryDeltas(mergedCandidates, history, context.now);
   const queue = buildDiscoveryQueue(withDeltas, {
     config: config.data,
     now: context.now,
@@ -1319,13 +1352,15 @@ async function runDiscover(
     });
   }
 
+  // Rank first, then persist the same capped candidates in the snapshot and
+  // the queue so later history deltas stay coherent with the emitted queue.
   const snapshot: DiscoverySnapshot = {
     formatVersion: 1,
     runAt: context.now.toISOString(),
     retentionDays: config.data.discovery.retentionDays,
-    candidates: withDeltas,
+    candidates: queue.candidates,
   };
-  const written = writeDiscoverySnapshot(discoveryDir, snapshot);
+  const written = writeDiscoverySnapshot(discoveryDir, snapshot, config.data.discovery.maxDailyCandidates);
   if (!written.ok) return written;
 
   const pruned = pruneDiscoverySnapshots(discoveryDir, config.data.discovery.retentionDays, context.now);
@@ -1337,7 +1372,7 @@ async function runDiscover(
     maxDailyCandidates: config.data.discovery.maxDailyCandidates,
     counts: queue.counts,
     candidates: queue.candidates,
-    warnings: [...collection.data.warnings, ...history.warnings, ...pruned.warnings],
+    warnings: [...warnings, ...history.warnings, ...pruned.warnings],
   });
   if (!queueWritten.ok) return queueWritten;
 

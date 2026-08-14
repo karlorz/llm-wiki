@@ -92,6 +92,53 @@ describe("agent-memory-trends discovery ranker", () => {
     expect(queue.candidates[0]!.canonicalUrl).toBe("https://github.com/acme/repo-24");
   });
 
+  it("retains an alert outside the naive top-20 score ordering and reports emitted-queue counts", () => {
+    const nonAlerts = Array.from({ length: 24 }, (_, index) =>
+      makeCandidate({
+        canonicalUrl: `https://github.com/acme/repo-${String(index).padStart(2, "0")}`,
+        fullName: `acme/repo-${String(index).padStart(2, "0")}`,
+        name: `repo-${String(index).padStart(2, "0")}`,
+        stargazersCount: 5000,
+        forksCount: 500,
+        relevanceInput: 100,
+        evidenceQualityInput: 40,
+      })
+    );
+    const alertCandidate = makeCandidate({
+      canonicalUrl: "https://github.com/acme/repo-alert",
+      fullName: "acme/repo-alert",
+      name: "repo-alert",
+      stargazersCount: 5000,
+      forksCount: 500,
+      relevanceInput: 0,
+      evidenceQualityInput: 0,
+      attentionEvidence: [
+        { sourceId: "hacker_news", url: "https://news.ycombinator.com/item?id=1" },
+        { sourceId: "hugging_face", url: "https://huggingface.co/spaces/acme" },
+      ],
+    });
+    // The alert candidate's total (40) ranks below every non-alert total (49),
+    // so a pure score ordering would drop it from the 20-item queue.
+    expect(alertCandidate.score.total).toBe(0);
+    const alertTotal = evaluateDiscoveryCandidate(alertCandidate, context(makeConfig())).score.total;
+    expect(alertTotal).toBeLessThan(
+      evaluateDiscoveryCandidate(nonAlerts[0]!, context(makeConfig())).score.total
+    );
+
+    const queue = buildDiscoveryQueue([...nonAlerts, alertCandidate], context(makeConfig()));
+
+    expect(queue.candidates).toHaveLength(20);
+    expect(queue.candidates[0]!.canonicalUrl).toBe("https://github.com/acme/repo-alert");
+    expect(queue.candidates[0]!.alert).toBe(true);
+    expect(queue.candidates[0]!.disposition).toBe("alert");
+    expect(queue.candidates.some((candidate) => candidate.canonicalUrl === "https://github.com/acme/repo-alert")).toBe(true);
+    expect(queue.counts).toMatchObject({ totalEvaluated: 25, queued: 20, alert: 1, new: 19 });
+    // Counts refer to the emitted queue: the five non-alert candidates that
+    // fell outside the cap are not counted as emitted "new" entries.
+    expect(queue.counts.new).not.toBe(24);
+    expect(queue.candidates.filter((candidate) => candidate.alert).length).toBe(queue.counts.alert);
+  });
+
   it("keeps tracked candidates with fresh momentum in the queue but flags them ineligible for automatic promotion", () => {
     const trackedUrl = "https://github.com/acme/repo-tracked";
     const tracked = makeCandidate({

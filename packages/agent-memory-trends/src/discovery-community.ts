@@ -26,6 +26,34 @@ export interface CommunityFetchClient {
   fetchJson(url: string): Promise<Result<unknown>>;
 }
 
+/**
+ * Default production fetch seam for the community adapters: platform fetch,
+ * one public JSON document per call, structured errors only. Injectable for
+ * tests; never carries credentials, prompts, environment values, or headers.
+ */
+export function createFetchJsonClient(
+  fetchImpl: (url: string) => Promise<{ ok: boolean; json: () => Promise<unknown> }> = fetch
+): CommunityFetchClient {
+  return {
+    async fetchJson(url) {
+      let response: { ok: boolean; json: () => Promise<unknown> };
+      try {
+        response = await fetchImpl(url);
+      } catch (error) {
+        return err("COMMUNITY_FETCH_FAILED", error instanceof Error ? error.message : String(error));
+      }
+      if (!response.ok) {
+        return err("COMMUNITY_FETCH_FAILED", `HTTP error for ${url}`);
+      }
+      try {
+        return ok(await response.json());
+      } catch (error) {
+        return err("COMMUNITY_FETCH_FAILED", error instanceof Error ? error.message : String(error));
+      }
+    },
+  };
+}
+
 export interface CommunityAdapterFetchInput {
   /** Maximum items this source may normalize per run. */
   maxItems: number;

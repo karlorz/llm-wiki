@@ -113,33 +113,41 @@ export function evaluateDiscoveryCandidate(
 /**
  * Rank all candidates and cap the queue at
  * config.discovery.maxDailyCandidates (v2 validation already caps it at 20).
+ * Eligible alerts are prioritized ahead of otherwise higher-scoring
+ * non-alert entries so an alert can never be pushed out of the emitted
+ * queue while non-alert candidates are retained. Disposition counts refer
+ * to the emitted queue (alert/tracked/new/watch), never to evaluated
+ * candidates that were dropped by the cap; `totalEvaluated` and
+ * `suppressed` are the only evaluated-level counts.
  */
 export function buildDiscoveryQueue(
   candidates: DiscoveryCandidate[],
   context: DiscoveryRankContext
 ): DiscoveryQueue {
   const evaluated = candidates.map((candidate) => evaluateDiscoveryCandidate(candidate, context));
+  const suppressed = evaluated.filter((candidate) => candidate.disposition === "suppressed").length;
+  const queued = evaluated
+    .filter((candidate) => candidate.disposition !== "suppressed")
+    .sort(
+      (left, right) =>
+        (right.alert ? 1 : 0) - (left.alert ? 1 : 0) ||
+        right.score.total - left.score.total ||
+        left.canonicalUrl.localeCompare(right.canonicalUrl)
+    )
+    .slice(0, context.config.discovery.maxDailyCandidates);
+
   const counts: DiscoveryQueue["counts"] = {
     totalEvaluated: evaluated.length,
-    queued: 0,
-    suppressed: 0,
+    queued: queued.length,
+    suppressed,
     alert: 0,
     tracked: 0,
     new: 0,
     watch: 0,
   };
-  for (const candidate of evaluated) {
+  for (const candidate of queued) {
     counts[candidate.disposition] += 1;
   }
-
-  const queued = evaluated
-    .filter((candidate) => candidate.disposition !== "suppressed")
-    .sort(
-      (left, right) =>
-        right.score.total - left.score.total || left.canonicalUrl.localeCompare(right.canonicalUrl)
-    )
-    .slice(0, context.config.discovery.maxDailyCandidates);
-  counts.queued = queued.length;
 
   return { generatedAt: context.now.toISOString(), candidates: queued, counts };
 }

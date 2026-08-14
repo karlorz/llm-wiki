@@ -18,6 +18,8 @@ export const DISCOVERY_MAX_RETENTION_DAYS = 90;
 export const DISCOVERY_MAX_API_CALL_BUDGET = 100;
 export const DISCOVERY_MAX_SEARCH_QUERIES = 100;
 export const DISCOVERY_MAX_ENRICHMENTS = 100;
+/** Maximum reachable repository signal: momentum 0..40 + official identity 0..15. */
+export const DISCOVERY_MAX_REPOSITORY_SIGNAL = 55;
 
 /** Maximum community items normalized per community source per run. */
 export const COMMUNITY_MAX_ITEMS_PER_SOURCE = 20;

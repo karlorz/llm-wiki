@@ -6,6 +6,7 @@ import {
   DISCOVERY_MAX_API_CALL_BUDGET,
   DISCOVERY_MAX_DAILY_CANDIDATES,
   DISCOVERY_MAX_ENRICHMENTS,
+  DISCOVERY_MAX_REPOSITORY_SIGNAL,
   DISCOVERY_MAX_RETENTION_DAYS,
   DISCOVERY_MAX_SEARCH_QUERIES,
   disabledDiscoveryConfig,
@@ -490,6 +491,12 @@ function validateResearchConfig(config: ResearchConfig, legacyQueries: boolean):
     }
     if (discovery.github.maxEnrichments > DISCOVERY_MAX_ENRICHMENTS) {
       return `discovery.github.max_enrichments must be <= ${DISCOVERY_MAX_ENRICHMENTS}`;
+    }
+    if (discovery.github.lanes.some((lane) => lane.perPage > 100)) {
+      return "discovery.github lanes per_page must be <= 100";
+    }
+    if (discovery.immediateAlert.minRepositorySignal > DISCOVERY_MAX_REPOSITORY_SIGNAL) {
+      return `discovery.immediate_alert.min_repository_signal must be <= ${DISCOVERY_MAX_REPOSITORY_SIGNAL}`;
     }
     if (discovery.github.lanes.length === 0) return "discovery.github lanes must contain at least one lane";
     const discoveryLaneIds = discovery.github.lanes.map((lane) => lane.id);

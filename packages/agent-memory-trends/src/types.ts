@@ -1,5 +1,10 @@
 import type { ResearchConfig } from "./config.js";
 import type { DuplicateSignals } from "./dedupe.js";
+import type {
+  CommunityCollectionOptions,
+  CommunityCollectionOutput,
+  CommunityFetchClient,
+} from "./discovery-community.js";
 import type { DiscoveryCollectorOptions, DiscoveryCollectionOutput } from "./discovery-github.js";
 import type { GhRunner, GithubCollectionOutput } from "./github.js";
 import type { AgentInput, WriteAgentInputOutput } from "./input.js";
@@ -75,6 +80,12 @@ export interface AgentMemoryTrendsContext {
     config: ResearchConfig,
     options: DiscoveryCollectorOptions
   ) => Promise<Result<DiscoveryCollectionOutput>>;
+  runCommunityCollection?: (
+    config: ResearchConfig,
+    options: CommunityCollectionOptions
+  ) => Promise<Result<CommunityCollectionOutput>>;
+  /** Fetch seam for the bounded community adapters; defaults to platform fetch. */
+  fetchJson?: CommunityFetchClient;
   collectDuplicateSignals?: (vault: string, project: string) => Result<DuplicateSignals>;
   writeAgentInput?: (input: AgentInput) => Result<WriteAgentInputOutput>;
   runSynthesis?: SynthesisRunner;

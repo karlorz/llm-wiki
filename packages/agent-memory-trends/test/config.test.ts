@@ -161,7 +161,7 @@ discovery:
   retention_days: 30
   immediate_alert:
     enabled: true
-    min_repository_signal: 100
+    min_repository_signal: 40
     min_independent_signal_count: 1
   github:
     api_call_budget: 60
@@ -518,7 +518,7 @@ describe("agent-memory-trends research config", () => {
       retentionDays: 30,
       immediateAlert: {
         enabled: true,
-        minRepositorySignal: 100,
+        minRepositorySignal: 40,
         minIndependentSignalCount: 1,
       },
       github: {
@@ -681,9 +681,15 @@ describe("agent-memory-trends research config", () => {
     ],
     [
       "a negative immediate-alert repository threshold",
-      "min_repository_signal: 100",
+      "min_repository_signal: 40",
       "min_repository_signal: -1",
       "min_repository_signal must be >= 0",
+    ],
+    [
+      "an immediate-alert repository threshold above the reachable signal maximum",
+      "min_repository_signal: 40",
+      "min_repository_signal: 56",
+      "min_repository_signal must be <= 55",
     ],
     [
       "a zero immediate-alert independent-signal count",
@@ -713,5 +719,18 @@ describe("agent-memory-trends research config", () => {
     if (parsed.ok) throw new Error("expected invalid config");
     expect(parsed.error).toBe("CONFIG_INVALID");
     expect(String(parsed.detail)).toContain(expectedDetail);
+  });
+
+  it("rejects a discovery lane per_page above the GitHub API limit", () => {
+    const discoveryLanePerPage = "order: desc\n        per_page: 10\n        quality_gate:\n          min_stars: 0";
+    const parsed = parseResearchConfig(
+      V2_CONFIG.replace(discoveryLanePerPage, discoveryLanePerPage.replace("per_page: 10", "per_page: 101")),
+      "invalid-v2.yaml"
+    );
+
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) throw new Error("expected invalid config");
+    expect(parsed.error).toBe("CONFIG_INVALID");
+    expect(String(parsed.detail)).toContain("discovery.github lanes per_page must be <= 100");
   });
 });

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runAgentMemoryTrendsCli } from "../src/cli.js";
-import { makeDiscoveryCandidate, type DiscoveryCandidate } from "../src/discovery-contracts.js";
+import { makeDiscoveryCandidate, type CommunityReference, type DiscoveryCandidate } from "../src/discovery-contracts.js";
 import { writeDiscoverySnapshot } from "../src/discovery-snapshots.js";
 import type { SelectedGithubCandidate } from "../src/github.js";
 
@@ -2081,7 +2081,7 @@ discovery:
   retention_days: 30
   immediate_alert:
     enabled: true
-    min_repository_signal: 100
+    min_repository_signal: 40
     min_independent_signal_count: 2
   github:
     api_call_budget: 60
@@ -2103,11 +2103,23 @@ discovery:
           - id: release-new
             label: New release query
             query: ""
-  official_organizations: []
+  official_organizations:
+    - github: deepseek-ai
+      region: CN
+      official_urls:
+        - https://www.deepseek.com/
+      categories:
+        - models
   community_sources:
     - id: hacker_news
       enabled: true
       role: corroboration
+    - id: hugging_face
+      enabled: true
+      role: corroboration
+    - id: chinese_public_sources
+      enabled: true
+      role: discovery
 `;
 
 describe("agent-memory-trends discover command", () => {
@@ -2192,7 +2204,7 @@ describe("agent-memory-trends discover command", () => {
     };
   }
 
-  it("wires v2 discover through the discovery collector and writes snapshot/latest/queue under the exact path", async () => {
+  it("wires v2 discover through the discovery collector, merges community warnings, and writes snapshot/latest/queue under the exact path", async () => {
     const { root, vault, configPath, readConfig } = discoverFixture();
     const now = new Date("2026-08-14T02:00:00Z");
     const discoveryDir = join(vault, ".skillwiki", "agent-memory-trends", "discovery");
@@ -2206,9 +2218,12 @@ describe("agent-memory-trends discover command", () => {
 
     const touched: string[] = [];
     let collectorCalls = 0;
+    let communityCalls = 0;
     let ghCalls = 0;
     const candidates = [
-      discoveryCandidate("https://github.com/acme/repo-a", 120, 10),
+      // repo-a is tracked by the prior snapshot and gains a positive 24h
+      // delta, so it must outrank the fresh repos and stay in the capped queue.
+      { ...discoveryCandidate("https://github.com/acme/repo-a", 120, 10), relevanceInput: 100 },
       ...Array.from({ length: 24 }, (_, index) =>
         discoveryCandidate(`https://github.com/acme/repo-${String(index).padStart(2, "0")}`)
       ),
@@ -2246,6 +2261,12 @@ describe("agent-memory-trends discover command", () => {
             },
           };
         },
+        runCommunityCollection: async (config, options) => {
+          communityCalls += 1;
+          expect(config.discovery.enabled).toBe(true);
+          expect(options.fetchJson).toBeDefined();
+          throw new Error("community unavailable");
+        },
         ...throwingInjectables(touched),
       }
     );
@@ -2254,6 +2275,7 @@ describe("agent-memory-trends discover command", () => {
     expect(result.result.ok).toBe(true);
     if (!result.result.ok) throw new Error("expected discover success");
     expect(collectorCalls).toBe(1);
+    expect(communityCalls).toBe(1);
     expect(ghCalls).toBe(0);
     expect(touched).toEqual([]);
 
@@ -2271,13 +2293,15 @@ describe("agent-memory-trends discover command", () => {
     ]);
     expect(existsSync(join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"))).toBe(false);
 
+    // The snapshot persists the same ranked, capped candidates as the queue.
     const snapshot = JSON.parse(readFileSync(datedPath, "utf8")) as { candidates: Array<Record<string, unknown>> };
-    expect(snapshot.candidates).toHaveLength(25);
+    expect(snapshot.candidates).toHaveLength(20);
     const repoA = snapshot.candidates.find(
       (candidate) => candidate.canonicalUrl === "https://github.com/acme/repo-a"
     )!;
     expect(repoA.starDelta24h).toBe(20);
     expect(repoA.forkDelta24h).toBe(2);
+    expect(repoA.disposition).toBe("tracked");
 
     const queue = JSON.parse(readFileSync(queuePath, "utf8")) as {
       formatVersion: number;
@@ -2288,11 +2312,16 @@ describe("agent-memory-trends discover command", () => {
     };
     expect(queue.formatVersion).toBe(1);
     expect(queue.snapshotPath).toBe(".skillwiki/agent-memory-trends/discovery/2026-08-14.json");
-    expect(queue.counts).toMatchObject({ totalEvaluated: 25, queued: 20 });
+    expect(queue.counts).toMatchObject({ totalEvaluated: 25, queued: 20, tracked: 1, new: 19 });
     expect(queue.candidates).toHaveLength(20);
-    expect(queue.candidates[0]!.disposition).toBe("new");
+    expect(queue.candidates[0]!.canonicalUrl).toBe("https://github.com/acme/repo-a");
+    expect(queue.candidates[0]!.disposition).toBe("tracked");
+    expect(queue.candidates[0]!.promotionEligible).toBe(false);
     expect((queue.candidates[0]!.score as { total: number }).total).toBeGreaterThan(0);
-    expect(queue.warnings).toEqual(["enrichment failed for acme/repo-a: sample failure"]);
+    expect(queue.warnings).toEqual([
+      "enrichment failed for acme/repo-a: sample failure",
+      "community collection failed: community unavailable",
+    ]);
     expect(JSON.stringify(queue)).not.toContain("latest-run");
     expect(result.result.data.humanHint).toContain("queued 20 candidate(s)");
     expect(result.result.data.humanHint).toContain("alert");
@@ -2302,6 +2331,7 @@ describe("agent-memory-trends discover command", () => {
   it("exercises collection and ranking in discover --dry-run without writing any vault file", async () => {
     const { root, vault, configPath, readConfig } = discoverFixture();
     let collectorCalls = 0;
+    let communityCalls = 0;
     const result = await runAgentMemoryTrendsCli(
       ["discover", "--dry-run", "--vault", vault, "--repo", root, "--config", configPath],
       {
@@ -2329,6 +2359,18 @@ describe("agent-memory-trends discover command", () => {
             },
           };
         },
+        runCommunityCollection: async () => {
+          communityCalls += 1;
+          return {
+            ok: true,
+            data: {
+              references: [],
+              warnings: [],
+              requestsUsed: 0,
+              sources: { attempted: [], skipped: ["hacker_news", "hugging_face", "chinese_public_sources"], unknown: [] },
+            },
+          };
+        },
       }
     );
 
@@ -2336,6 +2378,7 @@ describe("agent-memory-trends discover command", () => {
     expect(result.result.ok).toBe(true);
     if (!result.result.ok) throw new Error("expected discover dry-run success");
     expect(collectorCalls).toBe(1);
+    expect(communityCalls).toBe(1);
     expect(result.result.data.mutations).toEqual([]);
     expect(result.result.data.dryRun).toBe(true);
     expect(existsSync(join(vault, ".skillwiki"))).toBe(false);
@@ -2343,11 +2386,13 @@ describe("agent-memory-trends discover command", () => {
   });
 
   it.each(["v1", "v2-disabled"] as const)(
-    "fails closed for %s discovery config with zero runner calls and zero writes",
+    "fails closed for %s discovery config with zero runner, community, and fetch calls and zero writes",
     async (kind) => {
       const body = kind === "v1" ? CONFIG : DISCOVER_CONFIG.replace("enabled: true", "enabled: false");
       const { root, vault, configPath, readConfig } = discoverFixture(body);
       const ghCalls: string[][] = [];
+      let communityTouched = false;
+      let fetchTouched = false;
       let legacyTouched = false;
       const result = await runAgentMemoryTrendsCli(
         ["discover", "--vault", vault, "--repo", root, "--config", configPath],
@@ -2364,6 +2409,16 @@ describe("agent-memory-trends discover command", () => {
             legacyTouched = true;
             throw new Error("legacy collector must not run when discovery is disabled");
           },
+          runCommunityCollection: async () => {
+            communityTouched = true;
+            throw new Error("community collection must not run when discovery is disabled");
+          },
+          fetchJson: {
+            fetchJson: async () => {
+              fetchTouched = true;
+              throw new Error("community fetch must not run when discovery is disabled");
+            },
+          },
         }
       );
 
@@ -2372,11 +2427,254 @@ describe("agent-memory-trends discover command", () => {
       if (result.result.ok) throw new Error("expected discover to fail closed");
       expect(result.result.error).toBe("DISCOVERY_DISABLED");
       expect(ghCalls).toEqual([]);
+      expect(communityTouched).toBe(false);
+      expect(fetchTouched).toBe(false);
       expect(legacyTouched).toBe(false);
       expect(existsSync(join(vault, ".skillwiki"))).toBe(false);
       rmSync(root, { recursive: true, force: true });
     }
   );
+
+  it("merges matching HN/HF/China community references, retains bilingual bounded evidence, makes the two-signal alert possible, and never creates a community-only candidate", async () => {
+    const { root, vault, configPath, readConfig } = discoverFixture();
+    const now = new Date("2026-08-14T02:00:00Z");
+    const discoveryDir = join(vault, ".skillwiki", "agent-memory-trends", "discovery");
+
+    const alertRepo = {
+      ...discoveryCandidate("https://github.com/deepseek-ai/chat", 6000, 600),
+      fullName: "deepseek-ai/chat",
+      owner: "deepseek-ai",
+      name: "chat",
+      sourceIds: ["github_org_seed:deepseek-ai"],
+      relevanceInput: 80,
+      evidenceQualityInput: 0,
+    };
+    const candidates = [
+      alertRepo,
+      ...Array.from({ length: 24 }, (_, index) =>
+        discoveryCandidate(`https://github.com/acme/repo-${String(index).padStart(2, "0")}`)
+      ),
+    ];
+    const references: CommunityReference[] = [
+      {
+        canonicalUrl: "https://github.com/deepseek-ai/chat",
+        sourceId: "hacker_news",
+        sourceUrl: "https://news.ycombinator.com/item?id=1",
+        language: "zh",
+        title: "深度智能发布记忆模型",
+        excerpt: "中文摘要内容",
+        englishSummary: "HN story, score 42, 3 comments, by pg",
+        observedAt: "2026-08-14T01:00:00Z",
+      },
+      {
+        canonicalUrl: "https://github.com/deepseek-ai/chat",
+        sourceId: "hugging_face",
+        sourceUrl: "https://huggingface.co/models/deepseek-ai/chat",
+        title: "deepseek-ai/chat",
+        englishSummary: "Trending on Hugging Face, 100 likes",
+      },
+      {
+        canonicalUrl: "https://github.com/deepseek-ai/chat",
+        sourceId: "chinese_public_sources",
+        sourceUrl: "https://example.com.cn/posts/1",
+        language: "zh",
+        title: "中文社区讨论",
+        englishSummary: "Community observation in zh: \"中文社区讨论\"; no source-provided English summary",
+      },
+      {
+        canonicalUrl: "https://github.com/acme/repo-community-only",
+        sourceId: "hacker_news",
+        sourceUrl: "https://news.ycombinator.com/item?id=2",
+        title: "Community-only repo",
+        englishSummary: "HN story, score 5",
+      },
+    ];
+
+    const result = await runAgentMemoryTrendsCli(
+      ["discover", "--vault", vault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now,
+        readFile: readConfig,
+        runDiscoveryCollector: async () => {
+          return {
+            ok: true,
+            data: {
+              rateLimit: {
+                resources: {
+                  core: { remaining: 1, limit: 1, reset: 1 },
+                  search: { remaining: 1, limit: 1, reset: 1 },
+                },
+              },
+              apiCallsUsed: 3,
+              searchQueriesUsed: 2,
+              enrichmentsUsed: 0,
+              candidates,
+              warnings: [],
+              runSummary: { candidateCount: 25, apiCallsUsed: 3, searchQueriesUsed: 2, enrichmentsUsed: 0 },
+            },
+          };
+        },
+        runCommunityCollection: async (config) => {
+          expect(
+            config.discovery.communitySources.filter((source) => source.enabled).map((source) => source.id)
+          ).toEqual(["hacker_news", "hugging_face", "chinese_public_sources"]);
+          return {
+            ok: true,
+            data: {
+              references,
+              warnings: ["community source cn_extra failed: sample failure"],
+              requestsUsed: 3,
+              sources: {
+                attempted: ["hacker_news", "hugging_face", "chinese_public_sources"],
+                skipped: [],
+                unknown: [],
+              },
+            },
+          };
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected discover success");
+
+    const queuePath = join(discoveryDir, "2026-08-14-queue.json");
+    const datedPath = join(discoveryDir, "2026-08-14.json");
+    const queue = JSON.parse(readFileSync(queuePath, "utf8")) as {
+      counts: Record<string, number>;
+      candidates: Array<Record<string, unknown>>;
+      warnings: string[];
+    };
+    const snapshot = JSON.parse(readFileSync(datedPath, "utf8")) as {
+      candidates: Array<Record<string, unknown>>;
+    };
+
+    // The alert candidate is retained first in the emitted queue.
+    expect(queue.candidates[0]!.canonicalUrl).toBe("https://github.com/deepseek-ai/chat");
+    expect(queue.candidates[0]!.alert).toBe(true);
+    expect(queue.candidates[0]!.disposition).toBe("alert");
+    expect((queue.candidates[0]!.score as { repositorySignal: number }).repositorySignal).toBeGreaterThanOrEqual(40);
+    expect((queue.candidates[0]!.score as { components: { corroboration: number } }).components.corroboration).toBe(10);
+    expect(queue.counts).toMatchObject({ totalEvaluated: 25, queued: 20, alert: 1 });
+
+    // Community-only observations never create candidates.
+    expect(JSON.stringify(queue)).not.toContain("repo-community-only");
+    expect(JSON.stringify(snapshot)).not.toContain("repo-community-only");
+    expect(snapshot.candidates).toHaveLength(20);
+    expect(queue.warnings).toEqual(["community source cn_extra failed: sample failure"]);
+
+    // Bilingual bounded evidence survives the queue and snapshot contracts.
+    const alertInQueue = queue.candidates[0]!;
+    const evidence = alertInQueue.attentionEvidence as Array<Record<string, unknown>>;
+    expect(evidence).toHaveLength(3);
+    const hn = evidence.find((entry) => entry.sourceId === "hacker_news")!;
+    expect(hn.url).toBe("https://news.ycombinator.com/item?id=1");
+    expect(hn.language).toBe("zh");
+    expect(hn.title).toBe("深度智能发布记忆模型");
+    expect(hn.excerpt).toBe("中文摘要内容");
+    expect(hn.englishSummary).toBe("HN story, score 42, 3 comments, by pg");
+    const hf = evidence.find((entry) => entry.sourceId === "hugging_face")!;
+    expect(hf.englishSummary).toBe("Trending on Hugging Face, 100 likes");
+    const cn = evidence.find((entry) => entry.sourceId === "chinese_public_sources")!;
+    expect(cn.language).toBe("zh");
+    expect(cn.title).toBe("中文社区讨论");
+    expect(alertInQueue.sourceIds).toEqual(
+      expect.arrayContaining(["hacker_news", "hugging_face", "chinese_public_sources"])
+    );
+
+    const alertInSnapshot = snapshot.candidates.find(
+      (candidate) => candidate.canonicalUrl === "https://github.com/deepseek-ai/chat"
+    )!;
+    const snapshotEvidence = alertInSnapshot.attentionEvidence as Array<Record<string, unknown>>;
+    expect(snapshotEvidence.find((entry) => entry.sourceId === "hacker_news")!.englishSummary).toBe(
+      "HN story, score 42, 3 comments, by pg"
+    );
+
+    expect(result.result.data.humanHint).toContain("1 alert(s)");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("uses the real bounded community adapters through the injected fetch seam with no real network", async () => {
+    const { root, vault, configPath, readConfig } = discoverFixture();
+    const fetchCalls: string[] = [];
+    const result = await runAgentMemoryTrendsCli(
+      ["discover", "--vault", vault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now: new Date("2026-08-14T02:00:00Z"),
+        readFile: readConfig,
+        runDiscoveryCollector: async () => {
+          return {
+            ok: true,
+            data: {
+              rateLimit: {
+                resources: {
+                  core: { remaining: 1, limit: 1, reset: 1 },
+                  search: { remaining: 1, limit: 1, reset: 1 },
+                },
+              },
+              apiCallsUsed: 1,
+              searchQueriesUsed: 1,
+              enrichmentsUsed: 0,
+              candidates: [discoveryCandidate("https://github.com/acme/repo-a")],
+              warnings: [],
+              runSummary: { candidateCount: 1, apiCallsUsed: 1, searchQueriesUsed: 1, enrichmentsUsed: 0 },
+            },
+          };
+        },
+        fetchJson: {
+          fetchJson: async (url) => {
+            fetchCalls.push(url);
+            if (url === "https://hacker-news.firebaseio.com/v0/topstories.json") return { ok: true, data: [1] };
+            if (url === "https://hacker-news.firebaseio.com/v0/item/1.json") {
+              return {
+                ok: true,
+                data: {
+                  id: 1,
+                  by: "pg",
+                  score: 42,
+                  descendants: 3,
+                  time: 1752537600,
+                  title: "Agent memory tooling",
+                  url: "https://github.com/acme/repo-a",
+                },
+              };
+            }
+            return { ok: false, error: "UNEXPECTED_URL", detail: url };
+          },
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected discover success");
+    // Real adapters: HN firebase top-stories + one item, then the HF trending
+    // endpoint (which the fake fails, surfacing a per-source warning).
+    expect(fetchCalls).toEqual([
+      "https://hacker-news.firebaseio.com/v0/topstories.json",
+      "https://hacker-news.firebaseio.com/v0/item/1.json",
+      "https://huggingface.co/api/trending",
+    ]);
+
+    const queuePath = join(vault, ".skillwiki", "agent-memory-trends", "discovery", "2026-08-14-queue.json");
+    const queue = JSON.parse(readFileSync(queuePath, "utf8")) as {
+      candidates: Array<Record<string, unknown>>;
+      warnings: string[];
+    };
+    const evidence = queue.candidates[0]!.attentionEvidence as Array<Record<string, unknown>>;
+    expect(evidence).toHaveLength(1);
+    expect(evidence[0]!.sourceId).toBe("hacker_news");
+    expect(evidence[0]!.title).toBe("Agent memory tooling");
+    expect(evidence[0]!.englishSummary).toBe("HN story, score 42, 3 comments, by pg");
+    expect(queue.warnings.join(" ")).toContain("community source hugging_face failed");
+    expect(queue.warnings.join(" ")).toContain("community source chinese_public_sources is not registered");
+    rmSync(root, { recursive: true, force: true });
+  });
 
   it.each([
     ["--synthesis-retries", "3"],

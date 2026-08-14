@@ -185,6 +185,80 @@ describe("agent-memory-trends discovery snapshots", () => {
     expect(history.observationsByUrl.has("https://github.com/acme/repo-old")).toBe(false);
     expect(history.observationsByUrl.get("https://github.com/acme/repo-a")).toHaveLength(1);
   });
+
+  it("caps snapshot candidates at the discovery cap and redacts token-like free text before truncating", () => {
+    const straddlingToken = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+    // The token starts just before the 200-char cap and is cut in half by
+    // truncation; a truncate-then-redact serializer would persist the
+    // partial secret "ghp_abcdefghij".
+    const descriptionWithStraddlingSecret = `${"x".repeat(190)} ${straddlingToken}`;
+    const candidates = [
+      {
+        ...makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a" }),
+        description: descriptionWithStraddlingSecret,
+        topics: ["agent-memory", `GITHUB_TOKEN=${straddlingToken}`],
+        sourceIds: ["lane:release_velocity", `github_pat_abcdefghijklmnopqrstuvwxyz1234567`],
+        attentionEvidence: [
+          {
+            sourceId: "hacker_news",
+            url: "https://news.ycombinator.com/item?id=1",
+            title: "t".repeat(500),
+            englishSummary: `HN story with ${straddlingToken}`,
+          },
+        ],
+        reasons: [`reason with ${straddlingToken}`],
+      } as unknown as DiscoveryCandidate,
+      ...Array.from({ length: 24 }, (_, index) =>
+        makeCandidate({ canonicalUrl: `https://github.com/acme/repo-${index}` })
+      ),
+    ];
+    const snapshot: DiscoverySnapshot = {
+      formatVersion: 1,
+      runAt: "2026-08-14T02:00:00.000Z",
+      retentionDays: 30,
+      candidates,
+    };
+
+    const written = writeDiscoverySnapshot(dir, snapshot, 20);
+    expect(written.ok).toBe(true);
+    if (!written.ok) throw new Error("expected snapshot write to succeed");
+
+    const body = readFileSync(join(dir, "2026-08-14.json"), "utf8");
+    const parsed = JSON.parse(body) as { candidates: Array<Record<string, unknown>> };
+    expect(parsed.candidates).toHaveLength(20);
+
+    // Redaction happens before truncation: the token straddles the 200-char
+    // text cap, so a truncate-then-redact serializer would persist the
+    // partial secret. No part of the token may survive anywhere.
+    expect(body).not.toContain(straddlingToken);
+    expect(body).not.toContain("ghp_abcdefghij");
+    expect(body).not.toContain("github_pat_abcdefghijklmnopqrstuvwxyz1234567");
+    expect(body).toContain("[redacted]");
+
+    const first = parsed.candidates[0]!;
+    expect(first.description).toBe("[redacted]");
+    expect(first.topics).toContain("[redacted]");
+    expect(first.sourceIds).not.toContain("github_pat_abcdefghijklmnopqrstuvwxyz1234567");
+    expect(String((first.reasons as string[])[0])).toBe("[redacted]");
+    const evidence = first.attentionEvidence as Array<Record<string, unknown>>;
+    expect(String(evidence[0]!.title)).toHaveLength(200);
+    expect(evidence[0]!.englishSummary).toBe("[redacted]");
+
+    // The default defensive cap also applies when callers omit the cap.
+    const defaultWritten = writeDiscoverySnapshot(dir, {
+      ...snapshot,
+      runAt: "2026-08-15T02:00:00.000Z",
+      candidates: Array.from({ length: 25 }, (_, index) =>
+        makeCandidate({ canonicalUrl: `https://github.com/acme/repo-${index}` })
+      ),
+    });
+    expect(defaultWritten.ok).toBe(true);
+    if (!defaultWritten.ok) throw new Error("expected snapshot write to succeed");
+    const defaultParsed = JSON.parse(readFileSync(join(dir, "2026-08-15.json"), "utf8")) as {
+      candidates: Array<Record<string, unknown>>;
+    };
+    expect(defaultParsed.candidates).toHaveLength(20);
+  });
 });
 
 describe("agent-memory-trends discovery queue artifact", () => {

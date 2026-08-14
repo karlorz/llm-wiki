@@ -123,7 +123,7 @@ discovery:
   retention_days: 30               # default 30, bounded 1..90
   immediate_alert:
     enabled: true
-    min_repository_signal: 100     # nonnegative
+    min_repository_signal: 40      # nonnegative, <= 55 (repository signal is bounded at 55)
     min_independent_signal_count: 1  # positive
   github:
     api_call_budget: 60            # positive, <= 100
@@ -146,9 +146,12 @@ discovery:
 v2 is validated strictly: duplicate seed organizations (case-insensitive),
 invalid GitHub organization identifiers, non-HTTPS official URLs, duplicate
 community source IDs, unsupported community roles, a discovery daily max above
-20, invalid retention/budget values, and duplicate discovery lane/query IDs all
-reject the document with `CONFIG_INVALID`. Community sources only ever rank and
-corroborate; they cannot create work items on their own.
+20, invalid retention/budget values, discovery lane `per_page` above the
+GitHub API limit of 100, an immediate-alert repository threshold above the
+reachable signal bound of 55 (momentum 0..40 plus official identity 0..15),
+and duplicate discovery lane/query IDs all reject the document with
+`CONFIG_INVALID`. Community sources only ever rank and corroborate; they
+cannot create work items on their own.
 
 ## Synthesis Contract
 

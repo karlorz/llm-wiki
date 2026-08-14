@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   DISCOVERY_ATTENTION_EVIDENCE_MAX,
   DISCOVERY_ATTENTION_EXCERPT_MAX,
+  DISCOVERY_MAX_DAILY_CANDIDATES,
   type DiscoveryAttentionEvidence,
   type DiscoveryCandidate,
   type DiscoverySnapshot,
@@ -14,8 +15,10 @@ import { err, ok, type Result } from "./types.js";
  * caller-provided base directory. Persists only compact candidate facts,
  * score/delta fields, source IDs/URLs, alert/status/reasons, and the run
  * timestamp; never README bodies, page bodies, prompts, env vars, tokens, or
- * secrets. Filesystem writes are deliberately not wired into vault/output
- * allowlists; callers always pass a temporary or dedicated base directory.
+ * secrets. Every retained free-text value is token-redacted before
+ * truncation and candidates are capped at the discovery maximum. Filesystem
+ * writes are deliberately not wired into vault/output allowlists; callers
+ * always pass a temporary or dedicated base directory.
  */
 
 export interface DiscoveryHistoryObservation {
@@ -49,11 +52,14 @@ const SNAPSHOT_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}\.json$/;
 /**
  * Write one dated daily snapshot plus a latest.json pointer, both with the
  * same deterministic serialized content. The dated file name derives from
- * the snapshot's own runAt timestamp (UTC date).
+ * the snapshot's own runAt timestamp (UTC date). Candidates are capped at
+ * `maxDailyCandidates` (defaults to the discovery hard cap) so the persisted
+ * snapshot can never exceed the validated queue size.
  */
 export function writeDiscoverySnapshot(
   dir: string,
-  snapshot: DiscoverySnapshot
+  snapshot: DiscoverySnapshot,
+  maxDailyCandidates = DISCOVERY_MAX_DAILY_CANDIDATES
 ): Result<WriteDiscoverySnapshotOutput> {
   try {
     const runAt = new Date(snapshot.runAt);
@@ -62,7 +68,7 @@ export function writeDiscoverySnapshot(
     }
     mkdirSync(dir, { recursive: true });
     const datedFile = `${dateKey(runAt)}.json`;
-    const payload = serializeSnapshot(snapshot);
+    const payload = serializeSnapshot(snapshot, maxDailyCandidates);
     const datedPath = join(dir, datedFile);
     const latestPath = join(dir, "latest.json");
     writeFileSync(datedPath, payload, "utf8");
@@ -248,13 +254,16 @@ function addDays(dateKeyValue: string, days: number): string {
 }
 
 /** Deterministic serialization with a stable, explicit field order. */
-function serializeSnapshot(snapshot: DiscoverySnapshot): string {
+function serializeSnapshot(snapshot: DiscoverySnapshot, maxDailyCandidates: number): string {
+  const cap = Number.isFinite(maxDailyCandidates)
+    ? Math.max(0, Math.floor(maxDailyCandidates))
+    : DISCOVERY_MAX_DAILY_CANDIDATES;
   return JSON.stringify(
     {
       formatVersion: 1,
       runAt: snapshot.runAt,
       retentionDays: snapshot.retentionDays,
-      candidates: snapshot.candidates.map(serializeCandidate),
+      candidates: snapshot.candidates.slice(0, cap).map(serializeCandidate),
     },
     null,
     2
@@ -272,18 +281,12 @@ function serializeCandidate(candidate: DiscoveryCandidate): Record<string, unkno
     stargazersCount: candidate.stargazersCount,
     forksCount: candidate.forksCount,
     archived: candidate.archived,
-    topics: candidate.topics,
-    description: candidate.description,
+    topics: candidate.topics.slice(0, 20).map(sanitizeDiscoveryText),
+    description: sanitizeDiscoveryText(candidate.description),
     license: candidate.license,
     defaultBranch: candidate.defaultBranch,
-    sourceIds: candidate.sourceIds,
-    attentionEvidence: candidate.attentionEvidence.map((evidence) => ({
-      sourceId: evidence.sourceId,
-      url: evidence.url,
-      language: evidence.language ?? null,
-      title: evidence.title ?? null,
-      excerpt: evidence.excerpt ?? null,
-    })),
+    sourceIds: uniqueInOrder(candidate.sourceIds).slice(0, 20).map(sanitizeDiscoveryText),
+    attentionEvidence: serializeAttentionEvidence(candidate.attentionEvidence),
     relevanceInput: candidate.relevanceInput,
     evidenceQualityInput: candidate.evidenceQualityInput,
     starDelta24h: candidate.starDelta24h,
@@ -304,7 +307,7 @@ function serializeCandidate(candidate: DiscoveryCandidate): Record<string, unkno
         evidenceQuality: candidate.score.components.evidenceQuality,
       },
     },
-    reasons: candidate.reasons,
+    reasons: candidate.reasons.slice(0, 20).map(sanitizeDiscoveryText),
   };
 }
 
@@ -354,9 +357,15 @@ const DISCOVERY_TOKEN_PATTERNS = [
   /\bAKIA[0-9A-Z]{16}\b/,
 ];
 
+/**
+ * Sanitize one retained free-text value: redact the whole value when a
+ * token pattern matches anywhere in it (before truncation, so a credential
+ * straddling the cap can never persist as a partial secret), then cap the
+ * length.
+ */
 function sanitizeDiscoveryText(text: string): string {
-  const capped = text.slice(0, DISCOVERY_ATTENTION_EXCERPT_MAX);
-  return DISCOVERY_TOKEN_PATTERNS.some((pattern) => pattern.test(capped)) ? "[redacted]" : capped;
+  const redacted = DISCOVERY_TOKEN_PATTERNS.some((pattern) => pattern.test(text)) ? "[redacted]" : text;
+  return redacted.slice(0, DISCOVERY_ATTENTION_EXCERPT_MAX);
 }
 
 /**
@@ -411,8 +420,8 @@ function serializeQueueCandidate(candidate: DiscoveryCandidate): Record<string, 
     forksCount: candidate.forksCount,
     pushedAt: candidate.pushedAt,
     archived: candidate.archived,
-    sourceIds: uniqueInOrder(candidate.sourceIds).slice(0, 20),
-    attentionEvidence: serializeQueueEvidence(candidate.attentionEvidence),
+    sourceIds: uniqueInOrder(candidate.sourceIds).slice(0, 20).map(sanitizeDiscoveryText),
+    attentionEvidence: serializeAttentionEvidence(candidate.attentionEvidence),
     score: {
       total: candidate.score.total,
       repositorySignal: candidate.score.repositorySignal,
@@ -431,7 +440,7 @@ function serializeQueueCandidate(candidate: DiscoveryCandidate): Record<string, 
   };
 }
 
-function serializeQueueEvidence(evidence: DiscoveryAttentionEvidence[]): Record<string, unknown>[] {
+function serializeAttentionEvidence(evidence: DiscoveryAttentionEvidence[]): Record<string, unknown>[] {
   return evidence.slice(0, DISCOVERY_ATTENTION_EVIDENCE_MAX).map((item) => ({
     sourceId: sanitizeDiscoveryText(item.sourceId),
     url: sanitizeDiscoveryText(item.url),
