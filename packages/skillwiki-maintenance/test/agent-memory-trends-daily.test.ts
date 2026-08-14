@@ -174,6 +174,50 @@ describe("runAgentMemoryTrendsDaily", () => {
     expect(git(vault, "rev-parse", "HEAD")).toBe(before);
   });
 
+  it("accepts discovery snapshot/latest/queue outputs through the existing transaction allowlist", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-trends-discovery-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const before = git(vault, "rev-parse", "HEAD");
+    const discoveryFiles = [
+      ".skillwiki/agent-memory-trends/discovery/2026-06-13.json",
+      ".skillwiki/agent-memory-trends/discovery/2026-06-13-queue.json",
+      ".skillwiki/agent-memory-trends/discovery/latest.json",
+    ];
+
+    const check = await runAgentMemoryTrendsDaily({
+      vaultPath: vault,
+      repoPath: repo,
+      project: "llm-wiki",
+      runCommand: async (command, args, options) => {
+        if (command === "git") return runGit(args, options.cwd);
+        if (command !== "agent-memory-trends") return result("", 127, `unexpected command: ${command}`);
+        const discoveryDir = join(vault, ".skillwiki", "agent-memory-trends", "discovery");
+        mkdirSync(discoveryDir, { recursive: true });
+        for (const file of discoveryFiles) {
+          writeFileSync(join(vault, file), "{}\n", "utf8");
+        }
+        return result(JSON.stringify({
+          ok: true,
+          data: {
+            mutations: discoveryFiles,
+            humanHint: "discover: ok; queued 1 candidate(s), 0 alert(s)",
+          },
+        }) + "\n");
+      },
+    });
+
+    expect(check.status).toBe("pass");
+    expect(check.details.committed).toBe(true);
+    expect(check.details.changedFiles).toEqual([
+      ".skillwiki/agent-memory-trends/discovery/2026-06-13-queue.json",
+      ".skillwiki/agent-memory-trends/discovery/2026-06-13.json",
+      ".skillwiki/agent-memory-trends/discovery/latest.json",
+    ]);
+    expect(check.details.jobData?.humanHint).toBe("discover: ok; queued 1 candidate(s), 0 alert(s)");
+    expect(git(vault, "rev-list", "--count", `${before}..HEAD`)).toBe("1");
+  });
+
   it("preserves failed agent-memory-trends stdout and stderr after cleanup", async () => {
     const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-trends-fail-"));
     const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));

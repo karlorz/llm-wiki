@@ -1,8 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runAgentMemoryTrendsCli } from "../src/cli.js";
+import { makeDiscoveryCandidate, type DiscoveryCandidate } from "../src/discovery-contracts.js";
+import { writeDiscoverySnapshot } from "../src/discovery-snapshots.js";
 import type { SelectedGithubCandidate } from "../src/github.js";
 
 const CONFIG = `version: 1
@@ -407,7 +409,7 @@ describe("agent-memory-trends CLI", () => {
     if (result.result.ok) throw new Error("expected usage error");
     expect(result.result.error).toBe("USAGE");
     expect(result.result.detail).toEqual({
-      message: "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]",
+      message: "Usage: agent-memory-trends <doctor|collect|daily|discover|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]",
     });
   });
 
@@ -1581,6 +1583,120 @@ describe("agent-memory-trends CLI", () => {
     ]);
   });
 
+  it("cleans interrupted discovery generation files during live daily preflight", async () => {
+    const calls: string[] = [];
+    const result = await runAgentMemoryTrendsCli(["daily", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
+      cwd: "/repo",
+      env: {},
+      now: new Date("2026-06-11T00:10:00+08:00"),
+      readFile: () => CONFIG,
+      runCommand: async (command, args) => {
+        calls.push(`${command}:${args.join(" ")}`);
+        if (command === "git" && args.join(" ") === "-C /vault status --porcelain --untracked-files=all") {
+          return {
+            exitCode: 0,
+            stdout: [
+              " M .skillwiki/agent-memory-trends/discovery/2026-08-13.json",
+              "?? .skillwiki/agent-memory-trends/discovery/2026-08-14-queue.json",
+              "?? .skillwiki/agent-memory-trends/discovery/latest.json",
+            ].join("\n") + "\n",
+            stderr: "",
+          };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      collectGithubCandidates: async () => ({ ok: true, data: {
+        rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+        apiCallsUsed: 12,
+        rawCandidateCount: 1,
+        selectedCandidates: [selectedCandidate()],
+        runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+      } }),
+      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
+      writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
+      runSynthesis: async () => ({
+        ok: true,
+        data: {
+          manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
+          outputLastMessagePath: "/tmp/last-message.md",
+          stdout: "",
+          stderr: "",
+          output: { proposals: [] },
+        },
+      }),
+      renderProposalCaptures: () => ({ ok: true, data: { renderedPaths: [], validationErrors: [], duplicateSuppressions: [] } }),
+      refreshSessionBrief: async () => ({ ok: true, data: { filesWritten: [] } }),
+      listTrackedRawPaths: async () => ({ ok: true, data: [] }),
+      publishGeneratedChanges: async () => ({
+        ok: true,
+        data: {
+          baseCommit: "abc123",
+          changedFiles: [".skillwiki/agent-memory-trends/latest-run.json"],
+          commitMessage: "research(agent-memory): daily digest 2026-06-11",
+        },
+      }),
+      maybeSendHeartbeat: async () => ({ ok: true, data: { status: "skipped", reason: "heartbeat URL missing" } }),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    expect(calls.slice(0, 4)).toEqual([
+      "git:-C /vault status --porcelain --untracked-files=all",
+      "git:-C /vault restore --source=HEAD --staged --worktree -- .skillwiki/agent-memory-trends/discovery/2026-08-13.json",
+      "git:-C /vault clean -f -- .skillwiki/agent-memory-trends/discovery/2026-08-14-queue.json .skillwiki/agent-memory-trends/discovery/latest.json",
+      "git:-C /vault pull --rebase origin main",
+    ]);
+  });
+
+  it("keeps unrelated dirty .skillwiki files as a dirty-preflight failure", async () => {
+    const calls: string[] = [];
+    const result = await runAgentMemoryTrendsCli(["daily", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
+      cwd: "/repo",
+      env: {},
+      now: new Date("2026-06-11T00:10:00+08:00"),
+      readFile: () => CONFIG,
+      runCommand: async (command, args) => {
+        calls.push(`${command}:${args.join(" ")}`);
+        if (command === "git" && args.join(" ") === "-C /vault status --porcelain --untracked-files=all") {
+          return { exitCode: 0, stdout: "?? .skillwiki/agent-memory-trends/discovery/notes.json\n", stderr: "" };
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+      collectGithubCandidates: async () => {
+        calls.push("collect");
+        return { ok: true, data: {
+          rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+          apiCallsUsed: 12,
+          rawCandidateCount: 1,
+          selectedCandidates: [selectedCandidate()],
+          runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        } };
+      },
+      writeRunState: () => {
+        calls.push("write-state");
+        return {
+          ok: true,
+          data: {
+            runStatePath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
+            latestRunPath: "/vault/.skillwiki/agent-memory-trends/latest-run.json",
+          },
+        };
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected daily failure");
+    expect(result.result.error).toBe("DIRTY_PREFLIGHT");
+    expect(result.result.detail).toMatchObject({
+      dirtyFiles: [".skillwiki/agent-memory-trends/discovery/notes.json"],
+    });
+    expect(calls).toEqual([
+      "git:-C /vault status --porcelain --untracked-files=all",
+      "write-state",
+    ]);
+  });
+
   it("wires daily --generate-only through generation without publish, heartbeat, or session brief refresh", async () => {
     const calls: string[] = [];
     const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-generate-only-"));
@@ -1913,5 +2029,383 @@ describe("agent-memory-trends CLI", () => {
     ]);
     if (!result.result.ok) throw new Error("expected publish success");
     expect(result.result.data.mutations).toEqual(["queries/2026-06-11-agent-memory-trends-digest.md"]);
+  });
+});
+
+const DISCOVER_CONFIG = `version: 2
+project: llm-wiki
+timezone: Asia/Hong_Kong
+research_promotion:
+  scoring:
+    threshold: 65
+    weights:
+      relevance: 30
+      implementation_evidence: 25
+      authority_momentum: 25
+      freshness: 10
+      novelty_or_tracking: 10
+  github:
+    api_call_budget: 100
+    max_queries: 24
+    max_raw_candidates: 50
+    max_selected_candidates: 10
+    lanes:
+      - id: promotion_relevance
+        label: Promotion relevance lane
+        window_days: 7
+        date_field: pushed
+        sort: updated
+        order: desc
+        per_page: 10
+        quality_gate:
+          min_stars: 10
+          min_forks: 0
+          min_evidence_families: 2
+        queries:
+          - id: promo-memory
+            label: Promo memory query
+            query: coding agent memory in:name,description,readme
+  dedupe:
+    digest_ttl_days: 7
+  watchlist:
+    auto_append:
+      min_appearances: 3
+      window_days: 14
+      min_score: 65
+    accepted: []
+    rejected: []
+    archived: []
+discovery:
+  enabled: true
+  max_daily_candidates: 20
+  retention_days: 30
+  immediate_alert:
+    enabled: true
+    min_repository_signal: 100
+    min_independent_signal_count: 2
+  github:
+    api_call_budget: 60
+    max_search_queries: 24
+    max_enrichments: 40
+    new_release_lanes:
+      - id: release_velocity
+        label: New release velocity
+        window_days: 2
+        date_field: pushed
+        sort: updated
+        order: desc
+        per_page: 10
+        quality_gate:
+          min_stars: 0
+          min_forks: 0
+          min_evidence_families: 1
+        queries:
+          - id: release-new
+            label: New release query
+            query: ""
+  official_organizations: []
+  community_sources:
+    - id: hacker_news
+      enabled: true
+      role: corroboration
+`;
+
+describe("agent-memory-trends discover command", () => {
+  function discoverFixture(configBody: string = DISCOVER_CONFIG) {
+    const root = mkdtempSync(join(tmpdir(), "agent-memory-trends-discover-"));
+    const vault = join(root, "vault");
+    const configPath = join(root, "config.yaml");
+    mkdirSync(vault, { recursive: true });
+    writeFileSync(configPath, configBody, "utf8");
+    return {
+      root,
+      vault,
+      configPath,
+      readConfig: (path: string) => {
+        if (path === configPath) return configBody;
+        throw new Error(`unexpected readFile path: ${path}`);
+      },
+    };
+  }
+
+  function discoveryCandidate(url: string, stars = 6000, forks = 600): DiscoveryCandidate {
+    const fullName = url.replace("https://github.com/", "");
+    return makeDiscoveryCandidate({
+      canonicalUrl: url,
+      fullName,
+      owner: fullName.split("/")[0]!,
+      name: fullName.split("/")[1]!,
+      createdAt: "2026-06-01T00:00:00Z",
+      pushedAt: "2026-08-13T00:00:00Z",
+      stargazersCount: stars,
+      forksCount: forks,
+      archived: false,
+      topics: ["agent-memory"],
+      description: "coding agent memory with markdown and sqlite",
+      license: "MIT",
+      defaultBranch: "main",
+      sourceIds: ["lane:release_velocity", "query:release-new"],
+      attentionEvidence: [],
+      relevanceInput: 80,
+      evidenceQualityInput: 40,
+    });
+  }
+
+  function throwingInjectables(touched: string[]) {
+    return {
+      collectGithubCandidates: async () => {
+        touched.push("legacy-collector");
+        throw new Error("legacy collector must not be called by discover");
+      },
+      collectDuplicateSignals: () => {
+        touched.push("dedupe");
+        throw new Error("dedupe scan must not be called by discover");
+      },
+      writeAgentInput: () => {
+        touched.push("write-input");
+        throw new Error("input writer must not be called by discover");
+      },
+      runSynthesis: async () => {
+        touched.push("synthesis");
+        throw new Error("synthesis must not be called by discover");
+      },
+      renderProposalCaptures: () => {
+        touched.push("render-captures");
+        throw new Error("capture rendering must not be called by discover");
+      },
+      refreshSessionBrief: async () => {
+        touched.push("session-brief");
+        throw new Error("session brief refresh must not be called by discover");
+      },
+      publishGeneratedChanges: async () => {
+        touched.push("publish");
+        throw new Error("publish must not be called by discover");
+      },
+      maybeSendHeartbeat: async () => {
+        touched.push("heartbeat");
+        throw new Error("heartbeat must not be called by discover");
+      },
+      writeRunState: () => {
+        touched.push("run-state");
+        throw new Error("run-state writer must not be called by discover");
+      },
+    };
+  }
+
+  it("wires v2 discover through the discovery collector and writes snapshot/latest/queue under the exact path", async () => {
+    const { root, vault, configPath, readConfig } = discoverFixture();
+    const now = new Date("2026-08-14T02:00:00Z");
+    const discoveryDir = join(vault, ".skillwiki", "agent-memory-trends", "discovery");
+    const prior = writeDiscoverySnapshot(discoveryDir, {
+      formatVersion: 1,
+      runAt: "2026-08-13T02:00:00.000Z",
+      retentionDays: 30,
+      candidates: [discoveryCandidate("https://github.com/acme/repo-a", 100, 8)],
+    });
+    expect(prior.ok).toBe(true);
+
+    const touched: string[] = [];
+    let collectorCalls = 0;
+    let ghCalls = 0;
+    const candidates = [
+      discoveryCandidate("https://github.com/acme/repo-a", 120, 10),
+      ...Array.from({ length: 24 }, (_, index) =>
+        discoveryCandidate(`https://github.com/acme/repo-${String(index).padStart(2, "0")}`)
+      ),
+    ];
+    const result = await runAgentMemoryTrendsCli(
+      ["discover", "--vault", vault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now,
+        readFile: readConfig,
+        runGh: async () => {
+          ghCalls += 1;
+          throw new Error("gh runner must not be called when the discovery collector is injected");
+        },
+        runDiscoveryCollector: async (config, options) => {
+          collectorCalls += 1;
+          expect(config.discovery.enabled).toBe(true);
+          expect(options.now).toBe(now);
+          return {
+            ok: true,
+            data: {
+              rateLimit: {
+                resources: {
+                  core: { remaining: 1, limit: 1, reset: 1 },
+                  search: { remaining: 1, limit: 1, reset: 1 },
+                },
+              },
+              apiCallsUsed: 3,
+              searchQueriesUsed: 2,
+              enrichmentsUsed: 0,
+              candidates,
+              warnings: ["enrichment failed for acme/repo-a: sample failure"],
+              runSummary: { candidateCount: 25, apiCallsUsed: 3, searchQueriesUsed: 2, enrichmentsUsed: 0 },
+            },
+          };
+        },
+        ...throwingInjectables(touched),
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected discover success");
+    expect(collectorCalls).toBe(1);
+    expect(ghCalls).toBe(0);
+    expect(touched).toEqual([]);
+
+    const datedPath = join(discoveryDir, "2026-08-14.json");
+    const latestPath = join(discoveryDir, "latest.json");
+    const queuePath = join(discoveryDir, "2026-08-14-queue.json");
+    expect(result.result.data.mutations).toEqual([datedPath, latestPath, queuePath]);
+    expect(result.result.data.command).toBe("discover");
+    expect(result.result.data.dryRun).toBe(false);
+    expect(readdirSync(discoveryDir).sort()).toEqual([
+      "2026-08-13.json",
+      "2026-08-14-queue.json",
+      "2026-08-14.json",
+      "latest.json",
+    ]);
+    expect(existsSync(join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"))).toBe(false);
+
+    const snapshot = JSON.parse(readFileSync(datedPath, "utf8")) as { candidates: Array<Record<string, unknown>> };
+    expect(snapshot.candidates).toHaveLength(25);
+    const repoA = snapshot.candidates.find(
+      (candidate) => candidate.canonicalUrl === "https://github.com/acme/repo-a"
+    )!;
+    expect(repoA.starDelta24h).toBe(20);
+    expect(repoA.forkDelta24h).toBe(2);
+
+    const queue = JSON.parse(readFileSync(queuePath, "utf8")) as {
+      formatVersion: number;
+      snapshotPath: string;
+      counts: Record<string, number>;
+      candidates: Array<Record<string, unknown>>;
+      warnings: string[];
+    };
+    expect(queue.formatVersion).toBe(1);
+    expect(queue.snapshotPath).toBe(".skillwiki/agent-memory-trends/discovery/2026-08-14.json");
+    expect(queue.counts).toMatchObject({ totalEvaluated: 25, queued: 20 });
+    expect(queue.candidates).toHaveLength(20);
+    expect(queue.candidates[0]!.disposition).toBe("new");
+    expect((queue.candidates[0]!.score as { total: number }).total).toBeGreaterThan(0);
+    expect(queue.warnings).toEqual(["enrichment failed for acme/repo-a: sample failure"]);
+    expect(JSON.stringify(queue)).not.toContain("latest-run");
+    expect(result.result.data.humanHint).toContain("queued 20 candidate(s)");
+    expect(result.result.data.humanHint).toContain("alert");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("exercises collection and ranking in discover --dry-run without writing any vault file", async () => {
+    const { root, vault, configPath, readConfig } = discoverFixture();
+    let collectorCalls = 0;
+    const result = await runAgentMemoryTrendsCli(
+      ["discover", "--dry-run", "--vault", vault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now: new Date("2026-08-14T02:00:00Z"),
+        readFile: readConfig,
+        runDiscoveryCollector: async () => {
+          collectorCalls += 1;
+          return {
+            ok: true,
+            data: {
+              rateLimit: {
+                resources: {
+                  core: { remaining: 1, limit: 1, reset: 1 },
+                  search: { remaining: 1, limit: 1, reset: 1 },
+                },
+              },
+              apiCallsUsed: 1,
+              searchQueriesUsed: 1,
+              enrichmentsUsed: 0,
+              candidates: [discoveryCandidate("https://github.com/acme/repo-a")],
+              warnings: [],
+              runSummary: { candidateCount: 1, apiCallsUsed: 1, searchQueriesUsed: 1, enrichmentsUsed: 0 },
+            },
+          };
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected discover dry-run success");
+    expect(collectorCalls).toBe(1);
+    expect(result.result.data.mutations).toEqual([]);
+    expect(result.result.data.dryRun).toBe(true);
+    expect(existsSync(join(vault, ".skillwiki"))).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each(["v1", "v2-disabled"] as const)(
+    "fails closed for %s discovery config with zero runner calls and zero writes",
+    async (kind) => {
+      const body = kind === "v1" ? CONFIG : DISCOVER_CONFIG.replace("enabled: true", "enabled: false");
+      const { root, vault, configPath, readConfig } = discoverFixture(body);
+      const ghCalls: string[][] = [];
+      let legacyTouched = false;
+      const result = await runAgentMemoryTrendsCli(
+        ["discover", "--vault", vault, "--repo", root, "--config", configPath],
+        {
+          cwd: root,
+          env: {},
+          now: new Date("2026-08-14T02:00:00Z"),
+          readFile: readConfig,
+          runGh: async (args) => {
+            ghCalls.push(args);
+            return { exitCode: 0, stdout: "", stderr: "" };
+          },
+          collectGithubCandidates: async () => {
+            legacyTouched = true;
+            throw new Error("legacy collector must not run when discovery is disabled");
+          },
+        }
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.result.ok).toBe(false);
+      if (result.result.ok) throw new Error("expected discover to fail closed");
+      expect(result.result.error).toBe("DISCOVERY_DISABLED");
+      expect(ghCalls).toEqual([]);
+      expect(legacyTouched).toBe(false);
+      expect(existsSync(join(vault, ".skillwiki"))).toBe(false);
+      rmSync(root, { recursive: true, force: true });
+    }
+  );
+
+  it.each([
+    ["--synthesis-retries", "3"],
+    ["--synthesis-fallback", "claude"],
+    ["--synthesis-timeout-ms", "300000"],
+    ["--generate-only", undefined],
+    ["--preview-only", undefined],
+  ] as const)("rejects discover with %s as a usage error before the collector runs", async (flag, value) => {
+    const { root, vault, configPath, readConfig } = discoverFixture();
+    const argv = ["discover", flag, ...(value === undefined ? [] : [value]), "--vault", vault, "--repo", root, "--config", configPath];
+    let collectorTouched = false;
+    const result = await runAgentMemoryTrendsCli(argv, {
+      cwd: root,
+      env: {},
+      now: new Date("2026-08-14T02:00:00Z"),
+      readFile: readConfig,
+      runDiscoveryCollector: async () => {
+        collectorTouched = true;
+        throw new Error("discovery collector must not run for rejected flags");
+      },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected usage failure");
+    expect(result.result.error).toBe("USAGE");
+    expect(String(result.result.detail)).toContain(flag);
+    expect(collectorTouched).toBe(false);
+    expect(existsSync(join(vault, ".skillwiki"))).toBe(false);
+    rmSync(root, { recursive: true, force: true });
   });
 });

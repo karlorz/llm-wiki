@@ -13,7 +13,9 @@ import {
   loadDiscoveryHistory,
   pruneDiscoverySnapshots,
   readDiscoverySnapshot,
+  writeDiscoveryQueue,
   writeDiscoverySnapshot,
+  type DiscoveryQueueCounts,
 } from "../src/discovery-snapshots.js";
 
 let dir: string;
@@ -182,5 +184,181 @@ describe("agent-memory-trends discovery snapshots", () => {
     expect(history.warnings).toEqual([]);
     expect(history.observationsByUrl.has("https://github.com/acme/repo-old")).toBe(false);
     expect(history.observationsByUrl.get("https://github.com/acme/repo-a")).toHaveLength(1);
+  });
+});
+
+describe("agent-memory-trends discovery queue artifact", () => {
+  function queueCounts(overrides: Partial<DiscoveryQueueCounts> = {}): DiscoveryQueueCounts {
+    return {
+      totalEvaluated: 1,
+      queued: 1,
+      suppressed: 0,
+      alert: 0,
+      tracked: 0,
+      new: 1,
+      watch: 0,
+      ...overrides,
+    };
+  }
+
+  it("writes a dated queue artifact with deterministic field order, counts, and warnings", () => {
+    const written = writeDiscoveryQueue({
+      dir,
+      snapshotPath: ".skillwiki/agent-memory-trends/discovery/2026-08-14.json",
+      generatedAt: "2026-08-14T02:00:00.000Z",
+      maxDailyCandidates: 20,
+      counts: queueCounts(),
+      candidates: [makeCandidate()],
+      warnings: ["collector: enrichment failed for acme/repo-a", "history: malformed snapshot 2026-08-13.json"],
+    });
+    expect(written.ok).toBe(true);
+    if (!written.ok) throw new Error("expected queue write to succeed");
+    expect(written.data.queueFile).toBe("2026-08-14-queue.json");
+    expect(existsSync(join(dir, "2026-08-14-queue.json"))).toBe(true);
+
+    const parsed = JSON.parse(readFileSync(join(dir, "2026-08-14-queue.json"), "utf8")) as Record<string, unknown>;
+    expect(Object.keys(parsed)).toEqual([
+      "formatVersion",
+      "generatedAt",
+      "snapshotPath",
+      "maxDailyCandidates",
+      "counts",
+      "candidates",
+      "warnings",
+    ]);
+    expect(parsed.formatVersion).toBe(1);
+    expect(parsed.generatedAt).toBe("2026-08-14T02:00:00.000Z");
+    expect(parsed.snapshotPath).toBe(".skillwiki/agent-memory-trends/discovery/2026-08-14.json");
+    expect(parsed.maxDailyCandidates).toBe(20);
+    expect(parsed.warnings).toEqual([
+      "collector: enrichment failed for acme/repo-a",
+      "history: malformed snapshot 2026-08-13.json",
+    ]);
+
+    const candidate = (parsed.candidates as Record<string, unknown>[])[0]!;
+    expect(Object.keys(candidate).sort()).toEqual([
+      "alert",
+      "archived",
+      "attentionEvidence",
+      "canonicalUrl",
+      "description",
+      "disposition",
+      "forksCount",
+      "fullName",
+      "name",
+      "owner",
+      "promotionEligible",
+      "pushedAt",
+      "reasons",
+      "score",
+      "sourceIds",
+      "stargazersCount",
+      "topics",
+    ]);
+    expect(JSON.stringify(parsed)).not.toContain("prompt");
+    expect(JSON.stringify(parsed)).not.toContain("readmeText");
+    expect(JSON.stringify(parsed)).not.toContain("secret");
+    expect(JSON.stringify(parsed)).not.toContain("token");
+  });
+
+  it("caps candidates at maxDailyCandidates and bounds attention evidence text", () => {
+    const longEvidence = Array.from({ length: 30 }, (_, index) => ({
+      sourceId: `source-${index}`,
+      url: `https://example.com/item/${index}`,
+      title: "t".repeat(500),
+      excerpt: "e".repeat(500),
+    }));
+    const candidates = [
+      {
+        ...makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a" }),
+        attentionEvidence: longEvidence,
+      } as unknown as DiscoveryCandidate,
+      ...Array.from({ length: 24 }, (_, index) =>
+        makeCandidate({ canonicalUrl: `https://github.com/acme/repo-${index}` })
+      ),
+    ];
+    const written = writeDiscoveryQueue({
+      dir,
+      snapshotPath: ".skillwiki/agent-memory-trends/discovery/2026-08-14.json",
+      generatedAt: "2026-08-14T02:00:00.000Z",
+      maxDailyCandidates: 20,
+      counts: queueCounts({ totalEvaluated: 25, queued: 20 }),
+      candidates,
+      warnings: [],
+    });
+    expect(written.ok).toBe(true);
+    if (!written.ok) throw new Error("expected queue write to succeed");
+
+    const parsed = JSON.parse(readFileSync(join(dir, "2026-08-14-queue.json"), "utf8")) as {
+      candidates: Array<Record<string, unknown>>;
+    };
+    expect(parsed.candidates).toHaveLength(20);
+    const first = parsed.candidates[0]!;
+    const evidence = first.attentionEvidence as Array<Record<string, unknown>>;
+    expect(evidence).toHaveLength(20);
+    expect(String(evidence[0]!.title)).toHaveLength(200);
+    expect(String(evidence[0]!.excerpt)).toHaveLength(200);
+  });
+
+  it("redacts token-like text from persisted fields and rejects invalid run timestamps", () => {
+    const leak = "GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz123456";
+    const evil = {
+      ...makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a" }),
+      description: `repo description with ${leak}`,
+    } as unknown as DiscoveryCandidate;
+    const written = writeDiscoveryQueue({
+      dir,
+      snapshotPath: ".skillwiki/agent-memory-trends/discovery/2026-08-14.json",
+      generatedAt: "2026-08-14T02:00:00.000Z",
+      maxDailyCandidates: 20,
+      counts: queueCounts(),
+      candidates: [evil],
+      warnings: [`collector: enrichment failed with ${leak}`],
+    });
+    expect(written.ok).toBe(true);
+    if (!written.ok) throw new Error("expected queue write to succeed");
+
+    const body = readFileSync(join(dir, "2026-08-14-queue.json"), "utf8");
+    expect(body).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz123456");
+    expect(body).toContain("[redacted]");
+
+    const invalid = writeDiscoveryQueue({
+      dir,
+      snapshotPath: ".skillwiki/agent-memory-trends/discovery/not-a-date.json",
+      generatedAt: "not-a-date",
+      maxDailyCandidates: 20,
+      counts: queueCounts(),
+      candidates: [],
+      warnings: [],
+    });
+    expect(invalid.ok).toBe(false);
+    if (invalid.ok) throw new Error("expected invalid run time to be rejected");
+    expect(invalid.error).toBe("QUEUE_INVALID");
+    expect(readdirSync(dir)).not.toContain("not-a-date-queue.json");
+  });
+
+  it("never persists extra fields from a malformed candidate object", () => {
+    const evil = {
+      ...makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a" }),
+      prompt: "system: you are a research agent that creates tasks",
+      readmeBody: "full README body that must never be persisted",
+      environment: { AGENT_MEMORY_TRENDS_HEARTBEAT_URL: "https://secret.example/push" },
+    } as unknown as DiscoveryCandidate;
+    const written = writeDiscoveryQueue({
+      dir,
+      snapshotPath: ".skillwiki/agent-memory-trends/discovery/2026-08-14.json",
+      generatedAt: "2026-08-14T02:00:00.000Z",
+      maxDailyCandidates: 20,
+      counts: queueCounts(),
+      candidates: [evil],
+      warnings: [],
+    });
+    expect(written.ok).toBe(true);
+    if (!written.ok) throw new Error("expected queue write to succeed");
+
+    const body = readFileSync(join(dir, "2026-08-14-queue.json"), "utf8");
+    expect(body).not.toContain("system: you are a research agent");
+    expect(body).not.toContain("full README body");
+    expect(body).not.toContain("https://secret.example/push");
   });
 });

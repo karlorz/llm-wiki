@@ -3,6 +3,10 @@ import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { DiscoverySnapshot } from "./discovery-contracts.js";
+import { collectDiscoveryCandidates } from "./discovery-github.js";
+import { buildDiscoveryQueue } from "./discovery-score.js";
+import { applyDiscoveryDeltas, loadDiscoveryHistory, pruneDiscoverySnapshots, writeDiscoveryQueue, writeDiscoverySnapshot } from "./discovery-snapshots.js";
 import { collectGithubCandidates } from "./github.js";
 import { readResearchConfig, parseResearchConfig, type ResearchConfig } from "./config.js";
 import { collectDuplicateSignals } from "./dedupe.js";
@@ -34,8 +38,8 @@ import {
   type Result,
 } from "./types.js";
 
-const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "publish", "version"]);
-const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
+const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "discover", "publish", "version"]);
+const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|discover|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
 const SESSION_BRIEF_FILES = [
@@ -120,6 +124,12 @@ export async function runAgentMemoryTrendsCli(
         result.data.mutations,
         `daily: ok${dailyModeLabel(dryRun, generateOnly, previewOnly)}; selected ${result.data.selectedCandidateCount} candidate(s)`
       );
+    }
+
+    if (command === "discover") {
+      const result = await runDiscover(options, context, dryRun);
+      if (!result.ok) return errorRun(result);
+      return okRun(command, dryRun, generatedAt, result.data.mutations, result.data.humanHint);
     }
 
     const published = await runPublish(options, context, dryRun);
@@ -1253,6 +1263,100 @@ async function runQuietDaily(
   });
 }
 
+const DISCOVER_REJECTED_FLAGS = new Set([
+  "synthesis-retries",
+  "synthesis-fallback",
+  "synthesis-timeout-ms",
+  "generate-only",
+  "preview-only",
+]);
+
+const DISCOVERY_OUTPUT_DIRECTORY = join(".skillwiki", "agent-memory-trends", "discovery");
+
+interface DiscoverOutput {
+  mutations: string[];
+  humanHint: string;
+}
+
+/**
+ * Controlled discovery queue flow. Structurally independent of runDaily,
+ * runPublish, buildAgentInput, and writeAgentInput: it never invokes
+ * synthesis, capture rendering, session brief refresh, publish, heartbeat,
+ * the legacy collector, or any input/run-state writer. Writes only the
+ * deterministic discovery snapshot/latest/queue files. The queue's
+ * promotionEligible field is informational only and never acted upon.
+ */
+async function runDiscover(
+  options: ParsedCliOptions,
+  context: AgentMemoryTrendsContext,
+  dryRun: boolean
+): Promise<Result<DiscoverOutput>> {
+  const rejected = rejectDiscoverIncompatibleFlags(options);
+  if (!rejected.ok) return rejected;
+
+  const resolved = resolveRunOptions(options, context);
+  const config = loadResearchConfig(resolved.configPath, context);
+  if (!config.ok) return config;
+
+  const runner = context.runGh ?? createGhRunner(context.cwd);
+  const collector = context.runDiscoveryCollector ?? collectDiscoveryCandidates;
+  const collection = await collector(config.data, { runGh: runner, now: context.now });
+  if (!collection.ok) return collection;
+
+  const discoveryDir = join(resolved.vault, DISCOVERY_OUTPUT_DIRECTORY);
+  const history = loadDiscoveryHistory(discoveryDir, context.now, config.data.discovery.retentionDays);
+  const withDeltas = applyDiscoveryDeltas(collection.data.candidates, history, context.now);
+  const queue = buildDiscoveryQueue(withDeltas, {
+    config: config.data,
+    now: context.now,
+    trackedUrls: [...history.observationsByUrl.keys()],
+  });
+
+  if (dryRun) {
+    return ok({
+      mutations: [],
+      humanHint: `discover: ok (dry-run); queued ${queue.counts.queued} candidate(s), ${queue.counts.alert} alert(s)`,
+    });
+  }
+
+  const snapshot: DiscoverySnapshot = {
+    formatVersion: 1,
+    runAt: context.now.toISOString(),
+    retentionDays: config.data.discovery.retentionDays,
+    candidates: withDeltas,
+  };
+  const written = writeDiscoverySnapshot(discoveryDir, snapshot);
+  if (!written.ok) return written;
+
+  const pruned = pruneDiscoverySnapshots(discoveryDir, config.data.discovery.retentionDays, context.now);
+
+  const queueWritten = writeDiscoveryQueue({
+    dir: discoveryDir,
+    snapshotPath: vaultRelativePath(resolved.vault, written.data.datedPath),
+    generatedAt: context.now.toISOString(),
+    maxDailyCandidates: config.data.discovery.maxDailyCandidates,
+    counts: queue.counts,
+    candidates: queue.candidates,
+    warnings: [...collection.data.warnings, ...history.warnings, ...pruned.warnings],
+  });
+  if (!queueWritten.ok) return queueWritten;
+
+  return ok({
+    mutations: [written.data.datedPath, written.data.latestPath, queueWritten.data.queuePath],
+    humanHint: `discover: ok; queued ${queue.counts.queued} candidate(s), ${queue.counts.alert} alert(s)`,
+  });
+}
+
+function rejectDiscoverIncompatibleFlags(options: ParsedCliOptions): Result<{ rejected: true }> {
+  const present = [...options.values.keys(), ...options.flags]
+    .filter((flag) => DISCOVER_REJECTED_FLAGS.has(flag))
+    .sort();
+  if (present.length > 0) {
+    return err("USAGE", `discover does not accept synthesis/capture flags: ${present.map((flag) => `--${flag}`).join(", ")}`);
+  }
+  return ok({ rejected: true });
+}
+
 function isQuietRunInput(input: AgentInput): boolean {
   return input.selectedCandidates.length === 0;
 }
@@ -1278,6 +1382,7 @@ function vaultRelativePath(vault: string, path: string): string {
 }
 
 const AGENT_MEMORY_RUN_STATE_RE = /^\.skillwiki\/agent-memory-trends\/(?:latest-run|\d{4}-\d{2}-\d{2}-(?:input|run))\.json$/;
+const DISCOVERY_STATE_RE = /^\.skillwiki\/agent-memory-trends\/discovery\/(?:latest|\d{4}-\d{2}-\d{2}(?:-queue)?)\.json$/;
 
 interface DirtyVaultPaths {
   tracked: string[];
@@ -1302,7 +1407,9 @@ async function cleanGeneratedPreflightLeftovers(
   const dirtyPaths = [...dirty.tracked, ...dirty.untracked];
   if (dirtyPaths.length === 0) return ok({ cleaned: true });
 
-  const unrelated = dirtyPaths.filter((path) => !AGENT_MEMORY_RUN_STATE_RE.test(path));
+  const unrelated = dirtyPaths.filter(
+    (path) => !AGENT_MEMORY_RUN_STATE_RE.test(path) && !DISCOVERY_STATE_RE.test(path)
+  );
   if (unrelated.length > 0) {
     return err("DIRTY_PREFLIGHT", {
       message: "vault has dirty files outside generated agent-memory-trends run state",

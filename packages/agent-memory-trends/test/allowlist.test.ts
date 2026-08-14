@@ -7,7 +7,6 @@ import {
   validateGeneratedChanges,
   type RunManifest,
 } from "../src/allowlist.js";
-
 function writeVaultFile(vault: string, relPath: string, body: string, mode?: number): void {
   const fullPath = join(vault, relPath);
   mkdirSync(dirname(fullPath), { recursive: true });
@@ -357,5 +356,185 @@ describe("agent-memory-trends generated-output allowlist", () => {
     expect(result.error).toBe("ALLOWLIST_REJECTED");
     expect(result.detail).toContain("partial render failure");
     expect(result.detail).toContain(missingCapturePath!);
+  });
+
+  it("accepts only exact discovery snapshot/latest/queue paths with valid date filenames", () => {
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/2026-06-11.json", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/latest.json", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json", "2026-06-11")).toBe(true);
+
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/2026-06-11.json.bak", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/2026-6-11.json", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/2026-02-31.json", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/2026-13-01.json", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/2026-06-11-run.json", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json.bak", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/sub/2026-06-11.json", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/../2026-06-11.json", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery.json", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/latest-run.json", "2026-06-11")).toBe(false);
+    expect(isAllowedGeneratedPath(".skillwiki/agent-memory-trends/discovery/latest.json.bak", "2026-06-11")).toBe(false);
+  });
+
+  it("accepts a discovery-only changed set without a digest when queue output is declared", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-discovery-"));
+    const discoveryFiles = [
+      ".skillwiki/agent-memory-trends/discovery/2026-06-11.json",
+      ".skillwiki/agent-memory-trends/discovery/latest.json",
+      ".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json",
+    ];
+    const runManifest = manifest({
+      changedFiles: discoveryFiles,
+      outputs: {
+        discoveryQueuePaths: [".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json"],
+      },
+      webSources: [],
+    });
+    for (const path of discoveryFiles) writeVaultFile(vault, path, `generated file ${path}\n`);
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: discoveryFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected discovery-only changes to validate");
+    expect(result.data.typedPagesToValidate).toEqual([]);
+    expect(result.data.rawPagesToValidate).toEqual([]);
+    expect(result.data.digestPathForAudit).toBeUndefined();
+  });
+
+  it("requires discovery queue artifacts to be declared in manifest outputs", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-discovery-"));
+    const discoveryFiles = [
+      ".skillwiki/agent-memory-trends/discovery/2026-06-11.json",
+      ".skillwiki/agent-memory-trends/discovery/latest.json",
+      ".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json",
+    ];
+    const runManifest = manifest({
+      changedFiles: discoveryFiles,
+      outputs: {},
+      webSources: [],
+    });
+    for (const path of discoveryFiles) writeVaultFile(vault, path, `generated file ${path}\n`);
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: discoveryFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected undeclared queue output to be rejected");
+    expect(String(result.detail)).toContain(
+      ".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json [discovery-state] is changed but not declared in manifest outputs"
+    );
+  });
+
+  it("still rejects normal successful daily runs that lack a digest", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-discovery-"));
+    const runManifest = manifest({
+      changedFiles: [
+        "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        ".skillwiki/agent-memory-trends/latest-run.json",
+      ],
+      outputs: {
+        evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        runStatePath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        latestRunPath: ".skillwiki/agent-memory-trends/latest-run.json",
+      },
+      webSources: [],
+    });
+    for (const path of runManifest.changedFiles) writeVaultFile(vault, path, `generated file ${path}\n`);
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected no-digest daily run to be rejected");
+    expect(String(result.detail)).toContain("expected exactly one digest on successful runs");
+  });
+
+  it("secret-scans and size-checks generated discovery content", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-discovery-"));
+    const discoveryFiles = [
+      ".skillwiki/agent-memory-trends/discovery/2026-06-11.json",
+      ".skillwiki/agent-memory-trends/discovery/latest.json",
+      ".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json",
+    ];
+    const runManifest = manifest({
+      changedFiles: discoveryFiles,
+      outputs: {
+        discoveryQueuePaths: [".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json"],
+      },
+      webSources: [],
+    });
+    writeVaultFile(vault, ".skillwiki/agent-memory-trends/discovery/2026-06-11.json", "snapshot\n");
+    writeVaultFile(vault, ".skillwiki/agent-memory-trends/discovery/latest.json", `${"x".repeat(2048)}\n`);
+    writeVaultFile(
+      vault,
+      ".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json",
+      "GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz123456\n"
+    );
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: discoveryFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 8,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected discovery content inspection failures");
+    const detail = String(result.detail);
+    expect(detail).toContain("[discovery-state] contains secret-like content");
+    expect(detail).toContain("[discovery-state] is oversized");
+  });
+
+  it("rejects near-miss discovery paths in changed sets even when declared", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-discovery-"));
+    const nearMiss = ".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json.bak";
+    const runManifest = manifest({
+      changedFiles: [
+        ".skillwiki/agent-memory-trends/discovery/2026-06-11.json",
+        ".skillwiki/agent-memory-trends/discovery/latest.json",
+        ".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json",
+        nearMiss,
+      ],
+      outputs: {
+        discoveryQueuePaths: [".skillwiki/agent-memory-trends/discovery/2026-06-11-queue.json"],
+      },
+      webSources: [],
+    });
+    for (const path of runManifest.changedFiles) writeVaultFile(vault, path, `generated file ${path}\n`);
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected near-miss discovery path to be rejected");
+    expect(String(result.detail)).toContain(`${nearMiss} [skillwiki-state] is not in generated-output allowlist`);
   });
 });
