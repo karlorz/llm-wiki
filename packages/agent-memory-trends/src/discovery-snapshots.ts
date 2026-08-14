@@ -114,7 +114,7 @@ export function parseDiscoverySnapshot(text: string, source: string): Result<Dis
       return err("SNAPSHOT_INVALID", `${source}: candidates must be an array`);
     }
     const runAt = (parsed as { runAt?: unknown }).runAt;
-    if (typeof runAt !== "string" || !isValidRunAt(runAt)) {
+    if (!isValidRunAt(runAt)) {
       return err("SNAPSHOT_INVALID", `${source}: invalid runAt`);
     }
     const retentionDays = (parsed as { retentionDays?: unknown }).retentionDays;
@@ -263,8 +263,8 @@ function dateKey(date: Date): string {
 }
 
 /** Shared top-level snapshot validity: a non-empty string parsing to a date. */
-function isValidRunAt(value: string): boolean {
-  return value !== "" && Number.isFinite(Date.parse(value));
+function isValidRunAt(value: unknown): value is string {
+  return typeof value === "string" && value !== "" && Number.isFinite(Date.parse(value));
 }
 
 /** Shared top-level snapshot validity: finite integer within the contract range. */

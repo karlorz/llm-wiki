@@ -99,7 +99,12 @@ export function makeCommunityReference(input: CommunityReferenceInput): Result<C
       `expected a public http(s) source URL of at most ${DISCOVERY_ATTENTION_EXCERPT_MAX} characters, got ${sourceUrl.length}`
     );
   }
-  if (/^https?:\/\/[^/\s]*@/.test(sourceUrl)) {
+  // Any `@` in an authority-like position — `scheme://` or protocol-relative
+  // forms, or a bare `scheme:userinfo@` prefix — marks the value as
+  // credential-bearing. Reject before the raw-value echo so credentials never
+  // reach an error or warning; valid http(s) URLs (no `@` before the first
+  // `/`) and short credential-free malformed inputs behave exactly as before.
+  if (/^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/\s]*@|^[^/\s:@]+:[^/\s]*@/i.test(sourceUrl)) {
     return err("COMMUNITY_INVALID_SOURCE_URL", "expected a public http(s) source URL without credentials");
   }
   if (!/^https?:\/\/\S+$/.test(sourceUrl)) {

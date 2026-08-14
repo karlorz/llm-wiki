@@ -262,15 +262,23 @@ describe("agent-memory-trends discovery snapshots", () => {
     expect(defaultParsed.candidates).toHaveLength(20);
   });
 
-  it("rejects empty or invalid runAt on write without creating files", () => {
+  it("rejects empty, invalid, and non-string runAt values on write without creating files", () => {
     const snapshot: DiscoverySnapshot = {
       formatVersion: 1,
       runAt: "2026-08-14T02:00:00.000Z",
       retentionDays: 30,
       candidates: [makeCandidate()],
     };
-    for (const runAt of ["", "not-a-date"]) {
-      const written = writeDiscoverySnapshot(dir, { ...snapshot, runAt });
+    for (const runAt of [
+      "",
+      "not-a-date",
+      null,
+      42,
+      true,
+      {},
+      new Date("2026-08-14T02:00:00.000Z"),
+    ]) {
+      const written = writeDiscoverySnapshot(dir, { ...snapshot, runAt } as unknown as DiscoverySnapshot);
       expect(written.ok).toBe(false);
       if (written.ok) continue;
       expect(written.error).toBe("SNAPSHOT_INVALID");

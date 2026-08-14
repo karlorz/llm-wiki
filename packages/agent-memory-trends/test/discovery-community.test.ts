@@ -845,6 +845,10 @@ describe("community reference source URL validation", () => {
       "https://example.com/a b",
       "https://user:pass@example.com/x",
       "https://example.com@evil.example/x",
+      "ftp://user:pass@example.com/x",
+      "//user:pass@example.com/x",
+      "user:pass@example.com/x",
+      "FTP://USER:PASS@EXAMPLE.COM/x",
     ];
     for (const sourceUrl of rejected) {
       const made = makeCommunityReference({ ...VALID_INPUT, sourceUrl });
@@ -852,6 +856,24 @@ describe("community reference source URL validation", () => {
       if (made.ok) continue;
       expect(made.error).toBe("COMMUNITY_INVALID_SOURCE_URL");
       expect(String(made.detail)).not.toContain("pass");
+      expect(String(made.detail)).not.toContain("user:pass");
+    }
+  });
+
+  it("keeps the byte-identical short malformed-URL warning for credential-free inputs", () => {
+    const made = makeCommunityReference({ ...VALID_INPUT, sourceUrl: "not-a-url" });
+    expect(made.ok).toBe(false);
+    if (made.ok) return;
+    expect(made.error).toBe("COMMUNITY_INVALID_SOURCE_URL");
+    expect(String(made.detail)).toBe("expected a public http(s) source URL, got: not-a-url");
+  });
+
+  it("still accepts valid http(s) URLs with @ only outside the authority", () => {
+    for (const sourceUrl of ["https://example.com/path@more", "https://example.com/path:x@y"]) {
+      const made = makeCommunityReference({ ...VALID_INPUT, sourceUrl });
+      expect(made.ok).toBe(true);
+      if (!made.ok) return;
+      expect(made.data.sourceUrl).toBe(sourceUrl);
     }
   });
 
