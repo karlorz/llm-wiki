@@ -16,8 +16,8 @@ agent-memory-trends <doctor|collect|daily|discover|publish|version>
   [--help] [--version]
 ```
 
-Package scripts: `build`, `doctor`, `collect`, `daily`, `publish`, `test`,
-`typecheck`. Build first when using the dist entrypoint:
+Package scripts: `build`, `doctor`, `collect`, `daily`, `discover`, `publish`,
+`test`, `typecheck`. Build first when using the dist entrypoint:
 
 ```bash
 npm run -w @skillwiki/agent-memory-trends build
