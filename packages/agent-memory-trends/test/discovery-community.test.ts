@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseResearchConfig, type ResearchConfig } from "../src/config.js";
 import {
   COMMUNITY_MAX_FETCHES_PER_SOURCE,
@@ -11,6 +11,8 @@ import {
 } from "../src/discovery-contracts.js";
 import {
   collectCommunityReferences,
+  COMMUNITY_FETCH_TIMEOUT_MS,
+  createFetchJsonClient,
   createHackerNewsAdapter,
   createHuggingFaceAdapter,
   createJsonCommunityAdapter,
@@ -164,7 +166,9 @@ function makeCandidate(canonicalUrl: string): DiscoveryCandidate {
 
 const HN_FIREBASE_TOP = "https://hacker-news.firebaseio.com/v0/topstories.json";
 const HN_ALGOLIA = "https://hn.algolia.com/api/v1/search?tags=story&hitsPerPage=";
-const HF_TRENDING = "https://huggingface.co/api/trending";
+const HF_MODELS_API = "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=";
+const HF_MODELS_API_EXPANDS = "&expand=cardData&expand=likes&expand=trendingScore";
+const hfModelsUrl = (limit: number): string => `${HF_MODELS_API}${limit}${HF_MODELS_API_EXPANDS}`;
 
 describe("extraction seam", () => {
   it("accepts direct repository links and explicit outbound links, deduplicated deterministically", () => {
@@ -298,10 +302,8 @@ describe("hacker news adapter", () => {
           url: "https://github.com/AcmeOrg/AgentMemory",
         });
       }
-      if (url === HF_TRENDING) {
-        return ok({
-          trending: [{ repoData: { id: "org/ok-model", cardData: { github: "https://github.com/Org/OkModel" } } }],
-        });
+      if (url === hfModelsUrl(COMMUNITY_MAX_ITEMS_PER_SOURCE)) {
+        return ok([{ id: "org/ok-model", likes: 0, cardData: { github: "https://github.com/Org/OkModel" } }]);
       }
       return err("NETWORK_FAILED", "unexpected url");
     });
@@ -359,31 +361,40 @@ describe("hacker news adapter", () => {
 });
 
 describe("hugging face adapter", () => {
-  it("extracts strict GitHub links only from documented card fields, bounded and per-entry fault tolerant", async () => {
-    const entries: unknown[] = [
-      { repoData: { id: "org/model-one", likes: 42, cardData: { github: "https://github.com/Org/ModelOne", homepage: "https://github.com/Org/ModelOne" } } },
-      { repoData: { id: "org/model-two", likes: 7, cardData: { description: "no links here" } } },
-      { repoData: { id: "org/model-three", likes: 1, cardData: { github: "https://github.com/Someone" } } },
+  it("requests the Models API exactly once with a bounded limit and normalizes flat records with trusted card links and top-level likes", async () => {
+    const models: unknown[] = [
+      { id: "org/model-one", likes: 42, cardData: { github: "https://github.com/Org/ModelOne", homepage: "https://github.com/Org/ModelOne" } },
+      { id: "org/model-two", likes: 7, cardData: { description: "no links here", tags: ["agent-memory"] } },
+      { id: "org/model-three", likes: 1, cardData: { github: "https://github.com/Someone" } },
       "malformed",
-      { repoData: { id: "org/model-four", likes: 9, cardData: { description: "See https://github.com/Org/DescriptionRepo for code" } } },
+      { id: "org/model-four", likes: 9, cardData: { description: "See https://github.com/Org/DescriptionRepo for code" } },
+      { id: "org/model-five", likes: 3, cardData: { github_repo: "Org/Shorthand" } },
+      { id: "org/model-six", likes: 2, cardData: { repository: "https://github.com/Org/FullRepo" } },
+      { likes: 1, cardData: { github: "https://github.com/Org/NoId" } },
     ];
-    for (let index = 5; index < 30; index += 1) {
-      entries.push({ repoData: { id: `org/model-${index}`, likes: 1, cardData: {} } });
+    for (let index = 8; index < 30; index += 1) {
+      models.push({ id: `org/model-${index}`, likes: 1, cardData: {} });
     }
-    entries[25] = { repoData: { id: "org/model-late", cardData: { github: "https://github.com/Org/LateRepo" } } };
 
-    const { client, calls } = fakeFetch((url) => (url === HF_TRENDING ? ok({ trending: entries }) : err("NETWORK_FAILED", "unexpected url")));
+    const { client, calls } = fakeFetch((url) =>
+      url === hfModelsUrl(COMMUNITY_MAX_ITEMS_PER_SOURCE) ? ok(models) : err("NETWORK_FAILED", "unexpected url")
+    );
     const config = loadConfig();
     config.discovery.communitySources = config.discovery.communitySources.filter((source) => source.id === "hugging_face");
     const result = await collectCommunityReferences(config, { fetchJson: client });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(calls).toEqual([HF_TRENDING]);
+    expect(calls).toEqual([hfModelsUrl(COMMUNITY_MAX_ITEMS_PER_SOURCE)]);
     expect(result.data.requestsUsed).toBe(1);
     const references = result.data.references;
-    expect(references).toHaveLength(1);
-    expect(references[0]).toEqual({
+    expect(references.map((r) => r.canonicalUrl)).toEqual([
+      "https://github.com/org/fullrepo",
+      "https://github.com/org/modelone",
+      "https://github.com/org/shorthand",
+    ]);
+    const modelOne = references.find((r) => r.canonicalUrl === "https://github.com/org/modelone");
+    expect(modelOne).toEqual({
       canonicalUrl: "https://github.com/org/modelone",
       sourceId: "hugging_face",
       sourceUrl: "https://huggingface.co/org/model-one",
@@ -393,8 +404,170 @@ describe("hugging face adapter", () => {
     const serialized = JSON.stringify(result.data);
     expect(serialized).not.toContain("huggingface.co/org/model-two");
     expect(serialized).not.toContain("DescriptionRepo");
-    expect(serialized).not.toContain("LateRepo");
-    expect(result.data.warnings).toContain("community source hugging_face: malformed trending entry");
+    expect(serialized).not.toContain("model-three");
+    expect(serialized).not.toContain("model-four");
+    expect(result.data.warnings).toContain("community source hugging_face: malformed model entry");
+    expect(result.data.warnings).toContain("community source hugging_face: model entry without an id");
+  });
+
+  it("accepts exact two-segment owner/repo shorthand and canonical full URLs only from trusted card fields", async () => {
+    const models = [
+      { id: "a/shorthand", likes: 1, cardData: { github: "Org/Repo" } },
+      { id: "b/full", likes: 1, cardData: { homepage: "https://github.com/Org/Full" } },
+      { id: "c/three", likes: 1, cardData: { github: "Org/Repo/Extra" } },
+      { id: "d/trailing", likes: 1, cardData: { github: "Org/Repo/" } },
+      { id: "e/blank-segment", likes: 1, cardData: { github: "Org/" } },
+      { id: "f/prose", likes: 1, cardData: { code: "visit Org/Repo for code" } },
+      { id: "g/profile", likes: 1, cardData: { github: "https://github.com/someone" } },
+      { id: "h/qualified", likes: 1, cardData: { github: "https://github.com/Org/Repo?tab=readme" } },
+      { id: "i/untrusted", likes: 1, cardData: { unknown_field: "Org/Repo" } },
+    ];
+    const { client } = fakeFetch(() => ok(models));
+    const adapter = createHuggingFaceAdapter(client);
+    const result = await adapter.fetchReferences({ maxItems: 20, maxRequests: 10 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.references.map((r) => r.canonicalUrl)).toEqual([
+      "https://github.com/org/repo",
+      "https://github.com/org/full",
+    ]);
+    expect(result.data.warnings).toEqual([]);
+    expect(result.data.requestsUsed).toBe(1);
+  });
+
+  it("treats a valid flat response with no trusted GitHub links as success with zero references and zero warnings", async () => {
+    const { client, calls } = fakeFetch(() =>
+      ok([{ id: "org/plain", likes: 1, cardData: { description: "no links" } }])
+    );
+    const adapter = createHuggingFaceAdapter(client);
+    const result = await adapter.fetchReferences({ maxItems: 20, maxRequests: 10 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.references).toEqual([]);
+    expect(result.data.warnings).toEqual([]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("rejects object, wrapper, and malformed payloads with HF_MODELS_PAYLOAD_INVALID", async () => {
+    for (const payload of [{ trending: [] }, { models: [] }, { id: "org/one" }, null, "nope", 42, true]) {
+      const { client } = fakeFetch(() => ok(payload));
+      const adapter = createHuggingFaceAdapter(client);
+      const result = await adapter.fetchReferences({ maxItems: 20, maxRequests: 10 });
+      expect(result.ok).toBe(false);
+      if (result.ok) continue;
+      expect(result.error).toBe("HF_MODELS_PAYLOAD_INVALID");
+    }
+  });
+
+  it("derives the request limit from maxItems, capped at the per-source bound, one request only", async () => {
+    const { client, calls } = fakeFetch(() => ok([]));
+    const adapter = createHuggingFaceAdapter(client);
+    const small = await adapter.fetchReferences({ maxItems: 5, maxRequests: 10 });
+    expect(small.ok).toBe(true);
+    if (!small.ok) return;
+    expect(calls).toEqual([hfModelsUrl(5)]);
+    expect(small.data.requestsUsed).toBe(1);
+
+    const capped = await adapter.fetchReferences({ maxItems: 999, maxRequests: 10 });
+    expect(capped.ok).toBe(true);
+    if (!capped.ok) return;
+    expect(calls).toEqual([hfModelsUrl(5), hfModelsUrl(COMMUNITY_MAX_ITEMS_PER_SOURCE)]);
+    expect(capped.data.requestsUsed).toBe(1);
+  });
+});
+
+describe("fetch json client", () => {
+  it("fetches a JSON document successfully and passes an abort signal to the platform fetch implementation", async () => {
+    let capturedInit: { signal?: AbortSignal } | undefined;
+    const client = createFetchJsonClient(async (url, init) => {
+      capturedInit = init;
+      expect(url).toBe("https://example.com/payload.json");
+      return { ok: true, status: 200, json: async () => ({ items: [1, 2] }) };
+    });
+    const result = await client.fetchJson("https://example.com/payload.json");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data).toEqual({ items: [1, 2] });
+    expect(capturedInit?.signal).toBeInstanceOf(AbortSignal);
+    expect(capturedInit?.signal?.aborted).toBe(false);
+  });
+
+  it("maps 429 to COMMUNITY_RATE_LIMITED", async () => {
+    const client = createFetchJsonClient(async () => ({ ok: false, status: 429, json: async () => ({}) }));
+    const result = await client.fetchJson("https://example.com/payload.json");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("COMMUNITY_RATE_LIMITED");
+  });
+
+  it("maps other non-2xx statuses to COMMUNITY_FETCH_FAILED with status-only detail", async () => {
+    const client = createFetchJsonClient(async () => ({ ok: false, status: 503, json: async () => ({}) }));
+    const result = await client.fetchJson("https://example.com/payload.json");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("COMMUNITY_FETCH_FAILED");
+    expect(String(result.detail)).toBe("HTTP status 503");
+    expect(String(result.detail)).not.toContain("example.com");
+  });
+
+  it("maps malformed JSON and network failures to COMMUNITY_FETCH_FAILED", async () => {
+    const badJson = createFetchJsonClient(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("Unexpected token");
+      },
+    }));
+    const jsonResult = await badJson.fetchJson("https://example.com/payload.json");
+    expect(jsonResult.ok).toBe(false);
+    if (jsonResult.ok) return;
+    expect(jsonResult.error).toBe("COMMUNITY_FETCH_FAILED");
+
+    const network = createFetchJsonClient(async () => {
+      throw new Error("socket hang up");
+    });
+    const networkResult = await network.fetchJson("https://example.com/payload.json");
+    expect(networkResult.ok).toBe(false);
+    if (networkResult.ok) return;
+    expect(networkResult.error).toBe("COMMUNITY_FETCH_FAILED");
+    expect(String(networkResult.detail)).toBe("socket hang up");
+  });
+
+  it("maps abort rejection to COMMUNITY_FETCH_TIMEOUT", async () => {
+    const client = createFetchJsonClient(async () => {
+      const error = new Error("The operation was aborted.");
+      error.name = "AbortError";
+      throw error;
+    });
+    const result = await client.fetchJson("https://example.com/payload.json");
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("COMMUNITY_FETCH_TIMEOUT");
+  });
+
+  it("aborts in-flight fetches after the named 15,000 ms timeout constant", async () => {
+    expect(COMMUNITY_FETCH_TIMEOUT_MS).toBe(15_000);
+    vi.useFakeTimers();
+    try {
+      const client = createFetchJsonClient(
+        (_url, init) =>
+          new Promise<never>((_resolve, reject) => {
+            init?.signal.addEventListener("abort", () => {
+              const error = new Error("The operation was aborted.");
+              error.name = "AbortError";
+              reject(error);
+            });
+          })
+      );
+      const pending = client.fetchJson("https://example.com/payload.json");
+      await vi.advanceTimersByTimeAsync(COMMUNITY_FETCH_TIMEOUT_MS);
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toBe("COMMUNITY_FETCH_TIMEOUT");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -477,7 +650,9 @@ describe("collector dispatch", () => {
     const config = loadConfig();
     config.discovery.communitySources.push({ id: "mystery_feed", enabled: true, role: "discovery" });
     const { client } = fakeFetch((url) => {
-      if (url === HF_TRENDING) return ok({ trending: [{ repoData: { id: "org/ok-model", cardData: { github: "https://github.com/Org/OkModel" } } }] });
+      if (url === hfModelsUrl(COMMUNITY_MAX_ITEMS_PER_SOURCE)) {
+        return ok([{ id: "org/ok-model", likes: 0, cardData: { github: "https://github.com/Org/OkModel" } }]);
+      }
       if (url === "https://feed.example.com/cn.json") return ok({ items: "nope" });
       return err("NETWORK_FAILED", "endpoint unavailable");
     });
@@ -498,6 +673,39 @@ describe("collector dispatch", () => {
     expect(result.data.sources.unknown).toEqual(["mystery_feed"]);
   });
 
+  it("preserves a failed Hugging Face source as a warning while other sources continue", async () => {
+    const config = loadConfig();
+    config.discovery.communitySources = config.discovery.communitySources.filter(
+      (source) => source.id === "hacker_news" || source.id === "hugging_face"
+    );
+    const { client } = fakeFetch((url) => {
+      if (url === HN_FIREBASE_TOP) return ok([1]);
+      if (url === "https://hacker-news.firebaseio.com/v0/item/1.json") {
+        return ok({
+          id: 1,
+          by: "pg",
+          score: 42,
+          descendants: 3,
+          time: 1752537600,
+          title: "Agent memory tooling",
+          url: "https://github.com/Org/HnRepo",
+        });
+      }
+      if (url === hfModelsUrl(COMMUNITY_MAX_ITEMS_PER_SOURCE)) {
+        return err("COMMUNITY_FETCH_FAILED", "endpoint unavailable");
+      }
+      return err("NETWORK_FAILED", "unexpected url");
+    });
+    const result = await collectCommunityReferences(config, { fetchJson: client });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.data.references.map((r) => r.canonicalUrl)).toEqual(["https://github.com/org/hnrepo"]);
+    expect(result.data.warnings).toContain("community source hugging_face failed: endpoint unavailable");
+    expect(result.data.requestsUsed).toBe(2);
+    expect(result.data.sources.attempted).toEqual(["hacker_news", "hugging_face"]);
+  });
+
   it("fails closed with DISCOVERY_DISABLED before any fetch when discovery is disabled", async () => {
     const config = loadConfig();
     config.discovery.enabled = false;
@@ -513,7 +721,7 @@ describe("collector dispatch", () => {
     const config = loadConfig();
     config.discovery.communitySources[0]!.enabled = false;
     const { client, calls } = fakeFetch((url) => {
-      if (url === HF_TRENDING) return ok({ trending: [] });
+      if (url === hfModelsUrl(COMMUNITY_MAX_ITEMS_PER_SOURCE)) return ok([]);
       if (url === "https://feed.example.com/cn.json") return ok({ items: [] });
       return err("NETWORK_FAILED", "endpoint unavailable");
     });
@@ -524,7 +732,7 @@ describe("collector dispatch", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(calls.every((url) => !url.includes("firebaseio") && !url.includes("algolia"))).toBe(true);
-    expect(calls).toEqual([HF_TRENDING, "https://feed.example.com/cn.json"]);
+    expect(calls).toEqual([hfModelsUrl(COMMUNITY_MAX_ITEMS_PER_SOURCE), "https://feed.example.com/cn.json"]);
     expect(result.data.sources.skipped).toEqual(["hacker_news"]);
     expect(result.data.sources.attempted).toEqual(["hugging_face", "cn_community"]);
   });

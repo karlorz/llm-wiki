@@ -1,4 +1,5 @@
 import {
+  canonicalizeDiscoveryRepositoryUrl,
   COMMUNITY_MAX_FETCHES_PER_SOURCE,
   COMMUNITY_MAX_ITEMS_PER_SOURCE,
   type CommunityReference,
@@ -26,29 +27,54 @@ export interface CommunityFetchClient {
   fetchJson(url: string): Promise<Result<unknown>>;
 }
 
+/** Named bound for one public JSON fetch; timeout/abort maps to COMMUNITY_FETCH_TIMEOUT. */
+export const COMMUNITY_FETCH_TIMEOUT_MS = 15_000;
+
+interface CommunityFetchResponse {
+  ok: boolean;
+  status?: number;
+  json: () => Promise<unknown>;
+}
+
+type CommunityFetchImpl = (url: string, init?: { signal: AbortSignal }) => Promise<CommunityFetchResponse>;
+
 /**
  * Default production fetch seam for the community adapters: platform fetch,
- * one public JSON document per call, structured errors only. Injectable for
- * tests; never carries credentials, prompts, environment values, or headers.
+ * one public JSON document per call, structured errors only, bounded by an
+ * abort-signal timeout. Injectable for tests; never carries credentials,
+ * prompts, environment values, or headers, and never retains response
+ * headers or bodies.
  */
 export function createFetchJsonClient(
-  fetchImpl: (url: string) => Promise<{ ok: boolean; json: () => Promise<unknown> }> = fetch
+  fetchImpl: CommunityFetchImpl = fetch
 ): CommunityFetchClient {
   return {
     async fetchJson(url) {
-      let response: { ok: boolean; json: () => Promise<unknown> };
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), COMMUNITY_FETCH_TIMEOUT_MS);
       try {
-        response = await fetchImpl(url);
+        const response = await fetchImpl(url, { signal: controller.signal });
+        if (response.status === 429) {
+          return err("COMMUNITY_RATE_LIMITED", "rate limited (HTTP 429)");
+        }
+        if (!response.ok) {
+          return err("COMMUNITY_FETCH_FAILED", `HTTP status ${response.status ?? "unknown"}`);
+        }
+        try {
+          return ok(await response.json());
+        } catch (error) {
+          return err("COMMUNITY_FETCH_FAILED", error instanceof Error ? error.message : String(error));
+        }
       } catch (error) {
+        if (controller.signal.aborted) {
+          return err("COMMUNITY_FETCH_TIMEOUT", "community fetch timed out");
+        }
+        if (error instanceof Error && error.name === "AbortError") {
+          return err("COMMUNITY_FETCH_TIMEOUT", "community fetch aborted");
+        }
         return err("COMMUNITY_FETCH_FAILED", error instanceof Error ? error.message : String(error));
-      }
-      if (!response.ok) {
-        return err("COMMUNITY_FETCH_FAILED", `HTTP error for ${url}`);
-      }
-      try {
-        return ok(await response.json());
-      } catch (error) {
-        return err("COMMUNITY_FETCH_FAILED", error instanceof Error ? error.message : String(error));
+      } finally {
+        clearTimeout(timer);
       }
     },
   };
@@ -75,12 +101,17 @@ export interface CommunitySourceAdapter {
 
 const HACKER_NEWS_FIREBASE_BASE = "https://hacker-news.firebaseio.com/v0";
 const HACKER_NEWS_ALGOLIA_SEARCH = "https://hn.algolia.com/api/v1/search";
-const HUGGING_FACE_TRENDING_URL = "https://huggingface.co/api/trending";
+const HUGGING_FACE_MODELS_API = "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=";
+const HUGGING_FACE_MODELS_API_EXPANDS = "&expand=cardData&expand=likes&expand=trendingScore";
 /**
  * Documented model-card metadata fields scanned for outbound GitHub links.
  * The Hugging Face model URL itself is never treated as a repository link.
  */
 const HUGGING_FACE_CARD_LINK_FIELDS = ["github", "github_repo", "repository", "homepage", "code", "paper"];
+/** Maximum length of a trusted card field value scanned for a repository link. */
+const HUGGING_FACE_CARD_VALUE_MAX = 500;
+/** Exact two-segment owner/repo shorthand accepted from trusted HF card fields only. */
+const OWNER_REPO_SHORTHAND = /^[^/\s]+\/[^/\s]+$/;
 
 /**
  * Hacker News adapter: Firebase top-stories API with a best-effort Algolia
@@ -207,64 +238,48 @@ function normalizeAlgoliaHit(value: unknown, warnings: string[]): CommunityRefer
 }
 
 /**
- * Hugging Face adapter: public trending-model API through the injected
- * client. Bounded result count; strict GitHub links are extracted only
- * from the documented card link fields. A Hugging Face model URL alone
- * never becomes a repository reference.
+ * Hugging Face adapter: public Models API through the injected client.
+ * Exactly one bounded request per run; strict GitHub links are extracted
+ * only from the documented card link fields, where exact two-segment
+ * owner/repo shorthand is converted to a full URL before strict
+ * canonicalization. A Hugging Face model URL alone never becomes a
+ * repository reference, and a valid zero-link response is normal success.
  */
 export function createHuggingFaceAdapter(client: CommunityFetchClient): CommunitySourceAdapter {
   return {
     sourceId: "hugging_face",
     async fetchReferences(input) {
-      const result = await client.fetchJson(HUGGING_FACE_TRENDING_URL);
+      const bounded = Math.min(input.maxItems, COMMUNITY_MAX_ITEMS_PER_SOURCE);
+      const result = await client.fetchJson(`${HUGGING_FACE_MODELS_API}${bounded}${HUGGING_FACE_MODELS_API_EXPANDS}`);
       if (!result.ok) return result;
-      const payload = result.data;
-      if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
-        return err("HF_TRENDING_PAYLOAD_INVALID", "expected an object with a trending array");
-      }
-      const trending = (payload as Record<string, unknown>).trending;
-      if (!Array.isArray(trending)) {
-        return err("HF_TRENDING_PAYLOAD_INVALID", "expected trending to be an array");
+      if (!Array.isArray(result.data)) {
+        return err("HF_MODELS_PAYLOAD_INVALID", "expected a top-level array of model records");
       }
       const warnings: string[] = [];
       const references: CommunityReference[] = [];
-      for (const entry of trending.slice(0, input.maxItems)) {
-        references.push(...normalizeHuggingFaceEntry(entry, warnings));
+      for (const entry of result.data.slice(0, bounded)) {
+        references.push(...normalizeHuggingFaceModel(entry, warnings));
       }
       return ok({ references, warnings, requestsUsed: 1 });
     },
   };
 }
 
-function normalizeHuggingFaceEntry(value: unknown, warnings: string[]): CommunityReference[] {
+function normalizeHuggingFaceModel(value: unknown, warnings: string[]): CommunityReference[] {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    warnings.push("malformed trending entry");
+    warnings.push("malformed model entry");
     return [];
   }
   const entry = value as Record<string, unknown>;
-  const repoData = entry.repoData;
-  if (repoData === null || typeof repoData !== "object" || Array.isArray(repoData)) {
-    warnings.push("trending entry without repoData");
-    return [];
-  }
-  const data = repoData as Record<string, unknown>;
-  const modelId = typeof data.id === "string" && data.id.trim() !== "" ? data.id : undefined;
+  const modelId = typeof entry.id === "string" && entry.id.trim() !== "" ? entry.id : undefined;
   if (!modelId) {
-    warnings.push("trending entry without a model id");
+    warnings.push("model entry without an id");
     return [];
   }
-  const links: string[] = [];
-  const cardData = data.cardData;
-  if (cardData !== null && typeof cardData === "object" && !Array.isArray(cardData)) {
-    for (const field of HUGGING_FACE_CARD_LINK_FIELDS) {
-      const value = (cardData as Record<string, unknown>)[field];
-      if (typeof value === "string") links.push(value);
-    }
-  }
-  const canonicalUrls = extractCanonicalRepositoryUrls({ links });
+  const canonicalUrls = extractTrustedCardLinks(entry.cardData);
   if (canonicalUrls.length === 0) return [];
 
-  const likes = typeof data.likes === "number" && Number.isFinite(data.likes) ? data.likes : undefined;
+  const likes = typeof entry.likes === "number" && Number.isFinite(entry.likes) ? entry.likes : undefined;
   const englishSummary = `Trending on Hugging Face${likes !== undefined ? `, ${likes} likes` : ""}`;
 
   return referencesForCanonicalUrls(canonicalUrls, "hugging_face", `https://huggingface.co/${modelId}`, {
@@ -273,6 +288,30 @@ function normalizeHuggingFaceEntry(value: unknown, warnings: string[]): Communit
     itemLabel: `model ${modelId}`,
     warnings,
   });
+}
+
+/**
+ * Extract strict canonical GitHub repository URLs from the trusted
+ * Hugging Face card fields only. Exact two-segment owner/repo shorthand
+ * is converted to a full URL before strict canonicalization; profiles,
+ * paths, qualified URLs, prose, malformed shorthand, over-long values,
+ * and unrecognized card fields are rejected.
+ */
+function extractTrustedCardLinks(cardData: unknown): string[] {
+  if (cardData === null || typeof cardData !== "object" || Array.isArray(cardData)) {
+    return [];
+  }
+  const canonical: string[] = [];
+  for (const field of HUGGING_FACE_CARD_LINK_FIELDS) {
+    const value = (cardData as Record<string, unknown>)[field];
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed === "" || trimmed.length > HUGGING_FACE_CARD_VALUE_MAX) continue;
+    const candidate = OWNER_REPO_SHORTHAND.test(trimmed) ? `https://github.com/${trimmed}` : trimmed;
+    const result = canonicalizeDiscoveryRepositoryUrl(candidate);
+    if (result.ok && !canonical.includes(result.data)) canonical.push(result.data);
+  }
+  return canonical;
 }
 
 /**
