@@ -7,7 +7,7 @@ The package stages high-signal agent-memory research into the vault. It collects
 ## CLI surface
 
 ```text
-agent-memory-trends <doctor|collect|daily|publish|version>
+agent-memory-trends <doctor|collect|daily|discover|publish|version>
   [--dry-run] [--generate-only] [--preview-only]
   [--dedupe-digest-ttl-days <n>]
   [--synthesis-retries <n>]
@@ -16,8 +16,8 @@ agent-memory-trends <doctor|collect|daily|publish|version>
   [--help] [--version]
 ```
 
-Package scripts: `build`, `doctor`, `collect`, `daily`, `publish`, `test`,
-`typecheck`. Build first when using the dist entrypoint:
+Package scripts: `build`, `doctor`, `collect`, `daily`, `discover`, `publish`,
+`test`, `typecheck`. Build first when using the dist entrypoint:
 
 ```bash
 npm run -w @skillwiki/agent-memory-trends build
@@ -99,6 +99,120 @@ config path through `AGENT_MEMORY_TRENDS_CONFIG` for controlled runs.
 
 Legacy configs with a flat `github.queries` list still parse through an explicit
 `legacy_flat` compatibility lane. New owned config should use `github.lanes`.
+
+### Config versions (v1/v2)
+
+The research config accepts both document versions and always normalizes the
+promotion settings into the same parsed view (`scoring`, `github`, `dedupe`,
+`watchlist`), so collection code does not branch on version:
+
+- `version: 1` documents keep parsing exactly as before with settings at the
+  top level. They receive a safe disabled discovery configuration
+  (`discovery.enabled: false` with zeroed budgets, empty lanes, empty seed
+  registries) so discovery code never runs against an implicit old schema.
+- `version: 2` documents move the same promotion settings under
+  `research_promotion` and add a `discovery` section:
+
+```yaml
+version: 2
+research_promotion:
+  # scoring, github, dedupe, watchlist — unchanged promotion schema
+discovery:
+  enabled: true                    # default true when omitted
+  max_daily_candidates: 20         # hard cap 20
+  retention_days: 30               # default 30, bounded 1..90
+  immediate_alert:
+    enabled: true
+    min_repository_signal: 40      # nonnegative, <= 55 (repository signal is bounded at 55)
+    min_independent_signal_count: 1  # positive
+  github:
+    api_call_budget: 60            # positive, <= 100
+    max_search_queries: 24         # positive, <= 100
+    max_enrichments: 40            # positive, <= 100
+    new_release_lanes: [...]       # keyword-free release discovery lanes
+    relevance_lanes: [...]         # existing keyword lanes, same semantics
+    topic_lanes: [...]             # GitHub topic search lanes
+  official_organizations:
+    - github: deepseek-ai          # valid GitHub org identifier, normalized to lowercase
+      region: CN
+      official_urls: [https://www.deepseek.com/]  # https only
+      categories: [agent-runtime, models]
+  community_sources:
+    - id: hacker_news              # ids must be unique
+      enabled: true
+      role: corroboration          # discovery or corroboration only
+```
+
+v2 is validated strictly: duplicate seed organizations (case-insensitive),
+invalid GitHub organization identifiers, non-HTTPS official URLs, duplicate
+community source IDs, unsupported community roles, a discovery daily max above
+20, invalid retention/budget values, discovery lane `per_page` above the
+GitHub API limit of 100, an immediate-alert repository threshold above the
+reachable signal bound of 55 (momentum 0..40 plus official identity 0..15),
+and duplicate discovery lane/query IDs all reject the document with
+`CONFIG_INVALID`. Community sources only ever rank and corroborate; they
+cannot create work items on their own.
+
+## Community Discovery Sources
+
+`discover` runs community collection only after the GitHub collector
+succeeded, then merges bounded community references onto the
+GitHub-discovered candidates. Community evidence alone never creates
+candidates, tasks, captures, synthesis, publication, alerts, session brief
+updates, heartbeat, legacy input, dedupe scans, or run-state writes.
+Community source failures and unknown adapters become nonfatal warnings and
+never fail the run.
+
+Built-in community adapters:
+
+- `hacker_news`: Firebase top-stories with a best-effort Algolia fallback,
+  bounded per-source item and request caps.
+- `hugging_face`: exactly one bounded unauthenticated request per run to the
+  Hugging Face Models API
+  (`https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=N&expand=cardData&expand=likes&expand=trendingScore`)
+  with no retries and no credentials or custom headers. Strict canonical
+  GitHub repository links are extracted only from the documented trusted
+  card link fields (`github`, `github_repo`, `repository`, `homepage`,
+  `code`, `paper`); the Hugging Face model URL itself is never treated as a
+  repository link. A valid zero-link response is a normal success: the
+  adapter reports zero references with no warnings.
+
+The `discover` human hint carries compact aggregate diagnostics for every
+run, including `--dry-run`: community request total, attempted/skipped/unknown
+source counts, and community warning count, for example
+`community: 3 request(s), 3 attempted, 0 skipped, 0 unknown, 1 warning(s)`.
+These are bounded counts only; no raw URLs, headers, request data, or
+response bodies are surfaced, and the persisted queue/snapshot artifacts are
+structurally unchanged. `discover --dry-run` writes nothing.
+
+### Reliability boundaries
+
+- Public JSON fetches are bounded by a 15-second timeout per request. An
+  abort that fires while the response body JSON is being parsed is also
+  classified as `COMMUNITY_FETCH_TIMEOUT`; non-abort JSON decode failures
+  remain `COMMUNITY_FETCH_FAILED`; an HTTP 429 response is
+  `COMMUNITY_RATE_LIMITED`. All remain nonfatal source warnings.
+- A blank `new_release` query is valid only when its positive date window
+  forms a qualifier-only GitHub search. A blank query with `window_days: 0`
+  is rejected as `CONFIG_INVALID` before collection.
+- `discover` writes its queue before the fresh snapshot/latest files and
+  retention pruning. A queue-write failure therefore creates no fresh
+  snapshot/latest output and prunes no historical snapshots. On success,
+  the returned mutation paths and the queue's snapshot reference are
+  vault-relative.
+- Live unflagged `daily` treats dirty discovery snapshot/latest/queue files
+  as `DIRTY_PREFLIGHT` rather than automatically deleting them, because a
+  completed manual `discover` result cannot be distinguished from
+  interrupted output.
+
+Deferred, not part of this repair:
+
+- Non-built-in public/China JSON community sources (the generic registered
+  JSON adapter path) are not live until configuration/runtime registration
+  work is separately approved. Configured sources without a registered
+  adapter are reported as unknown and skipped with a nonfatal warning.
+- Discovery scheduling is not part of this repair: `discover` remains a
+  manual command, and the nightly timers continue to run `daily` only.
 
 ## Synthesis Contract
 
@@ -294,6 +408,7 @@ Run dry-run checks. Dry-run mode must not commit, push, or heartbeat.
 agent-memory-trends doctor
 agent-memory-trends collect --dry-run
 agent-memory-trends daily --dry-run
+agent-memory-trends discover --dry-run
 ```
 
 `daily --dry-run` still writes generated input and run-state files to the

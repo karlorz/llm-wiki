@@ -1,8 +1,14 @@
 import { execFile } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { DiscoverySnapshot } from "./discovery-contracts.js";
+import { collectCommunityReferences, createFetchJsonClient } from "./discovery-community.js";
+import { mergeCommunityReferences } from "./discovery-community-normalize.js";
+import { collectDiscoveryCandidates } from "./discovery-github.js";
+import { buildDiscoveryQueue } from "./discovery-score.js";
+import { applyDiscoveryDeltas, dateKey, loadDiscoveryHistory, pruneDiscoverySnapshots, writeDiscoveryQueue, writeDiscoverySnapshot } from "./discovery-snapshots.js";
 import { collectGithubCandidates } from "./github.js";
 import { readResearchConfig, parseResearchConfig, type ResearchConfig } from "./config.js";
 import { collectDuplicateSignals } from "./dedupe.js";
@@ -34,8 +40,8 @@ import {
   type Result,
 } from "./types.js";
 
-const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "publish", "version"]);
-const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
+const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "discover", "publish", "version"]);
+const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|discover|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
 const SESSION_BRIEF_FILES = [
@@ -120,6 +126,12 @@ export async function runAgentMemoryTrendsCli(
         result.data.mutations,
         `daily: ok${dailyModeLabel(dryRun, generateOnly, previewOnly)}; selected ${result.data.selectedCandidateCount} candidate(s)`
       );
+    }
+
+    if (command === "discover") {
+      const result = await runDiscover(options, context, dryRun);
+      if (!result.ok) return errorRun(result);
+      return okRun(command, dryRun, generatedAt, result.data.mutations, result.data.humanHint);
     }
 
     const published = await runPublish(options, context, dryRun);
@@ -1253,6 +1265,185 @@ async function runQuietDaily(
   });
 }
 
+const DISCOVER_REJECTED_FLAGS = new Set([
+  "synthesis-retries",
+  "synthesis-fallback",
+  "synthesis-timeout-ms",
+  "generate-only",
+  "preview-only",
+]);
+
+const DISCOVERY_OUTPUT_DIRECTORY = join(".skillwiki", "agent-memory-trends", "discovery");
+
+interface DiscoverOutput {
+  mutations: string[];
+  humanHint: string;
+}
+
+/**
+ * Controlled discovery queue flow. Structurally independent of runDaily,
+ * runPublish, buildAgentInput, and writeAgentInput: it never invokes
+ * synthesis, capture rendering, session brief refresh, publish, heartbeat,
+ * the legacy collector, or any input/run-state writer. Writes only the
+ * deterministic discovery snapshot/latest/queue files. Community source
+ * failures are warnings and never fail the run; community references only
+ * merge onto GitHub-discovered candidates and never create candidates. The
+ * queue's promotionEligible field is informational only and never acted
+ * upon.
+ */
+async function runDiscover(
+  options: ParsedCliOptions,
+  context: AgentMemoryTrendsContext,
+  dryRun: boolean
+): Promise<Result<DiscoverOutput>> {
+  const rejected = rejectDiscoverIncompatibleFlags(options);
+  if (!rejected.ok) return rejected;
+
+  const resolved = resolveRunOptions(options, context);
+  // Normal filesystem execution only: a resolved vault that does not exist
+  // as a directory is rejected before any collector/community call or
+  // write, so a typoed --vault can never materialize discovery paths even
+  // when an explicit --config points elsewhere. Injected test contexts
+  // (custom readFile seam) keep their fictional paths unchecked.
+  if (!context.readFile) {
+    let vaultIsDirectory = false;
+    try {
+      vaultIsDirectory = statSync(resolved.vault).isDirectory();
+    } catch {
+      // Absent or unreadable vault path: not a directory.
+    }
+    if (!vaultIsDirectory) {
+      return err("VAULT_NOT_FOUND", `vault directory does not exist: ${resolved.vault}`);
+    }
+  }
+  const config = loadResearchConfig(resolved.configPath, context);
+  if (!config.ok) return config;
+
+  const runner = context.runGh ?? createGhRunner(context.cwd);
+  const collector = context.runDiscoveryCollector ?? collectDiscoveryCandidates;
+  const collection = await collector(config.data, { runGh: runner, now: context.now });
+  if (!collection.ok) return collection;
+
+  const warnings = [...collection.data.warnings];
+  // Community collection runs only after the GitHub collector succeeded,
+  // which for v1/disabled discovery never happens (fail-closed above).
+  const communityCollector = context.runCommunityCollection ?? collectCommunityReferences;
+  let mergedCandidates = collection.data.candidates;
+  // Bounded aggregate community diagnostics for the human hint only; they
+  // are never persisted into the queue or snapshot artifacts.
+  const communityWarnings: string[] = [];
+  const communityDiagnostics = {
+    available: false,
+    requestsUsed: 0,
+    attempted: 0,
+    skipped: 0,
+    unknown: 0,
+  };
+  try {
+    const community = await communityCollector(config.data, {
+      fetchJson: context.fetchJson ?? createFetchJsonClient(),
+    });
+    if (community.ok) {
+      communityDiagnostics.available = true;
+      communityDiagnostics.requestsUsed = community.data.requestsUsed;
+      communityDiagnostics.attempted = community.data.sources.attempted.length;
+      communityDiagnostics.skipped = community.data.sources.skipped.length;
+      communityDiagnostics.unknown = community.data.sources.unknown.length;
+      communityWarnings.push(...community.data.warnings);
+      const enabledCommunityIds = config.data.discovery.communitySources
+        .filter((source) => source.enabled)
+        .map((source) => source.id);
+      mergedCandidates = collection.data.candidates.map((candidate) =>
+        mergeCommunityReferences({
+          candidate,
+          references: community.data.references,
+          validSourceIds: enabledCommunityIds,
+        })
+      );
+    } else {
+      communityWarnings.push(`community collection failed: ${String(community.detail ?? community.error)}`);
+    }
+  } catch (error) {
+    communityWarnings.push(`community collection failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  warnings.push(...communityWarnings);
+
+  const discoveryDir = join(resolved.vault, DISCOVERY_OUTPUT_DIRECTORY);
+  const history = loadDiscoveryHistory(discoveryDir, context.now, config.data.discovery.retentionDays);
+  const withDeltas = applyDiscoveryDeltas(mergedCandidates, history, context.now);
+  const queue = buildDiscoveryQueue(withDeltas, {
+    config: config.data,
+    now: context.now,
+    trackedUrls: [...history.observationsByUrl.keys()],
+  });
+
+  if (dryRun) {
+    return ok({
+      mutations: [],
+      humanHint: `discover: ok (dry-run); queued ${queue.counts.queued} candidate(s), ${queue.counts.alert} alert(s); ${formatCommunityDiagnostics(communityDiagnostics, communityWarnings.length)}`,
+    });
+  }
+
+  // Rank first, then persist the same capped candidates in the snapshot and
+  // the queue so later history deltas stay coherent with the emitted queue.
+  // The queue is written before any new dated snapshot/latest write or
+  // retention pruning, so a QUEUE_WRITE_FAILED leaves no fresh artifacts
+  // and never prunes history; its snapshotPath is the vault-relative dated
+  // snapshot path the snapshot write below produces.
+  const runAt = context.now.toISOString();
+  const snapshot: DiscoverySnapshot = {
+    formatVersion: 1,
+    runAt,
+    retentionDays: config.data.discovery.retentionDays,
+    candidates: queue.candidates,
+  };
+  const queueWritten = writeDiscoveryQueue({
+    dir: discoveryDir,
+    snapshotPath: vaultRelativePath(resolved.vault, join(discoveryDir, `${dateKey(context.now)}.json`)),
+    generatedAt: runAt,
+    maxDailyCandidates: config.data.discovery.maxDailyCandidates,
+    counts: queue.counts,
+    candidates: queue.candidates,
+    warnings: [...warnings, ...history.warnings],
+  });
+  if (!queueWritten.ok) return queueWritten;
+
+  const written = writeDiscoverySnapshot(discoveryDir, snapshot, config.data.discovery.maxDailyCandidates);
+  if (!written.ok) return written;
+
+  // Pruning runs only after all three expected output files were written.
+  pruneDiscoverySnapshots(discoveryDir, config.data.discovery.retentionDays, context.now);
+
+  return ok({
+    mutations: [
+      vaultRelativePath(resolved.vault, written.data.datedPath),
+      vaultRelativePath(resolved.vault, written.data.latestPath),
+      vaultRelativePath(resolved.vault, queueWritten.data.queuePath),
+    ],
+    humanHint: `discover: ok; queued ${queue.counts.queued} candidate(s), ${queue.counts.alert} alert(s); ${formatCommunityDiagnostics(communityDiagnostics, communityWarnings.length)}`,
+  });
+}
+
+function formatCommunityDiagnostics(
+  diagnostics: { available: boolean; requestsUsed: number; attempted: number; skipped: number; unknown: number },
+  warningCount: number
+): string {
+  if (!diagnostics.available) {
+    return `community: unavailable, ${warningCount} warning(s)`;
+  }
+  return `community: ${diagnostics.requestsUsed} request(s), ${diagnostics.attempted} attempted, ${diagnostics.skipped} skipped, ${diagnostics.unknown} unknown, ${warningCount} warning(s)`;
+}
+
+function rejectDiscoverIncompatibleFlags(options: ParsedCliOptions): Result<{ rejected: true }> {
+  const present = [...options.values.keys(), ...options.flags]
+    .filter((flag) => DISCOVER_REJECTED_FLAGS.has(flag))
+    .sort();
+  if (present.length > 0) {
+    return err("USAGE", `discover does not accept synthesis/capture flags: ${present.map((flag) => `--${flag}`).join(", ")}`);
+  }
+  return ok({ rejected: true });
+}
+
 function isQuietRunInput(input: AgentInput): boolean {
   return input.selectedCandidates.length === 0;
 }
@@ -1302,6 +1493,11 @@ async function cleanGeneratedPreflightLeftovers(
   const dirtyPaths = [...dirty.tracked, ...dirty.untracked];
   if (dirtyPaths.length === 0) return ok({ cleaned: true });
 
+  // Only generated daily run-state leftovers are restorable/cleanable.
+  // Discovery snapshot/latest/queue artifacts are never touched: the
+  // preflight cannot distinguish a completed manual discover result from
+  // interrupted output, so any dirty discovery artifact is ordinary dirty
+  // state and blocks the live daily run.
   const unrelated = dirtyPaths.filter((path) => !AGENT_MEMORY_RUN_STATE_RE.test(path));
   if (unrelated.length > 0) {
     return err("DIRTY_PREFLIGHT", {

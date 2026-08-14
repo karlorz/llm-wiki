@@ -123,7 +123,7 @@ cat > "$BIN_DIR/agent-memory-trends" <<'EOF'
 set -Eeuo pipefail
 
 if [ "$#" -lt 1 ]; then
-  echo "Usage: agent-memory-trends <doctor|collect|daily|publish|version> [args...]" >&2
+  echo "Usage: agent-memory-trends <doctor|collect|daily|discover|publish|version> [args...]" >&2
   exit 46
 fi
 
@@ -159,7 +159,7 @@ cat > "$BIN_DIR/agent-memory-trends-daily" <<'EOF'
 set -Eeuo pipefail
 
 if [ "$#" -ne 0 ]; then
-  echo "agent-memory-trends-daily does not accept arguments; use agent-memory-trends <doctor|collect|daily|publish|version> [args...] for manual package commands" >&2
+  echo "agent-memory-trends-daily does not accept arguments; use agent-memory-trends <doctor|collect|daily|discover|publish|version> [args...] for manual package commands" >&2
   exit 64
 fi
 

@@ -82,6 +82,8 @@ describe("sg02 systemd rollout artifacts", () => {
     expect(installer).toContain("export WIKI_PATH=\"${WIKI_PATH:-$VAULT}\"");
     expect(installer).toContain("require('./packages/agent-memory-trends/package.json').version");
     expect(installer).toContain("npm run -w @skillwiki/agent-memory-trends --silent \"$COMMAND\" --");
+    // The installed wrapper advertises discover alongside the other supported commands.
+    expect(installer).toContain("Usage: agent-memory-trends <doctor|collect|daily|discover|publish|version> [args...]");
     expect(installer).toContain("manual auth gates");
     expect(installer).toContain("gh auth login");
     expect(installer).toContain("codex login");
@@ -105,6 +107,9 @@ describe("sg02 systemd rollout artifacts", () => {
     expect(argumentGuard).toBeGreaterThan(-1);
     expect(argumentGuard).toBeLessThan(dailyCommand);
     expect(dailyWrapper).toContain("agent-memory-trends-daily does not accept arguments");
+    expect(dailyWrapper).toContain(
+      "use agent-memory-trends <doctor|collect|daily|discover|publish|version> [args...]"
+    );
     expect(dailyWrapper).toContain("SKILLWIKI_MAINTENANCE_FLEET");
     expect(dailyWrapper).toContain("SKILLWIKI_MAINTENANCE_MODE=\"${SKILLWIKI_MAINTENANCE_MODE:-daily}\"");
     expect(dailyWrapper).toContain("--host \"$SKILLWIKI_MAINTENANCE_HOST_ID\"");

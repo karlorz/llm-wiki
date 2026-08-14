@@ -1,5 +1,21 @@
 import { readFileSync } from "node:fs";
 import yaml from "js-yaml";
+import {
+  COMMUNITY_SOURCE_ROLES,
+  DISCOVERY_DEFAULT_RETENTION_DAYS,
+  DISCOVERY_MAX_API_CALL_BUDGET,
+  DISCOVERY_MAX_DAILY_CANDIDATES,
+  DISCOVERY_MAX_ENRICHMENTS,
+  DISCOVERY_MAX_REPOSITORY_SIGNAL,
+  DISCOVERY_MAX_RETENTION_DAYS,
+  DISCOVERY_MAX_SEARCH_QUERIES,
+  disabledDiscoveryConfig,
+  type CommunitySource,
+  type DiscoveryConfig,
+  type DiscoveryGithubLane,
+  type DiscoveryGithubLaneKind,
+  type OfficialOrganizationSeed,
+} from "./discovery-contracts.js";
 import { err, ok, type Result } from "./types.js";
 
 export interface ResearchQuery {
@@ -47,7 +63,7 @@ export interface WatchlistEntry {
 
 export interface ResearchConfig {
   sourcePath: string;
-  version: 1;
+  version: 1 | 2;
   project: string;
   timezone: string;
   dedupe: {
@@ -75,6 +91,7 @@ export interface ResearchConfig {
     rejected: WatchlistEntry[];
     archived: WatchlistEntry[];
   };
+  discovery: DiscoveryConfig;
 }
 
 export interface WatchlistAppearance {
@@ -127,47 +144,56 @@ export function parseResearchConfig(text: string, sourcePath: string): Result<Re
 
   try {
     const root = asRecord(raw, "root");
-    const scoring = asRecord(root.scoring, "scoring");
-    const weights = asRecord(scoring.weights, "scoring.weights");
-    const github = asRecord(root.github, "github");
-    const dedupe = root.dedupe === undefined || root.dedupe === null ? {} : asRecord(root.dedupe, "dedupe");
-    const watchlist = asRecord(root.watchlist, "watchlist");
-    const autoAppend = asRecord(watchlist.auto_append, "watchlist.auto_append");
+    const version = asNumber(root.version, "version");
+    if (version !== 1 && version !== 2) throw new Error("version must be 1 or 2");
 
-    const laneParse = parseGithubLanes(github);
+    const prefix = version === 2 ? "research_promotion." : "";
+    const promotionRoot = version === 2 ? asRecord(root.research_promotion, "research_promotion") : root;
+    const scoring = asRecord(promotionRoot.scoring, `${prefix}scoring`);
+    const weights = asRecord(scoring.weights, `${prefix}scoring.weights`);
+    const github = asRecord(promotionRoot.github, `${prefix}github`);
+    const dedupe =
+      promotionRoot.dedupe === undefined || promotionRoot.dedupe === null
+        ? {}
+        : asRecord(promotionRoot.dedupe, `${prefix}dedupe`);
+    const watchlist = asRecord(promotionRoot.watchlist, `${prefix}watchlist`);
+    const autoAppend = asRecord(watchlist.auto_append, `${prefix}watchlist.auto_append`);
+
+    const laneParse = parseGithubLanes(github, prefix);
     const lanes = laneParse.lanes;
     const queries = lanes.flatMap((lane) => lane.queries);
 
     const config: ResearchConfig = {
       sourcePath,
-      version: asNumber(root.version, "version") as 1,
+      version,
       project: asString(root.project, "project"),
       timezone: asString(root.timezone, "timezone"),
       dedupe: {
-        digestTtlDays: asOptionalNonNegativeNumber(dedupe.digest_ttl_days, "dedupe.digest_ttl_days", 14),
+        digestTtlDays: asOptionalNonNegativeNumber(dedupe.digest_ttl_days, `${prefix}dedupe.digest_ttl_days`, 14),
       },
       scoring: {
-        threshold: asNumber(scoring.threshold, "scoring.threshold"),
-        weights: parseScoringWeights(weights),
+        threshold: asNumber(scoring.threshold, `${prefix}scoring.threshold`),
+        weights: parseScoringWeights(weights, prefix),
       },
       github: {
-        apiCallBudget: asNumber(github.api_call_budget, "github.api_call_budget"),
-        maxQueries: asNumber(github.max_queries, "github.max_queries"),
-        maxRawCandidates: asNumber(github.max_raw_candidates, "github.max_raw_candidates"),
-        maxSelectedCandidates: asNumber(github.max_selected_candidates, "github.max_selected_candidates"),
+        apiCallBudget: asNumber(github.api_call_budget, `${prefix}github.api_call_budget`),
+        maxQueries: asNumber(github.max_queries, `${prefix}github.max_queries`),
+        maxRawCandidates: asNumber(github.max_raw_candidates, `${prefix}github.max_raw_candidates`),
+        maxSelectedCandidates: asNumber(github.max_selected_candidates, `${prefix}github.max_selected_candidates`),
         lanes,
         queries,
       },
       watchlist: {
         autoAppend: {
-          minAppearances: asNumber(autoAppend.min_appearances, "watchlist.auto_append.min_appearances"),
-          windowDays: asNumber(autoAppend.window_days, "watchlist.auto_append.window_days"),
-          minScore: asNumber(autoAppend.min_score, "watchlist.auto_append.min_score"),
+          minAppearances: asNumber(autoAppend.min_appearances, `${prefix}watchlist.auto_append.min_appearances`),
+          windowDays: asNumber(autoAppend.window_days, `${prefix}watchlist.auto_append.window_days`),
+          minScore: asNumber(autoAppend.min_score, `${prefix}watchlist.auto_append.min_score`),
         },
-        accepted: parseWatchlistEntries(watchlist.accepted, "watchlist.accepted"),
-        rejected: parseWatchlistEntries(watchlist.rejected, "watchlist.rejected"),
-        archived: parseWatchlistEntries(watchlist.archived, "watchlist.archived"),
+        accepted: parseWatchlistEntries(watchlist.accepted, `${prefix}watchlist.accepted`),
+        rejected: parseWatchlistEntries(watchlist.rejected, `${prefix}watchlist.rejected`),
+        archived: parseWatchlistEntries(watchlist.archived, `${prefix}watchlist.archived`),
       },
+      discovery: version === 2 ? parseDiscoverySection(root) : disabledDiscoveryConfig(),
     };
 
     const validation = validateResearchConfig(config, laneParse.legacy);
@@ -178,37 +204,39 @@ export function parseResearchConfig(text: string, sourcePath: string): Result<Re
   }
 }
 
-function parseScoringWeights(weights: Record<string, unknown>): ScoringWeights {
+function parseScoringWeights(weights: Record<string, unknown>, prefix: string): ScoringWeights {
   const hasNewKeys =
     weights.implementation_evidence !== undefined ||
     weights.authority_momentum !== undefined ||
     weights.novelty_or_tracking !== undefined;
   if (hasNewKeys) {
     return {
-      relevance: asNumber(weights.relevance, "scoring.weights.relevance"),
-      implementationEvidence: asNumber(weights.implementation_evidence, "scoring.weights.implementation_evidence"),
-      authorityMomentum: asNumber(weights.authority_momentum, "scoring.weights.authority_momentum"),
-      freshness: asNumber(weights.freshness, "scoring.weights.freshness"),
-      noveltyOrTracking: asNumber(weights.novelty_or_tracking, "scoring.weights.novelty_or_tracking"),
+      relevance: asNumber(weights.relevance, `${prefix}scoring.weights.relevance`),
+      implementationEvidence: asNumber(weights.implementation_evidence, `${prefix}scoring.weights.implementation_evidence`),
+      authorityMomentum: asNumber(weights.authority_momentum, `${prefix}scoring.weights.authority_momentum`),
+      freshness: asNumber(weights.freshness, `${prefix}scoring.weights.freshness`),
+      noveltyOrTracking: asNumber(weights.novelty_or_tracking, `${prefix}scoring.weights.novelty_or_tracking`),
     };
   }
 
   return {
-    relevance: asNumber(weights.relevance, "scoring.weights.relevance"),
-    implementationEvidence: asNumber(weights.actionability, "scoring.weights.actionability"),
-    authorityMomentum: asNumber(weights.authority_activity, "scoring.weights.authority_activity"),
-    freshness: asNumber(weights.freshness, "scoring.weights.freshness"),
-    noveltyOrTracking: asNumber(weights.novelty, "scoring.weights.novelty"),
+    relevance: asNumber(weights.relevance, `${prefix}scoring.weights.relevance`),
+    implementationEvidence: asNumber(weights.actionability, `${prefix}scoring.weights.actionability`),
+    authorityMomentum: asNumber(weights.authority_activity, `${prefix}scoring.weights.authority_activity`),
+    freshness: asNumber(weights.freshness, `${prefix}scoring.weights.freshness`),
+    noveltyOrTracking: asNumber(weights.novelty, `${prefix}scoring.weights.novelty`),
   };
 }
 
-function parseGithubLanes(github: Record<string, unknown>): { lanes: GithubLane[]; legacy: boolean } {
+function parseGithubLanes(github: Record<string, unknown>, prefix: string): { lanes: GithubLane[]; legacy: boolean } {
   if (github.lanes !== undefined) {
-    const lanes = asArray(github.lanes, "github.lanes").map(parseGithubLane);
+    const lanes = asArray(github.lanes, `${prefix}github.lanes`).map((lane, index) =>
+      parseGithubLane(lane, `${prefix}github.lanes[${index}]`)
+    );
     return { lanes, legacy: false };
   }
 
-  const queries = parseResearchQueries(github.queries, "github.queries");
+  const queries = parseResearchQueries(github.queries, `${prefix}github.queries`);
   return {
     legacy: true,
     lanes: [
@@ -233,32 +261,33 @@ function parseGithubLanes(github: Record<string, unknown>): { lanes: GithubLane[
   };
 }
 
-function parseGithubLane(lane: unknown, index: number): GithubLane {
-  const path = `github.lanes[${index}]`;
-  const item = asRecord(lane, path);
-  const queries = parseResearchQueries(item.queries, `${path}.queries`);
-  if (queries.length === 0) throw new Error(`${path}.queries must contain at least one query`);
+function parseGithubLane(lane: unknown, itemPath: string, allowEmptyQuery = false): GithubLane {
+  const item = asRecord(lane, itemPath);
+  const queries = parseResearchQueries(item.queries, `${itemPath}.queries`, allowEmptyQuery);
+  if (queries.length === 0) throw new Error(`${itemPath}.queries must contain at least one query`);
 
   return {
-    id: asString(item.id, `${path}.id`),
-    label: asString(item.label, `${path}.label`),
-    windowDays: asNonNegativeNumber(item.window_days, `${path}.window_days`),
-    dateField: asEnum(item.date_field, `${path}.date_field`, ["pushed", "created"]),
-    sort: asEnum(item.sort, `${path}.sort`, ["updated", "stars"]),
-    order: asEnum(item.order, `${path}.order`, ["asc", "desc"]),
-    perPage: asPositiveNumber(item.per_page, `${path}.per_page`),
-    qualityGate: parseQualityGate(item.quality_gate, `${path}.quality_gate`),
+    id: asString(item.id, `${itemPath}.id`),
+    label: asString(item.label, `${itemPath}.label`),
+    windowDays: asNonNegativeNumber(item.window_days, `${itemPath}.window_days`),
+    dateField: asEnum(item.date_field, `${itemPath}.date_field`, ["pushed", "created"]),
+    sort: asEnum(item.sort, `${itemPath}.sort`, ["updated", "stars"]),
+    order: asEnum(item.order, `${itemPath}.order`, ["asc", "desc"]),
+    perPage: asPositiveNumber(item.per_page, `${itemPath}.per_page`),
+    qualityGate: parseQualityGate(item.quality_gate, `${itemPath}.quality_gate`),
     queries,
   };
 }
 
-function parseResearchQueries(value: unknown, path: string): ResearchQuery[] {
+function parseResearchQueries(value: unknown, path: string, allowEmptyQuery = false): ResearchQuery[] {
   return asArray(value, path).map((query, index) => {
     const item = asRecord(query, `${path}[${index}]`);
     return {
       id: asString(item.id, `${path}[${index}].id`),
       label: asString(item.label, `${path}[${index}].label`),
-      query: asString(item.query, `${path}[${index}].query`),
+      query: allowEmptyQuery
+        ? asOptionalString(item.query, `${path}[${index}].query`)
+        : asString(item.query, `${path}[${index}].query`),
     };
   });
 }
@@ -272,6 +301,103 @@ function parseQualityGate(value: unknown, path: string): GithubQualityGate {
     allowMultiQueryException: asOptionalBoolean(item.allow_multi_query_exception, `${path}.allow_multi_query_exception`, false),
     allowStrongEvidenceException: asOptionalBoolean(item.allow_strong_evidence_exception, `${path}.allow_strong_evidence_exception`, false),
   };
+}
+
+function parseDiscoverySection(root: Record<string, unknown>): DiscoveryConfig {
+  const discovery = asRecord(root.discovery, "discovery");
+  const github = asRecord(discovery.github, "discovery.github");
+  const alert = asRecord(discovery.immediate_alert, "discovery.immediate_alert");
+  const lanes = parseDiscoveryLanes(github);
+  return {
+    enabled: asOptionalBoolean(discovery.enabled, "discovery.enabled", true),
+    maxDailyCandidates: asPositiveInteger(discovery.max_daily_candidates, "discovery.max_daily_candidates"),
+    retentionDays: asOptionalPositiveInteger(
+      discovery.retention_days,
+      "discovery.retention_days",
+      DISCOVERY_DEFAULT_RETENTION_DAYS
+    ),
+    immediateAlert: {
+      enabled: asBoolean(alert.enabled, "discovery.immediate_alert.enabled"),
+      minRepositorySignal: asNonNegativeInteger(
+        alert.min_repository_signal,
+        "discovery.immediate_alert.min_repository_signal"
+      ),
+      minIndependentSignalCount: asPositiveInteger(
+        alert.min_independent_signal_count,
+        "discovery.immediate_alert.min_independent_signal_count"
+      ),
+    },
+    github: {
+      apiCallBudget: asPositiveInteger(github.api_call_budget, "discovery.github.api_call_budget"),
+      maxSearchQueries: asPositiveInteger(github.max_search_queries, "discovery.github.max_search_queries"),
+      maxEnrichments: asPositiveInteger(github.max_enrichments, "discovery.github.max_enrichments"),
+      lanes,
+    },
+    officialOrganizations: parseOfficialOrganizations(
+      discovery.official_organizations,
+      "discovery.official_organizations"
+    ),
+    communitySources: parseCommunitySources(discovery.community_sources, "discovery.community_sources"),
+  };
+}
+
+function parseDiscoveryLanes(github: Record<string, unknown>): DiscoveryGithubLane[] {
+  const laneGroups: Array<[string, DiscoveryGithubLaneKind]> = [
+    ["new_release_lanes", "new_release"],
+    ["relevance_lanes", "relevance"],
+    ["topic_lanes", "topic"],
+  ];
+  const lanes: DiscoveryGithubLane[] = [];
+  for (const [key, kind] of laneGroups) {
+    if (github[key] === undefined || github[key] === null) continue;
+    asArray(github[key], `discovery.github.${key}`).forEach((lane, index) => {
+      // New-release lanes may carry an empty query string: the collector
+      // turns it into a qualifier-only repository search with the date window.
+      lanes.push({ ...parseGithubLane(lane, `discovery.github.${key}[${index}]`, kind === "new_release"), kind });
+    });
+  }
+  return lanes;
+}
+
+function parseOfficialOrganizations(value: unknown, path: string): OfficialOrganizationSeed[] {
+  if (value === undefined || value === null) return [];
+  return asArray(value, path).map((seed, index) => {
+    const item = asRecord(seed, `${path}[${index}]`);
+    const github = asString(item.github, `${path}[${index}].github`).trim();
+    if (!isValidGithubOrganizationIdentifier(github)) {
+      throw new Error(`${path}[${index}].github must be a valid GitHub organization identifier`);
+    }
+    const officialUrls = asArray(item.official_urls, `${path}[${index}].official_urls`).map((url, urlIndex) => {
+      const value = asString(url, `${path}[${index}].official_urls[${urlIndex}]`);
+      if (!/^https:\/\//i.test(value)) {
+        throw new Error(`${path}[${index}].official_urls[${urlIndex}] must be an https URL`);
+      }
+      return value;
+    });
+    if (officialUrls.length === 0) {
+      throw new Error(`${path}[${index}].official_urls must contain at least one URL`);
+    }
+    return {
+      github: github.toLowerCase(),
+      region: asString(item.region, `${path}[${index}].region`),
+      officialUrls,
+      categories: asArray(item.categories, `${path}[${index}].categories`).map((category, categoryIndex) =>
+        asString(category, `${path}[${index}].categories[${categoryIndex}]`)
+      ),
+    };
+  });
+}
+
+function parseCommunitySources(value: unknown, path: string): CommunitySource[] {
+  if (value === undefined || value === null) return [];
+  return asArray(value, path).map((source, index) => {
+    const item = asRecord(source, `${path}[${index}]`);
+    return {
+      id: asString(item.id, `${path}[${index}].id`),
+      enabled: asBoolean(item.enabled, `${path}[${index}].enabled`),
+      role: asEnum(item.role, `${path}[${index}].role`, COMMUNITY_SOURCE_ROLES),
+    };
+  });
 }
 
 export function shouldAutoAppendWatchlist(input: WatchlistDecisionInput): WatchlistDecision {
@@ -325,7 +451,7 @@ export function normalizeCanonicalUrl(url: string): string {
 }
 
 function validateResearchConfig(config: ResearchConfig, legacyQueries: boolean): string | undefined {
-  if (config.version !== 1) return "version must be 1";
+  if (config.version !== 1 && config.version !== 2) return "version must be 1 or 2";
   if (config.github.maxQueries > MAX_GITHUB_QUERIES) return `github.max_queries must be <= ${MAX_GITHUB_QUERIES}`;
   if (config.github.maxRawCandidates > 50) return "github.max_raw_candidates must be <= 50";
   if (config.github.maxSelectedCandidates > 10) return "github.max_selected_candidates must be <= 10";
@@ -348,6 +474,55 @@ function validateResearchConfig(config: ResearchConfig, legacyQueries: boolean):
   const weightSum = Object.values(config.scoring.weights).reduce((sum, value) => sum + value, 0);
   if (weightSum !== 100) return "scoring.weights must sum to 100";
   if (config.watchlist.autoAppend.minAppearances < 3) return "watchlist.auto_append.min_appearances must be >= 3";
+
+  if (config.version === 2) {
+    const discovery = config.discovery;
+    if (discovery.maxDailyCandidates > DISCOVERY_MAX_DAILY_CANDIDATES) {
+      return `discovery.max_daily_candidates must be <= ${DISCOVERY_MAX_DAILY_CANDIDATES}`;
+    }
+    if (discovery.retentionDays > DISCOVERY_MAX_RETENTION_DAYS) {
+      return `discovery.retention_days must be <= ${DISCOVERY_MAX_RETENTION_DAYS}`;
+    }
+    if (discovery.github.apiCallBudget > DISCOVERY_MAX_API_CALL_BUDGET) {
+      return `discovery.github.api_call_budget must be <= ${DISCOVERY_MAX_API_CALL_BUDGET}`;
+    }
+    if (discovery.github.maxSearchQueries > DISCOVERY_MAX_SEARCH_QUERIES) {
+      return `discovery.github.max_search_queries must be <= ${DISCOVERY_MAX_SEARCH_QUERIES}`;
+    }
+    if (discovery.github.maxEnrichments > DISCOVERY_MAX_ENRICHMENTS) {
+      return `discovery.github.max_enrichments must be <= ${DISCOVERY_MAX_ENRICHMENTS}`;
+    }
+    if (discovery.github.lanes.some((lane) => lane.perPage > 100)) {
+      return "discovery.github lanes per_page must be <= 100";
+    }
+    if (discovery.immediateAlert.minRepositorySignal > DISCOVERY_MAX_REPOSITORY_SIGNAL) {
+      return `discovery.immediate_alert.min_repository_signal must be <= ${DISCOVERY_MAX_REPOSITORY_SIGNAL}`;
+    }
+    if (discovery.github.lanes.length === 0) return "discovery.github lanes must contain at least one lane";
+    if (
+      discovery.github.lanes.some(
+        (lane) => lane.kind === "new_release" && lane.windowDays === 0 && lane.queries.some((query) => query.query === "")
+      )
+    ) {
+      return "new_release lanes with a blank query require a positive window_days";
+    }
+    const discoveryLaneIds = discovery.github.lanes.map((lane) => lane.id);
+    if (new Set(discoveryLaneIds).size !== discoveryLaneIds.length) {
+      return "discovery.github lanes ids must be unique";
+    }
+    const discoveryQueryIds = discovery.github.lanes.flatMap((lane) => lane.queries).map((query) => query.id);
+    if (new Set(discoveryQueryIds).size !== discoveryQueryIds.length) {
+      return "discovery.github query ids must be unique across lanes";
+    }
+    const orgIds = discovery.officialOrganizations.map((org) => org.github);
+    if (new Set(orgIds).size !== orgIds.length) {
+      return "discovery.official_organizations github identifiers must be unique";
+    }
+    const sourceIds = discovery.communitySources.map((source) => source.id);
+    if (new Set(sourceIds).size !== sourceIds.length) {
+      return "discovery.community_sources ids must be unique";
+    }
+  }
   return undefined;
 }
 
@@ -383,6 +558,12 @@ function asString(value: unknown, path: string): string {
   return value;
 }
 
+function asOptionalString(value: unknown, path: string): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") throw new Error(`${path} must be a string`);
+  return value.trim();
+}
+
 function asNumber(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${path} must be a finite number`);
   return value;
@@ -403,6 +584,38 @@ function asPositiveNumber(value: unknown, path: string): number {
 function asOptionalNonNegativeNumber(value: unknown, path: string, fallback: number): number {
   if (value === undefined || value === null) return fallback;
   return asNonNegativeNumber(value, path);
+}
+
+function asBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${path} must be a boolean`);
+  return value;
+}
+
+function asInteger(value: unknown, path: string): number {
+  const number = asNumber(value, path);
+  if (!Number.isInteger(number)) throw new Error(`${path} must be an integer`);
+  return number;
+}
+
+function asNonNegativeInteger(value: unknown, path: string): number {
+  const number = asInteger(value, path);
+  if (number < 0) throw new Error(`${path} must be >= 0`);
+  return number;
+}
+
+function asPositiveInteger(value: unknown, path: string): number {
+  const number = asInteger(value, path);
+  if (number <= 0) throw new Error(`${path} must be > 0`);
+  return number;
+}
+
+function asOptionalPositiveInteger(value: unknown, path: string, fallback: number): number {
+  if (value === undefined || value === null) return fallback;
+  return asPositiveInteger(value, path);
+}
+
+function isValidGithubOrganizationIdentifier(id: string): boolean {
+  return /^[a-z\d](?:[a-z\d-]{0,37}[a-z\d])?$/i.test(id) && !id.includes("--");
 }
 
 function asOptionalBoolean(value: unknown, path: string, fallback: boolean): boolean {

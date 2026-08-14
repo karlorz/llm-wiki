@@ -1,5 +1,11 @@
 import type { ResearchConfig } from "./config.js";
 import type { DuplicateSignals } from "./dedupe.js";
+import type {
+  CommunityCollectionOptions,
+  CommunityCollectionOutput,
+  CommunityFetchClient,
+} from "./discovery-community.js";
+import type { DiscoveryCollectorOptions, DiscoveryCollectionOutput } from "./discovery-github.js";
 import type { GhRunner, GithubCollectionOutput } from "./github.js";
 import type { AgentInput, WriteAgentInputOutput } from "./input.js";
 import type { MaybeSendHeartbeatInput, HeartbeatResult } from "./heartbeat.js";
@@ -29,7 +35,7 @@ export function err(error: string, detail?: unknown): ErrResult {
   return detail === undefined ? { ok: false, error } : { ok: false, error, detail };
 }
 
-export type AgentMemoryTrendsCommand = "doctor" | "collect" | "daily" | "publish" | "help" | "version";
+export type AgentMemoryTrendsCommand = "doctor" | "collect" | "daily" | "discover" | "publish" | "help" | "version";
 
 export interface RefreshSessionBriefInput {
   vault: string;
@@ -70,6 +76,16 @@ export interface AgentMemoryTrendsContext {
     config: ResearchConfig,
     options: { runGh: GhRunner; now: Date; knownCanonicalUrls?: string[]; existingTaskUrls?: string[] }
   ) => Promise<Result<GithubCollectionOutput>>;
+  runDiscoveryCollector?: (
+    config: ResearchConfig,
+    options: DiscoveryCollectorOptions
+  ) => Promise<Result<DiscoveryCollectionOutput>>;
+  runCommunityCollection?: (
+    config: ResearchConfig,
+    options: CommunityCollectionOptions
+  ) => Promise<Result<CommunityCollectionOutput>>;
+  /** Fetch seam for the bounded community adapters; defaults to platform fetch. */
+  fetchJson?: CommunityFetchClient;
   collectDuplicateSignals?: (vault: string, project: string) => Result<DuplicateSignals>;
   writeAgentInput?: (input: AgentInput) => Result<WriteAgentInputOutput>;
   runSynthesis?: SynthesisRunner;

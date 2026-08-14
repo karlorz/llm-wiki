@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  isDiscoveryQueuePath,
   parseRunManifest,
   validateGeneratedChanges,
   type RunManifest,
@@ -197,6 +198,12 @@ function normalizeManifestForOperationalFiles(
   if (changedSupportPaths.length > 0) {
     const existingSupportPaths = stringArray(outputs.session_brief_support_paths ?? outputs.sessionBriefSupportPaths);
     outputs.session_brief_support_paths = [...new Set([...existingSupportPaths, ...changedSupportPaths])]
+      .sort((left, right) => left.localeCompare(right));
+  }
+  const changedDiscoveryQueuePaths = changedFiles.filter(isDiscoveryQueuePath);
+  if (changedDiscoveryQueuePaths.length > 0) {
+    const existingQueuePaths = stringArray(outputs.discovery_queue_paths ?? outputs.discoveryQueuePaths);
+    outputs.discovery_queue_paths = [...new Set([...existingQueuePaths, ...changedDiscoveryQueuePaths])]
       .sort((left, right) => left.localeCompare(right));
   }
   if (typeof outputs.run_state_path !== "string" && typeof outputs.runStatePath !== "string") {

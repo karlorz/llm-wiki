@@ -13,6 +13,7 @@ export interface RunManifestOutputs {
   runStatePath?: string;
   latestRunPath?: string;
   watchlistPath?: string;
+  discoveryQueuePaths?: string[];
 }
 
 export interface RunManifest {
@@ -50,6 +51,42 @@ const SESSION_BRIEF_CACHE_PATHS = [".skillwiki/session-brief.md", ".skillwiki/se
 const SESSION_BRIEF_SUPPORT_PATHS = ["index.md", "log.md"];
 const WATCHLIST_PATH = "projects/llm-wiki/architecture/agent-memory-research-sources.yaml";
 const TYPED_KNOWLEDGE_PREFIXES = ["concepts/", "entities/", "comparisons/", "queries/", "meta/"];
+const DISCOVERY_DIRECTORY = ".skillwiki/agent-memory-trends/discovery";
+const DISCOVERY_DATE_PATTERN = /^(\d{4}-\d{2}-\d{2})\.json$/;
+
+/**
+ * Exact discovery snapshot/latest/queue paths from the binding decision:
+ * `.skillwiki/agent-memory-trends/discovery/YYYY-MM-DD.json`,
+ * `latest.json`, and `YYYY-MM-DD-queue.json`. Filenames must carry a real
+ * calendar date; near-miss names, traversal, and sibling files are rejected.
+ */
+export function isDiscoveryGeneratedPath(path: string): boolean {
+  return path === `${DISCOVERY_DIRECTORY}/latest.json` || isDiscoveryQueuePath(path) || isDiscoveryDatedSnapshotPath(path);
+}
+
+/** Queue artifacts must additionally be declared in manifest outputs. */
+export function isDiscoveryQueuePath(path: string): boolean {
+  const prefix = `${DISCOVERY_DIRECTORY}/`;
+  if (!path.startsWith(prefix)) return false;
+  const base = path.slice(prefix.length);
+  const suffix = "-queue.json";
+  if (!base.endsWith(suffix)) return false;
+  return isValidDiscoveryDateKey(base.slice(0, -suffix.length));
+}
+
+function isDiscoveryDatedSnapshotPath(path: string): boolean {
+  const prefix = `${DISCOVERY_DIRECTORY}/`;
+  if (!path.startsWith(prefix)) return false;
+  const base = path.slice(prefix.length);
+  const match = DISCOVERY_DATE_PATTERN.exec(base);
+  return Boolean(match && isValidDiscoveryDateKey(match[1]!));
+}
+
+function isValidDiscoveryDateKey(dateKeyValue: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKeyValue)) return false;
+  const date = new Date(`${dateKeyValue}T00:00:00.000Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === dateKeyValue;
+}
 
 export function isAllowedGeneratedPath(path: string, runDate: string): boolean {
   return (
@@ -63,6 +100,7 @@ export function isAllowedGeneratedPath(path: string, runDate: string): boolean {
     SESSION_BRIEF_CACHE_PATHS.includes(path) ||
     SESSION_BRIEF_SUPPORT_PATHS.includes(path) ||
     isAgentMemoryRunStatePath(path, runDate) ||
+    isDiscoveryGeneratedPath(path) ||
     path === WATCHLIST_PATH
   );
 }
@@ -76,6 +114,7 @@ export function generatedPathCategory(path: string, runDate: string): string {
   if (SESSION_BRIEF_CACHE_PATHS.includes(path)) return "session-brief-cache";
   if (SESSION_BRIEF_SUPPORT_PATHS.includes(path)) return "session-brief-support";
   if (isAgentMemoryRunStatePath(path, runDate)) return "run-state";
+  if (isDiscoveryGeneratedPath(path)) return "discovery-state";
   if (path === WATCHLIST_PATH) return "watchlist";
   if (TYPED_KNOWLEDGE_PREFIXES.some((prefix) => path.startsWith(prefix))) return "typed-knowledge";
   if (path.startsWith("raw/articles/")) return "raw-article";
@@ -120,7 +159,11 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
   if ((input.manifest.webSources ?? []).length > 15) issues.push("expected max 15 web sources");
 
   const digestPaths = changedFiles.filter((path) => path === `queries/${input.runDate}-agent-memory-trends-digest.md`);
-  if (digestPaths.length !== 1 && !isQuietRunStateOnlyChangeSet(changedFiles, input.runDate)) {
+  if (
+    digestPaths.length !== 1 &&
+    !isQuietRunStateOnlyChangeSet(changedFiles, input.runDate) &&
+    !isDiscoveryOnlyChangeSet(changedFiles)
+  ) {
     issues.push("expected exactly one digest on successful runs");
   }
 
@@ -134,10 +177,11 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
     input.manifest.outputs.runStatePath,
     input.manifest.outputs.latestRunPath,
     input.manifest.outputs.watchlistPath,
+    ...(input.manifest.outputs.discoveryQueuePaths ?? []),
   ].filter((path): path is string => typeof path === "string" && path.length > 0));
 
   for (const path of changedFiles) {
-    if (!outputPaths.has(path) && !path.startsWith(".skillwiki/agent-memory-trends/")) {
+    if (!outputPaths.has(path) && !isExemptFromOutputDeclaration(path)) {
       issues.push(`${pathDiagnostic(path, input.runDate)} is changed but not declared in manifest outputs`);
     }
   }
@@ -179,6 +223,7 @@ export function parseRunManifest(text: string): Result<RunManifest> {
         runStatePath: stringField(outputs.run_state_path ?? outputs.runStatePath),
         latestRunPath: stringField(outputs.latest_run_path ?? outputs.latestRunPath),
         watchlistPath: stringField(outputs.watchlist_path ?? outputs.watchlistPath),
+        discoveryQueuePaths: stringArray(outputs.discovery_queue_paths ?? outputs.discoveryQueuePaths),
       },
       webSources: stringArray(raw.web_sources ?? raw.webSources),
     });
@@ -213,6 +258,19 @@ function isQuietRunStateOnlyChangeSet(paths: string[], runDate: string): boolean
     paths.includes(`.skillwiki/agent-memory-trends/${runDate}-run.json`) &&
     paths.includes(".skillwiki/agent-memory-trends/latest-run.json")
   );
+}
+
+/** Discovery snapshot/latest/queue changed sets are valid without a digest. */
+function isDiscoveryOnlyChangeSet(paths: string[]): boolean {
+  return paths.length > 0 && paths.every(isDiscoveryGeneratedPath);
+}
+
+/**
+ * Run-state and discovery snapshot/latest files are exempt from manifest
+ * output declaration; queue artifacts must always be declared.
+ */
+function isExemptFromOutputDeclaration(path: string): boolean {
+  return path.startsWith(".skillwiki/agent-memory-trends/") && !isDiscoveryQueuePath(path);
 }
 
 function inspectChangedFile(vault: string, path: string, runDate: string, maxFileBytes: number, issues: string[]): void {

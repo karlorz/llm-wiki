@@ -14,6 +14,7 @@
     "doctor": "npm run --silent build && node dist/cli.js doctor",
     "collect": "npm run --silent build && node dist/cli.js collect",
     "daily": "npm run --silent build && node dist/cli.js daily",
+    "discover": "npm run --silent build && node dist/cli.js discover",
     "publish": "npm run --silent build && node dist/cli.js publish",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

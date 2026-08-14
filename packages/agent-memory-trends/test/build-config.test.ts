@@ -21,7 +21,7 @@ describe("agent-memory-trends build config", () => {
       scripts: Record<string, string>;
     };
 
-    for (const scriptName of ["doctor", "collect", "daily", "publish"]) {
+    for (const scriptName of ["doctor", "collect", "daily", "discover", "publish"]) {
       expect(packageJson.scripts[scriptName]).toContain("npm run --silent build");
       expect(packageJson.scripts[scriptName]).toContain(`node dist/cli.js ${scriptName}`);
     }

@@ -324,7 +324,7 @@ async function fetchReadme(runGh: GhRunner, fullName: string): Promise<Result<st
   return ok(Buffer.from(parsed.data.content, "base64").toString("utf8"));
 }
 
-async function ghApi(runGh: GhRunner, args: string[]): Promise<Result<GhRunResult>> {
+export async function ghApi(runGh: GhRunner, args: string[]): Promise<Result<GhRunResult>> {
   const result = await runGh(["api", ...args]);
   if (result.exitCode !== 0) return err("GH_API_FAILED", result.stderr || result.stdout);
   return ok(result);
@@ -481,7 +481,7 @@ function parseRateLimit(text: string): RateLimitState {
   return parsed;
 }
 
-function parseJsonObject(text: string): Result<Record<string, unknown>> {
+export function parseJsonObject(text: string): Result<Record<string, unknown>> {
   try {
     const parsed = JSON.parse(text);
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return err("INVALID_JSON", "expected object");
