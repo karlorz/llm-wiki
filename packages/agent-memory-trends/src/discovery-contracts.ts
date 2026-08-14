@@ -19,6 +19,11 @@ export const DISCOVERY_MAX_API_CALL_BUDGET = 100;
 export const DISCOVERY_MAX_SEARCH_QUERIES = 100;
 export const DISCOVERY_MAX_ENRICHMENTS = 100;
 
+/** Maximum community items normalized per community source per run. */
+export const COMMUNITY_MAX_ITEMS_PER_SOURCE = 20;
+/** Maximum fetch calls a community source may make per run. */
+export const COMMUNITY_MAX_FETCHES_PER_SOURCE = 10;
+
 /** Maximum attention evidence references kept per candidate. */
 export const DISCOVERY_ATTENTION_EVIDENCE_MAX = 20;
 /** Maximum length of an attention evidence excerpt/title reference. */
@@ -40,8 +45,9 @@ export const DISCOVERY_DISPOSITIONS: readonly DiscoveryDisposition[] = [
 ];
 
 /**
- * Bounded public attention evidence reference. `excerpt`/`title` are capped
- * to DISCOVERY_ATTENTION_EXCERPT_MAX by producers; never a full page body.
+ * Bounded public attention evidence reference. `excerpt`/`title`/
+ * `englishSummary` are capped to DISCOVERY_ATTENTION_EXCERPT_MAX by
+ * producers; never a full page body.
  */
 export interface DiscoveryAttentionEvidence {
   sourceId: string;
@@ -49,6 +55,36 @@ export interface DiscoveryAttentionEvidence {
   language?: string;
   title?: string;
   excerpt?: string;
+  /** Bounded English review summary; optional and backwards-compatible. */
+  englishSummary?: string;
+}
+
+/**
+ * Compact normalized public community observation reference. One reference
+ * per canonical repository URL per observation. All retained text fields
+ * are capped to DISCOVERY_ATTENTION_EXCERPT_MAX by producers; never a full
+ * page body, README body, request header, prompt, environment value,
+ * secret, token, or credential.
+ */
+export interface CommunityReference {
+  /** Strict canonical GitHub repository URL; the only repository identity form. */
+  canonicalUrl: string;
+  /** Configured community source ID that produced this reference. */
+  sourceId: string;
+  /** Public URL of the observation itself (story/item/entry page). */
+  sourceUrl: string;
+  /** Original-language metadata where supplied. */
+  language?: string;
+  title?: string;
+  excerpt?: string;
+  /**
+   * Deterministic bounded English review summary. Conservative generic
+   * description when no source-provided English summary exists; never a
+   * translation and never inferred claims.
+   */
+  englishSummary: string;
+  /** Observation timestamp (ISO 8601) where valid. */
+  observedAt?: string;
 }
 
 export interface DiscoveryScoreComponents {
