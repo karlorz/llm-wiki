@@ -56,9 +56,9 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm run -w @skillwiki/shared test
       - run: npm run -w skillwiki build
-      - run: npm run -w skillwiki test
+      - run: npm test
+      - run: npm run typecheck
       - name: install --dry-run smoke
         run: |
           node packages/cli/dist/cli.js install --dry-run --skills-root packages/skills --target ${{ runner.temp }}/skills-target

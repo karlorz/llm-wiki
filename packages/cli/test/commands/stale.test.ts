@@ -39,7 +39,7 @@ describe("runStale", () => {
     writeFileSync(join(v, "raw", "transcripts", "2026-04-01-idea-foo.md"), TRANSCRIPT_FM);
     const workDir = join(v, "projects", "acme", "work", "2026-04-01-foo");
     mkdirSync(workDir, { recursive: true });
-    writeFileSync(join(workDir, "spec.md"), DONE_SPEC);
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: done item\nstatus: completed\nsource: raw/transcripts/2026-04-01-idea-foo.md\n---\n\nspec body`);
     const r = await runStale({ vault: v, days: 3 });
     expect(r.exitCode).toBe(19);
     if (r.result.ok) {
@@ -197,7 +197,7 @@ describe("runStale", () => {
     writeFileSync(transcriptPath, TRANSCRIPT_FM);
     const workDir = join(v, "projects", "acme", "work", "2026-04-01-arch");
     mkdirSync(workDir, { recursive: true });
-    writeFileSync(join(workDir, "spec.md"), DONE_SPEC);
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: done item\nstatus: completed\nsource: raw/transcripts/2026-04-01-idea-arch.md\n---\n\nspec body`);
     const preview = await runStale({ vault: v, days: 3, archive: true });
     expect(existsSync(transcriptPath)).toBe(true);
     if (!preview.result.ok || !preview.result.data.approval_token) throw new Error("stale preview failed");
@@ -218,7 +218,7 @@ describe("runStale", () => {
     writeFileSync(transcriptPath, TRANSCRIPT_FM);
     const workDir = join(v, "projects", "acme", "work", "2026-04-01-state-bound");
     mkdirSync(workDir, { recursive: true });
-    writeFileSync(join(workDir, "spec.md"), DONE_SPEC);
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: done item\nstatus: completed\nsource: raw/transcripts/2026-04-01-idea-state-bound.md\n---\n\nspec body`);
 
     const preview = await runStale({ vault: v, days: 3, archive: true });
     if (!preview.result.ok || !preview.result.data.approval_token) throw new Error("stale preview failed");
@@ -245,7 +245,7 @@ describe("runStale", () => {
     writeFileSync(join(v, "raw", "archived", "transcripts", transcript), "occupied");
     const workDir = join(v, "projects", "acme", "work", "2026-04-01-conflict");
     mkdirSync(workDir, { recursive: true });
-    writeFileSync(join(workDir, "spec.md"), DONE_SPEC);
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: done item\nstatus: completed\nsource: raw/transcripts/2026-04-01-idea-conflict.md\n---\n\nspec body`);
     const result = await runStale({ vault: v, days: 3, archive: true });
     expect(result.result.ok).toBe(false);
     expect(existsSync(join(v, "raw", "transcripts", transcript))).toBe(true);
@@ -353,7 +353,7 @@ Just a note.`);
     }
   });
 
-  it("claims transcript via date-prefix match to work item", async () => {
+  it("claims transcript via exact spec.md source frontmatter reference", async () => {
     const v = makeVault();
     writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-fix-bar.md"), `---
 source_url:
@@ -365,7 +365,7 @@ project: "[[acme]]"
 # task: Fix bar`);
     const workDir = join(v, "projects", "acme", "work", "2026-04-01-fix-bar");
     mkdirSync(workDir, { recursive: true });
-    writeFileSync(join(workDir, "spec.md"), `---\ntitle: fix bar\n---\n\nspec`);
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: fix bar\nsource: raw/transcripts/2026-04-01-task-fix-bar.md\n---\n\nspec`);
     const r = await runStale({ vault: v, days: 0 });
     if (r.result.ok) {
       expect(r.result.data.unclaimed_transcripts.length).toBe(0);

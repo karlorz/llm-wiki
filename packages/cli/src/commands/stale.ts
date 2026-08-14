@@ -10,6 +10,7 @@ import { applyRawStructuralMove, planRawStructuralMove } from "../utils/raw-stru
 import { operationId } from "../utils/operation-id.js";
 import { buildSourceReferenceIndex } from "../utils/source-reference-index.js";
 import { buildSourceRelocationProjection, readSourceRelocations } from "../utils/source-relocations.js";
+import { collectClaimedTranscripts } from "../utils/transcript-claims.js";
 
 export interface StaleInput { vault: string; days: number; archive?: boolean; apply?: boolean; approve?: string; forceScan?: boolean; project?: string; scan?: VaultScan; pageTextCache?: PageTextCache }
 export interface StaleTranscript { path: string; reason: string; hint?: string }
@@ -50,9 +51,8 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   const incompleteWorkItems: IncompleteWorkItem[] = [];
   const archived: string[] = [];
 
-  // Discover work directories and their statuses, grouped by project slug
+  // Discover work directories and their statuses
   const workDirs = new Map<string, string>(); // relDir -> status | ""
-  const workDirsBySlug = new Map<string, Map<string, string>>(); // slug -> (dirName -> status)
   const projectsDir = join(input.vault, "projects");
   let projectSlugs: string[] = [];
   try { projectSlugs = (await readdir(projectsDir, { withFileTypes: true })).filter(d => d.isDirectory()).map(d => d.name); } catch { /* no projects */ }
@@ -69,14 +69,13 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     const workPath = join(projectsDir, slug, "work");
     let entries;
     try { entries = await readdir(workPath, { withFileTypes: true }); } catch { continue; }
-    const slugDirs = new Map<string, string>();
     for (const e of entries) {
       if (!e.isDirectory()) continue;
       const relDir = `projects/${slug}/work/${e.name}`;
       const absDir = join(workPath, e.name);
       let status = "";
       let files: string[];
-      try { files = await readdir(absDir); } catch { workDirs.set(relDir, ""); slugDirs.set(e.name, ""); continue; }
+      try { files = await readdir(absDir); } catch { workDirs.set(relDir, ""); continue; }
       for (const f of files) {
         if (!f.endsWith(".md")) continue;
         try {
@@ -85,9 +84,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
         } catch { /* skip */ }
       }
       workDirs.set(relDir, status);
-      slugDirs.set(e.name, status);
     }
-    workDirsBySlug.set(slug, slugDirs);
   }
 
   // Helper: extract project slug from frontmatter project field ("[[slug]]" → "slug")
@@ -103,7 +100,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   const LOOP_CYCLE_PATTERN = /loop-cycle-/;
 
   // 1. Stale transcripts: raw/transcripts/*.md where matching work item is done/invalid
-  let transcripts = scan.raw.filter(p => p.relPath.startsWith("raw/transcripts/") && p.relPath.endsWith(".md"));
+  const transcripts = scan.raw.filter(p => p.relPath.startsWith("raw/transcripts/") && p.relPath.endsWith(".md"));
   const claimedPaths = new Set<string>();
 
   // Pre-parse transcript frontmatter for project/kind fields
@@ -138,7 +135,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
           if (wikilink) {
             const candidate = wikilink[1]!;
             // Verify this is a known project slug
-            if (workDirsBySlug.has(candidate)) {
+            if (projectSlugs.includes(candidate)) {
               project = `[[${candidate}]]`;
               inferred = true;
             }
@@ -155,58 +152,44 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     if (entry) transcriptMeta.set(entry[0], entry[1]);
   }
 
-  for (const t of transcripts) {
-    const datePrefix = t.relPath.split("/").pop()!.slice(0, 10);
-    const meta = transcriptMeta.get(t.relPath);
-    const slug = meta?.slug || "";
-
-    if (slug && workDirsBySlug.has(slug)) {
-      // Project-scoped match: check slug substring, word overlap, or source: reference
-      const slugDirs = workDirsBySlug.get(slug)!;
-      const tSlug = t.relPath.split("/").pop()!.replace(/^\d{4}-\d{2}-\d{2}-/, "").replace(/\.md$/, "").replace(/^(task|bug|idea|note|observation)-/, "");
-      for (const [dirName, status] of slugDirs) {
-        if (!dirName.startsWith(datePrefix)) continue;
-        const wSlug = dirName.replace(/^\d{4}-\d{2}-\d{2}-/, "");
-        // Substring match (either direction) or word overlap >= 2
-        const tWords = new Set(tSlug.split("-").filter(w => w.length >= 3));
-        const wWords = wSlug.split("-").filter(w => w.length >= 3);
-        const overlap = wWords.filter(w => tWords.has(w)).length;
-        if (dirName.includes(tSlug) || tSlug.includes(wSlug) || overlap >= 1) {
-          claimedPaths.add(t.relPath);
-          if (TERMINAL_STATUSES.has(status)) {
-            staleTranscripts.push({ path: t.relPath, reason: `work item projects/${slug}/work/${dirName} is ${status}` });
-          }
-          break;
-        }
-      }
-    } else if (!slug) {
-      // No project field: fall back to cross-project date-prefix matching
-      for (const [dir, status] of workDirs) {
-        if (dir.split("/").pop()!.startsWith(datePrefix)) {
-          claimedPaths.add(t.relPath);
-          if (TERMINAL_STATUSES.has(status)) {
-            staleTranscripts.push({ path: t.relPath, reason: `work item ${dir} is ${status}` });
-          }
-          break;
-        }
-      }
-    }
-  }
-
-  // 1b. Also claim transcripts referenced by work item spec.md `source:` frontmatter
-  await mapWithConcurrency([...workDirs.keys()], vaultIoConcurrency(), async (relDir) => {
+  // 1. Exact claims: transcripts referenced by work item spec frontmatter
+  // (`source:`, `sources:`, or `closes:`). Ownership comes only from an exact
+  // vault-relative raw/transcripts path reference, never from dates, slugs,
+  // titles, or filename similarity.
+  const claimSources = await mapWithConcurrency([...workDirs.keys()], vaultIoConcurrency(), async (relDir) => {
     const specPath = join(input.vault, relDir, "spec.md");
     try {
       const specContent = await readFile(specPath, "utf8");
       const specFm = extractFrontmatter(specContent);
-      if (specFm.ok && typeof specFm.data.source === "string") {
-        const sourcePath = specFm.data.source;
-        if (sourcePath.startsWith("raw/transcripts/")) claimedPaths.add(sourcePath);
-      }
+      if (!specFm.ok) return null;
+      return {
+        relDir,
+        source: specFm.data.source,
+        sources: specFm.data.sources,
+        closes: specFm.data.closes,
+      };
     } catch { /* no spec or unreadable */ }
+    return null;
   });
+  const claimedByWorkDir = new Map<string, string>(); // transcript path -> owning work dir
+  for (const source of claimSources) {
+    if (source) {
+      const claimed = collectClaimedTranscripts([source]);
+      for (const path of claimed.claimedPaths) {
+        claimedPaths.add(path);
+        claimedByWorkDir.set(path, source.relDir);
+      }
+    }
+  }
+  for (const [transcriptPath, workDir] of claimedByWorkDir) {
+    const status = workDirs.get(workDir) ?? "";
+    if (TERMINAL_STATUSES.has(status)) {
+      staleTranscripts.push({ path: transcriptPath, reason: `work item ${workDir} is ${status}` });
+    }
+  }
 
-  // 1c. Unclaimed transcripts: kind=task|bug with project field but no matching work item
+  // 2. Unclaimed transcripts: kind=task|bug with project field but no exact
+  // work item reference
   const unclaimedTranscripts: StaleTranscript[] = [];
   const CLAIMABLE_KINDS = new Set(["task", "bug"]);
   for (const t of transcripts) {

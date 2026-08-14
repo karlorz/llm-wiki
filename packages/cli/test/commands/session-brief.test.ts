@@ -458,6 +458,101 @@ Mirror-only pending article.
       else process.env.SKILLWIKI_VAULT_READ_MIRROR = prior;
     }
   });
+
+  it("excludes transcripts claimed exactly via work-item source and closes references", async () => {
+    const vault = await makeVault();
+    mkdirSync(join(vault, "projects", "llm-wiki", "work", "2026-07-01-index-backfill"), { recursive: true });
+    mkdirSync(join(vault, "projects", "llm-wiki", "work", "2026-06-28-memory-review"), { recursive: true });
+    writeFileSync(join(vault, "raw", "transcripts", "2026-07-01-task-index-incomplete-eight-pages.md"), `---
+source_url:
+ingested: 2026-07-01
+kind: task
+project: "[[llm-wiki]]"
+---
+
+Backfill the index.
+`);
+    writeFileSync(join(vault, "raw", "transcripts", "2026-06-28-task-skillwiki-memory-review-dry-run.md"), `---
+source_url:
+ingested: 2026-06-28
+kind: task
+project: "[[llm-wiki]]"
+---
+
+Add memory review dry-run.
+`);
+    writeFileSync(join(vault, "raw", "transcripts", "2026-07-02-task-index-incomplete-similar-name.md"), `---
+source_url:
+ingested: 2026-07-02
+kind: task
+project: "[[llm-wiki]]"
+---
+
+Similar but unrelated capture.
+`);
+    writeFileSync(join(vault, "projects", "llm-wiki", "work", "2026-07-01-index-backfill", "spec.md"), `---
+title: Index backfill
+status: completed
+kind: issue
+project: "[[llm-wiki]]"
+closes:
+  - raw/transcripts/2026-07-01-task-index-incomplete-eight-pages.md
+---
+
+Backfill missing pages.
+`);
+    writeFileSync(join(vault, "projects", "llm-wiki", "work", "2026-06-28-memory-review", "spec.md"), `---
+title: Memory review dry-run
+status: completed
+kind: feature
+project: "[[llm-wiki]]"
+source: raw/transcripts/2026-06-28-task-skillwiki-memory-review-dry-run.md
+---
+
+Add the advisor surface.
+`);
+
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: false });
+
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.brief).not.toContain("2026-07-01-task-index-incomplete-eight-pages");
+    expect(result.result.data.brief).not.toContain("2026-06-28-task-skillwiki-memory-review-dry-run");
+    expect(result.result.data.brief).toContain("2026-07-02-task-index-incomplete-similar-name");
+  });
+
+  it("does not claim transcripts across projects", async () => {
+    const vault = await makeVault();
+    mkdirSync(join(vault, "projects", "portfolio-lab", "work", "2026-07-03-portfolio-capture"), { recursive: true });
+    writeFileSync(join(vault, "raw", "transcripts", "2026-07-03-task-portfolio-capture.md"), `---
+source_url:
+ingested: 2026-07-03
+kind: task
+project: "[[portfolio-lab]]"
+---
+
+Portfolio capture.
+`);
+    writeFileSync(join(vault, "projects", "portfolio-lab", "work", "2026-07-03-portfolio-capture", "spec.md"), `---
+title: Portfolio capture
+status: planned
+kind: task
+project: "[[portfolio-lab]]"
+source: raw/transcripts/2026-07-03-task-portfolio-capture.md
+---
+
+Claimed by portfolio-lab.
+`);
+
+    // Global scope: the portfolio-lab work item claims its own capture, so it
+    // is not unclaimed anywhere; an unrelated llm-wiki capture stays listed.
+    const result = await runSessionBrief({ vault, project: undefined, write: false });
+
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.brief).not.toContain("2026-07-03-task-portfolio-capture");
+    expect(result.result.data.brief).toContain("2026-06-11-task-memory-trends");
+  });
 });
 
 describe("session-brief memory authority ordering", () => {
