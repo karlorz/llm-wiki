@@ -849,6 +849,7 @@ describe("community reference source URL validation", () => {
       "//user:pass@example.com/x",
       "user:pass@example.com/x",
       "FTP://USER:PASS@EXAMPLE.COM/x",
+      "ftp://example.com/path/user:pass@x",
     ];
     for (const sourceUrl of rejected) {
       const made = makeCommunityReference({ ...VALID_INPUT, sourceUrl });
@@ -869,7 +870,11 @@ describe("community reference source URL validation", () => {
   });
 
   it("still accepts valid http(s) URLs with @ only outside the authority", () => {
-    for (const sourceUrl of ["https://example.com/path@more", "https://example.com/path:x@y"]) {
+    for (const sourceUrl of [
+      "https://example.com/path@more",
+      "https://example.com/path:x@y",
+      "https://example.com/path/user:pass@x",
+    ]) {
       const made = makeCommunityReference({ ...VALID_INPUT, sourceUrl });
       expect(made.ok).toBe(true);
       if (!made.ok) return;
