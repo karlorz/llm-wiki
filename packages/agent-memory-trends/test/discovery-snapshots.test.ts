@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  DISCOVERY_MAX_RETENTION_DAYS,
   makeDiscoveryCandidate,
   type DiscoveryCandidate,
   type DiscoveryCandidateFacts,
@@ -11,6 +12,7 @@ import {
 import {
   applyDiscoveryDeltas,
   loadDiscoveryHistory,
+  parseDiscoverySnapshot,
   pruneDiscoverySnapshots,
   readDiscoverySnapshot,
   writeDiscoveryQueue,
@@ -258,6 +260,160 @@ describe("agent-memory-trends discovery snapshots", () => {
       candidates: Array<Record<string, unknown>>;
     };
     expect(defaultParsed.candidates).toHaveLength(20);
+  });
+
+  it("rejects empty or invalid runAt on write without creating files", () => {
+    const snapshot: DiscoverySnapshot = {
+      formatVersion: 1,
+      runAt: "2026-08-14T02:00:00.000Z",
+      retentionDays: 30,
+      candidates: [makeCandidate()],
+    };
+    for (const runAt of ["", "not-a-date"]) {
+      const written = writeDiscoverySnapshot(dir, { ...snapshot, runAt });
+      expect(written.ok).toBe(false);
+      if (written.ok) continue;
+      expect(written.error).toBe("SNAPSHOT_INVALID");
+    }
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
+  it("rejects NaN, non-finite, non-integer, and out-of-range retentionDays on write", () => {
+    const snapshot: DiscoverySnapshot = {
+      formatVersion: 1,
+      runAt: "2026-08-14T02:00:00.000Z",
+      retentionDays: 30,
+      candidates: [makeCandidate()],
+    };
+    const invalid = [NaN, Infinity, -Infinity, 1.5, 0, -3, DISCOVERY_MAX_RETENTION_DAYS + 1];
+    for (const retentionDays of invalid) {
+      const written = writeDiscoverySnapshot(dir, { ...snapshot, retentionDays });
+      expect(written.ok).toBe(false);
+      if (written.ok) continue;
+      expect(written.error).toBe("SNAPSHOT_INVALID");
+    }
+    expect(readdirSync(dir)).toEqual([]);
+
+    // The contract maximum itself stays writable.
+    const atBound = writeDiscoverySnapshot(dir, {
+      ...snapshot,
+      runAt: "2026-08-15T02:00:00.000Z",
+      retentionDays: DISCOVERY_MAX_RETENTION_DAYS,
+    });
+    expect(atBound.ok).toBe(true);
+  });
+
+  it("parser rejects invalid runAt and retentionDays values with SNAPSHOT_INVALID", () => {
+    const valid = { formatVersion: 1, runAt: "2026-08-14T02:00:00.000Z", retentionDays: 30, candidates: [] };
+    expect(parseDiscoverySnapshot(JSON.stringify(valid), "ok.json").ok).toBe(true);
+
+    for (const runAt of ["", "not-a-date", 42, null, true]) {
+      const result = parseDiscoverySnapshot(JSON.stringify({ ...valid, runAt }), "runat.json");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toBe("SNAPSHOT_INVALID");
+    }
+    for (const retentionDays of [NaN, Infinity, 1.5, 0, -3, DISCOVERY_MAX_RETENTION_DAYS + 1, "30"]) {
+      const result = parseDiscoverySnapshot(JSON.stringify({ ...valid, retentionDays }), "retention.json");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toBe("SNAPSHOT_INVALID");
+    }
+  });
+
+  it("skips historical snapshots with invalid top-level fields as warnings without observations", () => {
+    writeSnapshot("2026-08-13", [
+      makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a", stargazersCount: 100, forksCount: 8 }),
+    ]);
+    writeFileSync(
+      join(dir, "2026-08-12.json"),
+      JSON.stringify({
+        formatVersion: 1,
+        runAt: "2026-08-12T00:00:00.000Z",
+        retentionDays: 0,
+        candidates: [makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a", stargazersCount: 90, forksCount: 7 })],
+      })
+    );
+    writeFileSync(
+      join(dir, "2026-08-11.json"),
+      JSON.stringify({
+        formatVersion: 1,
+        runAt: "not-a-date",
+        retentionDays: 30,
+        candidates: [makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a", stargazersCount: 80, forksCount: 6 })],
+      })
+    );
+
+    const now = new Date("2026-08-14T00:00:00Z");
+    const history = loadDiscoveryHistory(dir, now, 30);
+
+    expect(history.warnings).toHaveLength(2);
+    expect(history.warnings.join(" ")).toContain("2026-08-12.json");
+    expect(history.warnings.join(" ")).toContain("2026-08-11.json");
+
+    const observations = history.observationsByUrl.get("https://github.com/acme/repo-a");
+    expect(observations).toHaveLength(1);
+    expect(observations![0]!.date).toBe("2026-08-13");
+    expect(observations![0]!.stargazersCount).toBe(100);
+  });
+
+  it("redacts hf_, xoxb-, AIza, and Bearer credentials from snapshot, latest, and queue output before truncation", () => {
+    const hfToken = "hf_abcdefghijklmnopqrstuvwxyz123456";
+    const slackToken = ["xoxb", "redaction", "fixture"].join("-");
+    const googleToken = "AIzaSyA1234567890abcdefghijklmnopqrstuvwxyz";
+    const bearerToken = "Bearer ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    // Each token starts just before the 200-char cap and is cut in half by
+    // truncation; only redaction-before-truncation prevents a partial secret.
+    const straddling = (token: string) => `${"x".repeat(190)} ${token}`;
+    const candidates = [
+      {
+        ...makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a" }),
+        description: `docs mention ${hfToken} and ${googleToken}`,
+        topics: ["agent-memory", straddling(slackToken)],
+        sourceIds: ["lane:release_velocity", `auth ${bearerToken}`],
+        attentionEvidence: [
+          { sourceId: "hacker_news", url: `https://example.com/item/1?t=${bearerToken}` },
+          { sourceId: "cn_community", url: "https://example.com/item/2", excerpt: straddling(hfToken) },
+        ],
+        reasons: [`credential check: ${googleToken}`],
+      } as unknown as DiscoveryCandidate,
+    ];
+    const snapshot: DiscoverySnapshot = {
+      formatVersion: 1,
+      runAt: "2026-08-14T02:00:00.000Z",
+      retentionDays: 30,
+      candidates,
+    };
+
+    const written = writeDiscoverySnapshot(dir, snapshot, 20);
+    expect(written.ok).toBe(true);
+    if (!written.ok) throw new Error("expected snapshot write to succeed");
+
+    for (const file of ["2026-08-14.json", "latest.json"]) {
+      const body = readFileSync(join(dir, file), "utf8");
+      expect(body).not.toContain(hfToken);
+      expect(body).not.toContain(slackToken);
+      expect(body).not.toContain(googleToken);
+      expect(body).not.toContain("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+      expect(body).toContain("[redacted]");
+    }
+
+    const queued = writeDiscoveryQueue({
+      dir,
+      snapshotPath: ".skillwiki/agent-memory-trends/discovery/2026-08-14.json",
+      generatedAt: "2026-08-14T02:00:00.000Z",
+      maxDailyCandidates: 20,
+      counts: { totalEvaluated: 1, queued: 1, suppressed: 0, alert: 0, tracked: 0, new: 1, watch: 0 },
+      candidates,
+      warnings: [`collector: auth failed with ${bearerToken}`],
+    });
+    expect(queued.ok).toBe(true);
+    if (!queued.ok) throw new Error("expected queue write to succeed");
+
+    const queueBody = readFileSync(join(dir, "2026-08-14-queue.json"), "utf8");
+    expect(queueBody).not.toContain(hfToken);
+    expect(queueBody).not.toContain(slackToken);
+    expect(queueBody).not.toContain(googleToken);
+    expect(queueBody).not.toContain("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+    expect(queueBody).toContain("[redacted]");
   });
 });
 

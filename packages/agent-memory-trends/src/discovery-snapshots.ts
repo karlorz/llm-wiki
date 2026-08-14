@@ -4,6 +4,7 @@ import {
   DISCOVERY_ATTENTION_EVIDENCE_MAX,
   DISCOVERY_ATTENTION_EXCERPT_MAX,
   DISCOVERY_MAX_DAILY_CANDIDATES,
+  DISCOVERY_MAX_RETENTION_DAYS,
   type DiscoveryAttentionEvidence,
   type DiscoveryCandidate,
   type DiscoverySnapshot,
@@ -52,9 +53,12 @@ const SNAPSHOT_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}\.json$/;
 /**
  * Write one dated daily snapshot plus a latest.json pointer, both with the
  * same deterministic serialized content. The dated file name derives from
- * the snapshot's own runAt timestamp (UTC date). Candidates are capped at
- * `maxDailyCandidates` (defaults to the discovery hard cap) so the persisted
- * snapshot can never exceed the validated queue size.
+ * the snapshot's own runAt timestamp (UTC date). runAt must be a valid
+ * date and retentionDays a finite integer in the configured discovery
+ * contract range (1..DISCOVERY_MAX_RETENTION_DAYS), matching the parser's
+ * top-level validity rules. Candidates are capped at `maxDailyCandidates`
+ * (defaults to the discovery hard cap) so the persisted snapshot can never
+ * exceed the validated queue size.
  */
 export function writeDiscoverySnapshot(
   dir: string,
@@ -62,10 +66,16 @@ export function writeDiscoverySnapshot(
   maxDailyCandidates = DISCOVERY_MAX_DAILY_CANDIDATES
 ): Result<WriteDiscoverySnapshotOutput> {
   try {
-    const runAt = new Date(snapshot.runAt);
-    if (!Number.isFinite(runAt.getTime())) {
+    if (!isValidRunAt(snapshot.runAt)) {
       return err("SNAPSHOT_INVALID", "snapshot runAt must be a valid ISO timestamp");
     }
+    if (!isValidRetentionDays(snapshot.retentionDays)) {
+      return err(
+        "SNAPSHOT_INVALID",
+        `snapshot retentionDays must be an integer between 1 and ${DISCOVERY_MAX_RETENTION_DAYS}`
+      );
+    }
+    const runAt = new Date(snapshot.runAt);
     mkdirSync(dir, { recursive: true });
     const datedFile = `${dateKey(runAt)}.json`;
     const payload = serializeSnapshot(snapshot, maxDailyCandidates);
@@ -103,13 +113,18 @@ export function parseDiscoverySnapshot(text: string, source: string): Result<Dis
     if (!Array.isArray(candidates)) {
       return err("SNAPSHOT_INVALID", `${source}: candidates must be an array`);
     }
+    const runAt = (parsed as { runAt?: unknown }).runAt;
+    if (typeof runAt !== "string" || !isValidRunAt(runAt)) {
+      return err("SNAPSHOT_INVALID", `${source}: invalid runAt`);
+    }
+    const retentionDays = (parsed as { retentionDays?: unknown }).retentionDays;
+    if (typeof retentionDays !== "number" || !isValidRetentionDays(retentionDays)) {
+      return err("SNAPSHOT_INVALID", `${source}: invalid retentionDays`);
+    }
     return ok({
       formatVersion: 1,
-      runAt: typeof (parsed as { runAt?: unknown }).runAt === "string" ? (parsed as { runAt: string }).runAt : "",
-      retentionDays:
-        typeof (parsed as { retentionDays?: unknown }).retentionDays === "number"
-          ? (parsed as { retentionDays: number }).retentionDays
-          : 0,
+      runAt,
+      retentionDays,
       candidates: candidates as DiscoveryCandidate[],
     });
   } catch (error) {
@@ -247,6 +262,16 @@ function dateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+/** Shared top-level snapshot validity: a non-empty string parsing to a date. */
+function isValidRunAt(value: string): boolean {
+  return value !== "" && Number.isFinite(Date.parse(value));
+}
+
+/** Shared top-level snapshot validity: finite integer within the contract range. */
+function isValidRetentionDays(value: number): boolean {
+  return Number.isInteger(value) && value >= 1 && value <= DISCOVERY_MAX_RETENTION_DAYS;
+}
+
 function addDays(dateKeyValue: string, days: number): string {
   const date = new Date(`${dateKeyValue}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + days);
@@ -355,6 +380,10 @@ const DISCOVERY_TOKEN_PATTERNS = [
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
   /\bsk-[A-Za-z0-9]{20,}\b/,
   /\bAKIA[0-9A-Z]{16}\b/,
+  /\bhf_[A-Za-z0-9]{20,}\b/,
+  /\bxoxb-[A-Za-z0-9-]{10,}\b/,
+  /\bAIza[A-Za-z0-9_-]{20,}\b/,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{10,}\b/i,
 ];
 
 /**

@@ -812,6 +812,73 @@ describe("bounds and privacy", () => {
   });
 });
 
+describe("community reference source URL validation", () => {
+  const VALID_INPUT = {
+    canonicalUrl: "https://github.com/a/repo-a",
+    sourceId: "hacker_news",
+  };
+
+  it("accepts a valid short public http(s) source URL", () => {
+    const made = makeCommunityReference({
+      ...VALID_INPUT,
+      sourceUrl: "https://news.ycombinator.com/item?id=1",
+    });
+    expect(made.ok).toBe(true);
+    if (!made.ok) return;
+    expect(made.data.sourceUrl).toBe("https://news.ycombinator.com/item?id=1");
+  });
+
+  it("accepts a trimmed source URL at exactly the shared retained text bound", () => {
+    const atBound = `https://example.com/${"a".repeat(DISCOVERY_ATTENTION_EXCERPT_MAX - "https://example.com/".length)}`;
+    expect(atBound.length).toBe(DISCOVERY_ATTENTION_EXCERPT_MAX);
+    const made = makeCommunityReference({ ...VALID_INPUT, sourceUrl: ` ${atBound} ` });
+    expect(made.ok).toBe(true);
+    if (!made.ok) return;
+    expect(made.data.sourceUrl).toBe(atBound);
+  });
+
+  it("rejects malformed, non-http(s), and credentialed source URLs without echoing credentials", () => {
+    const rejected = [
+      "not-a-url",
+      "ftp://example.com/x",
+      "https://",
+      "https://example.com/a b",
+      "https://user:pass@example.com/x",
+      "https://example.com@evil.example/x",
+    ];
+    for (const sourceUrl of rejected) {
+      const made = makeCommunityReference({ ...VALID_INPUT, sourceUrl });
+      expect(made.ok).toBe(false);
+      if (made.ok) continue;
+      expect(made.error).toBe("COMMUNITY_INVALID_SOURCE_URL");
+      expect(String(made.detail)).not.toContain("pass");
+    }
+  });
+
+  it("rejects an overlong valid-prefix source URL instead of truncating it, without echoing the raw URL", () => {
+    const overlong = `https://example.com/${"segment/".repeat(30)}`;
+    expect(overlong.length).toBeGreaterThan(DISCOVERY_ATTENTION_EXCERPT_MAX);
+    const made = makeCommunityReference({ ...VALID_INPUT, sourceUrl: overlong });
+    expect(made.ok).toBe(false);
+    if (!made.ok) {
+      expect(made.error).toBe("COMMUNITY_INVALID_SOURCE_URL");
+      expect(String(made.detail)).not.toContain(overlong);
+      expect(String(made.detail)).not.toContain("example.com");
+    }
+  });
+
+  it("rejects a source URL one character past the shared retained text bound", () => {
+    const overBound = `https://example.com/${"a".repeat(DISCOVERY_ATTENTION_EXCERPT_MAX - "https://example.com/".length + 1)}`;
+    expect(overBound.length).toBe(DISCOVERY_ATTENTION_EXCERPT_MAX + 1);
+    const made = makeCommunityReference({ ...VALID_INPUT, sourceUrl: overBound });
+    expect(made.ok).toBe(false);
+    if (!made.ok) {
+      expect(made.error).toBe("COMMUNITY_INVALID_SOURCE_URL");
+      expect(String(made.detail)).not.toContain(overBound);
+    }
+  });
+});
+
 describe("merge seam", () => {
   const VALID = ["hacker_news", "hugging_face", "cn_community"];
 

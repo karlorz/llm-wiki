@@ -80,8 +80,10 @@ export interface CommunityReferenceInput {
 
 /**
  * Build one bounded community reference: re-validates the strict canonical
- * repository URL, requires a public http(s) source URL, caps every retained
- * text field to DISCOVERY_ATTENTION_EXCERPT_MAX, keeps only valid
+ * repository URL, requires a public http(s) source URL without credentials
+ * within the shared retained text bound (overlong or malformed inputs are
+ * rejected, never truncated into a potentially unrelated URL), caps every
+ * retained text field to DISCOVERY_ATTENTION_EXCERPT_MAX, keeps only valid
  * observation timestamps, and falls back to a conservative generic English
  * summary when none was supplied. Never retains body text, headers,
  * prompts, environment values, or secrets.
@@ -90,7 +92,16 @@ export function makeCommunityReference(input: CommunityReferenceInput): Result<C
   const canonical = canonicalizeDiscoveryRepositoryUrl(input.canonicalUrl);
   if (!canonical.ok) return err("COMMUNITY_INVALID_CANONICAL_URL", canonical.detail ?? canonical.error);
 
-  const sourceUrl = truncateDiscoveryText(input.sourceUrl);
+  const sourceUrl = input.sourceUrl.trim();
+  if (sourceUrl.length > DISCOVERY_ATTENTION_EXCERPT_MAX) {
+    return err(
+      "COMMUNITY_INVALID_SOURCE_URL",
+      `expected a public http(s) source URL of at most ${DISCOVERY_ATTENTION_EXCERPT_MAX} characters, got ${sourceUrl.length}`
+    );
+  }
+  if (/^https?:\/\/[^/\s]*@/.test(sourceUrl)) {
+    return err("COMMUNITY_INVALID_SOURCE_URL", "expected a public http(s) source URL without credentials");
+  }
   if (!/^https?:\/\/\S+$/.test(sourceUrl)) {
     return err("COMMUNITY_INVALID_SOURCE_URL", `expected a public http(s) source URL, got: ${input.sourceUrl}`);
   }
