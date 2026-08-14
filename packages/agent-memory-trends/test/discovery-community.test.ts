@@ -285,6 +285,46 @@ describe("hacker news adapter", () => {
     expect(serialized).not.toContain("example.com/x");
   });
 
+  it("omits an out-of-range finite timestamp with a warning instead of throwing, and other sources continue", async () => {
+    const { client } = fakeFetch((url) => {
+      if (url === HN_FIREBASE_TOP) return ok([1]);
+      if (url.match(/\/item\/1\.json$/)) {
+        return ok({
+          id: 1,
+          by: "alice",
+          score: 5,
+          time: 1e300,
+          title: "Repo with absurd timestamp",
+          url: "https://github.com/AcmeOrg/AgentMemory",
+        });
+      }
+      if (url === HF_TRENDING) {
+        return ok({
+          trending: [{ repoData: { id: "org/ok-model", cardData: { github: "https://github.com/Org/OkModel" } } }],
+        });
+      }
+      return err("NETWORK_FAILED", "unexpected url");
+    });
+    const config = loadConfig();
+    config.discovery.communitySources = config.discovery.communitySources.filter(
+      (source) => source.id === "hacker_news" || source.id === "hugging_face"
+    );
+    const result = await collectCommunityReferences(config, { fetchJson: client });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const hn = result.data.references.find((r) => r.sourceId === "hacker_news");
+    expect(hn).toBeDefined();
+    expect(hn!.canonicalUrl).toBe("https://github.com/acmeorg/agentmemory");
+    expect(hn!.observedAt).toBeUndefined();
+    expect(
+      result.data.references.some(
+        (r) => r.sourceId === "hugging_face" && r.canonicalUrl === "https://github.com/org/okmodel"
+      )
+    ).toBe(true);
+    expect(result.data.warnings).toContain("community source hacker_news: item 1: invalid timestamp omitted");
+  });
+
   it("falls back to the Algolia endpoint when Firebase fails, still bounded", async () => {
     const hits = [
       { objectID: "a1", title: "Agent memory roundup", url: "https://github.com/OrgA/RepoA", points: 120, num_comments: 30, created_at: "2026-08-01T00:00:00Z" },

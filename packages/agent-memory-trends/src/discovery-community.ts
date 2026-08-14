@@ -133,10 +133,15 @@ function normalizeHackerNewsItem(value: unknown, fallbackId: number, warnings: s
   }
   if (typeof item.by === "string" && item.by.trim() !== "") parts.push(`by ${item.by}`);
   const englishSummary = parts.length > 0 ? `HN story, ${parts.join(", ")}` : "HN story";
-  const observedAt =
-    typeof item.time === "number" && Number.isFinite(item.time) && item.time > 0
-      ? new Date(item.time * 1000).toISOString()
-      : undefined;
+  let observedAt: string | undefined;
+  if (typeof item.time === "number" && Number.isFinite(item.time) && item.time > 0) {
+    const date = new Date(item.time * 1000);
+    if (Number.isNaN(date.getTime())) {
+      warnings.push(`item ${id}: invalid timestamp omitted`);
+    } else {
+      observedAt = date.toISOString();
+    }
+  }
 
   return referencesForCanonicalUrls(canonicalUrls, "hacker_news", `https://news.ycombinator.com/item?id=${id}`, {
     title: typeof item.title === "string" ? item.title : undefined,
