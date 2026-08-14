@@ -100,6 +100,56 @@ config path through `AGENT_MEMORY_TRENDS_CONFIG` for controlled runs.
 Legacy configs with a flat `github.queries` list still parse through an explicit
 `legacy_flat` compatibility lane. New owned config should use `github.lanes`.
 
+### Config versions (v1/v2)
+
+The research config accepts both document versions and always normalizes the
+promotion settings into the same parsed view (`scoring`, `github`, `dedupe`,
+`watchlist`), so collection code does not branch on version:
+
+- `version: 1` documents keep parsing exactly as before with settings at the
+  top level. They receive a safe disabled discovery configuration
+  (`discovery.enabled: false` with zeroed budgets, empty lanes, empty seed
+  registries) so discovery code never runs against an implicit old schema.
+- `version: 2` documents move the same promotion settings under
+  `research_promotion` and add a `discovery` section:
+
+```yaml
+version: 2
+research_promotion:
+  # scoring, github, dedupe, watchlist — unchanged promotion schema
+discovery:
+  enabled: true                    # default true when omitted
+  max_daily_candidates: 20         # hard cap 20
+  retention_days: 30               # default 30, bounded 1..90
+  immediate_alert:
+    enabled: true
+    min_repository_signal: 100     # nonnegative
+    min_independent_signal_count: 1  # positive
+  github:
+    api_call_budget: 60            # positive, <= 100
+    max_search_queries: 24         # positive, <= 100
+    max_enrichments: 40            # positive, <= 100
+    new_release_lanes: [...]       # keyword-free release discovery lanes
+    relevance_lanes: [...]         # existing keyword lanes, same semantics
+    topic_lanes: [...]             # GitHub topic search lanes
+  official_organizations:
+    - github: deepseek-ai          # valid GitHub org identifier, normalized to lowercase
+      region: CN
+      official_urls: [https://www.deepseek.com/]  # https only
+      categories: [agent-runtime, models]
+  community_sources:
+    - id: hacker_news              # ids must be unique
+      enabled: true
+      role: corroboration          # discovery or corroboration only
+```
+
+v2 is validated strictly: duplicate seed organizations (case-insensitive),
+invalid GitHub organization identifiers, non-HTTPS official URLs, duplicate
+community source IDs, unsupported community roles, a discovery daily max above
+20, invalid retention/budget values, and duplicate discovery lane/query IDs all
+reject the document with `CONFIG_INVALID`. Community sources only ever rank and
+corroborate; they cannot create work items on their own.
+
 ## Synthesis Contract
 
 `agent-memory-trends` keeps the shared synthesis boundary agent-client-neutral. The core pipeline depends on `SynthesisRunner`; Codex is the primary live adapter and Claude Code CLI is an optional fallback adapter. Both feed the same downstream publisher contract.

@@ -113,6 +113,134 @@ watchlist:
       reason: superseded
 `;
 
+const V2_CONFIG = `version: 2
+project: llm-wiki
+timezone: Asia/Hong_Kong
+research_promotion:
+  scoring:
+    threshold: 65
+    weights:
+      relevance: 30
+      implementation_evidence: 25
+      authority_momentum: 25
+      freshness: 10
+      novelty_or_tracking: 10
+  github:
+    api_call_budget: 100
+    max_queries: 24
+    max_raw_candidates: 50
+    max_selected_candidates: 10
+    lanes:
+      - id: promotion_relevance
+        label: Promotion relevance lane
+        window_days: 7
+        date_field: pushed
+        sort: updated
+        order: desc
+        per_page: 10
+        quality_gate:
+          min_stars: 10
+          min_forks: 0
+          min_evidence_families: 2
+        queries:
+          - id: promo-memory
+            label: Promo memory query
+            query: coding agent memory in:name,description,readme
+  dedupe:
+    digest_ttl_days: 7
+  watchlist:
+    auto_append:
+      min_appearances: 3
+      window_days: 14
+      min_score: 65
+    accepted: []
+    rejected: []
+    archived: []
+discovery:
+  max_daily_candidates: 20
+  retention_days: 30
+  immediate_alert:
+    enabled: true
+    min_repository_signal: 100
+    min_independent_signal_count: 1
+  github:
+    api_call_budget: 60
+    max_search_queries: 24
+    max_enrichments: 40
+    new_release_lanes:
+      - id: release_velocity
+        label: New release velocity
+        window_days: 2
+        date_field: pushed
+        sort: updated
+        order: desc
+        per_page: 10
+        quality_gate:
+          min_stars: 0
+          min_forks: 0
+          min_evidence_families: 1
+        queries:
+          - id: release-new
+            label: New release query
+            query: coding agent release in:name,description,readme
+    relevance_lanes:
+      - id: relevance_keyword
+        label: Relevance keyword lane
+        window_days: 7
+        date_field: pushed
+        sort: stars
+        order: desc
+        per_page: 10
+        quality_gate:
+          min_stars: 50
+          min_forks: 5
+          min_evidence_families: 2
+        queries:
+          - id: relevance-keyword
+            label: Relevance keyword query
+            query: agent memory in:name,description,readme
+    topic_lanes:
+      - id: topic_agent_memory
+        label: Topic lane
+        window_days: 7
+        date_field: pushed
+        sort: updated
+        order: desc
+        per_page: 10
+        quality_gate:
+          min_stars: 0
+          min_forks: 0
+          min_evidence_families: 1
+        queries:
+          - id: topic-memory
+            label: Topic query
+            query: topic:agent-memory
+  official_organizations:
+    - github: deepseek-ai
+      region: CN
+      official_urls:
+        - https://www.deepseek.com/
+      categories:
+        - agent-runtime
+        - models
+    - github: qwenlm
+      region: CN
+      official_urls:
+        - https://qwenlm.github.io/
+      categories:
+        - models
+  community_sources:
+    - id: hacker_news
+      enabled: true
+      role: corroboration
+    - id: hugging_face
+      enabled: true
+      role: corroboration
+    - id: chinese_public_sources
+      enabled: true
+      role: discovery
+`;
+
 const LEGACY_CONFIG = `version: 1
 project: llm-wiki
 timezone: Asia/Hong_Kong
@@ -358,5 +486,232 @@ describe("agent-memory-trends research config", () => {
     });
     expect(unstable.shouldAppend).toBe(false);
     expect(unstable.reason).toContain("stable canonical URL");
+  });
+
+  it("parses a valid v2 config with promotion settings under research_promotion", () => {
+    const parsed = parseResearchConfig(V2_CONFIG, "v2-config.yaml");
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("expected v2 config to parse");
+    expect(parsed.data.version).toBe(2);
+    expect(parsed.data.project).toBe("llm-wiki");
+    expect(parsed.data.scoring.weights).toEqual({
+      relevance: 30,
+      implementationEvidence: 25,
+      authorityMomentum: 25,
+      freshness: 10,
+      noveltyOrTracking: 10,
+    });
+    expect(parsed.data.github.lanes.map((lane) => lane.id)).toEqual(["promotion_relevance"]);
+    expect(parsed.data.dedupe.digestTtlDays).toBe(7);
+    expect(parsed.data.watchlist.autoAppend.minAppearances).toBe(3);
+  });
+
+  it("normalizes a v2 discovery section into typed discovery fields", () => {
+    const parsed = parseResearchConfig(V2_CONFIG, "v2-config.yaml");
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("expected v2 config to parse");
+    expect(parsed.data.discovery).toMatchObject({
+      enabled: true,
+      maxDailyCandidates: 20,
+      retentionDays: 30,
+      immediateAlert: {
+        enabled: true,
+        minRepositorySignal: 100,
+        minIndependentSignalCount: 1,
+      },
+      github: {
+        apiCallBudget: 60,
+        maxSearchQueries: 24,
+        maxEnrichments: 40,
+      },
+    });
+    expect(parsed.data.discovery.github.lanes.map((lane) => lane.id)).toEqual([
+      "release_velocity",
+      "relevance_keyword",
+      "topic_agent_memory",
+    ]);
+    expect(parsed.data.discovery.github.lanes.map((lane) => lane.kind)).toEqual([
+      "new_release",
+      "relevance",
+      "topic",
+    ]);
+    expect(parsed.data.discovery.github.lanes[0]).toMatchObject({
+      windowDays: 2,
+      dateField: "pushed",
+      sort: "updated",
+      order: "desc",
+      perPage: 10,
+    });
+    expect(
+      parsed.data.discovery.github.lanes.flatMap((lane) => lane.queries).map((query) => query.id)
+    ).toEqual(["release-new", "relevance-keyword", "topic-memory"]);
+    expect(parsed.data.discovery.officialOrganizations).toEqual([
+      {
+        github: "deepseek-ai",
+        region: "CN",
+        officialUrls: ["https://www.deepseek.com/"],
+        categories: ["agent-runtime", "models"],
+      },
+      {
+        github: "qwenlm",
+        region: "CN",
+        officialUrls: ["https://qwenlm.github.io/"],
+        categories: ["models"],
+      },
+    ]);
+    expect(parsed.data.discovery.communitySources).toEqual([
+      { id: "hacker_news", enabled: true, role: "corroboration" },
+      { id: "hugging_face", enabled: true, role: "corroboration" },
+      { id: "chinese_public_sources", enabled: true, role: "discovery" },
+    ]);
+  });
+
+  it("gives v1 configs a safe disabled discovery configuration", () => {
+    const parsed = parseResearchConfig(LANE_CONFIG, "v1-config.yaml");
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("expected v1 config to parse");
+    expect(parsed.data.version).toBe(1);
+    expect(parsed.data.discovery).toEqual({
+      enabled: false,
+      maxDailyCandidates: 0,
+      retentionDays: 0,
+      immediateAlert: {
+        enabled: false,
+        minRepositorySignal: 0,
+        minIndependentSignalCount: 1,
+      },
+      github: { apiCallBudget: 0, maxSearchQueries: 0, maxEnrichments: 0, lanes: [] },
+      officialOrganizations: [],
+      communitySources: [],
+    });
+
+    const legacy = parseResearchConfig(LEGACY_CONFIG, "legacy-v1-config.yaml");
+    expect(legacy.ok).toBe(true);
+    if (!legacy.ok) throw new Error("expected legacy v1 config to parse");
+    expect(legacy.data.discovery.enabled).toBe(false);
+  });
+
+  it("rejects v2 configs missing research_promotion or discovery sections", () => {
+    const withoutPromotion = parseResearchConfig(
+      V2_CONFIG.replace(/research_promotion:\n(?: {2}.*\n)*/, "research_promotion:\n"),
+      "v2-no-promotion.yaml"
+    );
+    expect(withoutPromotion.ok).toBe(false);
+    if (withoutPromotion.ok) throw new Error("expected invalid config");
+    expect(String(withoutPromotion.detail)).toContain("research_promotion");
+
+    const withoutDiscovery = parseResearchConfig(
+      V2_CONFIG.replace(/^discovery:\n/m, ""),
+      "v2-no-discovery.yaml"
+    );
+    expect(withoutDiscovery.ok).toBe(false);
+    if (withoutDiscovery.ok) throw new Error("expected invalid config");
+    expect(String(withoutDiscovery.detail)).toContain("discovery");
+  });
+
+  it.each([
+    [
+      "duplicate official seed organizations",
+      "- github: qwenlm",
+      "- github: DeepSeek-AI",
+      "official_organizations github identifiers must be unique",
+    ],
+    [
+      "invalid GitHub organization identifiers",
+      "- github: qwenlm",
+      "- github: qwen_lm",
+      "must be a valid GitHub organization identifier",
+    ],
+    [
+      "non-HTTPS official URLs",
+      "https://qwenlm.github.io/",
+      "http://qwenlm.github.io/",
+      "must be an https URL",
+    ],
+    [
+      "duplicate community source IDs",
+      "- id: hugging_face",
+      "- id: hacker_news",
+      "community_sources ids must be unique",
+    ],
+    [
+      "unsupported community roles",
+      "- id: hugging_face\n      enabled: true\n      role: corroboration",
+      "- id: hugging_face\n      enabled: true\n      role: primary",
+      "community_sources[1].role must be one of",
+    ],
+    [
+      "a discovery daily max above the hard cap",
+      "max_daily_candidates: 20",
+      "max_daily_candidates: 21",
+      "max_daily_candidates must be <= 20",
+    ],
+    [
+      "a non-integer discovery daily max",
+      "max_daily_candidates: 20",
+      "max_daily_candidates: 20.5",
+      "max_daily_candidates must be an integer",
+    ],
+    [
+      "a zero retention window",
+      "retention_days: 30",
+      "retention_days: 0",
+      "retention_days must be > 0",
+    ],
+    [
+      "an excessive retention window",
+      "retention_days: 30",
+      "retention_days: 91",
+      "retention_days must be <= 90",
+    ],
+    [
+      "a zero discovery API call budget",
+      "api_call_budget: 60",
+      "api_call_budget: 0",
+      "api_call_budget must be > 0",
+    ],
+    [
+      "an excessive discovery enrichment budget",
+      "max_enrichments: 40",
+      "max_enrichments: 101",
+      "max_enrichments must be <= 100",
+    ],
+    [
+      "a negative immediate-alert repository threshold",
+      "min_repository_signal: 100",
+      "min_repository_signal: -1",
+      "min_repository_signal must be >= 0",
+    ],
+    [
+      "a zero immediate-alert independent-signal count",
+      "min_independent_signal_count: 1",
+      "min_independent_signal_count: 0",
+      "min_independent_signal_count must be > 0",
+    ],
+    [
+      "duplicate discovery lane IDs",
+      "- id: topic_agent_memory",
+      "- id: release_velocity",
+      "discovery.github lanes ids must be unique",
+    ],
+    [
+      "duplicate discovery query IDs across lanes",
+      "- id: topic-memory",
+      "- id: release-new",
+      "discovery.github query ids must be unique across lanes",
+    ],
+  ] as const)("rejects %s", (_name, target, replacement, expectedDetail) => {
+    const parsed = parseResearchConfig(
+      V2_CONFIG.replace(target, replacement),
+      "invalid-v2.yaml"
+    );
+
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) throw new Error("expected invalid config");
+    expect(parsed.error).toBe("CONFIG_INVALID");
+    expect(String(parsed.detail)).toContain(expectedDetail);
   });
 });
