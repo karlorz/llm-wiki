@@ -2325,6 +2325,13 @@ describe("agent-memory-trends discover command", () => {
     expect(JSON.stringify(queue)).not.toContain("latest-run");
     expect(result.result.data.humanHint).toContain("queued 20 candidate(s)");
     expect(result.result.data.humanHint).toContain("alert");
+    // Whole-collection failure is nonfatal: the hint reports the bounded
+    // unavailable summary with the community warning count.
+    expect(result.result.data.humanHint).toContain("community: unavailable, 1 warning(s)");
+    // The queue artifact stays structurally unchanged: no aggregate
+    // diagnostics leak into the persisted warnings/candidates.
+    expect(JSON.stringify(queue)).not.toContain("request(s)");
+    expect(JSON.stringify(queue)).not.toContain("attempted");
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -2382,6 +2389,11 @@ describe("agent-memory-trends discover command", () => {
     expect(result.result.data.mutations).toEqual([]);
     expect(result.result.data.dryRun).toBe(true);
     expect(existsSync(join(vault, ".skillwiki"))).toBe(false);
+    // Dry-run stays write-free but its human hint carries the bounded
+    // aggregate community diagnostics.
+    expect(result.result.data.humanHint).toContain(
+      "community: 0 request(s), 0 attempted, 3 skipped, 0 unknown, 0 warning(s)"
+    );
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -2594,6 +2606,15 @@ describe("agent-memory-trends discover command", () => {
     );
 
     expect(result.result.data.humanHint).toContain("1 alert(s)");
+    // Successful collection diagnostics surface in the regular human hint
+    // with bounded totals only.
+    expect(result.result.data.humanHint).toContain(
+      "community: 3 request(s), 3 attempted, 0 skipped, 0 unknown, 1 warning(s)"
+    );
+    // The queue artifact stays structurally unchanged: no aggregate
+    // diagnostics leak into the persisted warnings/candidates.
+    expect(JSON.stringify(queue)).not.toContain("request(s)");
+    expect(JSON.stringify(queue)).not.toContain("attempted");
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -2653,12 +2674,12 @@ describe("agent-memory-trends discover command", () => {
     expect(result.exitCode).toBe(0);
     expect(result.result.ok).toBe(true);
     if (!result.result.ok) throw new Error("expected discover success");
-    // Real adapters: HN firebase top-stories + one item, then the HF trending
-    // endpoint (which the fake fails, surfacing a per-source warning).
+    // Real adapters: HN firebase top-stories + one item, then the HF Models
+    // API (which the fake fails, surfacing a per-source warning).
     expect(fetchCalls).toEqual([
       "https://hacker-news.firebaseio.com/v0/topstories.json",
       "https://hacker-news.firebaseio.com/v0/item/1.json",
-      "https://huggingface.co/api/trending",
+      "https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=20&expand=cardData&expand=likes&expand=trendingScore",
     ]);
 
     const queuePath = join(vault, ".skillwiki", "agent-memory-trends", "discovery", "2026-08-14-queue.json");
@@ -2673,6 +2694,13 @@ describe("agent-memory-trends discover command", () => {
     expect(evidence[0]!.englishSummary).toBe("HN story, score 42, 3 comments, by pg");
     expect(queue.warnings.join(" ")).toContain("community source hugging_face failed");
     expect(queue.warnings.join(" ")).toContain("community source chinese_public_sources is not registered");
+    // Failed/unknown sources stay nonfatal: discovery succeeds and the hint
+    // carries the correct compact totals.
+    expect(result.result.data.humanHint).toContain(
+      "community: 2 request(s), 2 attempted, 0 skipped, 1 unknown, 2 warning(s)"
+    );
+    expect(JSON.stringify(queue)).not.toContain("request(s)");
+    expect(JSON.stringify(queue)).not.toContain("attempted");
     rmSync(root, { recursive: true, force: true });
   });
 

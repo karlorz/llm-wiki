@@ -7,7 +7,7 @@ The package stages high-signal agent-memory research into the vault. It collects
 ## CLI surface
 
 ```text
-agent-memory-trends <doctor|collect|daily|publish|version>
+agent-memory-trends <doctor|collect|daily|discover|publish|version>
   [--dry-run] [--generate-only] [--preview-only]
   [--dedupe-digest-ttl-days <n>]
   [--synthesis-retries <n>]
@@ -152,6 +152,47 @@ reachable signal bound of 55 (momentum 0..40 plus official identity 0..15),
 and duplicate discovery lane/query IDs all reject the document with
 `CONFIG_INVALID`. Community sources only ever rank and corroborate; they
 cannot create work items on their own.
+
+## Community Discovery Sources
+
+`discover` runs community collection only after the GitHub collector
+succeeded, then merges bounded community references onto the
+GitHub-discovered candidates. Community evidence alone never creates
+candidates, tasks, captures, synthesis, publication, alerts, session brief
+updates, heartbeat, legacy input, dedupe scans, or run-state writes.
+Community source failures and unknown adapters become nonfatal warnings and
+never fail the run.
+
+Built-in community adapters:
+
+- `hacker_news`: Firebase top-stories with a best-effort Algolia fallback,
+  bounded per-source item and request caps.
+- `hugging_face`: exactly one bounded unauthenticated request per run to the
+  Hugging Face Models API
+  (`https://huggingface.co/api/models?sort=trendingScore&direction=-1&limit=N&expand=cardData&expand=likes&expand=trendingScore`)
+  with no retries and no credentials or custom headers. Strict canonical
+  GitHub repository links are extracted only from the documented trusted
+  card link fields (`github`, `github_repo`, `repository`, `homepage`,
+  `code`, `paper`); the Hugging Face model URL itself is never treated as a
+  repository link. A valid zero-link response is a normal success: the
+  adapter reports zero references with no warnings.
+
+The `discover` human hint carries compact aggregate diagnostics for every
+run, including `--dry-run`: community request total, attempted/skipped/unknown
+source counts, and community warning count, for example
+`community: 3 request(s), 3 attempted, 0 skipped, 0 unknown, 1 warning(s)`.
+These are bounded counts only; no raw URLs, headers, request data, or
+response bodies are surfaced, and the persisted queue/snapshot artifacts are
+structurally unchanged. `discover --dry-run` writes nothing.
+
+Deferred, not part of this repair:
+
+- Non-built-in public/China JSON community sources (the generic registered
+  JSON adapter path) are not live until configuration/runtime registration
+  work is separately approved. Configured sources without a registered
+  adapter are reported as unknown and skipped with a nonfatal warning.
+- Discovery scheduling is not part of this repair: `discover` remains a
+  manual command, and the nightly timers continue to run `daily` only.
 
 ## Synthesis Contract
 
@@ -347,6 +388,7 @@ Run dry-run checks. Dry-run mode must not commit, push, or heartbeat.
 agent-memory-trends doctor
 agent-memory-trends collect --dry-run
 agent-memory-trends daily --dry-run
+agent-memory-trends discover --dry-run
 ```
 
 `daily --dry-run` still writes generated input and run-state files to the

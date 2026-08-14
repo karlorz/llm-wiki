@@ -1313,12 +1313,27 @@ async function runDiscover(
   // which for v1/disabled discovery never happens (fail-closed above).
   const communityCollector = context.runCommunityCollection ?? collectCommunityReferences;
   let mergedCandidates = collection.data.candidates;
+  // Bounded aggregate community diagnostics for the human hint only; they
+  // are never persisted into the queue or snapshot artifacts.
+  const communityWarnings: string[] = [];
+  const communityDiagnostics = {
+    available: false,
+    requestsUsed: 0,
+    attempted: 0,
+    skipped: 0,
+    unknown: 0,
+  };
   try {
     const community = await communityCollector(config.data, {
       fetchJson: context.fetchJson ?? createFetchJsonClient(),
     });
     if (community.ok) {
-      warnings.push(...community.data.warnings);
+      communityDiagnostics.available = true;
+      communityDiagnostics.requestsUsed = community.data.requestsUsed;
+      communityDiagnostics.attempted = community.data.sources.attempted.length;
+      communityDiagnostics.skipped = community.data.sources.skipped.length;
+      communityDiagnostics.unknown = community.data.sources.unknown.length;
+      communityWarnings.push(...community.data.warnings);
       const enabledCommunityIds = config.data.discovery.communitySources
         .filter((source) => source.enabled)
         .map((source) => source.id);
@@ -1330,11 +1345,12 @@ async function runDiscover(
         })
       );
     } else {
-      warnings.push(`community collection failed: ${String(community.detail ?? community.error)}`);
+      communityWarnings.push(`community collection failed: ${String(community.detail ?? community.error)}`);
     }
   } catch (error) {
-    warnings.push(`community collection failed: ${error instanceof Error ? error.message : String(error)}`);
+    communityWarnings.push(`community collection failed: ${error instanceof Error ? error.message : String(error)}`);
   }
+  warnings.push(...communityWarnings);
 
   const discoveryDir = join(resolved.vault, DISCOVERY_OUTPUT_DIRECTORY);
   const history = loadDiscoveryHistory(discoveryDir, context.now, config.data.discovery.retentionDays);
@@ -1348,7 +1364,7 @@ async function runDiscover(
   if (dryRun) {
     return ok({
       mutations: [],
-      humanHint: `discover: ok (dry-run); queued ${queue.counts.queued} candidate(s), ${queue.counts.alert} alert(s)`,
+      humanHint: `discover: ok (dry-run); queued ${queue.counts.queued} candidate(s), ${queue.counts.alert} alert(s); ${formatCommunityDiagnostics(communityDiagnostics, communityWarnings.length)}`,
     });
   }
 
@@ -1378,8 +1394,18 @@ async function runDiscover(
 
   return ok({
     mutations: [written.data.datedPath, written.data.latestPath, queueWritten.data.queuePath],
-    humanHint: `discover: ok; queued ${queue.counts.queued} candidate(s), ${queue.counts.alert} alert(s)`,
+    humanHint: `discover: ok; queued ${queue.counts.queued} candidate(s), ${queue.counts.alert} alert(s); ${formatCommunityDiagnostics(communityDiagnostics, communityWarnings.length)}`,
   });
+}
+
+function formatCommunityDiagnostics(
+  diagnostics: { available: boolean; requestsUsed: number; attempted: number; skipped: number; unknown: number },
+  warningCount: number
+): string {
+  if (!diagnostics.available) {
+    return `community: unavailable, ${warningCount} warning(s)`;
+  }
+  return `community: ${diagnostics.requestsUsed} request(s), ${diagnostics.attempted} attempted, ${diagnostics.skipped} skipped, ${diagnostics.unknown} unknown, ${warningCount} warning(s)`;
 }
 
 function rejectDiscoverIncompatibleFlags(options: ParsedCliOptions): Result<{ rejected: true }> {
