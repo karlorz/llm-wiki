@@ -1,6 +1,6 @@
 {
   "name": "skillwiki",
-  "version": "0.10.44",
+  "version": "0.10.45",
   "type": "module",
   "bin": {
     "skillwiki": "dist/cli.js",
