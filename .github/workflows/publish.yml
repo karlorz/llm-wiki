@@ -41,6 +41,7 @@ jobs:
       - run: npm run -w @skillwiki/shared test
       - run: npm run -w skillwiki build
       - run: npm run -w skillwiki test
+      - run: npm run typecheck
       - name: Determine npm tag
         id: tag
         env:

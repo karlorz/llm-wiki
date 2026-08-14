@@ -152,9 +152,9 @@ and do not move referenced assets as a side effect of archive or dedup.
 npm install
 npm run materialize:plugins:check
 npm run test:plugin-metadata
-npm run -w @skillwiki/shared test
 npm run -w skillwiki build
-npm run -w skillwiki test
+npm test
+npm run typecheck
 ```
 
 Local CLI tarball (for scp / offline install) goes to a **gitignored** folder — never

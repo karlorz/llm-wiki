@@ -9,6 +9,7 @@ import { renderRootIndex, writeRootIndexProjection } from "../utils/index-projec
 import { evaluateSatelliteRunHealth, satelliteLatestRunPath } from "../utils/satellite-run-health.js";
 import { memoryAuthorityTiersRank, type MemoryAuthorityTier } from "../utils/memory-authority.js";
 import { inventorySources } from "../utils/source-lifecycle.js";
+import { collectClaimedTranscripts } from "../utils/transcript-claims.js";
 
 export interface SessionBriefInput {
   vault: string;
@@ -58,6 +59,9 @@ interface PageInfo {
   project?: string;
   workItem?: string;
   status?: string;
+  source?: unknown;
+  sources?: unknown;
+  closes?: unknown;
 }
 
 const MAX_WORDS = 900;
@@ -103,9 +107,14 @@ export async function runSessionBrief(
       ...satelliteHealthWarnings(satelliteHealth),
     ];
 
+    const claimed = collectClaimedTranscripts(
+      workItems.map((w) => ({ relDir: w.path, source: w.source, sources: w.sources, closes: w.closes })),
+    );
+
     const latestLogs = newest(transcripts.filter((t) => t.kind === "session-log"), 3);
     const unclaimedCaptures = newest(transcripts.filter((t) => {
       if (t.kind !== "task" && t.kind !== "bug") return false;
+      if (claimed.claimedPaths.has(t.path)) return false;
       return !t.workItem && (!project || t.project === project);
     }), 5);
     const activeWork = newest(workItems.filter((w) => {
@@ -268,6 +277,9 @@ async function loadWorkItems(workItemPages: VaultPage[]): Promise<PageInfo[]> {
       date: stringField(fm.data.updated) || stringField(fm.data.created) || dateFromPath(page.relPath),
       status: stringField(fm.data.status),
       project: wikilinkSlug(fm.data.project),
+      source: fm.data.source,
+      sources: fm.data.sources,
+      closes: fm.data.closes,
     });
   }
   return out;

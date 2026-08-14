@@ -3,12 +3,24 @@ import { join, dirname, basename } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { atomicWriteText } from "../utils/atomic-write.js";
+import { guardProtectedVaultWrite } from "../utils/protected-vault-write-guard.js";
+import { runManagedWriteTransaction } from "../utils/managed-write-preflight.js";
 
 export interface ProjectIndexInput {
   vault: string;
   slug: string;
   apply: boolean;
 }
+
+export interface ProjectIndexDeps {
+  guardProtectedVaultWrite: typeof guardProtectedVaultWrite;
+  runManagedWriteTransaction: typeof runManagedWriteTransaction;
+}
+
+const DEFAULT_DEPS: ProjectIndexDeps = {
+  guardProtectedVaultWrite,
+  runManagedWriteTransaction,
+};
 
 export interface IndexEntry {
   page: string;
@@ -22,6 +34,8 @@ export interface ProjectIndexOutput {
   existing: boolean;
   stale: boolean;
   index_path: string;
+  changed?: boolean;
+  write_mode?: string;
   humanHint: string;
 }
 
@@ -198,7 +212,10 @@ export async function renderProjectIndex(
   });
 }
 
-export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitCode: number; result: Result<ProjectIndexOutput> }> {
+export async function runProjectIndex(
+  input: ProjectIndexInput,
+  deps: ProjectIndexDeps = DEFAULT_DEPS,
+): Promise<{ exitCode: number; result: Result<ProjectIndexOutput> }> {
   const slug = input.slug;
   const projectDir = join(input.vault, "projects", slug);
   const rendered = await renderProjectIndex(input.vault, slug);
@@ -226,35 +243,97 @@ export async function runProjectIndex(input: ProjectIndexInput): Promise<{ exitC
     stale = existingPages.size !== currentPages.size || [...currentPages].some(p => !existingPages.has(p));
   } catch { /* no existing index */ }
 
-  if (input.apply) {
-    try {
-      await mkdir(dirname(indexPath), { recursive: true });
-    } catch (e: unknown) {
-      return {
-        exitCode: ExitCode.WRITE_FAILED,
-        result: err("WRITE_FAILED", { file: indexPath, message: String(e) }),
-      };
-    }
-    const written = await atomicWriteText(indexPath, rendered.data.text);
-    if (!written.ok) {
-      return { exitCode: ExitCode.WRITE_FAILED, result: written };
-    }
+  if (!input.apply) {
+    const action = `${entries.length} entries found (use --apply to write)`;
+    const staleHint = stale ? " (STALE — existing index outdated)" : existing ? " (up to date)" : "";
+    return {
+      exitCode: ExitCode.OK,
+      result: ok({
+        slug,
+        entries,
+        existing,
+        stale,
+        index_path: rendered.data.index_path,
+        humanHint: `project: ${slug}\nentries: ${entries.length}${staleHint}\n${action}\n\n${entries.map(e => `  ${e.type}: [[${e.page.replace(/\.md$/, "")}]] — ${e.title}`).join("\n")}`,
+      }),
+    };
   }
 
-  const action = input.apply
-    ? `written ${entries.length} entries to ${indexPath}`
-    : `${entries.length} entries found (use --apply to write)`;
-  const staleHint = stale ? " (STALE — existing index outdated)" : existing ? " (up to date)" : "";
+  const guard = await deps.guardProtectedVaultWrite({
+    vault: input.vault,
+    command: "project-index --apply",
+  });
+  if (guard.blocked) {
+    return { exitCode: guard.exitCode, result: guard.result };
+  }
 
-  return {
-    exitCode: ExitCode.OK,
-    result: ok({
-      slug,
-      entries,
-      existing,
-      stale,
-      index_path: rendered.data.index_path,
-      humanHint: `project: ${slug}\nentries: ${entries.length}${staleHint}\n${action}\n\n${entries.map(e => `  ${e.type}: [[${e.page.replace(/\.md$/, "")}]] — ${e.title}`).join("\n")}`,
-    }),
-  };
+  return deps.runManagedWriteTransaction<ProjectIndexOutput>({
+    vault: input.vault,
+    command: "project-index --apply",
+    allowImmutableRecord: false,
+    mutate: async (receipt) => {
+      const mutationVault = receipt.mutation_vault;
+      const mutationIndexPath = join(mutationVault, "projects", slug, "knowledge.md");
+      let current = "";
+      try {
+        current = await readFile(mutationIndexPath, "utf8");
+      } catch { /* absent */ }
+      const changed = current !== rendered.data.text;
+      if (!changed) {
+        return {
+          exitCode: ExitCode.OK,
+          result: ok({
+            slug,
+            entries,
+            existing,
+            stale,
+            changed: false,
+            write_mode: receipt.mode,
+            index_path: rendered.data.index_path,
+            humanHint: `project: ${slug}\nentries: ${entries.length} (up to date)\nno write needed`,
+          }),
+        };
+      }
+      try {
+        await mkdir(dirname(mutationIndexPath), { recursive: true });
+      } catch (e: unknown) {
+        return {
+          exitCode: ExitCode.WRITE_FAILED,
+          result: err("WRITE_FAILED", { file: mutationIndexPath, message: String(e) }),
+        };
+      }
+      const written = await atomicWriteText(mutationIndexPath, rendered.data.text);
+      if (!written.ok) {
+        return { exitCode: ExitCode.WRITE_FAILED, result: written };
+      }
+      let installed = "";
+      try {
+        installed = await readFile(mutationIndexPath, "utf8");
+      } catch (error: unknown) {
+        return {
+          exitCode: ExitCode.WRITE_FAILED,
+          result: err("WRITE_FAILED", { message: String(error) }),
+        };
+      }
+      if (installed !== rendered.data.text) {
+        return {
+          exitCode: ExitCode.WRITE_FAILED,
+          result: err("WRITE_FAILED", { message: "installed knowledge.md differs from projection" }),
+        };
+      }
+      return {
+        exitCode: ExitCode.OK,
+        result: ok({
+          slug,
+          entries,
+          existing,
+          stale,
+          changed: true,
+          write_mode: receipt.mode,
+          index_path: rendered.data.index_path,
+          humanHint: `project: ${slug}\nentries: ${entries.length}\nwritten ${entries.length} entries to ${mutationIndexPath}`,
+        }),
+      };
+    },
+  });
 }
