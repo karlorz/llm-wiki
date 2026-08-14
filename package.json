@@ -10,9 +10,9 @@
     "packages/skillwiki-maintenance"
   ],
   "scripts": {
-    "build": "npm run -ws --if-present build",
-    "test": "npm run -ws --if-present test",
-    "typecheck": "npm run -ws --if-present typecheck",
+    "build": "npm run --workspaces --if-present build",
+    "test": "npm run --workspaces --if-present test",
+    "typecheck": "npm run --workspaces --if-present typecheck",
     "test:release-lockfile": "bash scripts/test/release-lockfile.test.sh",
     "test:plugin-metadata": "bash scripts/test/plugin-metadata.test.sh",
     "test:vault-sync": "bash -c 'for t in packages/vault-sync/test/*.test.sh; do echo \"=== $t ===\"; env -u WIKI_REMOTE -u VS_SNAPSHOT_PROFILE -u SNAPSHOT_PROFILE -u VS_CHECK_SNAPSHOTTER bash \"$t\" || exit 1; done'",

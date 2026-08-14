@@ -101,7 +101,6 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
 
   // 1. Stale transcripts: raw/transcripts/*.md where matching work item is done/invalid
   const transcripts = scan.raw.filter(p => p.relPath.startsWith("raw/transcripts/") && p.relPath.endsWith(".md"));
-  const claimedPaths = new Set<string>();
 
   // Pre-parse transcript frontmatter for project/kind fields
   const transcriptMeta = new Map<string, { kind: string; project: string; slug: string; inferred: boolean }>();
@@ -171,17 +170,10 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
     } catch { /* no spec or unreadable */ }
     return null;
   });
-  const claimedByWorkDir = new Map<string, string>(); // transcript path -> owning work dir
-  for (const source of claimSources) {
-    if (source) {
-      const claimed = collectClaimedTranscripts([source]);
-      for (const path of claimed.claimedPaths) {
-        claimedPaths.add(path);
-        claimedByWorkDir.set(path, source.relDir);
-      }
-    }
-  }
-  for (const [transcriptPath, workDir] of claimedByWorkDir) {
+  const claimedByPath = collectClaimedTranscripts(
+    claimSources.filter((source): source is NonNullable<typeof source> => source !== null),
+  ).claimedByPath;
+  for (const [transcriptPath, workDir] of claimedByPath) {
     const status = workDirs.get(workDir) ?? "";
     if (TERMINAL_STATUSES.has(status)) {
       staleTranscripts.push({ path: transcriptPath, reason: `work item ${workDir} is ${status}` });
@@ -193,7 +185,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
   const unclaimedTranscripts: StaleTranscript[] = [];
   const CLAIMABLE_KINDS = new Set(["task", "bug"]);
   for (const t of transcripts) {
-    if (claimedPaths.has(t.relPath)) continue;
+    if (claimedByPath.has(t.relPath)) continue;
     const meta = transcriptMeta.get(t.relPath);
     if (!meta) continue;
     if (CLAIMABLE_KINDS.has(meta.kind) && meta.project) {

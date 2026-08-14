@@ -114,7 +114,7 @@ export async function runSessionBrief(
     const latestLogs = newest(transcripts.filter((t) => t.kind === "session-log"), 3);
     const unclaimedCaptures = newest(transcripts.filter((t) => {
       if (t.kind !== "task" && t.kind !== "bug") return false;
-      if (claimed.claimedPaths.has(t.path)) return false;
+      if (claimed.claimedByPath.has(t.path)) return false;
       return !t.workItem && (!project || t.project === project);
     }), 5);
     const activeWork = newest(workItems.filter((w) => {

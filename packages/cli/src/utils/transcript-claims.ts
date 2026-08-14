@@ -1,17 +1,15 @@
-import { extractFrontmatter } from "../parsers/frontmatter.js";
-
 /**
  * Exact raw-transcript claim index derived from work-item frontmatter.
  *
  * A raw transcript under `raw/transcripts/` is claimed when a work item
- * references its exact vault-relative path in `source:` or in `closes:`.
- * Dates, slugs, titles, and filename similarity never establish ownership:
- * only an exact path reference does.
+ * references its exact vault-relative path in `source:`, `sources:`, or
+ * `closes:`. Dates, slugs, titles, and filename similarity never establish
+ * ownership: only an exact path reference does.
  */
 
 export interface ClaimedTranscriptIndex {
-  /** Exact vault-relative raw transcript paths referenced by any work item. */
-  claimedPaths: Set<string>;
+  /** Exact vault-relative raw transcript paths and their owning work item. */
+  claimedByPath: Map<string, string>;
 }
 
 export interface ClaimIndexSource {
@@ -47,7 +45,7 @@ export function normalizeRawTranscriptRef(value: unknown): string | undefined {
 export function collectClaimedTranscripts(
   workItems: ClaimIndexSource[],
 ): ClaimedTranscriptIndex {
-  const claimedPaths = new Set<string>();
+  const claimedByPath = new Map<string, string>();
   for (const item of workItems) {
     const candidates = [item.source];
     for (const list of [item.sources, item.closes]) {
@@ -56,8 +54,8 @@ export function collectClaimedTranscripts(
     }
     for (const value of candidates) {
       const normalized = normalizeRawTranscriptRef(value);
-      if (normalized) claimedPaths.add(normalized);
+      if (normalized) claimedByPath.set(normalized, item.relDir);
     }
   }
-  return { claimedPaths };
+  return { claimedByPath };
 }

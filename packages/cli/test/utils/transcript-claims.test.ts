@@ -38,45 +38,62 @@ describe("normalizeRawTranscriptRef", () => {
 });
 
 describe("collectClaimedTranscripts", () => {
-  const item = (source?: unknown, closes?: unknown): ClaimIndexSource => ({
+  const item = (overrides: Partial<ClaimIndexSource> = {}): ClaimIndexSource => ({
     relDir: "projects/llm-wiki/work/2026-07-01-x",
-    source,
-    closes,
+    ...overrides,
   });
 
-  it("collects exact source references", () => {
+  it("collects exact source references with their owning work item", () => {
     const index = collectClaimedTranscripts([
-      item("raw/transcripts/2026-07-01-task-a.md"),
+      item({ source: "raw/transcripts/2026-07-01-task-a.md" }),
     ]);
-    expect(index.claimedPaths.has("raw/transcripts/2026-07-01-task-a.md")).toBe(true);
+    expect(index.claimedByPath.get("raw/transcripts/2026-07-01-task-a.md")).toBe(
+      "projects/llm-wiki/work/2026-07-01-x",
+    );
   });
 
-  it("collects closes as a single value or an array", () => {
+  it("collects sources and closes as single values or arrays", () => {
     const index = collectClaimedTranscripts([
-      item(undefined, "raw/transcripts/2026-07-01-task-b.md"),
-      item(undefined, [
-        "raw/transcripts/2026-07-01-task-c.md",
-        "raw/transcripts/2026-07-01-task-d.md",
-      ]),
+      item({ source: "raw/transcripts/2026-07-01-task-b.md" }),
+      item({ sources: "raw/transcripts/2026-07-01-task-c.md" }),
+      item({
+        sources: [
+          "raw/transcripts/2026-07-01-task-d.md",
+          "raw/transcripts/2026-07-01-task-e.md",
+        ],
+      }),
+      item({ closes: "raw/transcripts/2026-07-01-task-f.md" }),
+      item({
+        closes: [
+          "raw/transcripts/2026-07-01-task-g.md",
+          "raw/transcripts/2026-07-01-task-h.md",
+        ],
+      }),
     ]);
-    expect(index.claimedPaths.has("raw/transcripts/2026-07-01-task-b.md")).toBe(true);
-    expect(index.claimedPaths.has("raw/transcripts/2026-07-01-task-c.md")).toBe(true);
-    expect(index.claimedPaths.has("raw/transcripts/2026-07-01-task-d.md")).toBe(true);
+    for (const suffix of ["b", "c", "d", "e", "f", "g", "h"]) {
+      expect(index.claimedByPath.has(`raw/transcripts/2026-07-01-task-${suffix}.md`)).toBe(true);
+    }
   });
 
   it("ignores non-path and non-transcript values", () => {
     const index = collectClaimedTranscripts([
-      item(42, "raw/articles/2026-07-01-x.md"),
-      item("raw/transcripts/../escape.md", ["not a path"]),
+      item({ source: 42, closes: "raw/articles/2026-07-01-x.md" }),
+      item({ source: "raw/transcripts/../escape.md", closes: ["not a path"] }),
     ]);
-    expect(index.claimedPaths.size).toBe(0);
+    expect(index.claimedByPath.size).toBe(0);
   });
 
-  it("deduplicates repeated references", () => {
+  it("deduplicates repeated references with the later work item as owner", () => {
     const index = collectClaimedTranscripts([
-      item("raw/transcripts/2026-07-01-task-a.md"),
-      item(undefined, ["raw/transcripts/2026-07-01-task-a.md"]),
+      item({ source: "raw/transcripts/2026-07-01-task-a.md" }),
+      item({
+        closes: ["raw/transcripts/2026-07-01-task-a.md"],
+        relDir: "projects/llm-wiki/work/2026-07-02-y",
+      }),
     ]);
-    expect(index.claimedPaths.size).toBe(1);
+    expect(index.claimedByPath.size).toBe(1);
+    expect(index.claimedByPath.get("raw/transcripts/2026-07-01-task-a.md")).toBe(
+      "projects/llm-wiki/work/2026-07-02-y",
+    );
   });
 });

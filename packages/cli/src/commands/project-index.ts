@@ -274,12 +274,19 @@ export async function runProjectIndex(
     mutate: async (receipt) => {
       const mutationVault = receipt.mutation_vault;
       const mutationIndexPath = join(mutationVault, "projects", slug, "knowledge.md");
-      let current = "";
       try {
-        current = await readFile(mutationIndexPath, "utf8");
-      } catch { /* absent */ }
-      const changed = current !== rendered.data.text;
-      if (!changed) {
+        await mkdir(dirname(mutationIndexPath), { recursive: true });
+      } catch (e: unknown) {
+        return {
+          exitCode: ExitCode.WRITE_FAILED,
+          result: err("WRITE_FAILED", { file: mutationIndexPath, message: String(e) }),
+        };
+      }
+      const written = await atomicWriteText(mutationIndexPath, rendered.data.text);
+      if (!written.ok) {
+        return { exitCode: ExitCode.WRITE_FAILED, result: written };
+      }
+      if (!written.data.changed) {
         return {
           exitCode: ExitCode.OK,
           result: ok({
@@ -293,18 +300,6 @@ export async function runProjectIndex(
             humanHint: `project: ${slug}\nentries: ${entries.length} (up to date)\nno write needed`,
           }),
         };
-      }
-      try {
-        await mkdir(dirname(mutationIndexPath), { recursive: true });
-      } catch (e: unknown) {
-        return {
-          exitCode: ExitCode.WRITE_FAILED,
-          result: err("WRITE_FAILED", { file: mutationIndexPath, message: String(e) }),
-        };
-      }
-      const written = await atomicWriteText(mutationIndexPath, rendered.data.text);
-      if (!written.ok) {
-        return { exitCode: ExitCode.WRITE_FAILED, result: written };
       }
       let installed = "";
       try {
