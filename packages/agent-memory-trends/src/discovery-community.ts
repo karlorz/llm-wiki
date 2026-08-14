@@ -63,6 +63,9 @@ export function createFetchJsonClient(
         try {
           return ok(await response.json());
         } catch (error) {
+          if (controller.signal.aborted) {
+            return err("COMMUNITY_FETCH_TIMEOUT", "community fetch timed out");
+          }
           return err("COMMUNITY_FETCH_FAILED", error instanceof Error ? error.message : String(error));
         }
       } catch (error) {

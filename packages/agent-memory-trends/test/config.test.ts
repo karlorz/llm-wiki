@@ -733,4 +733,33 @@ describe("agent-memory-trends research config", () => {
     expect(parsed.error).toBe("CONFIG_INVALID");
     expect(String(parsed.detail)).toContain("discovery.github lanes per_page must be <= 100");
   });
+
+  it("rejects a blank new-release query combined with a zero date window", () => {
+    const parsed = parseResearchConfig(
+      V2_CONFIG.replace("window_days: 2", "window_days: 0").replace(
+        "query: coding agent release in:name,description,readme",
+        'query: ""'
+      ),
+      "invalid-v2.yaml"
+    );
+
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) throw new Error("expected invalid config");
+    expect(parsed.error).toBe("CONFIG_INVALID");
+    expect(String(parsed.detail)).toContain("new_release");
+  });
+
+  it("accepts a blank new-release query when the date window is positive (qualifier-only search)", () => {
+    const parsed = parseResearchConfig(
+      V2_CONFIG.replace("query: coding agent release in:name,description,readme", 'query: ""'),
+      "v2-blank-new-release-query.yaml"
+    );
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("expected config to parse");
+    const lane = parsed.data.discovery.github.lanes.find((candidate) => candidate.kind === "new_release");
+    expect(lane).toBeDefined();
+    expect(lane!.windowDays).toBe(2);
+    expect(lane!.queries[0]!.query).toBe("");
+  });
 });

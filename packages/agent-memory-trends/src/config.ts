@@ -499,6 +499,13 @@ function validateResearchConfig(config: ResearchConfig, legacyQueries: boolean):
       return `discovery.immediate_alert.min_repository_signal must be <= ${DISCOVERY_MAX_REPOSITORY_SIGNAL}`;
     }
     if (discovery.github.lanes.length === 0) return "discovery.github lanes must contain at least one lane";
+    if (
+      discovery.github.lanes.some(
+        (lane) => lane.kind === "new_release" && lane.windowDays === 0 && lane.queries.some((query) => query.query === "")
+      )
+    ) {
+      return "new_release lanes with a blank query require a positive window_days";
+    }
     const discoveryLaneIds = discovery.github.lanes.map((lane) => lane.id);
     if (new Set(discoveryLaneIds).size !== discoveryLaneIds.length) {
       return "discovery.github lanes ids must be unique";

@@ -569,6 +569,34 @@ describe("fetch json client", () => {
       vi.useRealTimers();
     }
   });
+
+  it("maps an abort that fires while the JSON body is being parsed to COMMUNITY_FETCH_TIMEOUT", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createFetchJsonClient((_url, init) =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            new Promise<unknown>((_resolve, reject) => {
+              init?.signal.addEventListener("abort", () => {
+                const error = new Error("The operation was aborted.");
+                error.name = "AbortError";
+                reject(error);
+              });
+            }),
+        })
+      );
+      const pending = client.fetchJson("https://example.com/payload.json");
+      await vi.advanceTimersByTimeAsync(COMMUNITY_FETCH_TIMEOUT_MS);
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error).toBe("COMMUNITY_FETCH_TIMEOUT");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("json community adapter (China-region source)", () => {

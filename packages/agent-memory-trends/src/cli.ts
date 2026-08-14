@@ -1370,30 +1370,41 @@ async function runDiscover(
 
   // Rank first, then persist the same capped candidates in the snapshot and
   // the queue so later history deltas stay coherent with the emitted queue.
+  // The queue is written before any new dated snapshot/latest write or
+  // retention pruning, so a QUEUE_WRITE_FAILED leaves no fresh artifacts
+  // and never prunes history; its snapshotPath is the vault-relative dated
+  // snapshot path the snapshot write below produces.
+  const runAt = context.now.toISOString();
+  const dateKey = new Date(runAt).toISOString().slice(0, 10);
   const snapshot: DiscoverySnapshot = {
     formatVersion: 1,
-    runAt: context.now.toISOString(),
+    runAt,
     retentionDays: config.data.discovery.retentionDays,
     candidates: queue.candidates,
   };
-  const written = writeDiscoverySnapshot(discoveryDir, snapshot, config.data.discovery.maxDailyCandidates);
-  if (!written.ok) return written;
-
-  const pruned = pruneDiscoverySnapshots(discoveryDir, config.data.discovery.retentionDays, context.now);
-
   const queueWritten = writeDiscoveryQueue({
     dir: discoveryDir,
-    snapshotPath: vaultRelativePath(resolved.vault, written.data.datedPath),
-    generatedAt: context.now.toISOString(),
+    snapshotPath: vaultRelativePath(resolved.vault, join(discoveryDir, `${dateKey}.json`)),
+    generatedAt: runAt,
     maxDailyCandidates: config.data.discovery.maxDailyCandidates,
     counts: queue.counts,
     candidates: queue.candidates,
-    warnings: [...warnings, ...history.warnings, ...pruned.warnings],
+    warnings: [...warnings, ...history.warnings],
   });
   if (!queueWritten.ok) return queueWritten;
 
+  const written = writeDiscoverySnapshot(discoveryDir, snapshot, config.data.discovery.maxDailyCandidates);
+  if (!written.ok) return written;
+
+  // Pruning runs only after all three expected output files were written.
+  pruneDiscoverySnapshots(discoveryDir, config.data.discovery.retentionDays, context.now);
+
   return ok({
-    mutations: [written.data.datedPath, written.data.latestPath, queueWritten.data.queuePath],
+    mutations: [
+      vaultRelativePath(resolved.vault, written.data.datedPath),
+      vaultRelativePath(resolved.vault, written.data.latestPath),
+      vaultRelativePath(resolved.vault, queueWritten.data.queuePath),
+    ],
     humanHint: `discover: ok; queued ${queue.counts.queued} candidate(s), ${queue.counts.alert} alert(s); ${formatCommunityDiagnostics(communityDiagnostics, communityWarnings.length)}`,
   });
 }
@@ -1443,7 +1454,6 @@ function vaultRelativePath(vault: string, path: string): string {
 }
 
 const AGENT_MEMORY_RUN_STATE_RE = /^\.skillwiki\/agent-memory-trends\/(?:latest-run|\d{4}-\d{2}-\d{2}-(?:input|run))\.json$/;
-const DISCOVERY_STATE_RE = /^\.skillwiki\/agent-memory-trends\/discovery\/(?:latest|\d{4}-\d{2}-\d{2}(?:-queue)?)\.json$/;
 
 interface DirtyVaultPaths {
   tracked: string[];
@@ -1468,9 +1478,12 @@ async function cleanGeneratedPreflightLeftovers(
   const dirtyPaths = [...dirty.tracked, ...dirty.untracked];
   if (dirtyPaths.length === 0) return ok({ cleaned: true });
 
-  const unrelated = dirtyPaths.filter(
-    (path) => !AGENT_MEMORY_RUN_STATE_RE.test(path) && !DISCOVERY_STATE_RE.test(path)
-  );
+  // Only generated daily run-state leftovers are restorable/cleanable.
+  // Discovery snapshot/latest/queue artifacts are never touched: the
+  // preflight cannot distinguish a completed manual discover result from
+  // interrupted output, so any dirty discovery artifact is ordinary dirty
+  // state and blocks the live daily run.
+  const unrelated = dirtyPaths.filter((path) => !AGENT_MEMORY_RUN_STATE_RE.test(path));
   if (unrelated.length > 0) {
     return err("DIRTY_PREFLIGHT", {
       message: "vault has dirty files outside generated agent-memory-trends run state",

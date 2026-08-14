@@ -1583,7 +1583,7 @@ describe("agent-memory-trends CLI", () => {
     ]);
   });
 
-  it("cleans interrupted discovery generation files during live daily preflight", async () => {
+  it("blocks dirty discovery artifacts as a dirty-preflight failure without restore, clean, or collection", async () => {
     const calls: string[] = [];
     const result = await runAgentMemoryTrendsCli(["daily", "--vault", "/vault", "--repo", "/repo", "--config", "/config.yaml"], {
       cwd: "/repo",
@@ -1605,46 +1605,42 @@ describe("agent-memory-trends CLI", () => {
         }
         return { exitCode: 0, stdout: "", stderr: "" };
       },
-      collectGithubCandidates: async () => ({ ok: true, data: {
-        rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
-        apiCallsUsed: 12,
-        rawCandidateCount: 1,
-        selectedCandidates: [selectedCandidate()],
-        runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
-      } }),
-      collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
-      writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
-      runSynthesis: async () => ({
-        ok: true,
-        data: {
-          manifestPath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
-          outputLastMessagePath: "/tmp/last-message.md",
-          stdout: "",
-          stderr: "",
-          output: { proposals: [] },
-        },
-      }),
-      renderProposalCaptures: () => ({ ok: true, data: { renderedPaths: [], validationErrors: [], duplicateSuppressions: [] } }),
-      refreshSessionBrief: async () => ({ ok: true, data: { filesWritten: [] } }),
-      listTrackedRawPaths: async () => ({ ok: true, data: [] }),
-      publishGeneratedChanges: async () => ({
-        ok: true,
-        data: {
-          baseCommit: "abc123",
-          changedFiles: [".skillwiki/agent-memory-trends/latest-run.json"],
-          commitMessage: "research(agent-memory): daily digest 2026-06-11",
-        },
-      }),
-      maybeSendHeartbeat: async () => ({ ok: true, data: { status: "skipped", reason: "heartbeat URL missing" } }),
+      collectGithubCandidates: async () => {
+        calls.push("collect");
+        return { ok: true, data: {
+          rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+          apiCallsUsed: 12,
+          rawCandidateCount: 1,
+          selectedCandidates: [selectedCandidate()],
+          runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        } };
+      },
+      writeRunState: () => {
+        calls.push("write-state");
+        return {
+          ok: true,
+          data: {
+            runStatePath: "/vault/.skillwiki/agent-memory-trends/2026-06-11-run.json",
+            latestRunPath: "/vault/.skillwiki/agent-memory-trends/latest-run.json",
+          },
+        };
+      },
     });
 
-    expect(result.exitCode).toBe(0);
-    expect(result.result.ok).toBe(true);
-    expect(calls.slice(0, 4)).toEqual([
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected daily failure");
+    expect(result.result.error).toBe("DIRTY_PREFLIGHT");
+    expect(result.result.detail).toMatchObject({
+      dirtyFiles: [
+        ".skillwiki/agent-memory-trends/discovery/2026-08-13.json",
+        ".skillwiki/agent-memory-trends/discovery/2026-08-14-queue.json",
+        ".skillwiki/agent-memory-trends/discovery/latest.json",
+      ],
+    });
+    expect(calls).toEqual([
       "git:-C /vault status --porcelain --untracked-files=all",
-      "git:-C /vault restore --source=HEAD --staged --worktree -- .skillwiki/agent-memory-trends/discovery/2026-08-13.json",
-      "git:-C /vault clean -f -- .skillwiki/agent-memory-trends/discovery/2026-08-14-queue.json .skillwiki/agent-memory-trends/discovery/latest.json",
-      "git:-C /vault pull --rebase origin main",
+      "write-state",
     ]);
   });
 
@@ -2282,7 +2278,11 @@ describe("agent-memory-trends discover command", () => {
     const datedPath = join(discoveryDir, "2026-08-14.json");
     const latestPath = join(discoveryDir, "latest.json");
     const queuePath = join(discoveryDir, "2026-08-14-queue.json");
-    expect(result.result.data.mutations).toEqual([datedPath, latestPath, queuePath]);
+    expect(result.result.data.mutations).toEqual([
+      ".skillwiki/agent-memory-trends/discovery/2026-08-14.json",
+      ".skillwiki/agent-memory-trends/discovery/latest.json",
+      ".skillwiki/agent-memory-trends/discovery/2026-08-14-queue.json",
+    ]);
     expect(result.result.data.command).toBe("discover");
     expect(result.result.data.dryRun).toBe(false);
     expect(readdirSync(discoveryDir).sort()).toEqual([
@@ -2394,6 +2394,68 @@ describe("agent-memory-trends discover command", () => {
     expect(result.result.data.humanHint).toContain(
       "community: 0 request(s), 0 attempted, 3 skipped, 0 unknown, 0 warning(s)"
     );
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("fails with QUEUE_WRITE_FAILED before writing any dated snapshot/latest artifact or pruning history", async () => {
+    const { root, vault, configPath, readConfig } = discoverFixture();
+    const now = new Date("2026-08-14T02:00:00Z");
+    const discoveryDir = join(vault, ".skillwiki", "agent-memory-trends", "discovery");
+    mkdirSync(discoveryDir, { recursive: true });
+    // An expired dated snapshot that retention pruning would remove.
+    writeFileSync(
+      join(discoveryDir, "2026-07-01.json"),
+      JSON.stringify({ formatVersion: 1, runAt: "2026-07-01T00:00:00.000Z", retentionDays: 30, candidates: [] }),
+      "utf8"
+    );
+    // A directory at the expected queue path forces QUEUE_WRITE_FAILED.
+    mkdirSync(join(discoveryDir, "2026-08-14-queue.json"));
+
+    const result = await runAgentMemoryTrendsCli(
+      ["discover", "--vault", vault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now,
+        readFile: readConfig,
+        runDiscoveryCollector: async () => ({
+          ok: true,
+          data: {
+            rateLimit: {
+              resources: {
+                core: { remaining: 1, limit: 1, reset: 1 },
+                search: { remaining: 1, limit: 1, reset: 1 },
+              },
+            },
+            apiCallsUsed: 1,
+            searchQueriesUsed: 1,
+            enrichmentsUsed: 0,
+            candidates: [discoveryCandidate("https://github.com/acme/repo-a")],
+            warnings: [],
+            runSummary: { candidateCount: 1, apiCallsUsed: 1, searchQueriesUsed: 1, enrichmentsUsed: 0 },
+          },
+        }),
+        runCommunityCollection: async () => ({
+          ok: true,
+          data: {
+            references: [],
+            warnings: [],
+            requestsUsed: 0,
+            sources: { attempted: [], skipped: ["hacker_news", "hugging_face", "chinese_public_sources"], unknown: [] },
+          },
+        }),
+      }
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected discover failure");
+    expect(result.result.error).toBe("QUEUE_WRITE_FAILED");
+    // No new dated snapshot or latest.json artifact was written.
+    expect(existsSync(join(discoveryDir, "2026-08-14.json"))).toBe(false);
+    expect(existsSync(join(discoveryDir, "latest.json"))).toBe(false);
+    // No history pruning occurred: the expired snapshot is still present.
+    expect(existsSync(join(discoveryDir, "2026-07-01.json"))).toBe(true);
     rmSync(root, { recursive: true, force: true });
   });
 
