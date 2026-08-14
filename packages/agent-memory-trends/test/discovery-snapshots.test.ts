@@ -132,6 +132,59 @@ describe("agent-memory-trends discovery snapshots", () => {
     expect(unchangedDeltas[0]!.starDelta7d).toBe(20);
   });
 
+  it("keeps 24h/7d deltas null when only stale sparse history exists", () => {
+    // Age 3 (previously served as a 24h baseline) and age 10 (previously
+    // served as a 7d baseline) are both outside [lookback, lookback + 1].
+    writeSnapshot("2026-08-11", [
+      makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a", stargazersCount: 100, forksCount: 8 }),
+    ]);
+    writeSnapshot("2026-08-04", [
+      makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a", stargazersCount: 90, forksCount: 7 }),
+    ]);
+
+    const now = new Date("2026-08-14T02:00:00Z");
+    const history = loadDiscoveryHistory(dir, now, 30);
+    expect(history.warnings).toEqual([]);
+
+    const current = [makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a", stargazersCount: 120, forksCount: 10 })];
+    const withDeltas = applyDiscoveryDeltas(current, history, now);
+    expect(withDeltas[0]!.starDelta24h).toBeNull();
+    expect(withDeltas[0]!.starDelta7d).toBeNull();
+    expect(withDeltas[0]!.forkDelta24h).toBeNull();
+    expect(withDeltas[0]!.forkDelta7d).toBeNull();
+  });
+
+  it("uses in-window baselines at the far edge of the 24h/7d lookback windows", () => {
+    // Age 2 (24h window [1,2]) and age 8 (7d window [7,8]) are the oldest
+    // snapshots still usable for their named windows; repo-b only has an
+    // age-8 baseline, which is stale for 24h but valid for 7d.
+    writeSnapshot("2026-08-12", [
+      makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a", stargazersCount: 100, forksCount: 8 }),
+    ]);
+    writeSnapshot("2026-08-06", [
+      makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a", stargazersCount: 80, forksCount: 5 }),
+      makeCandidate({ canonicalUrl: "https://github.com/acme/repo-b", stargazersCount: 80, forksCount: 5 }),
+    ]);
+
+    const now = new Date("2026-08-14T02:00:00Z");
+    const history = loadDiscoveryHistory(dir, now, 30);
+    expect(history.warnings).toEqual([]);
+
+    const current = [
+      makeCandidate({ canonicalUrl: "https://github.com/acme/repo-a", stargazersCount: 120, forksCount: 10 }),
+      makeCandidate({ canonicalUrl: "https://github.com/acme/repo-b", stargazersCount: 120, forksCount: 10 }),
+    ];
+    const withDeltas = applyDiscoveryDeltas(current, history, now);
+    expect(withDeltas[0]!.starDelta24h).toBe(20);
+    expect(withDeltas[0]!.starDelta7d).toBe(40);
+    expect(withDeltas[0]!.forkDelta24h).toBe(2);
+    expect(withDeltas[0]!.forkDelta7d).toBe(5);
+    expect(withDeltas[1]!.starDelta24h).toBeNull();
+    expect(withDeltas[1]!.starDelta7d).toBe(40);
+    expect(withDeltas[1]!.forkDelta24h).toBeNull();
+    expect(withDeltas[1]!.forkDelta7d).toBe(5);
+  });
+
   it("prunes only dated snapshot files beyond the retention window and preserves unrelated files", () => {
     writeSnapshot("2026-08-01", [makeCandidate()]);
     writeSnapshot("2026-08-07", [makeCandidate()]);

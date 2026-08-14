@@ -171,7 +171,11 @@ export function loadDiscoveryHistory(dir: string, now: Date, retentionDays: numb
 /**
  * Fill 24-hour and 7-day star/fork deltas from prior observations for the
  * same canonical repository URL. First observations stay null (baseline
- * unknown); a real zero delta stays 0.
+ * unknown); a real zero delta stays 0. A historical baseline is usable
+ * only when its age in whole UTC calendar days is within
+ * [lookbackDays, lookbackDays + 1] of today, so the nearest normal
+ * once-per-day snapshot can serve the named window but a stale snapshot
+ * (for example 10 days old) never becomes a "24h" or "7d" baseline.
  */
 export function applyDiscoveryDeltas(
   candidates: DiscoveryCandidate[],
@@ -181,8 +185,8 @@ export function applyDiscoveryDeltas(
   const today = dateKey(now);
   return candidates.map((candidate) => {
     const observations = history.observationsByUrl.get(candidate.canonicalUrl) ?? [];
-    const prior24h = latestOnOrBefore(observations, addDays(today, -1));
-    const prior7d = latestOnOrBefore(observations, addDays(today, -7));
+    const prior24h = baselineInWindow(observations, today, 1);
+    const prior7d = baselineInWindow(observations, today, 7);
     return {
       ...candidate,
       starDelta24h: prior24h ? candidate.stargazersCount - prior24h.stargazersCount : null,
@@ -244,6 +248,23 @@ function isUsableHistoryEntry(entry: DiscoveryCandidate): boolean {
     Number.isFinite(entry.stargazersCount) &&
     Number.isFinite(entry.forksCount)
   );
+}
+
+/**
+ * Latest observation whose age in whole UTC calendar days is within
+ * [lookbackDays, lookbackDays + 1] of today: the nearest normal
+ * once-per-day snapshot for the named lookback. Observations outside the
+ * window (newer or older) are not usable baselines.
+ */
+function baselineInWindow(
+  observations: DiscoveryHistoryObservation[],
+  today: string,
+  lookbackDays: number
+): DiscoveryHistoryObservation | undefined {
+  const latest = latestOnOrBefore(observations, addDays(today, -lookbackDays));
+  if (!latest) return undefined;
+  const earliest = addDays(today, -(lookbackDays + 1));
+  return latest.date >= earliest ? latest : undefined;
 }
 
 function latestOnOrBefore(

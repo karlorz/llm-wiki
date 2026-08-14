@@ -99,19 +99,20 @@ export function makeCommunityReference(input: CommunityReferenceInput): Result<C
       `expected a public http(s) source URL of at most ${DISCOVERY_ATTENTION_EXCERPT_MAX} characters, got ${sourceUrl.length}`
     );
   }
-  // No untrusted source URL containing `@` may reach the raw-value echo
-  // below: `@` in the authority of a valid http(s) URL is userinfo, and any
-  // `@` in a value that is not a valid http(s) URL at all is treated as
-  // credential-bearing. Both are rejected without echoing raw text; valid
-  // http(s) URLs with `@` only in the path stay accepted, and short
-  // `@`-free malformed inputs keep the exact existing diagnostic.
+  // Never echo the raw source URL: `@` in the authority of a valid http(s)
+  // URL is userinfo, and any `@` in a value that is not a valid http(s) URL
+  // at all is treated as credential-bearing. Both are rejected with a
+  // credential-safe detail; valid http(s) URLs with `@` only in the path
+  // stay accepted, and every other malformed value is rejected with a
+  // generic detail that never echoes the raw input (even short
+  // credential-free values could carry a secret).
   const isPublicHttpUrl = /^https?:\/\/\S+$/.test(sourceUrl);
   const hasCredentialInAuthority = /^https?:\/\/[^/\s]*@/.test(sourceUrl);
   if (/@/.test(sourceUrl) && (!isPublicHttpUrl || hasCredentialInAuthority)) {
     return err("COMMUNITY_INVALID_SOURCE_URL", "expected a public http(s) source URL without credentials");
   }
   if (!isPublicHttpUrl) {
-    return err("COMMUNITY_INVALID_SOURCE_URL", `expected a public http(s) source URL, got: ${input.sourceUrl}`);
+    return err("COMMUNITY_INVALID_SOURCE_URL", "expected a public http(s) source URL");
   }
 
   const reference: CommunityReference = {

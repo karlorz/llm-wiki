@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1300,6 +1300,22 @@ async function runDiscover(
   if (!rejected.ok) return rejected;
 
   const resolved = resolveRunOptions(options, context);
+  // Normal filesystem execution only: a resolved vault that does not exist
+  // as a directory is rejected before any collector/community call or
+  // write, so a typoed --vault can never materialize discovery paths even
+  // when an explicit --config points elsewhere. Injected test contexts
+  // (custom readFile seam) keep their fictional paths unchecked.
+  if (!context.readFile) {
+    let vaultIsDirectory = false;
+    try {
+      vaultIsDirectory = statSync(resolved.vault).isDirectory();
+    } catch {
+      // Absent or unreadable vault path: not a directory.
+    }
+    if (!vaultIsDirectory) {
+      return err("VAULT_NOT_FOUND", `vault directory does not exist: ${resolved.vault}`);
+    }
+  }
   const config = loadResearchConfig(resolved.configPath, context);
   if (!config.ok) return config;
 

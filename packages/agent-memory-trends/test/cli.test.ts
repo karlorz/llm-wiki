@@ -2200,6 +2200,80 @@ describe("agent-memory-trends discover command", () => {
     };
   }
 
+  it("rejects a nonexistent vault with VAULT_NOT_FOUND before any collector call or write, even with a valid external config", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-memory-trends-vault-missing-"));
+    const missingVault = join(root, "typo-vault");
+    const configPath = join(root, "config.yaml");
+    writeFileSync(configPath, DISCOVER_CONFIG, "utf8");
+    let collectorTouched = false;
+    let communityTouched = false;
+    const result = await runAgentMemoryTrendsCli(
+      ["discover", "--vault", missingVault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now: new Date("2026-08-14T02:00:00Z"),
+        runDiscoveryCollector: async () => {
+          collectorTouched = true;
+          throw new Error("discovery collector must not run for a missing vault");
+        },
+        runCommunityCollection: async () => {
+          communityTouched = true;
+          throw new Error("community collection must not run for a missing vault");
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected discover to reject the missing vault");
+    expect(result.result.error).toBe("VAULT_NOT_FOUND");
+    expect(String(result.result.detail)).toContain(missingVault);
+    expect(collectorTouched).toBe(false);
+    expect(communityTouched).toBe(false);
+    // The typoed vault path is never materialized.
+    expect(existsSync(missingVault)).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("rejects a vault path that is a file with VAULT_NOT_FOUND before any collector call or write", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-memory-trends-vault-file-"));
+    const vaultFile = join(root, "vault-file");
+    const configPath = join(root, "config.yaml");
+    writeFileSync(configPath, DISCOVER_CONFIG, "utf8");
+    writeFileSync(vaultFile, "not a directory", "utf8");
+    let collectorTouched = false;
+    let communityTouched = false;
+    const result = await runAgentMemoryTrendsCli(
+      ["discover", "--vault", vaultFile, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now: new Date("2026-08-14T02:00:00Z"),
+        runDiscoveryCollector: async () => {
+          collectorTouched = true;
+          throw new Error("discovery collector must not run for a file vault path");
+        },
+        runCommunityCollection: async () => {
+          communityTouched = true;
+          throw new Error("community collection must not run for a file vault path");
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected discover to reject the file vault path");
+    expect(result.result.error).toBe("VAULT_NOT_FOUND");
+    expect(String(result.result.detail)).toContain(vaultFile);
+    expect(collectorTouched).toBe(false);
+    expect(communityTouched).toBe(false);
+    // No discovery output path is materialized under the file vault.
+    expect(existsSync(join(vaultFile, ".skillwiki", "agent-memory-trends", "discovery"))).toBe(false);
+    expect(readdirSync(root).sort()).toEqual(["config.yaml", "vault-file"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("wires v2 discover through the discovery collector, merges community warnings, and writes snapshot/latest/queue under the exact path", async () => {
     const { root, vault, configPath, readConfig } = discoverFixture();
     const now = new Date("2026-08-14T02:00:00Z");

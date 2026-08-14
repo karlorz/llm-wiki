@@ -653,9 +653,11 @@ describe("json community adapter (China-region source)", () => {
     expect(references[1]!.englishSummary).toBe("Community review of RepoYi.");
     expect(references[1]!.language).toBe("zh");
     expect(result.data.warnings).toContain(
-      "community source cn_community: item e4 skipped: expected a public http(s) source URL, got: not-a-url"
+      "community source cn_community: item e4 skipped: expected a public http(s) source URL"
     );
     expect(result.data.warnings).toContain("community source cn_community: malformed item");
+    // Raw malformed source URL values never surface in warnings or output.
+    expect(JSON.stringify(result.data)).not.toContain("not-a-url");
   });
 
   it("accepts a bare JSON array payload", async () => {
@@ -865,7 +867,7 @@ describe("community reference source URL validation", () => {
     expect(made.data.sourceUrl).toBe(atBound);
   });
 
-  it("rejects malformed, non-http(s), and credentialed source URLs without echoing credentials", () => {
+  it("rejects malformed, non-http(s), and credentialed source URLs without echoing credentials or raw values", () => {
     const rejected = [
       "not-a-url",
       "ftp://example.com/x",
@@ -886,15 +888,17 @@ describe("community reference source URL validation", () => {
       expect(made.error).toBe("COMMUNITY_INVALID_SOURCE_URL");
       expect(String(made.detail)).not.toContain("pass");
       expect(String(made.detail)).not.toContain("user:pass");
+      expect(String(made.detail)).not.toContain(sourceUrl);
     }
   });
 
-  it("keeps the byte-identical short malformed-URL warning for credential-free inputs", () => {
+  it("rejects short credential-free malformed URLs with a generic detail that never echoes the raw value", () => {
     const made = makeCommunityReference({ ...VALID_INPUT, sourceUrl: "not-a-url" });
     expect(made.ok).toBe(false);
     if (made.ok) return;
     expect(made.error).toBe("COMMUNITY_INVALID_SOURCE_URL");
-    expect(String(made.detail)).toBe("expected a public http(s) source URL, got: not-a-url");
+    expect(String(made.detail)).toBe("expected a public http(s) source URL");
+    expect(String(made.detail)).not.toContain("not-a-url");
   });
 
   it("still accepts valid http(s) URLs with @ only outside the authority", () => {
