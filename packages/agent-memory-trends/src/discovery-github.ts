@@ -5,7 +5,7 @@ import {
   type DiscoveryAttentionEvidence,
   type DiscoveryCandidate,
 } from "./discovery-contracts.js";
-import type { GhRunner, GhRunResult, RateLimitState } from "./github.js";
+import { ghApi, parseJsonObject, type GhRunner, type RateLimitState } from "./github.js";
 import { err, ok, type Result } from "./types.js";
 
 /**
@@ -341,12 +341,6 @@ function parseLicense(value: unknown): string | null {
   return typeof spdx === "string" && spdx ? spdx : null;
 }
 
-async function ghApi(runGh: GhRunner, args: string[]): Promise<Result<GhRunResult>> {
-  const result = await runGh(["api", ...args]);
-  if (result.exitCode !== 0) return err("GH_API_FAILED", result.stderr || result.stdout);
-  return ok(result);
-}
-
 function parseRateLimit(text: string): Result<RateLimitState> {
   try {
     const parsed = JSON.parse(text) as RateLimitState;
@@ -356,16 +350,6 @@ function parseRateLimit(text: string): Result<RateLimitState> {
     return ok(parsed);
   } catch (error) {
     return err("GH_RATE_LIMIT_PARSE_FAILED", error instanceof Error ? error.message : String(error));
-  }
-}
-
-function parseJsonObject(text: string): Result<Record<string, unknown>> {
-  try {
-    const parsed = JSON.parse(text);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return err("INVALID_JSON", "expected object");
-    return ok(parsed as Record<string, unknown>);
-  } catch (error) {
-    return err("INVALID_JSON", error instanceof Error ? error.message : String(error));
   }
 }
 

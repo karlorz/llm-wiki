@@ -8,7 +8,7 @@ import { collectCommunityReferences, createFetchJsonClient } from "./discovery-c
 import { mergeCommunityReferences } from "./discovery-community-normalize.js";
 import { collectDiscoveryCandidates } from "./discovery-github.js";
 import { buildDiscoveryQueue } from "./discovery-score.js";
-import { applyDiscoveryDeltas, loadDiscoveryHistory, pruneDiscoverySnapshots, writeDiscoveryQueue, writeDiscoverySnapshot } from "./discovery-snapshots.js";
+import { applyDiscoveryDeltas, dateKey, loadDiscoveryHistory, pruneDiscoverySnapshots, writeDiscoveryQueue, writeDiscoverySnapshot } from "./discovery-snapshots.js";
 import { collectGithubCandidates } from "./github.js";
 import { readResearchConfig, parseResearchConfig, type ResearchConfig } from "./config.js";
 import { collectDuplicateSignals } from "./dedupe.js";
@@ -1375,7 +1375,6 @@ async function runDiscover(
   // and never prunes history; its snapshotPath is the vault-relative dated
   // snapshot path the snapshot write below produces.
   const runAt = context.now.toISOString();
-  const dateKey = new Date(runAt).toISOString().slice(0, 10);
   const snapshot: DiscoverySnapshot = {
     formatVersion: 1,
     runAt,
@@ -1384,7 +1383,7 @@ async function runDiscover(
   };
   const queueWritten = writeDiscoveryQueue({
     dir: discoveryDir,
-    snapshotPath: vaultRelativePath(resolved.vault, join(discoveryDir, `${dateKey}.json`)),
+    snapshotPath: vaultRelativePath(resolved.vault, join(discoveryDir, `${dateKey(context.now)}.json`)),
     generatedAt: runAt,
     maxDailyCandidates: config.data.discovery.maxDailyCandidates,
     counts: queue.counts,

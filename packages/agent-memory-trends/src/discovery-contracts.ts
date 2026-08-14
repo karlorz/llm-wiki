@@ -10,7 +10,6 @@ export type CommunitySourceRole = "discovery" | "corroboration";
 export type DiscoveryGithubLaneKind = "new_release" | "relevance" | "topic";
 
 export const COMMUNITY_SOURCE_ROLES: readonly CommunitySourceRole[] = ["discovery", "corroboration"];
-export const DISCOVERY_LANE_KINDS: readonly DiscoveryGithubLaneKind[] = ["new_release", "relevance", "topic"];
 
 export const DISCOVERY_MAX_DAILY_CANDIDATES = 20;
 export const DISCOVERY_DEFAULT_RETENTION_DAYS = 30;
@@ -287,23 +286,7 @@ export function blankDiscoveryScore(): DiscoveryScore {
  */
 export function makeDiscoveryCandidate(facts: DiscoveryCandidateFacts): DiscoveryCandidate {
   return {
-    canonicalUrl: facts.canonicalUrl,
-    fullName: facts.fullName,
-    owner: facts.owner,
-    name: facts.name,
-    createdAt: facts.createdAt,
-    pushedAt: facts.pushedAt,
-    stargazersCount: facts.stargazersCount,
-    forksCount: facts.forksCount,
-    archived: facts.archived,
-    topics: facts.topics,
-    description: facts.description,
-    license: facts.license,
-    defaultBranch: facts.defaultBranch,
-    sourceIds: facts.sourceIds,
-    attentionEvidence: facts.attentionEvidence,
-    relevanceInput: facts.relevanceInput,
-    evidenceQualityInput: facts.evidenceQualityInput,
+    ...facts,
     starDelta24h: null,
     starDelta7d: null,
     forkDelta24h: null,

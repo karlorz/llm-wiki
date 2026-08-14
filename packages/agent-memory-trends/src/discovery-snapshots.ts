@@ -258,7 +258,7 @@ function latestOnOrBefore(
   return latest;
 }
 
-function dateKey(date: Date): string {
+export function dateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
