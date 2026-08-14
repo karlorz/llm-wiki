@@ -185,6 +185,26 @@ These are bounded counts only; no raw URLs, headers, request data, or
 response bodies are surfaced, and the persisted queue/snapshot artifacts are
 structurally unchanged. `discover --dry-run` writes nothing.
 
+### Reliability boundaries
+
+- Public JSON fetches are bounded by a 15-second timeout per request. An
+  abort that fires while the response body JSON is being parsed is also
+  classified as `COMMUNITY_FETCH_TIMEOUT`; non-abort JSON decode failures
+  remain `COMMUNITY_FETCH_FAILED`; an HTTP 429 response is
+  `COMMUNITY_RATE_LIMITED`. All remain nonfatal source warnings.
+- A blank `new_release` query is valid only when its positive date window
+  forms a qualifier-only GitHub search. A blank query with `window_days: 0`
+  is rejected as `CONFIG_INVALID` before collection.
+- `discover` writes its queue before the fresh snapshot/latest files and
+  retention pruning. A queue-write failure therefore creates no fresh
+  snapshot/latest output and prunes no historical snapshots. On success,
+  the returned mutation paths and the queue's snapshot reference are
+  vault-relative.
+- Live unflagged `daily` treats dirty discovery snapshot/latest/queue files
+  as `DIRTY_PREFLIGHT` rather than automatically deleting them, because a
+  completed manual `discover` result cannot be distinguished from
+  interrupted output.
+
 Deferred, not part of this repair:
 
 - Non-built-in public/China JSON community sources (the generic registered
