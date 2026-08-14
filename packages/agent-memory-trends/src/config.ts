@@ -260,9 +260,9 @@ function parseGithubLanes(github: Record<string, unknown>, prefix: string): { la
   };
 }
 
-function parseGithubLane(lane: unknown, itemPath: string): GithubLane {
+function parseGithubLane(lane: unknown, itemPath: string, allowEmptyQuery = false): GithubLane {
   const item = asRecord(lane, itemPath);
-  const queries = parseResearchQueries(item.queries, `${itemPath}.queries`);
+  const queries = parseResearchQueries(item.queries, `${itemPath}.queries`, allowEmptyQuery);
   if (queries.length === 0) throw new Error(`${itemPath}.queries must contain at least one query`);
 
   return {
@@ -278,13 +278,15 @@ function parseGithubLane(lane: unknown, itemPath: string): GithubLane {
   };
 }
 
-function parseResearchQueries(value: unknown, path: string): ResearchQuery[] {
+function parseResearchQueries(value: unknown, path: string, allowEmptyQuery = false): ResearchQuery[] {
   return asArray(value, path).map((query, index) => {
     const item = asRecord(query, `${path}[${index}]`);
     return {
       id: asString(item.id, `${path}[${index}].id`),
       label: asString(item.label, `${path}[${index}].label`),
-      query: asString(item.query, `${path}[${index}].query`),
+      query: allowEmptyQuery
+        ? asOptionalString(item.query, `${path}[${index}].query`)
+        : asString(item.query, `${path}[${index}].query`),
     };
   });
 }
@@ -348,7 +350,9 @@ function parseDiscoveryLanes(github: Record<string, unknown>): DiscoveryGithubLa
   for (const [key, kind] of laneGroups) {
     if (github[key] === undefined || github[key] === null) continue;
     asArray(github[key], `discovery.github.${key}`).forEach((lane, index) => {
-      lanes.push({ ...parseGithubLane(lane, `discovery.github.${key}[${index}]`), kind });
+      // New-release lanes may carry an empty query string: the collector
+      // turns it into a qualifier-only repository search with the date window.
+      lanes.push({ ...parseGithubLane(lane, `discovery.github.${key}[${index}]`, kind === "new_release"), kind });
     });
   }
   return lanes;
@@ -538,6 +542,12 @@ function asArray(value: unknown, path: string): unknown[] {
 function asString(value: unknown, path: string): string {
   if (typeof value !== "string" || value.trim() === "") throw new Error(`${path} must be a non-empty string`);
   return value;
+}
+
+function asOptionalString(value: unknown, path: string): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") throw new Error(`${path} must be a string`);
+  return value.trim();
 }
 
 function asNumber(value: unknown, path: string): number {
