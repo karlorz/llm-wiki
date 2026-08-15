@@ -188,6 +188,30 @@ describe("skillwiki claims audit", () => {
     expect(r.result.data.summary.project_mismatch).toBe(1);
   });
 
+  it("under --project acme reports an acme work item claiming an explicitly beta transcript as project_mismatch", async () => {
+    const v = makeVault();
+    writeTranscript(v, "2026-05-10-cross-owned.md", {
+      source_url: "", ingested: "2026-05-10", sha256: "0".repeat(64),
+      project: '"[[beta]]"', kind: "task",
+    });
+    // An acme-scoped work item claims a transcript explicitly owned by beta.
+    writeSpec(v, "acme", "2026-05-10-cross-claimed", {
+      source: "raw/transcripts/2026-05-10-cross-owned.md",
+    });
+    const r = await runClaimsAudit({ vault: v, project: "acme" });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+    const mis = r.result.data.findings.filter((f) => f.kind === "project_mismatch");
+    expect(mis).toHaveLength(1);
+    expect(mis[0]).toMatchObject({
+      path: "raw/transcripts/2026-05-10-cross-owned.md",
+      captureProject: "beta",
+      claimedByProject: "acme",
+      claimedBy: "projects/acme/work/2026-05-10-cross-claimed",
+    });
+    expect(r.result.data.summary.project_mismatch).toBe(1);
+  });
+
   it("does NOT report project_mismatch when capture project matches claiming project", async () => {
     const v = makeVault();
     writeTranscript(v, "2026-05-09-task-exact.md", {

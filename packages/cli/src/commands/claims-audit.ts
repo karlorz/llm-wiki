@@ -11,6 +11,9 @@
  * only from an exact vault-relative `raw/transcripts/...` reference in a work
  * item's `source:` / `sources:` / `closes:` frontmatter — never from dates,
  * slugs, titles, body wikilinks, filename similarity, or a project substring.
+ * `--project` scopes claim-derived findings (duplicate, malformed, dangling,
+ * project_mismatch) by owning work-item project; raw-capture filtering limits
+ * only standalone `work_item_unbacked_claim`.
  *
  * Finding kinds:
  *  - duplicate_claim: more than one work item claims the same exact transcript path
@@ -167,9 +170,6 @@ export async function runClaimsAudit(
       if (!fm.ok) continue;
       const project = extractSlug(fm.data.project);
       const workItemRaw = typeof fm.data.work_item === "string" ? fm.data.work_item.trim() : undefined;
-      // A transcript is scoped-out of unbacked detection when --project is set
-      // and the capture's explicit project (if any) differs from the scope.
-      if (input.project && project && project !== input.project) continue;
       transcriptMeta.set(t.relPath, {
         ...(project !== undefined ? { project } : {}),
         ...(workItemRaw !== undefined && workItemRaw !== "" ? { workItem: workItemRaw } : {}),
@@ -211,10 +211,12 @@ export async function runClaimsAudit(
     }
   }
 
-  // 4. Work-item-unbacked claims.
+  // 4. Work-item-unbacked claims (raw-capture filtering: --project limits only
+  // this standalone finding, keyed on the capture's own explicit project).
   for (const t of activeTranscripts) {
     const meta = transcriptMeta.get(t.relPath);
     if (!meta?.workItem) continue;
+    if (input.project && meta.project && meta.project !== input.project) continue;
     if (claimedByPath.has(t.relPath)) continue;
     findings.push({ kind: "work_item_unbacked_claim", path: t.relPath, workItem: meta.workItem });
   }
