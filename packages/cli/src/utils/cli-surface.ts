@@ -85,7 +85,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("update").option("--tag <tag>");
   program.command("self-update").option("--check");
   program.command("transcripts").option("--since <date>").option("--wiki <name>");
-  program.command("project-index").option("--apply").option("--wiki <name>");
+  program.command("project-index").option("--apply").option("--check").option("--wiki <name>");
   program.command("compound"); // has subcommands
   program.command("tag"); // has subcommands
   program.command("tag-sync").option("--dry-run").option("--wiki <name>");

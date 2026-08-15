@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ExitCode } from "@skillwiki/shared";
 import { runProjectIndex } from "../../src/commands/project-index.js";
 
 const CONCEPT_FM = (slug: string, title: string) => `---
@@ -310,5 +311,63 @@ Body text.
     if (r.result.ok) {
       expect(r.result.data.entries.length).toBe(0);
     }
+  });
+
+  // ── project-index --check exit-code contract (0 = fresh, 3 = stale) ──────
+
+  it("--check exits 3 with stale JSON when the existing index is stale", async () => {
+    const dir = makeVault("cmux");
+    mkdirSync(join(dir, "projects", "cmux", "compound"), { recursive: true });
+    writeFileSync(join(dir, "projects", "cmux", "knowledge.md"), "# old index\n");
+    writeFileSync(join(dir, "concepts", "cmux-routing.md"), CONCEPT_FM("cmux", "Routing Design"));
+
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: false, check: true });
+    expect(r.exitCode).toBe(3); // contract: exit 0 = fresh, exit 3 = stale
+    if (r.result.ok) {
+      expect(r.result.data.existing).toBe(true);
+      expect(r.result.data.stale).toBe(true);
+      expect(r.result.data.entries.length).toBe(1);
+      expect(r.result.data.index_path).toBe("projects/cmux/knowledge.md");
+    }
+  });
+
+  it("--check exits 0 when the existing index is fresh", async () => {
+    const dir = makeVault("cmux");
+    mkdirSync(join(dir, "projects", "cmux", "compound"), { recursive: true });
+    writeFileSync(join(dir, "concepts", "cmux-routing.md"), CONCEPT_FM("cmux", "Routing Design"));
+    await runProjectIndex({ vault: dir, slug: "cmux", apply: true });
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: false, check: true });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.existing).toBe(true);
+      expect(r.result.data.stale).toBe(false);
+    }
+  });
+
+  it("default read-only mode (no --check) exits 0 regardless of staleness", async () => {
+    const dir = makeVault("cmux");
+    mkdirSync(join(dir, "projects", "cmux", "compound"), { recursive: true });
+    writeFileSync(join(dir, "projects", "cmux", "knowledge.md"), "# old index\n");
+    writeFileSync(join(dir, "concepts", "cmux-routing.md"), CONCEPT_FM("cmux", "Routing Design"));
+
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: false });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.stale).toBe(true);
+    }
+  });
+
+  it("--check with --apply is a usage error (exit 46, never 0/3) and never writes", async () => {
+    const dir = makeVault("cmux");
+    writeFileSync(join(dir, "concepts", "cmux-routing.md"), CONCEPT_FM("cmux", "Routing Design"));
+
+    const r = await runProjectIndex({ vault: dir, slug: "cmux", apply: true, check: true });
+    expect(r.exitCode).toBe(ExitCode.USAGE);
+    expect([0, 3]).not.toContain(r.exitCode);
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) {
+      expect(r.result.error).toBe("USAGE");
+    }
+    expect(existsSync(join(dir, "projects", "cmux", "knowledge.md"))).toBe(false);
   });
 });
