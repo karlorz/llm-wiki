@@ -11,12 +11,24 @@ interface CliOptions {
   hostId: string;
   lockDir: string;
   mode: MaintenanceMode;
+  lockWaitMsRaw?: string;
+  lockWaitMs?: number;
 }
 
+const USAGE = "Usage: skillwiki-maintenance run [--fleet <path>] [--host <id>] [--lock-dir <path>] [--lock-wait-ms <ms>] [--mode <full|daily|self-update|self-update-apply|session-brief-refresh>]";
+
 async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2), process.env);
+  let options: CliOptions;
+  try {
+    options = parseArgs(process.argv.slice(2), process.env);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error(USAGE);
+    process.exitCode = 46;
+    return;
+  }
   if (options.command !== "run") {
-    console.error("Usage: skillwiki-maintenance run [--fleet <path>] [--host <id>] [--lock-dir <path>] [--mode <full|daily|self-update|self-update-apply|session-brief-refresh>]");
+    console.error(USAGE);
     process.exitCode = 46;
     return;
   }
@@ -26,6 +38,7 @@ async function main(): Promise<void> {
     hostId: options.hostId,
     lockDir: options.lockDir,
     mode: options.mode,
+    lockWaitMs: options.lockWaitMs,
     now: new Date(),
     emit: (event) => console.log(JSON.stringify(event)),
   });
@@ -53,10 +66,26 @@ function parseArgs(args: string[], env: NodeJS.ProcessEnv): CliOptions {
     if (arg === "--fleet") options.fleetPath = args[++i] ?? options.fleetPath;
     else if (arg === "--host") options.hostId = args[++i] ?? options.hostId;
     else if (arg === "--lock-dir") options.lockDir = args[++i] ?? options.lockDir;
+    else if (arg === "--lock-wait-ms") options.lockWaitMsRaw = args[++i];
     else if (arg === "--mode") options.mode = parseMode(args[++i]);
   }
 
+  const lockWaitRaw = options.lockWaitMsRaw ?? env.SKILLWIKI_MAINTENANCE_LOCK_WAIT_MS;
+  if (lockWaitRaw !== undefined) {
+    const parsed = parseNonNegativeInt(lockWaitRaw);
+    if (parsed === null) {
+      throw new Error(`invalid --lock-wait-ms / SKILLWIKI_MAINTENANCE_LOCK_WAIT_MS value ${JSON.stringify(lockWaitRaw)} (expected a non-negative integer)`);
+    }
+    options.lockWaitMs = parsed;
+  }
+
   return options;
+}
+
+function parseNonNegativeInt(value: string): number | null {
+  if (!/^[0-9]+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 function parseMode(value: string | undefined): MaintenanceMode {

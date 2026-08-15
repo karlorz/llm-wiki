@@ -21,6 +21,10 @@ export interface RunMaintenanceInput {
   mode?: MaintenanceMode;
   emit?: (event: MaintenanceEvent) => void;
   runCommand?: CommandRunner;
+  /** How long to wait for a held maintenance lock before failing (ms). Defaults to 15 minutes. */
+  lockWaitMs?: number;
+  /** How often to poll a held maintenance lock (ms). Defaults to 2 seconds. */
+  lockPollMs?: number;
 }
 
 export interface MaintenanceEvent {
@@ -46,7 +50,12 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
   if (!profile.ok) return profile;
 
   const emit = input.emit ?? (() => undefined);
-  const lock = acquireLock(input.lockDir, { owner: `skillwiki-maintenance:${input.hostId}`, now: input.now });
+  const lock = await acquireLock(input.lockDir, {
+    owner: `skillwiki-maintenance:${input.hostId}`,
+    now: input.now,
+    waitMs: input.lockWaitMs,
+    pollMs: input.lockPollMs,
+  });
   if (!lock.ok) return lock;
 
   const checks: JobCheck[] = [];
@@ -56,14 +65,14 @@ export async function runStage1Maintenance(input: RunMaintenanceInput): Promise<
     maintenanceMode: mode,
   });
   const ts = () => new Date().toISOString();
-  emit({
-    ts: input.now.toISOString(),
-    event: "start",
-    host_id: input.hostId,
-    details: { stage: 2, mode, profile: profile.data.id, sessionKind: sessionKind.data },
-  });
 
   try {
+    emit({
+      ts: input.now.toISOString(),
+      event: "start",
+      host_id: input.hostId,
+      details: { stage: 2, mode, profile: profile.data.id, sessionKind: sessionKind.data },
+    });
     if (profile.data.runsSelfUpdateApply) {
       const preflight = await runVaultSyncPreflight({ vaultPath: parsed.data.vaultPath, runCommand });
       checks.push(preflight);
