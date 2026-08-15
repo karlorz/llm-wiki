@@ -10,6 +10,11 @@ export interface ProjectIndexInput {
   vault: string;
   slug: string;
   apply: boolean;
+  /**
+   * Check-only mode: read the existing index, report staleness, and exit
+   * 3 when stale / 0 when fresh. Never writes. Mutually exclusive with apply.
+   */
+  check?: boolean;
 }
 
 export interface ProjectIndexDeps {
@@ -41,6 +46,12 @@ export interface ProjectIndexOutput {
 
 const LAYER2_DIRS = ["entities", "concepts", "comparisons", "queries", "meta"];
 const PROJECT_LOCAL_DIRS = ["requirements", "work", "architecture", "history"];
+
+/**
+ * Exit-code contract for `project-index --check` (documented in CLI help):
+ * 0 = existing index is fresh (or none exists), 3 = stale.
+ */
+const PROJECT_INDEX_STALE_EXIT_CODE = 3;
 
 async function scanMarkdownTree(rootAbs: string, rootRel: string): Promise<string[]> {
   const found: string[] = [];
@@ -217,6 +228,12 @@ export async function runProjectIndex(
   deps: ProjectIndexDeps = DEFAULT_DEPS,
 ): Promise<{ exitCode: number; result: Result<ProjectIndexOutput> }> {
   const slug = input.slug;
+  if (input.check && input.apply) {
+    return {
+      exitCode: ExitCode.USAGE,
+      result: err("USAGE", { message: "--check and --apply are mutually exclusive" }),
+    };
+  }
   const projectDir = join(input.vault, "projects", slug);
   const rendered = await renderProjectIndex(input.vault, slug);
   if (!rendered.ok) {
@@ -247,7 +264,7 @@ export async function runProjectIndex(
     const action = `${entries.length} entries found (use --apply to write)`;
     const staleHint = stale ? " (STALE — existing index outdated)" : existing ? " (up to date)" : "";
     return {
-      exitCode: ExitCode.OK,
+      exitCode: input.check && stale ? PROJECT_INDEX_STALE_EXIT_CODE : ExitCode.OK,
       result: ok({
         slug,
         entries,

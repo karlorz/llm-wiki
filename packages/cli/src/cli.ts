@@ -1213,8 +1213,13 @@ program
   .command("project-index <slug> [vault]")
   .description("generate a knowledge index for a project workspace")
   .option("--apply", "write knowledge.md to the project directory", false)
+  .option("--check", "check-only: exit 0 when the existing index is fresh, 3 when stale (no writes; mutually exclusive with --apply)", false)
   .option("--wiki <name>", "wiki profile name")
   .action(async (slug, vault, opts) => {
+    if (opts.check && opts.apply) {
+      emit({ exitCode: ExitCode.USAGE, result: err("USAGE", "--check and --apply are mutually exclusive") });
+      return;
+    }
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else if (opts.apply) return emitGuardedVaultWrite(
@@ -1222,7 +1227,7 @@ program
       "project-index --apply",
       () => runProjectIndex({ vault: v.vault, slug, apply: true })
     );
-    else emit(await runProjectIndex({ vault: v.vault, slug, apply: false }), v.vault);
+    else emit(await runProjectIndex({ vault: v.vault, slug, apply: false, check: opts.check }), v.vault);
   });
 
 // compound — grouped under a parent command

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import yaml from "js-yaml";
 import { normalizeCanonicalUrl } from "./config.js";
 import type { SelectedGithubCandidate } from "./github.js";
@@ -131,7 +131,7 @@ function collectActiveWork(vault: string, project: string, parseErrors: DedupePa
   const dir = join(vault, "projects", project, "work");
   if (!existsSync(dir)) return [];
   const results: ActiveWorkSignal[] = [];
-  for (const filePath of listMarkdownFiles(dir).filter((path) => path.endsWith("/spec.md"))) {
+  for (const filePath of listMarkdownFiles(dir).filter((path) => path.endsWith("spec.md"))) {
     const parsed = tryReadMarkdownPage(vault, filePath, parseErrors);
     if (!parsed) continue;
     if (!ACTIVE_WORK_STATUSES.has(stringValue(parsed.frontmatter.status))) continue;
@@ -196,7 +196,7 @@ function tryReadMarkdownPage(vault: string, path: string, parseErrors: DedupePar
   } catch (error) {
     const absolutePath = path.startsWith(vault) ? path : join(vault, path);
     parseErrors.push({
-      path: relative(vault, absolutePath),
+      path: vaultRelative(relative(vault, absolutePath)),
       error: error instanceof Error ? error.message : String(error),
     });
     return null;
@@ -205,7 +205,7 @@ function tryReadMarkdownPage(vault: string, path: string, parseErrors: DedupePar
 
 function readMarkdownPage(vault: string, path: string): ParsedPage {
   const absolutePath = path.startsWith(vault) ? path : join(vault, path);
-  const relPath = relative(vault, absolutePath);
+  const relPath = vaultRelative(relative(vault, absolutePath));
   const text = readFileSync(absolutePath, "utf8");
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
   if (!match) return { relPath, frontmatter: {}, body: text };
@@ -231,7 +231,13 @@ function frontmatterProjectMatches(value: unknown, project: string): boolean {
 }
 
 function pageTitle(parsed: ParsedPage, path: string): string {
-  return stringValue(parsed.frontmatter.title) || path.split("/").pop()?.replace(/\.md$/, "") || path;
+  return stringValue(parsed.frontmatter.title) || basename(path).replace(/\.md$/, "") || path;
+}
+
+// Vault-relative signal paths follow the repo's forward-slash convention;
+// node:path relative() uses "\" on Windows.
+function vaultRelative(path: string): string {
+  return path.replace(/\\/g, "/");
 }
 
 function stringValue(value: unknown): string {

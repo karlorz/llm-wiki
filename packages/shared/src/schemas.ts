@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 
 export const isoDate = z.string().refine((s) => {
@@ -152,7 +153,8 @@ const endpointName = z.string().min(1).regex(/^[A-Za-z0-9_.-]+$/, "must be a hos
 const ipAddress = z.string().min(1).regex(/^[0-9a-fA-F:.]+$/, "must be an IP address token");
 const sshAlias = z.string().min(1).regex(/^[A-Za-z0-9_.@-]+$/, "must be an SSH alias token");
 const sshUser = z.string().min(1).regex(/^[A-Za-z0-9_.-]+$/, "must be an SSH user token");
-const absolutePath = z.string().min(1).regex(/^\//, "must be an absolute path");
+// node:path isAbsolute accepts drive-letter paths (C:\...) on Windows.
+const absolutePath = z.string().min(1).refine((value) => isAbsolute(value), "must be an absolute path");
 
 export const FleetAccessProfileSchema = z.object({
   status: z.enum(["local", "configured", "planned", "absent", "unknown"]),

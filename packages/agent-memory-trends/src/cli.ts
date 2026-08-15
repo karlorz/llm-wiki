@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pathDelimiter, platformExecFile } from "./exec-utils.js";
 import type { DiscoverySnapshot } from "./discovery-contracts.js";
 import { collectCommunityReferences, createFetchJsonClient } from "./discovery-community.js";
 import { mergeCommunityReferences } from "./discovery-community-normalize.js";
@@ -1464,8 +1464,13 @@ function dailyModeLabel(dryRun: boolean, generateOnly: boolean, previewOnly: boo
 }
 
 function vaultRelativePath(vault: string, path: string): string {
-  const prefix = vault.endsWith("/") ? vault : `${vault}/`;
-  return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+  // node:path joins use "\" on Windows; normalize both sides so the vault
+  // prefix strip works on every platform while vault-relative outputs keep
+  // the repo's forward-slash convention.
+  const normalizedVault = vault.replace(/\\/g, "/");
+  const normalizedPath = path.replace(/\\/g, "/");
+  const prefix = normalizedVault.endsWith("/") ? normalizedVault : `${normalizedVault}/`;
+  return normalizedPath.startsWith(prefix) ? normalizedPath.slice(prefix.length) : path;
 }
 
 const AGENT_MEMORY_RUN_STATE_RE = /^\.skillwiki\/agent-memory-trends\/(?:latest-run|\d{4}-\d{2}-\d{2}-(?:input|run))\.json$/;
@@ -1722,7 +1727,7 @@ function resolveDedupeDigestTtlDays(values: Map<string, string>, fallback: numbe
 function createGhRunner(cwd: string) {
   return (args: string[]) =>
     new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
-      execFile("gh", args, { cwd, encoding: "utf8" }, (error, stdout, stderr) => {
+      platformExecFile("gh", args, { cwd, encoding: "utf8" }, (error, stdout, stderr) => {
         resolve({
           exitCode: typeof error?.code === "number" ? error.code : error ? 1 : 0,
           stdout,
@@ -1735,7 +1740,7 @@ function createGhRunner(cwd: string) {
 function createCodexRunner() {
   return (args: string[], options: { stdin: string; cwd: string; timeoutMs?: number }) =>
     new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
-      const child = execFile("codex", args, { cwd: options.cwd, encoding: "utf8", timeout: options.timeoutMs }, (error, stdout, stderr) => {
+      const child = platformExecFile("codex", args, { cwd: options.cwd, encoding: "utf8", timeout: options.timeoutMs }, (error, stdout, stderr) => {
         resolve({
           exitCode: typeof error?.code === "number" ? error.code : error ? 1 : 0,
           stdout,
@@ -1749,7 +1754,7 @@ function createCodexRunner() {
 function createClaudeRunner() {
   return (args: string[], options: { stdin: string; cwd: string; timeoutMs?: number }) =>
     new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
-      const child = execFile("claude", args, { cwd: options.cwd, encoding: "utf8", timeout: options.timeoutMs }, (error, stdout, stderr) => {
+      const child = platformExecFile("claude", args, { cwd: options.cwd, encoding: "utf8", timeout: options.timeoutMs }, (error, stdout, stderr) => {
         resolve({
           exitCode: typeof error?.code === "number" ? error.code : error ? 1 : 0,
           stdout,
@@ -1779,7 +1784,7 @@ function createDefaultSynthesisRunner(options: ParsedCliOptions, context: AgentM
 
 function commandAvailable(command: string, env: Record<string, string | undefined>): boolean {
   const pathValue = env.PATH ?? process.env.PATH ?? "";
-  for (const dir of pathValue.split(":")) {
+  for (const dir of pathValue.split(pathDelimiter())) {
     if (!dir) continue;
     try {
       accessSync(join(dir, command), constants.X_OK);
@@ -1795,7 +1800,7 @@ function createCommandRunner(): CommandRunner {
   return (command, args, options) =>
     new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
       const env = options.env ? { ...process.env, ...options.env } : undefined;
-      execFile(command, args, { cwd: options.cwd, encoding: "utf8", env }, (error, stdout, stderr) => {
+      platformExecFile(command, args, { cwd: options.cwd, encoding: "utf8", env }, (error, stdout, stderr) => {
         resolve({
           exitCode: typeof error?.code === "number" ? error.code : error ? 1 : 0,
           stdout,

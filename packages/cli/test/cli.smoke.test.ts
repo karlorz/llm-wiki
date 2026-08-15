@@ -187,6 +187,44 @@ describe("cli smoke", () => {
     expect(r.stdout).toContain("SCHEME_REJECTED");
   });
 
+  it("project-index --check exits 3 on a stale index and 0 on a fresh index", () => {
+    const vault = mkdtempSync(join(tmpdir(), "smoke-project-index-check-"));
+    mkdirSync(join(vault, "projects", "pi-check"), { recursive: true });
+    mkdirSync(join(vault, "concepts"), { recursive: true });
+    writeFileSync(join(vault, "projects", "pi-check", "knowledge.md"), "# old index\n");
+    writeFileSync(join(vault, "concepts", "pi-check.md"), `---
+title: PI Check
+type: concept
+created: 2026-05-08
+updated: 2026-05-08
+provenance: project
+provenance_projects: ["[[pi-check]]"]
+---
+
+# PI Check
+`);
+    execFileSync("git", ["init", "-b", "main", vault], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "config", "user.email", "test@example.invalid"], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "config", "user.name", "Test"], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "add", "-A"], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "commit", "-m", "baseline"], { encoding: "utf8" });
+
+    const stale = run(["project-index", "pi-check", vault, "--check"]);
+    expect(stale.status).toBe(3);
+    const staleParsed = JSON.parse(stale.stdout);
+    expect(staleParsed.ok).toBe(true);
+    expect(staleParsed.data.stale).toBe(true);
+
+    const applied = run(["project-index", "pi-check", vault, "--apply"]);
+    expect(applied.status).toBe(0);
+
+    const fresh = run(["project-index", "pi-check", vault, "--check"]);
+    expect(fresh.status).toBe(0);
+    const freshParsed = JSON.parse(fresh.stdout);
+    expect(freshParsed.ok).toBe(true);
+    expect(freshParsed.data.stale).toBe(false);
+  });
+
   it("--human produces non-JSON output for path", () => {
     const json = run(["path"]);
     const human = run(["path", "--human"]);
