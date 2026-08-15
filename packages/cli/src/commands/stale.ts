@@ -12,6 +12,7 @@ import { buildSourceReferenceIndex } from "../utils/source-reference-index.js";
 import { buildSourceRelocationProjection, readSourceRelocations } from "../utils/source-relocations.js";
 import { collectClaimedTranscripts } from "../utils/transcript-claims.js";
 import { normalizeProjectSlug } from "../utils/project-slug.js";
+import { parseActiveWorkPath } from "../utils/work-item-path.js";
 
 export interface StaleInput { vault: string; days: number; archive?: boolean; apply?: boolean; approve?: string; forceScan?: boolean; project?: string; scan?: VaultScan; pageTextCache?: PageTextCache }
 export interface StaleTranscript { path: string; reason: string; hint?: string }
@@ -348,12 +349,11 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
       archived.push(plan.from);
     }
     for (const w of [...incompleteWorkItems, ...doneWorkItems]) {
-      // Work items are directories — move to project history/ dir
-      const parts = w.path.split("/");
+      // Work items are directories — move to project history/ dir.
       // projects/{slug}/work/{item} → projects/{slug}/history/archived-work/{item}
-      if (parts.length >= 4 && parts[0] === "projects") {
-        const slug = parts[1];
-        const itemName = parts[3];
+      const active = parseActiveWorkPath(w.path);
+      if (active) {
+        const { project: slug, item: itemName } = active;
         const histDir = join(input.vault, "projects", slug, "history", "archived-work");
         await mkdir(histDir, { recursive: true });
         const dest = join(histDir, itemName);

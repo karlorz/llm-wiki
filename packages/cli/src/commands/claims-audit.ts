@@ -31,6 +31,7 @@ import { join } from "node:path";
 import { collectClaimedTranscripts, type ClaimField } from "../utils/transcript-claims.js";
 import { safeDiagnosticValue, REDACTED_MALFORMED_REFERENCE } from "../utils/transcript-claims.js";
 import { normalizeProjectSlug } from "../utils/project-slug.js";
+import { parseActiveWorkPath } from "../utils/work-item-path.js";
 
 export interface ClaimsAuditInput {
   vault: string;
@@ -101,13 +102,6 @@ function safeProjectPresentation(raw: string): string {
   return normalizeProjectSlug(raw) ?? REDACTED_MALFORMED_REFERENCE;
 }
 
-/** Extract the project slug owning a work-item relDir `projects/{slug}/work/{item}`. */
-function workItemProject(workItemDir: string): string | undefined {
-  const parts = workItemDir.split("/");
-  if (parts.length >= 3 && parts[0] === "projects") return parts[1];
-  return undefined;
-}
-
 export async function runClaimsAudit(
   input: ClaimsAuditInput,
 ): Promise<{ exitCode: number; result: Result<ClaimsAuditOutput> }> {
@@ -130,7 +124,7 @@ export async function runClaimsAudit(
   if (input.project) {
     const knownSlugs = new Set<string>();
     for (const dir of workItemDirs) {
-      const slug = workItemProject(dir);
+      const slug = parseActiveWorkPath(dir)?.project;
       if (slug) knownSlugs.add(slug);
     }
     if (!knownSlugs.has(input.project)) {
@@ -143,7 +137,7 @@ export async function runClaimsAudit(
 
   const claimSources: Array<{ relDir: string; source: unknown; sources: unknown; closes: unknown }> = [];
   for (const relDir of [...workItemDirs].sort()) {
-    const slug = workItemProject(relDir);
+    const slug = parseActiveWorkPath(relDir)?.project;
     if (input.project && slug !== input.project) continue;
     const specPath = join(input.vault, relDir, "spec.md");
     try {
@@ -211,12 +205,12 @@ export async function runClaimsAudit(
   // 3. Project mismatch (capture has explicit project, claimed under another).
   for (const [path, owner] of claimedByPath) {
     const meta = transcriptMeta.get(path);
-    if (meta?.project && workItemProject(owner) !== meta.project) {
+    if (meta?.project && parseActiveWorkPath(owner)?.project !== meta.project) {
       findings.push({
         kind: "project_mismatch",
         path,
         captureProject: safeProjectPresentation(meta.projectRaw ?? ""),
-        claimedByProject: workItemProject(owner) ?? "",
+        claimedByProject: parseActiveWorkPath(owner)?.project ?? "",
         claimedBy: owner,
       });
     }
