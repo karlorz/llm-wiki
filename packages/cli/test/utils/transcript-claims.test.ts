@@ -35,6 +35,30 @@ describe("normalizeRawTranscriptRef", () => {
     expect(normalizeRawTranscriptRef("raw/transcripts/2026-07-01-x")).toBeUndefined();
   });
 
+  it("rejects a multiline raw-transcript scalar even when it ends in .md", () => {
+    // A literal block scalar reconstructed by js-yaml can start raw/transcripts/
+    // and end .md while embedding an embedded newline. It must never normalize
+    // into a canonical claimed path.
+    expect(
+      normalizeRawTranscriptRef("raw/transcripts/2026-07-01-task-a.md\nsecret=leaked.md"),
+    ).toBeUndefined();
+  });
+
+  it("rejects raw-transcript scalars containing Unicode line/paragraph separators even when they end in .md", () => {
+    expect(
+      normalizeRawTranscriptRef("raw/transcripts/2026-07-01-task-b.md\u2028secret.md"),
+    ).toBeUndefined();
+    expect(
+      normalizeRawTranscriptRef("raw/transcripts/2026-07-01-task-c.md\u2029secret.md"),
+    ).toBeUndefined();
+  });
+
+  it("rejects raw-transcript scalars containing C1 control characters even when they end in .md", () => {
+    expect(
+      normalizeRawTranscriptRef("raw/transcripts/2026-07-01-task-d.md\u0085secret.md"),
+    ).toBeUndefined();
+  });
+
   it("rejects non-string values", () => {
     expect(normalizeRawTranscriptRef(42)).toBeUndefined();
     expect(normalizeRawTranscriptRef(["raw/transcripts/x.md"])).toBeUndefined();
@@ -188,6 +212,47 @@ describe("collectClaimedTranscripts", () => {
       {
         kind: "malformed",
         relDir: "projects/llm-wiki/work/2026-07-02-y",
+        field: "closes",
+        value: REDACTED_MALFORMED_REFERENCE,
+      },
+    ]);
+  });
+
+  it("treats separator-laden attempted refs as malformed and redacts them, never as claims", () => {
+    const multilineEndingMd = "raw/transcripts/2026-07-01-task-a.md\npayload.md";
+    const unicodeLs = "raw/transcripts/2026-07-01-task-b.md\u2028payload.md";
+    const unicodePs = "raw/transcripts/2026-07-01-task-c.md\u2029payload.md";
+    const nel = "raw\\transcripts\\2026-07-01-task-d.md\u0085payload.md";
+    const index = collectClaimedTranscripts([
+      item({ source: multilineEndingMd }),
+      item({ relDir: "projects/llm-wiki/work/2026-07-02-y", closes: unicodeLs }),
+      item({ relDir: "projects/llm-wiki/work/2026-07-03-z", sources: [unicodePs] }),
+      item({ relDir: "projects/llm-wiki/work/2026-07-04-w", closes: nel }),
+    ]);
+    // None of these may ever become a claimed path.
+    expect(index.claimedByPath.size).toBe(0);
+    expect(index.diagnostics).toEqual([
+      {
+        kind: "malformed",
+        relDir: "projects/llm-wiki/work/2026-07-01-x",
+        field: "source",
+        value: REDACTED_MALFORMED_REFERENCE,
+      },
+      {
+        kind: "malformed",
+        relDir: "projects/llm-wiki/work/2026-07-02-y",
+        field: "closes",
+        value: REDACTED_MALFORMED_REFERENCE,
+      },
+      {
+        kind: "malformed",
+        relDir: "projects/llm-wiki/work/2026-07-03-z",
+        field: "sources",
+        value: REDACTED_MALFORMED_REFERENCE,
+      },
+      {
+        kind: "malformed",
+        relDir: "projects/llm-wiki/work/2026-07-04-w",
         field: "closes",
         value: REDACTED_MALFORMED_REFERENCE,
       },

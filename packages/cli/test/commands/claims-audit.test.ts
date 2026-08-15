@@ -184,6 +184,49 @@ describe("skillwiki claims audit", () => {
     expect(r.result.data.summary.malformed_claim_reference).toBe(1);
   });
 
+  it("never turns a multiline block scalar ending in .md into a claim or leaks it to output", async () => {
+    const v = makeVault();
+    // A distinct real transcript exists; the leaked path below must never match it.
+    writeTranscript(v, "2026-05-11-task-real.md", {
+      source_url: "", ingested: "2026-05-11", sha256: "0".repeat(64),
+      project: '"[[acme]]"', kind: "task",
+    });
+    // Literal block scalar whose reconstructed first line is a valid-looking
+    // raw/transcripts/...md claim but whose trailing line ends in .md too, so a
+    // naive prefix+suffix check accepts it as a claimed path and leaks it.
+    const dir = join(v, "projects", "acme", "work", "2026-05-11-secret");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "spec.md"),
+      "---\nsource: |-\n  raw/transcripts/2026-05-11-task-secret.md\n  password=hunter2.md\n---\n\nspec body\n",
+    );
+    const r = await runClaimsAudit({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+    const findingJson = JSON.stringify(r.result.data.findings);
+    expect(findingJson).not.toContain("hunter2");
+    expect(findingJson).not.toContain("password=");
+    expect(r.result.data.humanHint).not.toContain("hunter2");
+    expect(r.result.data.humanHint).not.toContain("password=");
+    expect(r.result.data.humanHint).not.toContain("\n");
+    // It must surface only as a redacted malformed reference, never any claim kind.
+    const mal = r.result.data.findings.filter((f) => f.kind === "malformed_claim_reference");
+    expect(mal).toHaveLength(1);
+    expect(mal[0]).toMatchObject({
+      relDir: "projects/acme/work/2026-05-11-secret",
+      field: "source",
+      value: REDACTED_MALFORMED_REFERENCE,
+    });
+    expect(
+      r.result.data.findings.some(
+        (f) => f.kind === "dangling_claim_reference" || f.kind === "project_mismatch",
+      ),
+    ).toBe(false);
+    expect(r.result.data.summary.malformed_claim_reference).toBe(1);
+    expect(r.result.data.summary.dangling_claim_reference).toBe(0);
+    expect(r.result.data.summary.project_mismatch).toBe(0);
+  });
+
   it("reports dangling_claim_reference for a canonical claimed path missing from active transcripts", async () => {
     const v = makeVault();
     // Claim references a transcript that does not exist on disk.

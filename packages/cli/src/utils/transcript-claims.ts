@@ -35,8 +35,14 @@ export const REDACTED_MALFORMED_REFERENCE = "[redacted]";
  */
 const MAX_DIAGNOSTIC_VALUE_LENGTH = 1024;
 
-/** U+0000–U+001F and U+007F control characters, including CR/LF/TAB. */
-const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
+/**
+ * Characters that must never appear in a canonical raw-transcript reference or
+ * be echoed verbatim into diagnostic output: C0 controls (U+0000–U+001F,
+ * including CR/LF/TAB), DEL (U+007F), C1 controls (U+0080–U+009F, including NEL
+ * U+0085), and the Unicode line/paragraph separators U+2028/U+2029. These break
+ * single-line output and can smuggle arbitrary body content into a "path".
+ */
+const UNSAFE_CHAR_RE = /[\u0000-\u001f\u007f\u0080-\u009f\u2028\u2029]/;
 
 /**
  * The trimmed attempted-reference text is safe to echo as diagnostic evidence
@@ -46,7 +52,7 @@ const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
  * carries body-like or unbounded content.
  */
 export function safeDiagnosticValue(value: string): string {
-  if (CONTROL_CHAR_RE.test(value) || value.length > MAX_DIAGNOSTIC_VALUE_LENGTH) {
+  if (UNSAFE_CHAR_RE.test(value) || value.length > MAX_DIAGNOSTIC_VALUE_LENGTH) {
     return REDACTED_MALFORMED_REFERENCE;
   }
   return value;
@@ -103,6 +109,12 @@ export function normalizeRawTranscriptRef(value: unknown): string | undefined {
   // Reject paths that escape the transcript directory (e.g. ../) and
   // Windows-style separators; the vault-relative path is canonical.
   if (trimmed.includes("..") || trimmed.includes("\\")) return undefined;
+  // A canonical reference is a single line of path-shaped text. Any control or
+  // line-separator character (e.g. introduced by a literal block scalar whose
+  // first line looks valid and whose last line ends .md) cannot be a real path:
+  // accepting it would claim arbitrary body content. Reject so the value is
+  // treated as a malformed attempt and redacted rather than echoed verbatim.
+  if (UNSAFE_CHAR_RE.test(trimmed)) return undefined;
   return trimmed;
 }
 
