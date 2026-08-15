@@ -244,10 +244,17 @@ describe("agent-memory-trends generated-output allowlist", () => {
     writeVaultFile(vault, "raw/articles/2026-06-11-agent-memory-trends-evidence.md", "evidence\n");
     writeVaultFile(vault, "queries/2026-06-11-agent-memory-trends-digest.md", "digest\n", 0o755);
     writeVaultFile(vault, "raw/transcripts/2026-06-11-task-secret.md", "OPENAI_API_KEY=sk-test-secret\n");
-    symlinkSync(
-      join(vault, "raw/articles/2026-06-11-agent-memory-trends-evidence.md"),
-      join(vault, ".skillwiki-link")
-    );
+    let symlinkCreated = true;
+    try {
+      symlinkSync(
+        join(vault, "raw", "articles", "2026-06-11-agent-memory-trends-evidence.md"),
+        join(vault, ".skillwiki-link"),
+        "file"
+      );
+    } catch {
+      // Windows CI often denies symlink creation (EPERM); skip symlink assertions.
+      symlinkCreated = false;
+    }
     runManifest.changedFiles.push(".skillwiki-link");
 
     const result = validateGeneratedChanges({
@@ -261,8 +268,9 @@ describe("agent-memory-trends generated-output allowlist", () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected invalid generated changes");
-    expect(String(result.detail)).toContain("symlink");
-    expect(String(result.detail)).toContain("executable");
+    if (symlinkCreated) expect(String(result.detail)).toContain("symlink");
+    // Windows has no executable mode bits; only POSIX can observe 0o755.
+    if (process.platform !== "win32") expect(String(result.detail)).toContain("executable");
     expect(String(result.detail)).toContain("oversized");
     expect(String(result.detail)).toContain("secret");
   });

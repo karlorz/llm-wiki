@@ -121,6 +121,11 @@ describe("parseVaultSyncKeyValue (per-key validation used by config set)", () =>
       expect(parseVaultSyncKeyValue("vault_sync.snapshot_profile", "relative/path.env").ok).toBe(false);
       expect(parseVaultSyncKeyValue("vault_sync.snapshot_worktree", "wiki-git").ok).toBe(false);
     });
+    it("accepts Windows drive-letter paths on Windows", () => {
+      if (process.platform !== "win32") return;
+      expect(parseVaultSyncKeyValue("vault_sync.snapshot_worktree", "C:\\wiki-git").ok).toBe(true);
+      expect(parseVaultSyncKeyValue("vault_sync.snapshot_script", "D:\\scripts\\wiki-snapshot.sh").ok).toBe(true);
+    });
     it("rejects ~ expansion", () => {
       expect(parseVaultSyncKeyValue("vault_sync.snapshot_profile", "~/wiki").ok).toBe(false);
     });

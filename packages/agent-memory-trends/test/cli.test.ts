@@ -102,24 +102,27 @@ describe("agent-memory-trends CLI", () => {
     const runnerVersion = options.runnerVersion ?? rootVersion;
     const originRootVersion = options.originRootVersion ?? rootVersion;
     const originRunnerVersion = options.originRunnerVersion ?? runnerVersion;
+    const sessionBriefJsonKey = join("/vault", ".skillwiki", "session-brief.json");
+    const sessionBriefMetaKey = join("/vault", "meta", "latest-session-brief.md");
+    const latestRunJsonKey = join("/vault", ".skillwiki", "agent-memory-trends", "latest-run.json");
     const files = new Map<string, string>([
       ["/config.yaml", CONFIG],
       [
-        "/vault/.skillwiki/session-brief.json",
+        sessionBriefJsonKey,
         options.sessionBriefJson ?? JSON.stringify({ generated_at: "2026-06-10T23:50:00Z" }),
       ],
       [
-        "/vault/meta/latest-session-brief.md",
+        sessionBriefMetaKey,
         options.sessionBriefMeta ?? "---\ngenerated_at: 2026-06-10T23:50:00Z\n---\n# Latest Session Brief\n",
       ],
       [
-        "/vault/.skillwiki/agent-memory-trends/latest-run.json",
+        latestRunJsonKey,
         options.latestRunJson ?? latestRunJson("2026-06-10T22:00:00Z"),
       ],
     ]);
-    if (options.sessionBriefJson === null) files.delete("/vault/.skillwiki/session-brief.json");
-    if (options.sessionBriefMeta === null) files.delete("/vault/meta/latest-session-brief.md");
-    if (options.latestRunJson === null) files.delete("/vault/.skillwiki/agent-memory-trends/latest-run.json");
+    if (options.sessionBriefJson === null) files.delete(sessionBriefJsonKey);
+    if (options.sessionBriefMeta === null) files.delete(sessionBriefMetaKey);
+    if (options.latestRunJson === null) files.delete(latestRunJsonKey);
 
     return {
       toolCalls,
@@ -273,7 +276,7 @@ describe("agent-memory-trends CLI", () => {
         env: {},
         now: new Date("2026-06-11T00:10:00Z"),
         readFile: (path: string) => {
-          if (path === "/repo/packages/agent-memory-trends/package.json") {
+          if (path === join("/repo", "packages", "agent-memory-trends", "package.json")) {
             return JSON.stringify({ version: "0.9.1-beta.1" });
           }
           throw new Error(`version should not read ${path}`);
@@ -830,7 +833,7 @@ describe("agent-memory-trends CLI", () => {
         if (command === "npm" && args.join(" ") === "run -w skillwiki --silent build") {
           return { exitCode: 0, stdout: "built", stderr: "" };
         }
-        if (command === process.execPath && args.join(" ") === "/repo/packages/cli/dist/cli.js doctor") {
+        if (command === process.execPath && args.join(" ") === `${join("/repo", "packages", "cli", "dist", "cli.js")} doctor`) {
           return {
             exitCode: 1,
             stdout: JSON.stringify({
