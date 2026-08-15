@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runStage1Maintenance, type MaintenanceEvent } from "../src/orchestrator.js";
 import type { CommandRunResult } from "../src/types.js";
@@ -803,6 +803,125 @@ describe("runStage1Maintenance", () => {
     expect(sessionBriefSkip?.reason).toContain("prior writing job failed");
     expect(healthSummaryEvent?.status).toBe("warn");
     expect(git(vault, "log", "-1", "--pretty=%s")).toBe("initial");
+  });
+
+  it("waits for a held maintenance lock and proceeds once it is released", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-lock-wait-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const lockDir = join(root, "lock");
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(join(lockDir, "owner.json"), JSON.stringify({
+      owner: "concurrent-runner",
+      acquired_at: new Date().toISOString(),
+      pid: process.pid,
+      expires_at: "2099-01-01T00:00:00Z",
+      token: "concurrent-token",
+    }, null, 2) + "\n", "utf8");
+    const releaseTimer = setTimeout(() => {
+      rmSync(lockDir, { recursive: true, force: true });
+    }, 150);
+
+    try {
+      const result = await runStage1Maintenance({
+        fleetPath,
+        hostId: "sg02",
+        lockDir,
+        mode: "daily",
+        now: new Date("2026-06-13T00:00:00Z"),
+        lockWaitMs: 2000,
+        lockPollMs: 20,
+        runCommand: async (command, args, options) => {
+          if (command === "agent-memory-trends" && args[0] === "daily") {
+            writeGeneratedTrendOutputs(vault);
+            return commandResult(JSON.stringify({
+              ok: true,
+              data: {
+                mutations: [
+                  ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+                  ".skillwiki/agent-memory-trends/latest-run.json",
+                  "queries/2026-06-13-agent-memory-trends-digest.md",
+                ],
+              },
+            }) + "\n");
+          }
+          if (command === "skillwiki" && args[0] === "health") {
+            writeHealthReport(outputPath(args));
+            return commandResult("");
+          }
+          if (command === "node") return runNode(args, options.cwd);
+          if (command === "git") return runGit(args, options.cwd);
+          return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.data.checks.map((check) => [check.job, check.status])).toEqual([
+          ["vault-sync-preflight", "pass"],
+          ["agent-memory-trends-daily", "pass"],
+          ["health-summary", "pass"],
+        ]);
+      }
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      clearTimeout(releaseTimer);
+    }
+  });
+
+  it("reclaims a stale dead-owner maintenance lock and proceeds", async () => {
+    const root = mkdtempSync(join(tmpdir(), "skillwiki-maintenance-orch-lock-reclaim-"));
+    const repo = createSyncedRepo(join(root, "repo-origin.git"), join(root, "repo"));
+    const vault = createSyncedVault(join(root, "vault-origin.git"), join(root, "vault"));
+    const fleetPath = join(root, "fleet.yaml");
+    writeFileSync(fleetPath, fleetYaml(vault, repo), "utf8");
+    const lockDir = join(root, "lock");
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(join(lockDir, "owner.json"), JSON.stringify({
+      owner: "dead-runner",
+      acquired_at: "2026-06-12T00:00:00Z",
+      pid: 999999999,
+      expires_at: "2026-06-12T00:30:00Z",
+      token: "dead-token",
+    }, null, 2) + "\n", "utf8");
+
+    const result = await runStage1Maintenance({
+      fleetPath,
+      hostId: "sg02",
+      lockDir,
+      mode: "daily",
+      now: new Date("2026-06-13T00:00:00Z"),
+      runCommand: async (command, args, options) => {
+        if (command === "agent-memory-trends" && args[0] === "daily") {
+          writeGeneratedTrendOutputs(vault);
+          return commandResult(JSON.stringify({
+            ok: true,
+            data: {
+              mutations: [
+                ".skillwiki/agent-memory-trends/2026-06-13-run.json",
+                ".skillwiki/agent-memory-trends/latest-run.json",
+                "queries/2026-06-13-agent-memory-trends-digest.md",
+              ],
+            },
+          }) + "\n");
+        }
+        if (command === "skillwiki" && args[0] === "health") {
+          writeHealthReport(outputPath(args));
+          return commandResult("");
+        }
+        if (command === "node") return runNode(args, options.cwd);
+        if (command === "git") return runGit(args, options.cwd);
+        return commandResult("", 127, `unexpected command: ${command} ${args.join(" ")}`);
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(lockDir)).toBe(false);
+    // The stale owner record is preserved under <lock parent>/recovery/ before removal.
+    const recoveryDir = join(dirname(lockDir), "recovery");
+    expect(readdirSync(recoveryDir).some((name) => name.includes("dead-token"))).toBe(true);
   });
 });
 
