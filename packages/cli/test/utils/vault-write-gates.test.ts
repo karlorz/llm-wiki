@@ -11,9 +11,12 @@ import {
   evaluateDirtyVolumeGate,
   evaluateMissionCycleGate,
   GateError,
+  HYGIENE_COMMANDS,
+  isHygieneCommand,
   measureDirtyVolume,
   runWritePreflight,
 } from "../../src/utils/vault-write-gates.js";
+import { buildCliSurface } from "../../src/utils/cli-surface.js";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -29,6 +32,108 @@ function makeGitVault(label: string): string {
   git(vault, ["commit", "-m", "init"]);
   return vault;
 }
+
+describe("HYGIENE_COMMANDS registry coverage", () => {
+  // Families whose EVERY registered subcommand form must be classified hygiene:
+  // a mutating subcommand added to the CLI surface without a HYGIENE_COMMANDS
+  // entry regresses the M1 dirty-volume gate (2026-08-13 outage root cause).
+  const HYGIENE_FAMILY_ROOTS = ["sync", "log", "index", "projections", "fleet"] as const;
+  // Standalone hygiene verbs registered as top-level commands.
+  const HYGIENE_ROOT_VERBS = [
+    "write-preflight",
+    "work-complete",
+    "work-validate",
+    "doctor",
+    "health",
+    "lint",
+    "status",
+    "path",
+  ] as const;
+
+  it("covers every executable subcommand form the CLI surface registers under hygiene families", () => {
+    const surface = buildCliSurface();
+    const familyKeys = HYGIENE_FAMILY_ROOTS.flatMap((root) =>
+      [...surface.keys()].filter((key) => key.startsWith(`${root}.`)),
+    );
+    // Group parents (e.g. "sync journal") register no action of their own:
+    // they are not executable forms, cannot mutate, and must NOT be hygiene.
+    const groupKeys = familyKeys.filter((key) =>
+      familyKeys.some((k) => k.startsWith(`${key}.`)),
+    );
+    expect(groupKeys).toEqual(["sync.journal"]);
+    const missing: string[] = [];
+    for (const key of familyKeys) {
+      if (groupKeys.includes(key)) continue;
+      const form = key.replace(/\./g, " ");
+      if (!isHygieneCommand(form)) missing.push(form);
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it("covers every hygiene root verb registered on the surface", () => {
+    const surface = buildCliSurface();
+    for (const verb of HYGIENE_ROOT_VERBS) {
+      expect(surface.has(verb), `hygiene verb ${verb} missing from surface`).toBe(true);
+      expect(isHygieneCommand(verb), `${verb} must be hygiene`).toBe(true);
+    }
+  });
+
+  it("covers the mutating --fix form registered on lint", () => {
+    const surface = buildCliSurface();
+    expect(surface.get("lint")!.has("--fix")).toBe(true);
+    expect(isHygieneCommand("lint --fix")).toBe(true);
+  });
+
+  it("every HYGIENE_COMMANDS member resolves to a registered surface form", () => {
+    const surface = buildCliSurface();
+    const unresolved: string[] = [];
+    for (const member of HYGIENE_COMMANDS) {
+      const words = member.split(" ");
+      const key = words.filter((w) => !w.startsWith("--")).join(".");
+      const flagsFor = surface.get(key);
+      if (!flagsFor) {
+        unresolved.push(member);
+        continue;
+      }
+      for (const flag of words.filter((w) => w.startsWith("--"))) {
+        if (!flagsFor.has(flag)) unresolved.push(member);
+      }
+    }
+    expect(unresolved).toEqual([]);
+  });
+
+  it("snapshot: HYGIENE_COMMANDS is exactly the reviewed set (add/remove fails on purpose)", () => {
+    expect([...HYGIENE_COMMANDS].sort()).toEqual([
+      "doctor",
+      "fleet context",
+      "fleet health",
+      "fleet validate",
+      "health",
+      "index rebuild",
+      "lint",
+      "lint --fix",
+      "log materialize",
+      "log migrate-legacy",
+      "path",
+      "projections materialize",
+      "projections repair-legacy",
+      "status",
+      "sync journal clear-stale",
+      "sync journal list",
+      "sync lint-delta",
+      "sync lock",
+      "sync peers",
+      "sync pull",
+      "sync push",
+      "sync resolve-derived",
+      "sync status",
+      "sync unlock",
+      "work-complete",
+      "work-validate",
+      "write-preflight",
+    ]);
+  });
+});
 
 describe("M1 dirty volume gate", () => {
   it("allows when expanded dirty count is under threshold", () => {
