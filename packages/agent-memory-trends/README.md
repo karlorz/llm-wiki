@@ -301,7 +301,7 @@ Tracked rollout files:
 
 The systemd service is a system-level unit under `/etc/systemd/system`, runs with `User=agent-memory`, reads `/home/agent-memory/.config/agent-memory-trends/env`, and executes `/home/agent-memory/.local/bin/agent-memory-trends-daily`. The daily wrapper calls the guarded `@skillwiki/maintenance` runner in `--mode daily`, which performs vault preflight, runs `agent-memory-trends daily --generate-only` inside the maintenance write transaction, and pushes the maintenance-owned commit to `origin/main` instead of using the legacy direct publisher path.
 
-The daily timer runs at `00:10` Asia/Hong_Kong with `RandomizedDelaySec=300`, `Persistent=true`, and `AccuracySec=60s`. A dedicated session-brief refresh timer runs at `01:05` Asia/Hong_Kong, and the self-update timer runs every four hours at minute 20.
+The daily timer runs at `00:10` Asia/Hong_Kong with `RandomizedDelaySec=300`, `Persistent=true`, and `AccuracySec=60s`. A dedicated session-brief refresh timer runs at `01:05` Asia/Hong_Kong, and the self-update timer runs every four hours at minute 20. Concurrent maintenance runs now wait on the maintenance lock instead of failing: a run that finds the lock held waits up to `SKILLWIKI_MAINTENANCE_LOCK_WAIT_MS` (default 15 minutes) and then proceeds.
 
 ## Install on sg02
 

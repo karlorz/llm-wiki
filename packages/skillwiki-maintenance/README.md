@@ -34,6 +34,27 @@ Safety invariants:
   failures remain `fail` in every profile. `attended-full` keeps the strict
   mapping (`fail`).
 
+## Maintenance Lock
+
+Every `runStage1Maintenance` invocation takes an exclusive maintenance lock
+before starting and releases it when the run finishes, so overlapping timers
+(nightly, self-update, manual runs) serialize instead of failing immediately.
+
+- On contention the runner polls the lock every 2 seconds and waits up to
+  `SKILLWIKI_MAINTENANCE_LOCK_WAIT_MS` (default 900000 = 15 minutes, safely
+  under the systemd `RuntimeMaxSec` cap) before failing with `LOCK_HELD`. The
+  CLI flag `--lock-wait-ms <ms>` overrides the environment variable; both
+  accept a non-negative integer.
+- A stale lock is reclaimed only when its `owner.json` is both expired
+  (`expires_at` older than the 30-minute TTL) and its recorded `pid` is no
+  longer alive. The stale owner record is preserved under
+  `<lock parent>/recovery/<timestamp>-<token>.json` before the stale lock
+  directory is removed. A live owner or an unreadable record is never
+  reclaimed — the runner keeps waiting until the wait deadline.
+- Release is ownership-guarded: the lock directory is removed only while the
+  recorded ownership token still matches the releasing handle, so a reclaim
+  or a crashed predecessor can never delete a freshly acquired lock.
+
 ## Add A Satellite Job Safely
 
 1. Decide whether the new job is read-only or writing. Default to read-only unless it must mutate the repo or vault.
