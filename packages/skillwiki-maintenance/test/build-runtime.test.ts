@@ -11,6 +11,8 @@ describe("built maintenance CLI", () => {
     execFileSync("npm", ["run", "-w", "@skillwiki/maintenance", "--silent", "build"], {
       cwd: repoRoot,
       stdio: "pipe",
+      // npm is npm.cmd on Windows; cmd resolves it from PATH via the shell.
+      shell: process.platform === "win32",
     });
 
     const result = spawnSync("node", ["packages/skillwiki-maintenance/dist/cli.js", "--help"], {

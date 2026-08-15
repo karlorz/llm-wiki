@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runSelfUpdateApply, runSelfUpdateCheck } from "../src/jobs/self-update-check.js";
 import { runVaultSyncPreflight } from "../src/jobs/vault-sync-preflight.js";
@@ -181,7 +182,7 @@ describe("runSelfUpdateApply", () => {
         "npm install -g skillwiki@latest": result("changed 1 package\n"),
         "sudo -n npm install -g skillwiki@latest": result("changed 1 package\n"),
         "git -C /repo merge --ff-only origin/main": result("Updating aaa111..bbb222\n"),
-        "sudo -n bash /repo/packages/agent-memory-trends/scripts/install-sg02.sh --enable": result("[agent-memory-trends-install] --enable supplied; enabling timer\n"),
+        [`sudo -n bash ${join("/repo", "packages", "agent-memory-trends", "scripts", "install-sg02.sh")} --enable`]: result("[agent-memory-trends-install] --enable supplied; enabling timer\n"),
       }),
     });
 
