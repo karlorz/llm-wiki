@@ -29,6 +29,8 @@ import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { collectClaimedTranscripts, type ClaimField } from "../utils/transcript-claims.js";
+import { safeDiagnosticValue, REDACTED_MALFORMED_REFERENCE } from "../utils/transcript-claims.js";
+import { normalizeProjectSlug } from "../utils/project-slug.js";
 
 export interface ClaimsAuditInput {
   vault: string;
@@ -85,15 +87,18 @@ export interface ClaimsAuditOutput {
   humanHint: string;
 }
 
-/** Normalize a `[[slug]]` (or quoted `"[[slug]]"`) project value to the bare slug. */
-function extractSlug(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  return value
-    .trim()
-    .replace(/^\[\[/, "")
-    .replace(/\]\]$/, "")
-    .replace(/^"+|"+$/g, "")
-    .replace(/^'|'$/g, "");
+/**
+ * Safe presentation of a raw frontmatter project value. Only presentation is
+ * redacted: a value that `safeDiagnosticValue` deems unsafe (multiline,
+ * control characters, or oversized) becomes {@link REDACTED_MALFORMED_REFERENCE};
+ * a safe value is presented as its canonical normalized slug. Semantic
+ * comparison always uses the normalized internal value, never this helper.
+ */
+function safeProjectPresentation(raw: string): string {
+  if (safeDiagnosticValue(raw) === REDACTED_MALFORMED_REFERENCE) {
+    return REDACTED_MALFORMED_REFERENCE;
+  }
+  return normalizeProjectSlug(raw) ?? REDACTED_MALFORMED_REFERENCE;
 }
 
 /** Extract the project slug owning a work-item relDir `projects/{slug}/work/{item}`. */
@@ -161,8 +166,12 @@ export async function runClaimsAudit(
 
   // Parse active transcript frontmatter for explicit project and work_item.
   interface TranscriptMeta {
-    project?: string; // normalized bare slug
-    workItem?: string; // raw trimmed frontmatter value
+    /** Raw trimmed frontmatter project value, when present; used only to pick the safe presentation. */
+    projectRaw?: string;
+    /** Canonically normalized project slug for internal comparison. */
+    project?: string;
+    /** Raw trimmed frontmatter work_item value, when present and non-empty. */
+    workItem?: string;
   }
   const transcriptMeta = new Map<string, TranscriptMeta>();
   for (const t of activeTranscripts) {
@@ -170,10 +179,10 @@ export async function runClaimsAudit(
       const text = await readFile(join(input.vault, t.relPath), "utf8");
       const fm = extractFrontmatter(text);
       if (!fm.ok) continue;
-      const project = extractSlug(fm.data.project);
+      const projectRaw = typeof fm.data.project === "string" ? fm.data.project.trim() : undefined;
       const workItemRaw = typeof fm.data.work_item === "string" ? fm.data.work_item.trim() : undefined;
       transcriptMeta.set(t.relPath, {
-        ...(project !== undefined ? { project } : {}),
+        ...(projectRaw !== undefined && projectRaw !== "" ? { projectRaw, project: normalizeProjectSlug(projectRaw) } : {}),
         ...(workItemRaw !== undefined && workItemRaw !== "" ? { workItem: workItemRaw } : {}),
       });
     } catch {
@@ -206,7 +215,7 @@ export async function runClaimsAudit(
       findings.push({
         kind: "project_mismatch",
         path,
-        captureProject: meta.project,
+        captureProject: safeProjectPresentation(meta.projectRaw ?? ""),
         claimedByProject: workItemProject(owner) ?? "",
         claimedBy: owner,
       });
@@ -220,16 +229,27 @@ export async function runClaimsAudit(
     if (!meta?.workItem) continue;
     if (input.project && meta.project && meta.project !== input.project) continue;
     if (claimedByPath.has(t.relPath)) continue;
-    findings.push({ kind: "work_item_unbacked_claim", path: t.relPath, workItem: meta.workItem });
+    findings.push({ kind: "work_item_unbacked_claim", path: t.relPath, workItem: safeDiagnosticValue(meta.workItem) });
   }
 
+  // Single typed counting pass; findings retain deterministic append order so
+  // the summary counts never reorder them.
   const summary: ClaimsAuditSummary = {
-    duplicate_claim: findings.filter((f) => f.kind === "duplicate_claim").length,
-    malformed_claim_reference: findings.filter((f) => f.kind === "malformed_claim_reference").length,
-    dangling_claim_reference: findings.filter((f) => f.kind === "dangling_claim_reference").length,
-    project_mismatch: findings.filter((f) => f.kind === "project_mismatch").length,
-    work_item_unbacked_claim: findings.filter((f) => f.kind === "work_item_unbacked_claim").length,
+    duplicate_claim: 0,
+    malformed_claim_reference: 0,
+    dangling_claim_reference: 0,
+    project_mismatch: 0,
+    work_item_unbacked_claim: 0,
   };
+  for (const f of findings) {
+    switch (f.kind) {
+      case "duplicate_claim": summary.duplicate_claim += 1; break;
+      case "malformed_claim_reference": summary.malformed_claim_reference += 1; break;
+      case "dangling_claim_reference": summary.dangling_claim_reference += 1; break;
+      case "project_mismatch": summary.project_mismatch += 1; break;
+      case "work_item_unbacked_claim": summary.work_item_unbacked_claim += 1; break;
+    }
+  }
 
   const hintLines: string[] = [];
   for (const f of findings) {

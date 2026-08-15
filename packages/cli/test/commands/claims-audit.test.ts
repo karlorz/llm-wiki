@@ -377,4 +377,120 @@ describe("skillwiki claims audit", () => {
     expect(r.exitCode).toBe(37);
     expect(r.result.ok).toBe(false);
   });
+
+  it("redacts a project_mismatch captureProject whose frontmatter project embeds secret-like content", async () => {
+    // A literal block scalar `project:` reconstructs with an embedded newline
+    // carrying a secret-like trailing line; it must never reach output verbatim.
+    const v = makeVault();
+    writeFileSync(
+      join(v, "raw", "transcripts", "2026-05-12-secret-proj.md"),
+      "---\nproject: |-\n  [[acme]]\n  api_key=supersecret\nkind: task\n---\n\nbody\n",
+    );
+    // Claimed by an acme work item so the mismatch comparison fires.
+    writeSpec(v, "acme", "2026-05-12-secret-proj", {
+      source: "raw/transcripts/2026-05-12-secret-proj.md",
+    });
+    const r = await runClaimsAudit({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+    const findingJson = JSON.stringify(r.result.data.findings);
+    expect(findingJson).not.toContain("supersecret");
+    expect(findingJson).not.toContain("api_key=");
+    expect(JSON.stringify(r.result.data)).not.toContain("supersecret");
+    expect(r.result.data.humanHint).not.toContain("supersecret");
+    // The mismatch captureProject surfaces only as the stable redacted marker.
+    const mis = r.result.data.findings.filter((f) => f.kind === "project_mismatch");
+    expect(mis).toHaveLength(1);
+    expect(mis[0]).toMatchObject({
+      captureProject: REDACTED_MALFORMED_REFERENCE,
+      claimedByProject: "acme",
+    });
+    // The redacted value is single-line, so the single-finding hint is newline-free.
+    expect(r.result.data.humanHint).not.toContain("\n");
+  });
+
+  it("redacts a work_item_unbacked_claim workItem whose frontmatter work_item embeds secret-like content", async () => {
+    const v = makeVault();
+    writeFileSync(
+      join(v, "raw", "transcripts", "2026-05-13-secret-wi.md"),
+      "---\nproject: '[[acme]]'\nkind: task\nwork_item: |-\n  [[2026-05-13-secret-wi]]\n  token=hunter3-secret\n---\n\nbody\n",
+    );
+    // No work item claims this transcript, so the unbacked finding fires.
+    const r = await runClaimsAudit({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+    const findingJson = JSON.stringify(r.result.data.findings);
+    expect(findingJson).not.toContain("hunter3-secret");
+    expect(findingJson).not.toContain("token=");
+    expect(r.result.data.humanHint).not.toContain("hunter3-secret");
+    const un = r.result.data.findings.filter((f) => f.kind === "work_item_unbacked_claim");
+    expect(un).toHaveLength(1);
+    expect(un[0]).toMatchObject({
+      path: "raw/transcripts/2026-05-13-secret-wi.md",
+      workItem: REDACTED_MALFORMED_REFERENCE,
+    });
+    expect(r.result.data.humanHint).not.toContain("\n");
+  });
+
+  it("normalizes an aliased [[slug|Alias]] project identically to claim/stale, with no spurious mismatch", async () => {
+    const v = makeVault();
+    writeTranscript(v, "2026-05-14-alias.md", {
+      source_url: "", ingested: "2026-05-14", sha256: "0".repeat(64),
+      project: '"[[acme|Acme Corp]]"', kind: "task",
+    });
+    writeSpec(v, "acme", "2026-05-14-alias", {
+      source: "raw/transcripts/2026-05-14-alias.md",
+    });
+    const r = await runClaimsAudit({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+    expect(r.result.data.findings.filter((f) => f.kind === "project_mismatch")).toEqual([]);
+
+    // Exact --project scoping stays compatible with an aliased capture project.
+    const scoped = await runClaimsAudit({ vault: v, project: "acme" });
+    expect(scoped.exitCode).toBe(0);
+    if (!scoped.result.ok) throw new Error("expected ok");
+    expect(scoped.result.data.findings.filter((f) => f.kind === "project_mismatch")).toEqual([]);
+  });
+
+  it("keeps the summary schema with a single counting pass over deterministic findings order", async () => {
+    const v = makeVault();
+    // One duplicate (t-a.md), one dangling (t-dang.md, never written), one
+    // mismatch (t-beta.md claimed by an acme item), one unbacked (t-unb.md).
+    writeTranscript(v, "t-a.md", {
+      source_url: "", ingested: "2026-05-15", sha256: "0".repeat(64),
+      project: '"[[acme]]"', kind: "task",
+    });
+    writeTranscript(v, "t-beta.md", {
+      source_url: "", ingested: "2026-05-15", sha256: "0".repeat(64),
+      project: '"[[beta]]"', kind: "task",
+    });
+    writeTranscript(v, "t-unb.md", {
+      source_url: "", ingested: "2026-05-15", sha256: "0".repeat(64),
+      project: '"[[acme]]"', kind: "task",
+      work_item: '"[[some-item]]"',
+    });
+    writeSpec(v, "acme", "a1", { source: "raw/transcripts/t-a.md" });
+    writeSpec(v, "acme", "a2", { source: "raw/transcripts/t-a.md" });
+    writeSpec(v, "acme", "c", { source: "raw/transcripts/t-beta.md" });
+    writeSpec(v, "acme", "d", { source: "raw/transcripts/t-dang.md" });
+    const r = await runClaimsAudit({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+    const { summary, findings } = r.result.data;
+    expect(summary).toEqual({
+      duplicate_claim: 1,
+      malformed_claim_reference: 0,
+      dangling_claim_reference: 1,
+      project_mismatch: 1,
+      work_item_unbacked_claim: 1,
+    });
+    // Deterministic order: duplicate (index), dangling, mismatch, then unbacked.
+    expect(findings.map((f) => f.kind)).toEqual([
+      "duplicate_claim",
+      "dangling_claim_reference",
+      "project_mismatch",
+      "work_item_unbacked_claim",
+    ]);
+  });
 });
