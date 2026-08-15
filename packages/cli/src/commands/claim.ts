@@ -5,6 +5,7 @@ import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault } from "../utils/vault.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
+import { normalizeProjectSlug } from "../utils/project-slug.js";
 
 export interface ClaimInput {
   vault: string;
@@ -34,11 +35,6 @@ function extractSlugFromFilename(filename: string): string {
     .replace(/\.md$/, "");
 }
 
-// Extract project slug from "[[slug]]" format
-function extractProjectSlug(projectField: string): string {
-  return projectField.replace(/^\[\[/, "").replace(/\]\]$/, "").replace(/^"|"$/g, "");
-}
-
 export async function runClaim(input: ClaimInput): Promise<{ exitCode: number; result: Result<ClaimOutput> }> {
   // Validate vault
   if (!existsSync(input.vault) || !statSync(input.vault).isDirectory()) {
@@ -56,10 +52,31 @@ export async function runClaim(input: ClaimInput): Promise<{ exitCode: number; r
   const content = await readFile(absTranscript, "utf8");
   const fm = extractFrontmatter(content);
 
-  // Determine project slug
-  let projectSlug = input.project;
-  if (!projectSlug && fm.ok && typeof fm.data.project === "string") {
-    projectSlug = extractProjectSlug(fm.data.project);
+  // Parse the capture's explicit frontmatter project (normalized), if any.
+  const explicitProject = fm.ok ? normalizeProjectSlug(fm.data.project) : undefined;
+
+  // Binding ruling: a `--project` that contradicts the capture's explicit
+  // project is a validation failure. Fail before any mkdir/write/appendLastOp,
+  // with no force/override escape hatch.
+  if (input.project && explicitProject && explicitProject !== input.project) {
+    return {
+      exitCode: ExitCode.SCHEME_REJECTED,
+      result: err("PROJECT_MISMATCH", {
+        message: `--project ${input.project} does not match the capture's explicit project ${explicitProject}`,
+        project: input.project,
+        captureProject: explicitProject,
+        transcript: input.transcript,
+      }),
+    };
+  }
+
+  // Determine project slug. `--project` only applies when the capture has no
+  // explicit project; otherwise the explicit frontmatter project governs.
+  let projectSlug: string | undefined;
+  if (explicitProject) {
+    projectSlug = explicitProject;
+  } else {
+    projectSlug = input.project;
   }
   if (!projectSlug) {
     return {

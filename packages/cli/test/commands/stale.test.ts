@@ -536,6 +536,164 @@ Fix the foo thing.`);
     }
   });
 
+  describe("--project exact normalized matching", () => {
+    it("excludes raw transcripts whose project is a slug-prefix sibling, not an exact match", async () => {
+      const v = makeVault();
+      mkdirSync(join(v, "projects", "acme", "work"), { recursive: true });
+      mkdirSync(join(v, "projects", "acme-tools", "work"), { recursive: true });
+      // project acme — must be included under --project acme
+      writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-acme-item.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+project: "[[acme]]"
+---
+
+Acme task.`);
+      // project acme-tools — a substring sibling of "acme"; must be excluded
+      writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-sibling.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+project: "[[acme-tools]]"
+---
+
+Sibling task.`);
+
+      const r = await runStale({ vault: v, days: 0, project: "acme" });
+      if (r.result.ok) {
+        const paths = r.result.data.unclaimed_transcripts.map((t) => t.path);
+        expect(paths).toContain("raw/transcripts/2026-04-01-task-acme-item.md");
+        expect(paths).not.toContain("raw/transcripts/2026-04-01-task-sibling.md");
+      }
+    });
+
+    it("excludes typed pages whose provenance_projects is a slug-prefix sibling, not an exact match", async () => {
+      const v = makeVault();
+      mkdirSync(join(v, "projects", "acme", "work"), { recursive: true });
+      mkdirSync(join(v, "concepts"), { recursive: true });
+      // acme-tools provenance must NOT match --project acme
+      writeFileSync(join(v, "concepts", "tools-page.md"), `---
+title: Tools
+created: 2026-04-01
+updated: 2026-04-01
+type: concept
+tags: []
+sources: []
+provenance: project
+provenance_projects: ["[[acme-tools]]"]
+---
+
+Sibling tools page.`);
+
+      const r = await runStale({ vault: v, days: 3, project: "acme" });
+      if (r.result.ok) {
+        const pages = r.result.data.stale.map((s) => s.page);
+        expect(pages).not.toContain("concepts/tools-page.md");
+      }
+    });
+
+    it("includes typed pages whose provenance_projects exactly equals the --project slug", async () => {
+      const v = makeVault();
+      mkdirSync(join(v, "projects", "acme", "work"), { recursive: true });
+      mkdirSync(join(v, "concepts"), { recursive: true });
+      writeFileSync(join(v, "concepts", "acme-page.md"), `---
+title: Acme
+created: 2026-04-01
+updated: 2026-04-01
+type: concept
+tags: []
+sources: []
+provenance: project
+provenance_projects: ["[[acme]]"]
+---
+
+Acme page.`);
+
+      const r = await runStale({ vault: v, days: 3, project: "acme" });
+      if (r.result.ok) {
+        expect(r.result.data.stale.some((s) => s.page === "concepts/acme-page.md")).toBe(true);
+      }
+    });
+  });
+
+  it("regression: lifecycle is driven only by an exact source relationship, not date/title/slug similarity", async () => {
+    const v = makeVault();
+    mkdirSync(join(v, "projects", "acme", "work"), { recursive: true });
+    const workDir = join(v, "projects", "acme", "work", "2026-03-01-completed");
+    mkdirSync(workDir, { recursive: true });
+    // Completed work item owns no capture initially.
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: completed acme work\nstatus: completed\n---\n\nspec body`);
+
+    // Two same-date, same-project captures with deliberately overlapping
+    // titles and slug prefixes so weak similarity could never decide.
+    const capA = "raw/transcripts/2026-04-02-task-acme-tool.md";
+    const capB = "raw/transcripts/2026-04-02-task-acme-toolkit.md";
+    writeFileSync(join(v, capA), `---
+source_url:
+ingested: 2026-04-02
+kind: task
+project: "[[acme]]"
+title: "Build the acme tool"
+---
+
+Build acme tool.`);
+    writeFileSync(join(v, capB), `---
+source_url:
+ingested: 2026-04-02
+kind: task
+project: "[[acme]]"
+title: "Build the acme toolkit"
+---
+
+Build acme toolkit.`);
+
+    const first = await runStale({ vault: v, days: 0 });
+    if (first.result.ok) {
+      // Neither is claimed yet: both are unclaimed, neither stale.
+      const unclaimed = first.result.data.unclaimed_transcripts.map((t) => t.path);
+      const stale = first.result.data.stale_transcripts.map((t) => t.path);
+      expect(unclaimed).toContain(capA);
+      expect(unclaimed).toContain(capB);
+      expect(stale).not.toContain(capA);
+      expect(stale).not.toContain(capB);
+    }
+
+    // Now the completed work item claims EXACTLY capB via source:.
+    writeFileSync(join(workDir, "spec.md"), `---\ntitle: completed acme work\nstatus: completed\nsource: raw/transcripts/2026-04-02-task-acme-toolkit.md\n---\n\nspec body`);
+
+    const second = await runStale({ vault: v, days: 0 });
+    if (second.result.ok) {
+      const unclaimed = second.result.data.unclaimed_transcripts.map((t) => t.path);
+      const stale = second.result.data.stale_transcripts.map((t) => t.path);
+      // Only the exact source capture is stale; its same-project, same-date,
+      // slug-similar sibling stays unclaimed.
+      expect(stale).toContain(capB);
+      expect(stale).not.toContain(capA);
+      expect(unclaimed).toContain(capA);
+      expect(unclaimed).not.toContain(capB);
+    }
+  });
+
+  it("gives a claim hint with the exact normalized project slug (not a substring)", async () => {
+    const v = makeVault();
+    mkdirSync(join(v, "projects", "acme", "work"), { recursive: true });
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-fix-foo.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+project: "[[acme]]"
+---
+
+Fix the foo thing.`);
+    const r = await runStale({ vault: v, days: 0 });
+    if (r.result.ok) {
+      const hint = r.result.data.unclaimed_transcripts[0]?.hint;
+      expect(hint).toBe("skillwiki claim raw/transcripts/2026-04-01-task-fix-foo.md --project acme");
+      expect(hint).not.toContain("[[");
+    }
+  });
+
   describe("--project", () => {
     it("scopes results to a single project", async () => {
       const v = makeVault();
