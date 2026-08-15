@@ -86,6 +86,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("self-update").option("--check");
   program.command("transcripts").option("--since <date>").option("--wiki <name>");
   program.command("project-index").option("--apply").option("--check").option("--wiki <name>");
+  program.command("claims"); // has subcommands
   program.command("compound"); // has subcommands
   program.command("tag"); // has subcommands
   program.command("tag-sync").option("--dry-run").option("--wiki <name>");
@@ -192,6 +193,9 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--write")
     .option("--approve <token>")
     .option("--wiki <name>");
+
+  const claimsCmd = program.commands.find(c => c.name() === "claims")!;
+  claimsCmd.command("audit").option("--project <slug>").option("--wiki <name>");
 
   const logCmd = program.commands.find(c => c.name() === "log")!;
   logCmd.command("materialize").option("--write").option("--wiki <name>");
