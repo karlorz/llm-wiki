@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { runClaimsAudit } from "../../src/commands/claims-audit.js";
+import { REDACTED_MALFORMED_REFERENCE } from "../../src/utils/transcript-claims.js";
 
 /**
  * Task 2: read-only `claims audit` command integration tests.
@@ -147,6 +148,39 @@ describe("skillwiki claims audit", () => {
       field: "source",
       value: "raw/transcripts/2026-05-03-writing.txt",
     });
+    expect(r.result.data.summary.malformed_claim_reference).toBe(1);
+  });
+
+  it("redacts a malformed_claim_reference whose value embeds body-like content", async () => {
+    const v = makeVault();
+    writeTranscript(v, "2026-05-03-task-secret.md", {
+      source_url: "", ingested: "2026-05-03", sha256: "0".repeat(64),
+      project: '"[[acme]]"', kind: "task",
+    });
+    // source: is a literal block scalar; js-yaml reconstructs it as a string
+    // with an embedded newline carrying a secret-like trailing line.
+    const dir = join(v, "projects", "acme", "work", "2026-05-03-secret");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "spec.md"),
+      "---\nsource: |-\n  raw/transcripts/2026-05-03-writing.txt\n  api_key=supersecretvalue\n---\n\nspec body\n",
+    );
+    const r = await runClaimsAudit({ vault: v });
+    expect(r.exitCode).toBe(0);
+    if (!r.result.ok) throw new Error("expected ok");
+    const mal = r.result.data.findings.filter((f) => f.kind === "malformed_claim_reference");
+    expect(mal).toHaveLength(1);
+    expect(mal[0]).toMatchObject({
+      relDir: "projects/acme/work/2026-05-03-secret",
+      field: "source",
+      value: REDACTED_MALFORMED_REFERENCE,
+    });
+    // The raw secret never reaches the audit result or the human hint.
+    expect(JSON.stringify(r.result.data)).not.toContain("supersecretvalue");
+    expect(JSON.stringify(r.result.data)).not.toContain("api_key=");
+    expect(r.result.data.humanHint).not.toContain("\n");
+    const secretLine = r.result.data.humanHint.split("\n").find((l) => l.includes("malformed_claim_reference"));
+    expect(secretLine).toBe("malformed_claim_reference: projects/acme/work/2026-05-03-secret source=[redacted]");
     expect(r.result.data.summary.malformed_claim_reference).toBe(1);
   });
 

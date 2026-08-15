@@ -18,6 +18,7 @@
  * Finding kinds:
  *  - duplicate_claim: more than one work item claims the same exact transcript path
  *  - malformed_claim_reference: a claim field holds a noncanonical raw-transcript ref
+ *    (emitted value is safe single-line evidence, or {@link REDACTED_MALFORMED_REFERENCE})
  *  - dangling_claim_reference: a canonical claimed path is absent from active transcripts
  *  - project_mismatch: a capture with explicit `project` is claimed under another project
  *  - work_item_unbacked_claim: a transcript declares `work_item` with no exact claim
@@ -43,6 +44,7 @@ interface MalformedFinding {
   kind: "malformed_claim_reference";
   relDir: string;
   field: ClaimField;
+  /** Safe single-line attempted reference, or {@link REDACTED_MALFORMED_REFERENCE}. */
   value: string;
 }
 interface DanglingFinding {

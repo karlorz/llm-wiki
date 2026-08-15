@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   collectClaimedTranscripts,
   normalizeRawTranscriptRef,
+  REDACTED_MALFORMED_REFERENCE,
   type ClaimIndexSource,
 } from "../../src/utils/transcript-claims.js";
 
@@ -165,6 +166,44 @@ describe("collectClaimedTranscripts", () => {
           "projects/llm-wiki/work/2026-07-01-x",
           "projects/llm-wiki/work/2026-07-02-y",
         ],
+      },
+    ]);
+  });
+
+  it("redacts malformed attempted references that embed control characters or newlines", () => {
+    const multiline = "raw/transcripts/2026-07-01-secret.txt\napi_key=supersecretvalue";
+    const crlf = "raw\\transcripts\\2026-07-01-a.md\r\npassword=hunter2";
+    const index = collectClaimedTranscripts([
+      item({ source: multiline }),
+      item({ relDir: "projects/llm-wiki/work/2026-07-02-y", closes: crlf }),
+    ]);
+    expect(index.claimedByPath.size).toBe(0);
+    expect(index.diagnostics).toEqual([
+      {
+        kind: "malformed",
+        relDir: "projects/llm-wiki/work/2026-07-01-x",
+        field: "source",
+        value: REDACTED_MALFORMED_REFERENCE,
+      },
+      {
+        kind: "malformed",
+        relDir: "projects/llm-wiki/work/2026-07-02-y",
+        field: "closes",
+        value: REDACTED_MALFORMED_REFERENCE,
+      },
+    ]);
+  });
+
+  it("redacts oversized single-line attempted references to bound output", () => {
+    const long = "raw/transcripts/" + "x".repeat(2000) + ".txt";
+    const index = collectClaimedTranscripts([item({ source: long })]);
+    expect(index.claimedByPath.size).toBe(0);
+    expect(index.diagnostics).toEqual([
+      {
+        kind: "malformed",
+        relDir: "projects/llm-wiki/work/2026-07-01-x",
+        field: "source",
+        value: REDACTED_MALFORMED_REFERENCE,
       },
     ]);
   });
