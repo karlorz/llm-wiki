@@ -24,12 +24,16 @@
  *  - work_item_unbacked_claim: a transcript declares `work_item` with no exact claim
  */
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault } from "../utils/vault.js";
+import { mapWithConcurrency, readPageCached, scanVault, vaultIoConcurrency } from "../utils/vault.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { collectClaimedTranscripts, type ClaimField } from "../utils/transcript-claims.js";
-import { safeDiagnosticValue, REDACTED_MALFORMED_REFERENCE } from "../utils/transcript-claims.js";
+import {
+  collectClaimedTranscripts,
+  safeDiagnosticValue,
+  REDACTED_MALFORMED_REFERENCE,
+  type ClaimField,
+} from "../utils/transcript-claims.js";
 import { normalizeProjectSlug } from "../utils/project-slug.js";
 import { parseActiveWorkPath } from "../utils/work-item-path.js";
 
@@ -114,19 +118,26 @@ export async function runClaimsAudit(
     .sort((a, b) => a.relPath.localeCompare(b.relPath));
   const activePathSet = new Set(activeTranscripts.map((p) => p.relPath));
 
-  // Gather work item directories from scan (spec.md/plan.md/log.md under projects/*/work/*).
+  // scan.workItems is already filtered to spec|plan|log under projects/*/work/*.
+  // Reuse the shared active-work parser instead of restating that path shape.
   const workItemDirs = new Set<string>();
+  const specDirs = new Set<string>();
   for (const page of scanResult.data.workItems) {
-    const m = page.relPath.match(/^(projects\/[^/]+\/work\/[^/]+)\/(spec|plan|log)\.md$/);
-    if (m) workItemDirs.add(m[1]);
+    const slash = page.relPath.lastIndexOf("/");
+    if (slash < 0) continue;
+    const dir = page.relPath.slice(0, slash);
+    if (!parseActiveWorkPath(dir)) continue;
+    workItemDirs.add(dir);
+    if (page.relPath.endsWith("/spec.md")) specDirs.add(dir);
   }
 
+  const sortedDirs = [...workItemDirs].sort();
+  const slugByDir = new Map(sortedDirs.map((dir) => [dir, parseActiveWorkPath(dir)?.project] as const));
+
   if (input.project) {
-    const knownSlugs = new Set<string>();
-    for (const dir of workItemDirs) {
-      const slug = parseActiveWorkPath(dir)?.project;
-      if (slug) knownSlugs.add(slug);
-    }
+    const knownSlugs = new Set(
+      [...slugByDir.values()].filter((slug): slug is string => Boolean(slug)),
+    );
     if (!knownSlugs.has(input.project)) {
       return {
         exitCode: ExitCode.PROJECT_NOT_FOUND,
@@ -135,27 +146,29 @@ export async function runClaimsAudit(
     }
   }
 
-  const claimSources: Array<{ relDir: string; source: unknown; sources: unknown; closes: unknown }> = [];
-  for (const relDir of [...workItemDirs].sort()) {
-    const slug = parseActiveWorkPath(relDir)?.project;
-    if (input.project && slug !== input.project) continue;
+  const scopedSpecDirs = sortedDirs.filter((relDir) => {
+    if (!specDirs.has(relDir)) return false;
+    return !input.project || slugByDir.get(relDir) === input.project;
+  });
+  const claimSourceResults = await mapWithConcurrency(scopedSpecDirs, vaultIoConcurrency(), async (relDir) => {
     const specPath = join(input.vault, relDir, "spec.md");
     try {
       const specText = await readFile(specPath, "utf8");
       const fm = extractFrontmatter(specText);
-      if (!fm.ok) continue;
-      claimSources.push({
+      if (!fm.ok) return null;
+      return {
         relDir,
         source: fm.data.source,
         sources: fm.data.sources,
         closes: fm.data.closes,
-      });
+      };
     } catch {
-      /* no spec or unreadable */
+      return null;
     }
-  }
-
-  const claimIndex = collectClaimedTranscripts(claimSources);
+  });
+  const claimIndex = collectClaimedTranscripts(
+    claimSourceResults.filter((source): source is NonNullable<typeof source> => source !== null),
+  );
   const claimedByPath = claimIndex.claimedByPath;
 
   // Parse active transcript frontmatter for explicit project and work_item.
@@ -168,20 +181,26 @@ export async function runClaimsAudit(
     workItem?: string;
   }
   const transcriptMeta = new Map<string, TranscriptMeta>();
-  for (const t of activeTranscripts) {
+  const transcriptEntries = await mapWithConcurrency(activeTranscripts, vaultIoConcurrency(), async (t) => {
     try {
-      const text = await readFile(join(input.vault, t.relPath), "utf8");
+      const text = await readPageCached(t);
       const fm = extractFrontmatter(text);
-      if (!fm.ok) continue;
+      if (!fm.ok) return null;
       const projectRaw = typeof fm.data.project === "string" ? fm.data.project.trim() : undefined;
       const workItemRaw = typeof fm.data.work_item === "string" ? fm.data.work_item.trim() : undefined;
-      transcriptMeta.set(t.relPath, {
-        ...(projectRaw !== undefined && projectRaw !== "" ? { projectRaw, project: normalizeProjectSlug(projectRaw) } : {}),
-        ...(workItemRaw !== undefined && workItemRaw !== "" ? { workItem: workItemRaw } : {}),
-      });
+      const meta: TranscriptMeta = {};
+      if (projectRaw) {
+        meta.projectRaw = projectRaw;
+        meta.project = normalizeProjectSlug(projectRaw);
+      }
+      if (workItemRaw) meta.workItem = workItemRaw;
+      return [t.relPath, meta] as const;
     } catch {
-      /* skip unreadable */
+      return null;
     }
+  });
+  for (const entry of transcriptEntries) {
+    if (entry) transcriptMeta.set(entry[0], entry[1]);
   }
 
   const findings: ClaimsAuditFinding[] = [];
@@ -205,12 +224,13 @@ export async function runClaimsAudit(
   // 3. Project mismatch (capture has explicit project, claimed under another).
   for (const [path, owner] of claimedByPath) {
     const meta = transcriptMeta.get(path);
-    if (meta?.project && parseActiveWorkPath(owner)?.project !== meta.project) {
+    const ownerProject = slugByDir.get(owner) ?? parseActiveWorkPath(owner)?.project;
+    if (meta?.project && ownerProject !== meta.project) {
       findings.push({
         kind: "project_mismatch",
         path,
         captureProject: safeProjectPresentation(meta.projectRaw ?? ""),
-        claimedByProject: parseActiveWorkPath(owner)?.project ?? "",
+        claimedByProject: ownerProject ?? "",
         claimedBy: owner,
       });
     }
@@ -226,8 +246,8 @@ export async function runClaimsAudit(
     findings.push({ kind: "work_item_unbacked_claim", path: t.relPath, workItem: safeDiagnosticValue(meta.workItem) });
   }
 
-  // Single typed counting pass; findings retain deterministic append order so
-  // the summary counts never reorder them.
+  // Single typed counting + hint pass; findings retain deterministic append
+  // order so the summary counts never reorder them.
   const summary: ClaimsAuditSummary = {
     duplicate_claim: 0,
     malformed_claim_reference: 0,
@@ -235,18 +255,9 @@ export async function runClaimsAudit(
     project_mismatch: 0,
     work_item_unbacked_claim: 0,
   };
-  for (const f of findings) {
-    switch (f.kind) {
-      case "duplicate_claim": summary.duplicate_claim += 1; break;
-      case "malformed_claim_reference": summary.malformed_claim_reference += 1; break;
-      case "dangling_claim_reference": summary.dangling_claim_reference += 1; break;
-      case "project_mismatch": summary.project_mismatch += 1; break;
-      case "work_item_unbacked_claim": summary.work_item_unbacked_claim += 1; break;
-    }
-  }
-
   const hintLines: string[] = [];
   for (const f of findings) {
+    summary[f.kind] += 1;
     if (f.kind === "duplicate_claim") hintLines.push(`duplicate_claim: ${f.path} — ${f.owners.join(", ")}`);
     else if (f.kind === "malformed_claim_reference") hintLines.push(`malformed_claim_reference: ${f.relDir} ${f.field}=${f.value}`);
     else if (f.kind === "dangling_claim_reference") hintLines.push(`dangling_claim_reference: ${f.path} — claimed by ${f.claimedBy}`);

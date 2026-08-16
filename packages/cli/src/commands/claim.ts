@@ -72,12 +72,7 @@ export async function runClaim(input: ClaimInput): Promise<{ exitCode: number; r
 
   // Determine project slug. `--project` only applies when the capture has no
   // explicit project; otherwise the explicit frontmatter project governs.
-  let projectSlug: string | undefined;
-  if (explicitProject) {
-    projectSlug = explicitProject;
-  } else {
-    projectSlug = input.project;
-  }
+  const projectSlug = explicitProject ?? input.project;
   if (!projectSlug) {
     return {
       exitCode: ExitCode.SCHEME_REJECTED,

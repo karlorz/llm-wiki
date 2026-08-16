@@ -148,7 +148,7 @@ export function collectClaimedTranscripts(
 ): ClaimedTranscriptIndex {
   const claimedByPath = new Map<string, string>();
   const diagnostics: ClaimDiagnostic[] = [];
-  // Owners per path in input order, for duplicate detection.
+  // Owners per path in input order. claimedByPath is the last unique owner.
   const ownersByPath = new Map<string, string[]>();
 
   for (const item of workItems) {
@@ -166,7 +166,6 @@ export function collectClaimedTranscripts(
     for (const { field, value } of candidates) {
       const normalized = normalizeRawTranscriptRef(value);
       if (normalized) {
-        claimedByPath.set(normalized, item.relDir);
         const owners = ownersByPath.get(normalized);
         if (owners) {
           if (!owners.includes(item.relDir)) owners.push(item.relDir);
@@ -185,6 +184,7 @@ export function collectClaimedTranscripts(
   }
 
   for (const [path, owners] of ownersByPath) {
+    claimedByPath.set(path, owners[owners.length - 1]!);
     if (owners.length > 1) {
       diagnostics.push({ kind: "duplicate", path, owners });
     }
