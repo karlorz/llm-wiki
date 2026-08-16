@@ -45,14 +45,25 @@ vault_sync:
   presync_skill: auto-detect
 ```
 
+## Workflow profile
+
+```yaml
+# Adaptive never selects Superpowers full. Explicit full remains available
+# only via a later user/work-item override, not this project default.
+workflow_selection: adaptive
+workflow_capability: self-directed
+workflow_risk: routine
+```
+
 ## PRD layer
 
 ```yaml
-prd_layer: superpowers
-prd_pipeline: full
+prd_layer: manual
+# Omit prd_pipeline so the resolver supplies native → single-pass
+# (or guided → tdd-first). Do not declare an explicit Superpowers-full pipeline.
 
 prd_disciplines:
-  - skill: superpowers:test-driven-development
+  - skill: test-driven-development
     when: execute
     mode: mandatory
     include_paths:
@@ -75,14 +86,9 @@ prd_disciplines:
       - "packages/cli/src/utils/safe-write.ts"
       - "packages/cli/src/utils/sync-lock.ts"
       - "packages/cli/src/utils/log-lock.ts"
-      - "packages/cli/src/commands/sync.ts"
-      - "packages/cli/src/commands/drift.ts"
-  - skill: superpowers:test-driven-development
+  - skill: test-driven-development
     when: execute
     mode: advisory
-  - skill: superpowers:systematic-debugging
-    when: failure
-    mode: reactive
 ```
 
 ## Interview

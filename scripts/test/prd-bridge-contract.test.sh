@@ -49,7 +49,10 @@ assert_absent() {
   fi
 }
 
-assert_file "$USING" && assert_file "$PROJ" && assert_file "$ACTIVATION" && assert_file "$GATE"
+assert_file "$USING"
+assert_file "$PROJ"
+assert_file "$ACTIVATION"
+assert_file "$GATE"
 
 assert_contains "$USING" "Never create \`docs/superpowers/\`" \
   "using-skillwiki forbids docs/superpowers"

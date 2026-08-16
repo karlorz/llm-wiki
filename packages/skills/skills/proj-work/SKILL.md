@@ -59,12 +59,11 @@ After step 3 (output path override), emit redirect paths for the active PRD skil
 >   spec -> <vault-root>/projects/{slug}/work/YYYY-MM-DD-{work-slug}/spec.md
 >   plan -> <vault-root>/projects/{slug}/work/YYYY-MM-DD-{work-slug}/plan.md
 >
-> After the folder exists, brainstorming writes `spec.md` at the spec redirect.
-> Do not invoke `writing-plans`. Do not git commit from brainstorming.
-> `plan.md` is a later explicit `proj-work` step, not a Superpowers plan file.
-
 Rules:
 - Emit redirect paths as the first output after folder creation, before any spec write.
+- After the folder exists, brainstorming writes `spec.md` at the spec redirect.
+- Do not invoke `writing-plans`. Do not git commit from brainstorming.
+- `plan.md` is a later explicit `proj-work` step, not a Superpowers plan file.
 - Resolve `<vault-root>` via `skillwiki path` (never hardcode).
 - proj-work does NOT invoke brainstorming — it provides paths only.
 - If a foreign PRD skill cannot accept custom save paths, fall back to manual `wiki-ingest`.
