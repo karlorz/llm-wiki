@@ -96,13 +96,14 @@ node packages/cli/dist/cli.js --help | awk '/^Commands:/{listed=1; next} listed 
 | `dedup <vault>` | Detect duplicates; approved apply rewires maintained citations and preserves duplicate bytes under `raw/duplicates/`. |
 | `archive <page>` | Archive typed pages, or dry-run/approved preserve-move exact raw sources under `raw/archived/`. |
 | `remove <page>` | Remove maintained pages with durable delete intent; raw targets are refused in favor of `sources dispose`. |
-| `claim <transcript>` | Claim an unclaimed transcript by creating a work item. |
+| `claim <transcript>` | Claim a transcript by creating a work item with an exact `source:` path. Rejects `--project` that contradicts the capture's explicit project. |
+| `claims audit [vault]` | Read-only transcript claim-integrity report: duplicates, malformed or dangling refs, project mismatches, and unbacked `work_item` metadata. |
 | `config` | Manage skillwiki configuration and wiki profiles. |
 | `doctor` | Diagnose setup issues (paths, env, plugin, sync health). |
 | `path` | Resolve vault or project paths. |
 | `lang` | Detect vault language from SCHEMA.md. |
 | `pagesize <vault>` | Report page sizes, flag oversized pages. |
-| `stale <vault>` | List stale transcripts and incomplete work items. |
+| `stale <vault>` | List stale transcripts and incomplete work items. `--project` uses exact normalized project slugs, not substring matching. |
 | `links <vault>` | Wikilink graph analysis. |
 | `log-rotate <vault>` | Rotate log.md when it exceeds size limit. |
 | `log-append <vault>` | Append a vault log entry under an advisory lock. |
