@@ -181,7 +181,7 @@ The vault is shared across hosts, so host-local absolute paths are not durable s
 | `wiki-sync` | Safely sync vault git repository — push/pull with lint guards and conflict resolution |
 | `wiki-canvas` | Generate Obsidian Canvas visualization from vault graph data |
 | `proj-decide` | Write an Architectural Decision Record (ADR) |
-| `wiki-gate-plan-mode` | Toggle EnterPlanMode gating — force superpowers planning instead of built-in plan mode |
+| `wiki-gate-plan-mode` | Toggle EnterPlanMode gating — force brainstorming then proj-work instead of built-in plan mode |
 | `dev-loop:research` | Research agent for dev-loop IDLE — scans repo + vault health, outputs prioritized work-item recommendations (formerly `/dev-loop-research`) |
 
 ## dev-loop Alignment
@@ -300,15 +300,21 @@ skillwiki supports named wiki profiles for working with multiple vaults. Set `WI
 **Project-local override:** Place a `./skillwiki/.env` in a project root to bind that project to a specific wiki. Skills will use it automatically when running from that directory.
 
 ## PRD Bridge — Redirect Spec/Plan Output to Vault
-When skillwiki is installed, **all spec and plan documents must land in the vault**, not in repo-local directories like `docs/superpowers/`. This applies to PRD and TDD workflows (superpowers, codestable, AIDE, Hermes, manual templates).
-**Rule:** Before a PRD skill writes a spec or plan file, redirect its save path:
-1. Resolve the vault path: `skillwiki path`
-2. If the cwd is inside a project (check for `projects/{slug}/` via `skillwiki path --init-time` or look for `./skillwiki/.env`), use that project's work directory
-3. Create or locate the work item via `proj-work`, which emits redirect paths for `spec.md` and `plan.md`
-4. Pass those vault paths to the PRD/TDD skill as its save location
-**Concrete overrides for superpowers:**
-- `superpowers:brainstorming` step 6: override `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` → vault work-item `spec.md` path from `proj-work`
-- `superpowers:writing-plans` header: override `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md` → vault work-item `plan.md` path from `proj-work`
-Both skills say "User preferences for spec location override this default" — the vault work-item path IS the override. Apply the same override pattern to any TDD-oriented planner that emits spec/plan artifacts.
-**If no project context exists** (standalone vault, not inside a project), default to the `playground` project slug. Invoke `proj-work` with `playground` as the slug so redirect paths are emitted normally and the PRD bridge chain works. The `playground` project is a pre-initialized catch-all workspace at `projects/playground/` for exploratory work, experiments, and unclassified features. Work items that mature can be moved to a real project later.
+When skillwiki is installed, **all spec and plan documents must land in the vault**, not in repo-local directories like `docs/superpowers/`. This applies to brainstorming, grill-me, and any foreign PRD template (CodeStable, AIDE, Hermes).
+
+**Architectural brainstorming** (after the human approves the design):
+1. Resolve the vault path: `skillwiki path`.
+2. Invoke `proj-work` so the work folder exists. If cwd is inside `projects/{slug}/` (or `./skillwiki/.env` binds a project), use that slug. Otherwise use `playground`.
+3. Write `spec.md` only at the emitted redirect path.
+4. Do not invoke `writing-plans`.
+5. Do not git commit from brainstorming.
+6. `plan.md` is a later `proj-work` / explicit user step, not a Superpowers plan file.
+
+If the work is UI (layout, mockup, component look, page structure), offer brainstorming `visual-companion.md` at the first UI question as its own message. Offer the companion once. The human may decline. Non-UI work never offers it. Do not auto-open.
+
+**Bounded implementation:** after a bounded design is approved, TDD applies when standalone `test-driven-development` is installed. Do not require the Superpowers plugin.
+
+**Foreign PRD skills** that still default to `docs/superpowers/specs/` or `docs/superpowers/plans/` must use the `proj-work` redirect paths instead. The vault work-item path is the user preference those skills honor.
+
+The `playground` project at `projects/playground/` is the catch-all workspace when no project context exists. Work items that mature can move to a real project later.
 **Never create `docs/superpowers/` in any repo.**

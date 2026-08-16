@@ -1,6 +1,6 @@
 ---
 name: proj-work
-description: Open or run a work item under projects/{slug}/work/YYYY-MM-DD-{slug}/. Redirects brainstorming/writing-plans output paths.
+description: Open or run a work item under projects/{slug}/work/YYYY-MM-DD-{slug}/. Redirects brainstorming spec/plan output paths.
 ---
 
 # proj-work
@@ -22,7 +22,7 @@ install with `grok plugin update skillwiki`, not `skillwiki install`.
 ## When to invoke
 - User starts a feature, issue, refactor, or decision inside an existing project.
 - User asks to "get work of X" or "run work item Y" to review/execute an existing item.
-- Brainstorming or writing-plans skills would otherwise default-write outside the project tree.
+- Brainstorming would otherwise default-write outside the project tree.
 - If no project context can be determined, default to the `playground` slug so redirect paths always emit and the PRD bridge chain works.
 
 ## Pre-orientation reads
@@ -59,14 +59,15 @@ After step 3 (output path override), emit redirect paths for the active PRD skil
 >   spec -> <vault-root>/projects/{slug}/work/YYYY-MM-DD-{work-slug}/spec.md
 >   plan -> <vault-root>/projects/{slug}/work/YYYY-MM-DD-{work-slug}/plan.md
 >
-> Pass these paths to your PRD skill (superpowers:brainstorming, superpowers:writing-plans,
-> CodeStable, or any other). Files land in the vault natively — no separate ingest needed.
+> After the folder exists, brainstorming writes `spec.md` at the spec redirect.
+> Do not invoke `writing-plans`. Do not git commit from brainstorming.
+> `plan.md` is a later explicit `proj-work` step, not a Superpowers plan file.
 
 Rules:
-- Emit redirect paths as the first output after folder creation, before any PRD skill runs.
+- Emit redirect paths as the first output after folder creation, before any spec write.
 - Resolve `<vault-root>` via `skillwiki path` (never hardcode).
-- proj-work does NOT invoke any PRD skill — it provides paths only.
-- If the PRD skill cannot accept custom save paths, fall back to manual `wiki-ingest`.
+- proj-work does NOT invoke brainstorming — it provides paths only.
+- If a foreign PRD skill cannot accept custom save paths, fall back to manual `wiki-ingest`.
 - When `spec.md` or `plan.md` mentions repo files, follow `using-skillwiki` → Portable Source References.
 
 ## Pitfalls

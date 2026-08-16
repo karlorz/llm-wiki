@@ -28,6 +28,7 @@
     "install:activation": "bash scripts/install-skillwiki-activation.sh",
     "install:activation:check": "bash scripts/install-skillwiki-activation.sh --check",
     "test:install-activation": "bash scripts/test/install-activation.test.sh",
+    "test:prd-bridge-contract": "bash scripts/test/prd-bridge-contract.test.sh",
     "clean": "rm -rf packages/*/dist packages/*/.tsbuildinfo artifacts"
   },
   "engines": {

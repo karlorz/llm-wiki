@@ -28,7 +28,7 @@ Invoke a SkillWiki skill when the user: wants vault/wiki/knowledge-base operatio
 | `wiki-adapter-prd` | Map foreign PRD formats (CodeStable, RFC, AIDE, Hermes) |
 | `wiki-sync` | Safely sync vault git repository |
 | `wiki-canvas` | Generate Obsidian Canvas visualization |
-| `wiki-gate-plan-mode` | Toggle EnterPlanMode gating for superpowers planning |
+| `wiki-gate-plan-mode` | Toggle EnterPlanMode gating for brainstorming then proj-work |
 | `proj-init` | Bootstrap a project workspace |
 | `proj-work` | Open or run a work item |
 | `proj-distill` | Distill project compound entries into concept pages |
@@ -37,7 +37,7 @@ Invoke a SkillWiki skill when the user: wants vault/wiki/knowledge-base operatio
 
 ## PRD Bridge
 
-Route PRD/spec/plan work to `wiki-adapter-prd` and `proj-work`, not `docs/superpowers/`. Spec and plan outputs must land in vault work-item paths. Never create `docs/superpowers/` in any repo.
+After architectural design approval, invoke `proj-work` then write `spec.md` in that work folder. Do not invoke `writing-plans`. Do not git commit from brainstorming. Bounded TDD uses standalone `test-driven-development` when installed. For UI work, offer brainstorming `visual-companion.md` once (optional). Never create `docs/superpowers/` in any repo.
 
 ## Workflow Profiles
 

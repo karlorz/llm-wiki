@@ -1,18 +1,18 @@
 ---
 name: wiki-gate-plan-mode
-description: Toggle EnterPlanMode gating — force superpowers planning skills instead of built-in plan mode
+description: Toggle EnterPlanMode gating — force brainstorming then SkillWiki proj-work instead of built-in plan mode
 ---
 
 # wiki-gate-plan-mode
 
 Gate the agent away from Claude Code's built-in `EnterPlanMode` tool, forcing
-all planning through `superpowers:brainstorming` → `superpowers:writing-plans`
-(or a configurable pipeline). Uses `permissions.deny` for two-layer enforcement:
-the tool is removed from the model's context before it ever sees it.
+all planning through `brainstorming` → `proj-work` (SkillWiki PRD bridge).
+Uses `permissions.deny` for two-layer enforcement: the tool is removed from
+the model's context before it ever sees it.
 
 ## When This Skill Activates
 
-- User says "gate plan mode", "disable EnterPlanMode", "force superpowers planning"
+- User says "gate plan mode", "disable EnterPlanMode", "force SkillWiki planning"
 - User asks to toggle, check, or configure plan-mode gating
 - User wants to enforce structured planning workflows in a project
 
@@ -40,7 +40,7 @@ None for the first run.
    - If `"EnterPlanMode"` is already in `permissions.deny`, report "already gated" and stop.
    - Otherwise, add `"EnterPlanMode"` to `permissions.deny[]`. Create the array if absent.
    - Write the updated JSON back, preserving formatting.
-   - Report: "EnterPlanMode gated — agent will use superpowers planning skills."
+   - Report: "EnterPlanMode gated — agent will use brainstorming then proj-work."
 
    **`off`:**
    - If `"EnterPlanMode"` is not in `permissions.deny`, report "already ungated" and stop.
@@ -53,12 +53,12 @@ None for the first run.
    - Report whether EnterPlanMode is currently gated or ungated.
    - If gated, list which settings file contains the deny entry.
 
-4. **Suggest CLAUDE.md directive (on action only).** After enabling gating, check whether the project's `CLAUDE.md` contains a planning directive (search for "EnterPlanMode" or "superpowers:brainstorming"). If not found, suggest adding:
+4. **Suggest CLAUDE.md directive (on action only).** After enabling gating, check whether the project's `CLAUDE.md` contains a planning directive (search for "EnterPlanMode", "brainstorming", or "proj-work"). If not found, suggest adding:
 
    ```
    ## Planning
 
-   Use superpowers:brainstorming → superpowers:writing-plans for all planning. EnterPlanMode is disabled.
+   Use brainstorming → proj-work for all planning. Do not invoke writing-plans. EnterPlanMode is disabled.
    ```
 
    Do NOT edit CLAUDE.md automatically — only suggest.
