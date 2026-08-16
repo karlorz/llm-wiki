@@ -675,6 +675,91 @@ Build acme toolkit.`);
     }
   });
 
+  it("regression: same-day unlinked captures stay unclaimed under --project --days 0", async () => {
+    const v = makeVault();
+    const workDir = join(
+      v,
+      "projects",
+      "agent-skills",
+      "work",
+      "2026-08-10-dev-loop-runtime-policy-type-validation",
+    );
+    mkdirSync(workDir, { recursive: true });
+    writeFileSync(
+      join(workDir, "spec.md"),
+      `---
+title: runtime policy type validation
+status: completed
+---
+
+Completed earlier. Does not claim later captures.
+`,
+    );
+
+    const followup = "raw/transcripts/2026-08-10-task-dev-loop-1-26-26-followup-findings.md";
+    const sibling = "raw/transcripts/2026-08-10-task-dev-loop-other-followup.md";
+    writeFileSync(
+      join(v, followup),
+      `---
+source_url:
+ingested: 2026-08-10
+kind: task
+project: "[[agent-skills]]"
+---
+
+Later same-day capture with no work_item.
+`,
+    );
+    writeFileSync(
+      join(v, sibling),
+      `---
+source_url:
+ingested: 2026-08-10
+kind: task
+project: "[[agent-skills]]"
+---
+
+Sibling same-day capture with no work_item.
+`,
+    );
+
+    const first = await runStale({ vault: v, days: 0, project: "agent-skills" });
+    expect(first.result.ok).toBe(true);
+    if (first.result.ok) {
+      const unclaimed = first.result.data.unclaimed_transcripts.map((t) => t.path);
+      const stale = first.result.data.stale_transcripts.map((t) => t.path);
+      const staleReasons = first.result.data.stale_transcripts.map((t) => t.reason);
+      expect(unclaimed).toContain(followup);
+      expect(unclaimed).toContain(sibling);
+      expect(stale).not.toContain(followup);
+      expect(stale).not.toContain(sibling);
+      expect(staleReasons.join("\n")).not.toMatch(/runtime-policy-type-validation is completed/);
+    }
+
+    writeFileSync(
+      join(workDir, "spec.md"),
+      `---
+title: runtime policy type validation
+status: completed
+source: raw/transcripts/2026-08-10-task-dev-loop-1-26-26-followup-findings.md
+---
+
+Now claims only the follow-up path.
+`,
+    );
+
+    const second = await runStale({ vault: v, days: 0, project: "agent-skills" });
+    expect(second.result.ok).toBe(true);
+    if (second.result.ok) {
+      const unclaimed = second.result.data.unclaimed_transcripts.map((t) => t.path);
+      const stale = second.result.data.stale_transcripts.map((t) => t.path);
+      expect(stale).toContain(followup);
+      expect(stale).not.toContain(sibling);
+      expect(unclaimed).toContain(sibling);
+      expect(unclaimed).not.toContain(followup);
+    }
+  });
+
   it("gives a claim hint with the exact normalized project slug (not a substring)", async () => {
     const v = makeVault();
     mkdirSync(join(v, "projects", "acme", "work"), { recursive: true });
