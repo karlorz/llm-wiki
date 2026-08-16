@@ -46,6 +46,7 @@ import { runUpdate } from "./commands/update.js";
 import { runSelfUpdate } from "./commands/self-update.js";
 import { runTranscripts } from "./commands/transcripts.js";
 import { runProjectIndex } from "./commands/project-index.js";
+import { runClaimsAudit } from "./commands/claims-audit.js";
 import { runCompound, runCompoundList, runCompoundDelete } from "./commands/compound.js";
 import { runObserve } from "./commands/observe.js";
 import { runSessionBrief } from "./commands/session-brief.js";
@@ -1228,6 +1229,20 @@ program
       () => runProjectIndex({ vault: v.vault, slug, apply: true })
     );
     else emit(await runProjectIndex({ vault: v.vault, slug, apply: false, check: opts.check }), v.vault);
+  });
+
+// claims — grouped under a parent command
+const claimsCmd = program.command("claims").description("audit raw-transcript claim integrity (read-only)");
+
+claimsCmd
+  .command("audit [vault]")
+  .description("report duplicate, malformed, dangling, project-mismatch, and work-item-unbacked claims (read-only)")
+  .option("--project <slug>", "scope findings to an exact project slug")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runClaimsAudit({ vault: v.vault, project: opts.project }), v.vault, { postCommit: false });
   });
 
 // compound — grouped under a parent command

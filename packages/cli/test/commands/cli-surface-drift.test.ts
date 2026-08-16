@@ -30,7 +30,7 @@ describe("cli-surface drift detection", () => {
       "log-append", "work-complete", "work-validate", "log", "projections",
       "lint", "config", "health", "doctor", "status", "archive", "remove", "drift", "dedup",
       "migrate-citations", "frontmatter-fix", "update", "self-update",
-      "transcripts", "project-index", "compound", "page", "project-page", "tag", "tag-sync", "sync",
+      "transcripts", "project-index", "claims", "compound", "page", "project-page", "tag", "tag-sync", "sync",
       "backup", "seed", "observe", "session-brief", "memory", "ingest", "fleet",
       "write-preflight", "snapshot-maintenance", "mcp",
     ];
@@ -50,6 +50,7 @@ describe("cli-surface drift detection", () => {
       { parent: "compound", subs: ["promote", "list", "delete"] },
       { parent: "page", subs: ["publish"] },
       { parent: "project-page", subs: ["publish"] },
+      { parent: "claims", subs: ["audit"] },
       { parent: "tag", subs: ["reconcile"] },
       { parent: "log", subs: ["materialize", "migrate-legacy"] },
       { parent: "index", subs: ["rebuild"] },
@@ -79,7 +80,7 @@ describe("cli-surface drift detection", () => {
       "log-append", "work-complete", "work-validate", "log", "projections",
       "lint", "config", "health", "doctor", "status", "archive", "remove", "drift", "dedup",
       "migrate-citations", "frontmatter-fix", "update", "self-update",
-      "transcripts", "project-index", "compound", "page", "project-page", "tag", "tag-sync", "sync",
+      "transcripts", "project-index", "claims", "compound", "page", "project-page", "tag", "tag-sync", "sync",
       "backup", "seed", "observe", "session-brief", "memory", "ingest", "fleet",
       "write-preflight", "snapshot-maintenance", "mcp",
     ]);

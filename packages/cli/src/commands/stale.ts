@@ -11,6 +11,8 @@ import { operationId } from "../utils/operation-id.js";
 import { buildSourceReferenceIndex } from "../utils/source-reference-index.js";
 import { buildSourceRelocationProjection, readSourceRelocations } from "../utils/source-relocations.js";
 import { collectClaimedTranscripts } from "../utils/transcript-claims.js";
+import { normalizeProjectSlug } from "../utils/project-slug.js";
+import { parseActiveWorkPath } from "../utils/work-item-path.js";
 
 export interface StaleInput { vault: string; days: number; archive?: boolean; apply?: boolean; approve?: string; forceScan?: boolean; project?: string; scan?: VaultScan; pageTextCache?: PageTextCache }
 export interface StaleTranscript { path: string; reason: string; hint?: string }
@@ -89,7 +91,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
 
   // Helper: extract project slug from frontmatter project field ("[[slug]]" → "slug")
   function extractSlug(projectField: string): string {
-    return projectField.replace(/^\[\[/, "").replace(/\]\]$/, "").replace(/^"|"$/g, "");
+    return normalizeProjectSlug(projectField) ?? "";
   }
 
   // Terminal statuses that indicate work is finished (Zod schema: completed | abandoned; legacy: done | invalid)
@@ -111,8 +113,8 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
       let kind = fm.ok && typeof fm.data.kind === "string" ? fm.data.kind : "";
       let project = fm.ok && typeof fm.data.project === "string" ? fm.data.project : "";
 
-      // --project: skip transcripts not linked to this project
-      if (input.project && !project.includes(input.project)) return null;
+      // --project: skip transcripts not exactly linked to this project
+      if (input.project && normalizeProjectSlug(project) !== input.project) return null;
       let inferred = false;
 
       // Force-scan: infer kind from filename if missing (skip loop-cycle session logs)
@@ -221,10 +223,10 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
       const text = await readPageCached(page, input.pageTextCache);
       const fm = extractFrontmatter(text);
       if (fm.ok && typeof fm.data.updated === "string") {
-        // --project: only include pages linked to this project
+        // --project: only include pages exactly linked to this project
         if (input.project) {
           const pp = fm.data.provenance_projects;
-          const linked = Array.isArray(pp) && pp.some((p: string) => String(p).includes(input.project!));
+          const linked = Array.isArray(pp) && pp.some((p: unknown) => normalizeProjectSlug(p) === input.project);
           if (!linked) return null;
         }
         const age = daysSince(fm.data.updated);
@@ -251,7 +253,7 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
         const fm = extractFrontmatter(text);
         if (fm.ok) {
           const pp = fm.data.provenance_projects;
-          const linked = Array.isArray(pp) && pp.some((p: string) => String(p).includes(projectFilter));
+          const linked = Array.isArray(pp) && pp.some((p: unknown) => normalizeProjectSlug(p) === projectFilter);
           if (!linked) return pageSections;
         }
       }
@@ -347,12 +349,11 @@ export async function runStale(input: StaleInput): Promise<{ exitCode: number; r
       archived.push(plan.from);
     }
     for (const w of [...incompleteWorkItems, ...doneWorkItems]) {
-      // Work items are directories — move to project history/ dir
-      const parts = w.path.split("/");
+      // Work items are directories — move to project history/ dir.
       // projects/{slug}/work/{item} → projects/{slug}/history/archived-work/{item}
-      if (parts.length >= 4 && parts[0] === "projects") {
-        const slug = parts[1];
-        const itemName = parts[3];
+      const active = parseActiveWorkPath(w.path);
+      if (active) {
+        const { project: slug, item: itemName } = active;
         const histDir = join(input.vault, "projects", slug, "history", "archived-work");
         await mkdir(histDir, { recursive: true });
         const dest = join(histDir, itemName);

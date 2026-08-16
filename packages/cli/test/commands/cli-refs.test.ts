@@ -23,6 +23,7 @@ describe("buildCliSurface", () => {
     expect(surface.has("config.get")).toBe(true);
     expect(surface.has("config.set")).toBe(true);
     expect(surface.has("compound.promote")).toBe(true);
+    expect(surface.has("claims.audit")).toBe(true);
     expect(surface.has("backup.sync")).toBe(true);
     expect(surface.has("backup.restore")).toBe(true);
   });
@@ -51,6 +52,8 @@ describe("buildCliSurface", () => {
     expect(surface.get("sync.unlock")!.has("--force")).toBe(true);
     expect(surface.get("session-brief")!.has("--write")).toBe(true);
     expect(surface.get("session-brief")!.has("--project")).toBe(true);
+    expect(surface.get("claims.audit")!.has("--project")).toBe(true);
+    expect(surface.get("claims.audit")!.has("--wiki")).toBe(true);
     expect(surface.get("session-brief")!.has("--wiki")).toBe(true);
     expect(surface.get("memory.topics")!.has("--project")).toBe(true);
     expect(surface.get("memory.topics")!.has("--limit")).toBe(true);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runClaim } from "../../src/commands/claim.js";
@@ -128,6 +128,54 @@ Fix the foo thing.`);
     expect(r.exitCode).toBe(0);
     if (r.result.ok) {
       expect(r.result.data.humanHint).toContain("already exists");
+    }
+  });
+
+  it("rejects --project that differs from the capture's explicit project without writing", async () => {
+    const v = makeVault();
+    mkdirSync(join(v, "projects", "acme", "work"), { recursive: true });
+    mkdirSync(join(v, "projects", "beta", "work"), { recursive: true });
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-fix-foo.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+project: "[[acme]]"
+---
+
+Fix the foo thing.`);
+
+    const r = await runClaim({ vault: v, transcript: "raw/transcripts/2026-04-01-task-fix-foo.md", project: "beta" });
+    expect(r.exitCode).toBe(4); // SCHEME_REJECTED
+    if (!r.result.ok) {
+      expect(r.result.error).toBe("PROJECT_MISMATCH");
+      expect(r.result.detail).toBeTruthy();
+    }
+    // Nothing written: neither the mismatched work item nor any spec.md exists.
+    const betaWork = join(v, "projects", "beta", "work");
+    const betaItem = join(betaWork, "2026-04-01-fix-foo");
+    expect(existsSync(betaItem)).toBe(false);
+    expect(existsSync(join(betaItem, "spec.md"))).toBe(false);
+    expect(readdirSync(betaWork).length).toBe(0);
+    // The capture's own project must also be untouched.
+    expect(existsSync(join(v, "projects", "acme", "work", "2026-04-01-fix-foo"))).toBe(false);
+  });
+
+  it("accepts --project matching the capture's explicit project (normalized equality)", async () => {
+    const v = makeVault();
+    mkdirSync(join(v, "projects", "acme", "work"), { recursive: true });
+    writeFileSync(join(v, "raw", "transcripts", "2026-04-01-task-fix-foo.md"), `---
+source_url:
+ingested: 2026-04-01
+kind: task
+project: "[[acme]]"
+---
+
+Fix the foo thing.`);
+
+    const r = await runClaim({ vault: v, transcript: "raw/transcripts/2026-04-01-task-fix-foo.md", project: "acme" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      expect(r.result.data.workItemPath).toBe("projects/acme/work/2026-04-01-fix-foo");
     }
   });
 
