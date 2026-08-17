@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { runQuery } from "../../src/commands/query.js";
+import { buildVectorIndex } from "../../src/utils/vector-index.js";
 
 const VAULT = join(__dirname, "..", "fixtures", "sample-vault");
 
@@ -81,6 +82,39 @@ describe("query", () => {
       expect(r.result.data.results).toEqual([]);
       expect(r.result.data.humanHint).toBe("no query terms");
     }
+  });
+
+  it("keeps default ranking unchanged without --hybrid", async () => {
+    const a = await runQuery({ text: "alpha", vault: VAULT });
+    const b = await runQuery({ text: "alpha", vault: VAULT, hybrid: false });
+    expect(a.result.ok).toBe(true);
+    expect(b.result.ok).toBe(true);
+    if (!a.result.ok || !b.result.ok) return;
+    expect(a.result.data.results).toEqual(b.result.data.results);
+    expect(a.result.data.hybrid).toBeUndefined();
+  });
+
+  it("fails closed when --hybrid is set without a cache", async () => {
+    const r = await runQuery({ text: "alpha", vault: VAULT, hybrid: true });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toBe("HYBRID_INDEX_MISSING");
+  });
+
+  it("fuses ranks when a TF-IDF cache exists", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    writeFileSync(join(v, "concepts", "alpha.md"), "---\ntitle: Alpha\ntype: concept\ncreated: 2026-08-17\nupdated: 2026-08-17\ntags: []\nsources: []\n---\nAlpha bananas\n");
+    writeFileSync(join(v, "concepts", "beta.md"), "---\ntitle: Beta\ntype: concept\ncreated: 2026-08-17\nupdated: 2026-08-17\ntags: []\nsources: []\n---\nOranges\n");
+    const built = await buildVectorIndex(v);
+    expect(built.ok).toBe(true);
+    const r = await runQuery({ text: "alpha", vault: v, hybrid: true });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) return;
+    expect(r.result.data.hybrid).toEqual({ used: true, rrf_k: 60 });
+    expect(r.result.data.results.length).toBeGreaterThan(0);
   });
 
   it("respects --limit option", async () => {

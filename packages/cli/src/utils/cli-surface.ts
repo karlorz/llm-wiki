@@ -26,7 +26,8 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("graph"); // has subcommands
   program.command("canvas"); // has subcommands
   program.command("overlap").option("--wiki <name>");
-  program.command("query").option("--limit <n>").option("--include-pending").option("--wiki <name>");
+  program.command("query").option("--limit <n>").option("--include-pending").option("--hybrid").option("--wiki <name>");
+  program.command("vectors");
   program.command("sources"); // has subcommands
   program.command("orphans").option("--wiki <name>");
   program.command("audit");
@@ -124,6 +125,10 @@ export function buildCliSurface(): Map<string, Set<string>> {
   // Subcommands
   const graphCmd = program.commands.find(c => c.name() === "graph")!;
   graphCmd.command("build").option("--out <path>").option("--wiki <name>");
+
+  const vectorsCmd = program.commands.find(c => c.name() === "vectors")!;
+  vectorsCmd.command("rebuild").option("--wiki <name>");
+  vectorsCmd.command("status").option("--wiki <name>");
 
   const sourcesCmd = program.commands.find(c => c.name() === "sources")!;
   sourcesCmd.command("pending")

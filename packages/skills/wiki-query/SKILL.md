@@ -13,7 +13,7 @@ Standard four reads (SCHEMA, index, log, project context if applicable).
 ## Steps
 0. **Resolve vault and language.** Run `skillwiki path` (fail if NO_VAULT_CONFIGURED) and `skillwiki lang`.
 1. **Determine scope.** Ask the user once if ambiguous: vault | current project | project+concepts.
-   - Ordinary questions are typed-knowledge-first. Run `skillwiki query "<text>" [vault]` without widening into raw captures.
+   - Ordinary questions are typed-knowledge-first. Run `skillwiki query "<text>" [vault]` without widening into raw captures. Default ranking is 4-signal only. Optional `skillwiki query "<text>" --hybrid` RRF-fuses that ranking with a rebuildable TF-IDF cache (`skillwiki vectors rebuild`); if the cache is missing, stop and rebuild instead of silently falling back.
    - Explicit freshness language — `new`, `recent`, `fresh`, `clipped`, `raw`, `pending`, `undigested`, `unprocessed`, `not yet ingested`, or `not yet integrated` — requests the pending evidence channel. Run `skillwiki sources pending [vault]` for inventory and `skillwiki query "<text>" [vault] --include-pending` for synthesis support.
 2. **Refresh graph.** If `.skillwiki/graph.json` is missing or older than 24h: `skillwiki graph build <vault>`.
 3. **Compute overlap.** `skillwiki overlap <vault>`.
