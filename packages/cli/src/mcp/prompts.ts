@@ -117,4 +117,34 @@ export function registerMcpPrompts(server: McpServer): void {
       ],
     }),
   );
+
+  server.registerPrompt(
+    "skillwiki-pending-review",
+    {
+      description: "Inspect pending sources and compile reviews without mutating the vault",
+      argsSchema: {
+        match: z.string().optional().describe("Optional title/URL/path filter"),
+      },
+    },
+    ({ match }) => ({
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+            text: [
+              "List pending raw sources and open compile reviews.",
+              match ? `Filter: ${match}` : "No extra filter.",
+              "",
+              "1. Call skillwiki.sources_pending (read-only).",
+              "2. Call skillwiki.compile_status and skillwiki.reviews.",
+              "3. Summarize what an attended session should compile next.",
+              "",
+              "Do not call mutating tools. Compile claim/publish stays on the interactive CLI.",
+            ].join("\n"),
+          },
+        },
+      ],
+    }),
+  );
 }

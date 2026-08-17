@@ -130,7 +130,7 @@ node packages/cli/dist/cli.js --help | awk '/^Commands:/{listed=1; next} listed 
 | `transcripts <vault>` | Scan raw/transcripts for new ad-hoc captures. |
 | `update` | Check for skillwiki updates from npm. |
 | `self-update` | Update skillwiki CLI from local source or npm dist-tag. |
-| `mcp` | Local experimental MCP server entry (unsupported; see below). |
+| `mcp` | Optional read-only stdio MCP server (`skillwiki-mcp`). |
 
 All subcommands emit JSON by default. Pass `--human` for terminal output.
 `tag reconcile` and `page publish` default to dry-run; add `--write` only after
@@ -143,9 +143,24 @@ through attended state-bound workflows, preserve-move exact bytes within
 stable pool: use explicit embeds such as `![[raw/assets/example/diagram.png]]`,
 and do not move referenced assets as a side effect of archive or dedup.
 
-## MCP Server (experimental, hidden)
+## MCP Server (optional, read-only)
 
-> **Status:** shelved. The MCP surface is **not advertised** and **not bundled** in the plugins. It will be revisited once the brain moves to a real remote, centrally-managed wiki. Code remains under `packages/cli/src/mcp/` and `skillwiki mcp` / `skillwiki-mcp` for local experiments; no docs, no manifest declaration, no support.
+`skillwiki mcp` / `skillwiki-mcp` is an optional stdio MCP server over deterministic CLI functions. It is **not** auto-started by the plugin. Mutations stay on the CLI; compile claim/publish/review writes are interactive CLI only.
+
+Read-only tools include query, lint summary, doctor, graph build, project index, stale, config get, **sources pending**, **compile status**, and **reviews**.
+
+Example client config:
+
+```json
+{
+  "mcpServers": {
+    "skillwiki": {
+      "command": "skillwiki",
+      "args": ["mcp"]
+    }
+  }
+}
+```
 
 ## Development
 

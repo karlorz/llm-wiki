@@ -7,6 +7,9 @@ export const MCP_READ_ONLY_TOOLS = [
   "skillwiki.project_index",
   "skillwiki.stale",
   "skillwiki.config_get",
+  "skillwiki.sources_pending",
+  "skillwiki.compile_status",
+  "skillwiki.reviews",
 ] as const;
 
 /** Registered only when SKILLWIKI_MCP_ALLOW_MUTATIONS=true at call time; tool still listed but returns error when disabled. */
@@ -31,4 +34,5 @@ export const MCP_PROMPT_NAMES = [
   "skillwiki-project-work-item",
   "skillwiki-vault-health-review",
   "skillwiki-citation-audit",
+  "skillwiki-pending-review",
 ] as const;

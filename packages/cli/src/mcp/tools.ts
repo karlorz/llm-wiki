@@ -7,6 +7,8 @@ import { runGraphBuild } from "../commands/graph.js";
 import { runProjectIndex } from "../commands/project-index.js";
 import { runStale } from "../commands/stale.js";
 import { runConfigGet } from "../commands/config.js";
+import { runSourcesPending } from "../commands/sources.js";
+import { runSourceCompileStatus, runSourceReviews } from "../commands/source-compile.js";
 import { readCliPackageJson } from "../utils/package-info.js";
 import { resolveMcpVault, defaultGraphOut } from "./vault-resolve.js";
 import { formatToolResult } from "./result-format.js";
@@ -165,6 +167,65 @@ export function registerMcpTools(server: McpServer): void {
       runMcpToolHandler("skillwiki.config_get", {}, async () => {
         const r = await runConfigGet({ key, home: process.env.HOME ?? "" });
         return formatToolResult(r);
+      }),
+  );
+
+  server.registerTool(
+    "skillwiki.sources_pending",
+    {
+      description: "List captured raw articles/papers awaiting typed integration (read-only).",
+      inputSchema: z.object({
+        ...vaultFields,
+        match: z.string().optional().describe("Literal title, URL, or path match"),
+        scope: z.enum(["articles", "papers", "all"]).optional(),
+        limit: z.number().int().positive().optional().describe("Max items (default 50)"),
+        includeIntegrated: z.boolean().optional(),
+      }),
+    },
+    async ({ vault, wiki, match, scope, limit, includeIntegrated }) =>
+      runMcpToolHandler("skillwiki.sources_pending", { vault, wiki }, async () => {
+        const v = await resolveMcpVault({ vault, wiki });
+        if (!v.ok) return formatToolResult({ exitCode: 25, result: v });
+        const r = await runSourcesPending({
+          vault: v.data.vault,
+          match,
+          scope,
+          limit,
+          includeIntegrated,
+        });
+        return formatToolResult(r);
+      }),
+  );
+
+  server.registerTool(
+    "skillwiki.compile_status",
+    {
+      description: "List compiling and review-open pending compile-turns (read-only).",
+      inputSchema: z.object({
+        ...vaultFields,
+      }),
+    },
+    async ({ vault, wiki }) =>
+      runMcpToolHandler("skillwiki.compile_status", { vault, wiki }, async () => {
+        const v = await resolveMcpVault({ vault, wiki });
+        if (!v.ok) return formatToolResult({ exitCode: 25, result: v });
+        return formatToolResult(await runSourceCompileStatus({ vault: v.data.vault }));
+      }),
+  );
+
+  server.registerTool(
+    "skillwiki.reviews",
+    {
+      description: "List open or needs-fix post-compile reviews (read-only).",
+      inputSchema: z.object({
+        ...vaultFields,
+      }),
+    },
+    async ({ vault, wiki }) =>
+      runMcpToolHandler("skillwiki.reviews", { vault, wiki }, async () => {
+        const v = await resolveMcpVault({ vault, wiki });
+        if (!v.ok) return formatToolResult({ exitCode: 25, result: v });
+        return formatToolResult(await runSourceReviews({ vault: v.data.vault }));
       }),
   );
 }

@@ -6,7 +6,7 @@ import {
 } from "../../src/mcp/manifest.js";
 
 describe("MCP MVP manifest", () => {
-  it("exposes seven read-only tools", () => {
+  it("exposes ten read-only tools", () => {
     expect([...MCP_READ_ONLY_TOOLS]).toEqual([
       "skillwiki.query",
       "skillwiki.lint_summary",
@@ -15,6 +15,9 @@ describe("MCP MVP manifest", () => {
       "skillwiki.project_index",
       "skillwiki.stale",
       "skillwiki.config_get",
+      "skillwiki.sources_pending",
+      "skillwiki.compile_status",
+      "skillwiki.reviews",
     ]);
   });
 
@@ -24,8 +27,9 @@ describe("MCP MVP manifest", () => {
     expect(MCP_RESOURCE_URIS).toContain("skillwiki://graph/summary");
   });
 
-  it("exposes four prompts", () => {
-    expect(MCP_PROMPT_NAMES).toHaveLength(4);
+  it("exposes five prompts", () => {
+    expect(MCP_PROMPT_NAMES).toHaveLength(5);
     expect(MCP_PROMPT_NAMES).toContain("skillwiki-research-query");
+    expect(MCP_PROMPT_NAMES).toContain("skillwiki-pending-review");
   });
 });
