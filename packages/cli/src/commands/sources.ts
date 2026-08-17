@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { ExitCode, err, ok, type Result } from "@skillwiki/shared";
 import {
   inventorySources,
@@ -6,6 +7,9 @@ import {
   type SourceLifecycleItem,
   type SourceInventoryOutput,
 } from "../utils/source-lifecycle.js";
+import { completeSha256 } from "../utils/source-dispositions.js";
+import { effectiveCompileState, readSourceCompileEvents } from "../utils/source-compile.js";
+import { resolveExistingRegularFileInsideVault } from "../utils/vault-path-safety.js";
 
 export type SourceScope = "articles" | "papers" | "all";
 export type SourceSort = "newest" | "oldest";
@@ -123,6 +127,26 @@ export async function runSourcesPending(input: SourcesPendingInput): Promise<{ e
   const counts = summary(items);
   const unbounded = input.all === true;
   items = items.slice(0, unbounded ? undefined : (input.limit ?? 50));
+  const compileEvents = await readSourceCompileEvents(input.vault);
+  if (compileEvents.ok && compileEvents.data.length > 0) {
+    const now = `${today}T00:00:00.000Z`;
+    items = await Promise.all(items.map(async (item) => {
+      const resolved = await resolveExistingRegularFileInsideVault(input.vault, item.raw_path);
+      if (!resolved.ok) return item;
+      const text = await readFile(resolved.data, "utf8");
+      const state = effectiveCompileState({
+        events: compileEvents.data,
+        rawPath: item.raw_path,
+        completeSha256: completeSha256(text),
+        now,
+      });
+      return {
+        ...item,
+        ...(state.status !== "none" ? { compile_status: state.status } : {}),
+        ...(state.review?.status ? { review_status: state.review.status } : {}),
+      };
+    }));
+  }
   const visibleRawPaths = new Set(items.map(item => item.raw_path));
   const diagnostics = inventory.output.diagnostics.filter(diagnostic =>
     visibleRawPaths.has(diagnostic.raw_path) || diagnostic.raw_path === "meta/log-events"

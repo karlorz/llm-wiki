@@ -39,6 +39,8 @@ export interface SourceLifecycleItem {
   referenced_elsewhere: string[];
   effective_disposition?: SourceDisposition;
   disposition_identity_mismatch?: boolean;
+  compile_status?: "none" | "compiling" | "review-open" | "review-closed";
+  review_status?: "open" | "accepted" | "needs-fix" | "dismissed";
 }
 
 export interface SourceInventoryOutput {

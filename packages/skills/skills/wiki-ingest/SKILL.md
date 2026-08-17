@@ -34,6 +34,14 @@ Run `skillwiki lang` at the start. Generate page-body prose, narrative sections,
 6. **Feature-detect publication.** Run `skillwiki page publish --help`. If unavailable, fail closed and leave typed output unpublished; update the active SkillWiki CLI/plugin channel first.
 7. **Ingest and publish.** Use `skillwiki ingest` for deterministic source capture and typed-page publication. The command writes an immutable raw source first and delegates the typed page, taxonomy, index, and structural log entry to the shared page publisher. Supply the resolved vault, type, title, tags, and provenance through the command options.
 8. **Recovery.** Never create the final typed page or edit index.md/log.md directly. A raw-only result after publication failure is valid recovery state. Keep the exact command inputs and retry; do not delete or overwrite the raw source.
+9. **Pending-compile path** (raw already exists; clipper / `sources pending`). Do **not** run `skillwiki ingest` again — that would create a second raw object. Interactive sessions only:
+   1. `skillwiki sources pending [vault]`
+   2. `skillwiki sources compile claim <raw-path> [vault] --reason "<why>"` then the same command with `--write --approve <token>`
+   3. Read the raw; compose unpublished drafts **outside** the vault
+   4. `skillwiki page publish` each typed page
+   5. `skillwiki sources compile published <raw-path> [vault] --pages "<typed/a.md,typed/b.md>" --reason "<why>"` then `--write --approve <token>`
+   6. Leave the review `open` unless the human resolves it with `skillwiki sources review <raw-path> --status accepted|needs-fix|dismissed --reason "<why>"`
+   Goal, satellite, and headless sessions may list pending / compile status / reviews but must not claim or publish compile turns.
 ## Provenance defaults
 - Default `provenance: research`.
 - If cwd is inside `projects/{slug}/`, set `provenance: project` and add `provenance_projects: ["[[slug]]"]`.

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { Command } from "commander";
 import type { Result, ErrResult } from "@skillwiki/shared";
-import { ExitCode, err } from "@skillwiki/shared";
+import { ExitCode, err, resolveSessionKind } from "@skillwiki/shared";
 import { printJson, printHuman } from "./utils/output.js";
 import { healthLintDetailHints, lintDetailHints } from "./utils/lint-detail-hints.js";
 import { getDeprecatedWarnings } from "./utils/deprecation.js";
@@ -67,6 +67,14 @@ import { runCanvasGenerate } from "./commands/canvas.js";
 import { runQuery } from "./commands/query.js";
 import { runSourcesPending } from "./commands/sources.js";
 import { runSourceDisposition } from "./commands/source-disposition.js";
+import {
+  runSourceCompileClaim,
+  runSourceCompilePublished,
+  runSourceCompileRelease,
+  runSourceCompileStatus,
+  runSourceReview,
+  runSourceReviews,
+} from "./commands/source-compile.js";
 import { runSourceDisposal } from "./commands/source-disposal.js";
 import { runIndexLinkFormat } from "./commands/index-link-format.js";
 import { runTopicMapCheck } from "./commands/topic-map-check.js";
@@ -352,6 +360,166 @@ sourcesCmd
       }),
       { allowImmutableRecord: true },
     );
+  });
+
+function cliSessionKind() {
+  return resolveSessionKind({
+    env: process.env,
+    noTty: process.stdin.isTTY !== true,
+  }).data.kind;
+}
+
+const compileCmd = sourcesCmd.command("compile").description("attended pending-source compile turns");
+compileCmd
+  .command("claim <raw-path> [vault]")
+  .description("claim one pending raw article or paper for an attended compile turn")
+  .requiredOption("--reason <text>", "why this source is being compiled")
+  .option("--write", "write the approved claim event")
+  .option("--approve <token>", "approve the exact state-bound claim plan")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (rawPath, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (!opts.write) emit(await runSourceCompileClaim({
+      vault: v.vault,
+      rawPath,
+      reason: opts.reason,
+      sessionKind: cliSessionKind(),
+      write: false,
+    }), v.vault, { postCommit: false });
+    else return emitManagedVaultWrite(
+      v.vault,
+      "sources compile claim",
+      () => runSourceCompileClaim({
+        vault: v.vault,
+        rawPath,
+        reason: opts.reason,
+        sessionKind: cliSessionKind(),
+        write: true,
+        approve: opts.approve,
+      }),
+      { allowImmutableRecord: true },
+    );
+  });
+compileCmd
+  .command("release <raw-path> [vault]")
+  .description("release an attended compile claim")
+  .requiredOption("--reason <text>", "why the claim is released")
+  .option("--write", "write the approved release event")
+  .option("--approve <token>", "approve the exact state-bound release plan")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (rawPath, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (!opts.write) emit(await runSourceCompileRelease({
+      vault: v.vault,
+      rawPath,
+      reason: opts.reason,
+      sessionKind: cliSessionKind(),
+      write: false,
+    }), v.vault, { postCommit: false });
+    else return emitManagedVaultWrite(
+      v.vault,
+      "sources compile release",
+      () => runSourceCompileRelease({
+        vault: v.vault,
+        rawPath,
+        reason: opts.reason,
+        sessionKind: cliSessionKind(),
+        write: true,
+        approve: opts.approve,
+      }),
+      { allowImmutableRecord: true },
+    );
+  });
+compileCmd
+  .command("published <raw-path> [vault]")
+  .description("record typed pages published from a pending raw source and open a review")
+  .requiredOption("--pages <paths>", "comma-separated typed page paths")
+  .requiredOption("--reason <text>", "compile-turn closeout reason")
+  .option("--write", "write the approved published and review-open events")
+  .option("--approve <token>", "approve the exact state-bound publish plan")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (rawPath, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    const pages = String(opts.pages).split(",").map((page: string) => page.trim()).filter(Boolean);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (!opts.write) emit(await runSourceCompilePublished({
+      vault: v.vault,
+      rawPath,
+      pages,
+      reason: opts.reason,
+      sessionKind: cliSessionKind(),
+      write: false,
+    }), v.vault, { postCommit: false });
+    else return emitManagedVaultWrite(
+      v.vault,
+      "sources compile published",
+      () => runSourceCompilePublished({
+        vault: v.vault,
+        rawPath,
+        pages,
+        reason: opts.reason,
+        sessionKind: cliSessionKind(),
+        write: true,
+        approve: opts.approve,
+      }),
+      { allowImmutableRecord: true },
+    );
+  });
+compileCmd
+  .command("status [vault]")
+  .description("list compiling, review-open, and expired-claim compile turns")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runSourceCompileStatus({ vault: v.vault }), v.vault, { postCommit: false });
+  });
+
+sourcesCmd
+  .command("review <raw-path> [vault]")
+  .description("record a post-compile review decision for one compile turn")
+  .requiredOption("--status <status>", "open, accepted, needs-fix, or dismissed")
+  .requiredOption("--reason <text>", "review reason")
+  .option("--write", "write the approved review event")
+  .option("--approve <token>", "approve the exact state-bound review plan")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (rawPath, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else if (!opts.write) emit(await runSourceReview({
+      vault: v.vault,
+      rawPath,
+      status: opts.status,
+      reason: opts.reason,
+      sessionKind: cliSessionKind(),
+      write: false,
+    }), v.vault, { postCommit: false });
+    else return emitManagedVaultWrite(
+      v.vault,
+      "sources review",
+      () => runSourceReview({
+        vault: v.vault,
+        rawPath,
+        status: opts.status,
+        reason: opts.reason,
+        sessionKind: cliSessionKind(),
+        write: true,
+        approve: opts.approve,
+      }),
+      { allowImmutableRecord: true },
+    );
+  });
+
+sourcesCmd
+  .command("reviews [vault]")
+  .description("list open or needs-fix compile reviews")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runSourceReviews({ vault: v.vault }), v.vault, { postCommit: false });
   });
 
 sourcesCmd
