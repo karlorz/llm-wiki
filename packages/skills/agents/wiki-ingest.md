@@ -63,11 +63,13 @@ Return:
 - `skillwiki ingest` returns nonzero; retain any raw-only result for retry
 - sha256 already exists in vault (skip, don't duplicate)
 - Source or generated content contains unredacted live credentials or other authenticating secrets
+- The source is already a pending raw article/paper. Do not call `skillwiki ingest` again and do not drain `sources compile` from this maintenance agent. Report the path for an attended interactive session.
 
 **Forbidden:**
 - Skipping `fetch-guard` for URL sources
 - Creating a final typed page or editing index.md/log.md directly
 - Modifying existing raw files (N9)
+- Unattended `sources compile claim` / `published` / `review` writes (interactive only)
 - Writing `[[wikilinks]]` to nonexistent pages — verify first
 - Writing raw ephemeral data to cloud-mounted wiki paths
 - Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault

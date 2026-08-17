@@ -127,6 +127,8 @@ Also mirror these pointers in vault-presync / vault-sync-status skills when oper
 - typed pages: `skillwiki page publish <draft> <vault> --target <path>` then the same command with `--write`
 - archive: `skillwiki archive <path> <vault>`
 - pending source inventory: `skillwiki sources pending <vault>`
+- attended compile-turn: `skillwiki sources compile claim|release|published|status`
+- post-compile reviews: `skillwiki sources review` / `skillwiki sources reviews`
 - editorial disposition: `skillwiki sources disposition <exact-raw-path> <vault> ...`
 - exceptional raw disposal: `skillwiki sources dispose <exact-raw-path> <vault> --reason ...` then attended `--write --approve <token>`
 - ad-hoc structural log: `skillwiki log-append <vault> --content '<entry>'` (Release A dual-write) or event materialization (Release B)
@@ -226,7 +228,7 @@ for code changes.
 
 ## CLI Backbone
 All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, health reporting, and linting. Skills invoke it via Bash for the mechanical parts and use the active agent for the creative parts.
-Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `query`, `sources pending`, `sources disposition`, `sources dispose`, `archive`, `remove`, `drift`, `dedup`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `claim`, `claims audit`, `observe`, `canvas generate`.
+Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `query`, `sources pending`, `sources compile`, `sources review`, `sources reviews`, `sources disposition`, `sources dispose`, `archive`, `remove`, `drift`, `dedup`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `claim`, `claims audit`, `observe`, `canvas generate`.
 `skillwiki claim` binds a transcript to a work item only through an exact `raw/transcripts/...` path in `source:` / `sources:` / `closes:`. A `--project` that contradicts the capture's explicit project is rejected. `skillwiki stale --project` uses exact normalized slugs, not substring matching. `skillwiki claims audit` is the read-only integrity report for duplicate, malformed, dangling, cross-project, and unbacked claims; it never rewrites captures or work items.
 
 Run `skillwiki health <vault> --out /tmp/skillwiki-health.json --no-fail` for a bounded whole-system report that includes the nonblocking source-lifecycle backlog. Pending captures are informational and do not make health fail. Run `skillwiki lint <vault> --summary` for lint-only bucket counts with capped examples and details commands. Run `skillwiki doctor` to diagnose setup/runtime issues only. Run `skillwiki config list` to see current configuration.

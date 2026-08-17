@@ -148,6 +148,31 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--write")
     .option("--approve <token>")
     .option("--wiki <name>");
+  const sourcesCompileCmd = sourcesCmd.command("compile");
+  sourcesCompileCmd.command("claim")
+    .requiredOption("--reason <text>")
+    .option("--write")
+    .option("--approve <token>")
+    .option("--wiki <name>");
+  sourcesCompileCmd.command("release")
+    .requiredOption("--reason <text>")
+    .option("--write")
+    .option("--approve <token>")
+    .option("--wiki <name>");
+  sourcesCompileCmd.command("published")
+    .requiredOption("--pages <paths>")
+    .requiredOption("--reason <text>")
+    .option("--write")
+    .option("--approve <token>")
+    .option("--wiki <name>");
+  sourcesCompileCmd.command("status").option("--wiki <name>");
+  sourcesCmd.command("review")
+    .requiredOption("--status <status>")
+    .requiredOption("--reason <text>")
+    .option("--write")
+    .option("--approve <token>")
+    .option("--wiki <name>");
+  sourcesCmd.command("reviews").option("--wiki <name>");
   sourcesCmd.command("dispose")
     .requiredOption("--reason <text>")
     .option("--write")
