@@ -4,12 +4,15 @@ import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { scanVault, readPage } from "../utils/vault.js";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { runGraphBuild } from "./graph.js";
+import { fuseRankings, RRF_K } from "../utils/rrf.js";
+import { loadVectorIndex, rankVectorIndex } from "../utils/vector-index.js";
 
 export interface QueryInput {
   text: string;
   vault: string;
   limit?: number;
   includePending?: boolean;
+  hybrid?: boolean;
 }
 
 export interface QueryResult {
@@ -26,6 +29,7 @@ export interface QueryOutput {
     repetitive_historical_cycles_suppressed: boolean;
     historical_cycle_page_count: number;
   };
+  hybrid?: { used: true; rrf_k: number };
   humanHint: string;
 }
 
@@ -142,7 +146,7 @@ export async function runQuery(
   // Composite scoring with 4 signals
   // Seed pages (keyword match > 0) always rank above non-seed pages
   // because non-seed structural signals are discounted by NON_SEED_FACTOR.
-  const results: QueryResult[] = pages
+  const structural: QueryResult[] = pages
     .map((page) => {
       const sourceOverlap = scoreSourceOverlap(page, pages, structuralSeedPaths);
       const wikilink = scoreWikilink(page.relPath, structuralSeedPaths, graph);
@@ -170,8 +174,28 @@ export async function runQuery(
       };
     })
     .filter((r) => r.score > 0)
-    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
-    .slice(0, limit);
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+
+  let results = structural.slice(0, limit);
+  let hybridMeta: QueryOutput["hybrid"];
+  if (input.hybrid) {
+    const index = await loadVectorIndex(input.vault);
+    if (!index.ok) return { exitCode: ExitCode.USAGE, result: index };
+    const byPath = new Map(pages.map((page) => [page.relPath, page]));
+    const fused = fuseRankings([structural.map((row) => row.path), rankVectorIndex(index.data, input.text)]);
+    results = fused.slice(0, limit).map((row) => {
+      const existing = structural.find((item) => item.path === row.id);
+      if (existing) return { ...existing, score: Math.round(row.score * 1000) / 1000 };
+      const page = byPath.get(row.id);
+      return {
+        path: row.id,
+        score: Math.round(row.score * 1000) / 1000,
+        title: page?.title ?? "",
+        type: page?.type ?? "",
+      };
+    });
+    hybridMeta = { used: true, rrf_k: RRF_K };
+  }
 
   let pendingSources: import("../utils/source-lifecycle.js").SourceLifecycleItem[] | undefined;
   if (input.includePending) {
@@ -204,6 +228,7 @@ export async function runQuery(
       results,
       ...(pendingSources ? { pending_sources: pendingSources } : {}),
       ...(rankingGuardrails ? { ranking_guardrails: rankingGuardrails } : {}),
+      ...(hybridMeta ? { hybrid: hybridMeta } : {}),
       humanHint,
     }),
   };

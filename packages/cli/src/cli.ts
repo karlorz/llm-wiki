@@ -65,6 +65,7 @@ import { runStatus } from "./commands/status.js";
 import { runSeed } from "./commands/seed.js";
 import { runCanvasGenerate } from "./commands/canvas.js";
 import { runQuery } from "./commands/query.js";
+import { runVectorsRebuild, runVectorsStatus } from "./commands/vectors.js";
 import { runSourcesPending } from "./commands/sources.js";
 import { runSourceDisposition } from "./commands/source-disposition.js";
 import {
@@ -278,11 +279,18 @@ program
   .description("score and rank vault pages by relevance to a query")
   .option("--limit <n>", "max results to return", (s) => parseInt(s, 10), 10)
   .option("--include-pending", "include a separate pending-evidence channel")
+  .option("--hybrid", "RRF-fuse 4-signal ranks with the local TF-IDF cache")
   .option("--wiki <name>", "wiki profile name")
   .action(async (text, vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
-    else emit(await runQuery({ text, vault: v.vault, limit: opts.limit, includePending: opts.includePending }), v.vault, { postCommit: false });
+    else emit(await runQuery({
+      text,
+      vault: v.vault,
+      limit: opts.limit,
+      includePending: opts.includePending,
+      hybrid: opts.hybrid,
+    }), v.vault, { postCommit: false });
   });
 
 const sourcesCmd = program.command("sources").description("inspect raw-source lifecycle state");
@@ -2049,6 +2057,26 @@ program
       skipBudget: !!opts.skipBudget,
       checks: opts.checks,
     }), undefined, { postCommit: false });
+  });
+
+const vectorsCmd = program.command("vectors").description("rebuildable local TF-IDF cache for optional hybrid query");
+vectorsCmd
+  .command("rebuild [vault]")
+  .description("rebuild the derived TF-IDF cache under .skillwiki/vectors/")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runVectorsRebuild({ vault: v.vault }), v.vault, { postCommit: false });
+  });
+vectorsCmd
+  .command("status [vault]")
+  .description("report whether the derived TF-IDF cache exists")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runVectorsStatus({ vault: v.vault }), v.vault, { postCommit: false });
   });
 
 // Emit deprecation warnings for any installed skills marked deprecated
