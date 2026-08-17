@@ -20,7 +20,10 @@ function vault(): string {
 describe("vector index", () => {
   it("builds a rebuildable cache and ranks overlapping terms first", async () => {
     const root = vault();
-    expect((await vectorIndexStatus(root)).ok && (await vectorIndexStatus(root)).data?.present).toBe(false);
+    const missing = await vectorIndexStatus(root);
+    expect(missing.ok).toBe(true);
+    if (!missing.ok) return;
+    expect(missing.data.present).toBe(false);
     const built = await buildVectorIndex(root, "2026-08-17T00:00:00.000Z");
     expect(built.ok).toBe(true);
     const loaded = await loadVectorIndex(root);
@@ -28,8 +31,10 @@ describe("vector index", () => {
     if (!loaded.ok) return;
     expect(rankVectorIndex(loaded.data, "bananas")[0]).toBe("concepts/alpha.md");
     const status = await vectorIndexStatus(root);
-    expect(status.ok && status.data?.present).toBe(true);
-    expect(status.ok && status.data?.page_count).toBe(2);
+    expect(status.ok).toBe(true);
+    if (!status.ok) return;
+    expect(status.data.present).toBe(true);
+    expect(status.data.page_count).toBe(2);
   });
 
   it("reports missing cache as HYBRID_INDEX_MISSING", async () => {

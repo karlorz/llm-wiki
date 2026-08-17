@@ -87,8 +87,11 @@ describe("query", () => {
   it("keeps default ranking unchanged without --hybrid", async () => {
     const a = await runQuery({ text: "alpha", vault: VAULT });
     const b = await runQuery({ text: "alpha", vault: VAULT, hybrid: false });
-    expect(a.result.ok && b.result.ok && a.result.data.results).toEqual(b.result.ok ? b.result.data.results : []);
-    expect(a.result.ok && a.result.data.hybrid).toBeUndefined();
+    expect(a.result.ok).toBe(true);
+    expect(b.result.ok).toBe(true);
+    if (!a.result.ok || !b.result.ok) return;
+    expect(a.result.data.results).toEqual(b.result.data.results);
+    expect(a.result.data.hybrid).toBeUndefined();
   });
 
   it("fails closed when --hybrid is set without a cache", async () => {
@@ -108,8 +111,10 @@ describe("query", () => {
     expect(built.ok).toBe(true);
     const r = await runQuery({ text: "alpha", vault: v, hybrid: true });
     expect(r.exitCode).toBe(0);
-    expect(r.result.ok && r.result.data.hybrid).toEqual({ used: true, rrf_k: 60 });
-    expect(r.result.ok && r.result.data.results.length).toBeGreaterThan(0);
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) return;
+    expect(r.result.data.hybrid).toEqual({ used: true, rrf_k: 60 });
+    expect(r.result.data.results.length).toBeGreaterThan(0);
   });
 
   it("respects --limit option", async () => {
