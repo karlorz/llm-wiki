@@ -31,7 +31,7 @@ describe("skillwiki MCP integration (in-memory)", () => {
     return c;
   }
 
-  it("lists seven read-only tools matching manifest", async () => {
+  it("lists read-only tools matching manifest", async () => {
     const c = await connectPair();
     const { tools } = await c.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -39,7 +39,7 @@ describe("skillwiki MCP integration (in-memory)", () => {
     expect(names).toEqual(expected);
   });
 
-  it("lists four prompts matching manifest", async () => {
+  it("lists prompts matching manifest", async () => {
     const c = await connectPair();
     const { prompts } = await c.listPrompts();
     const names = prompts.map((p) => p.name).sort();

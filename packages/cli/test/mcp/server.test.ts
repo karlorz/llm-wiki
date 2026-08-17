@@ -6,8 +6,8 @@ describe("skillwiki MCP server", () => {
   it("creates server with expected MVP surface manifest", () => {
     const server = createSkillwikiMcpServer();
     expect(server).toBeDefined();
-    expect(MCP_READ_ONLY_TOOLS).toHaveLength(7);
+    expect(MCP_READ_ONLY_TOOLS).toHaveLength(10);
     expect(MCP_RESOURCE_URIS).toHaveLength(11);
-    expect(MCP_PROMPT_NAMES).toHaveLength(4);
+    expect(MCP_PROMPT_NAMES).toHaveLength(5);
   });
 });
