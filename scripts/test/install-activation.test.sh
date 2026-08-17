@@ -31,13 +31,17 @@ mkdir -p "$HOME/.grok" "$HOME/.claude" "$HOME/.codex"
 
 BEGIN_MARKER="<!-- skillwiki:begin -->"
 END_MARKER="<!-- skillwiki:end -->"
-REFERENCE_LINE="Read @skillwiki.md for SkillWiki activation context."
+# Prior dual-target installs used the relative ADR-6 form.
+STALE_REFERENCE_LINE="Read @skillwiki.md for SkillWiki activation context."
+GROK_REFERENCE_LINE="Read @~/.grok/skillwiki.md for SkillWiki activation context."
+CLAUDE_REFERENCE_LINE="Read @~/.claude/skillwiki.md for SkillWiki activation context."
+CODEX_REFERENCE_LINE="Read @~/.codex/skillwiki.md for SkillWiki activation context."
 
 seed_prior_hooked_install() {
   local dir="$1"
   local agents_file="$2"
   mkdir -p "$dir"
-  printf '%s\n%s\n%s\n' "$BEGIN_MARKER" "$REFERENCE_LINE" "$END_MARKER" > "$dir/$agents_file"
+  printf '%s\n%s\n%s\n' "$BEGIN_MARKER" "$STALE_REFERENCE_LINE" "$END_MARKER" > "$dir/$agents_file"
   cp "$REPO_ROOT/packages/skills/using-skillwiki/activation.md" "$dir/skillwiki.md"
 }
 
@@ -50,6 +54,8 @@ if [ "$rc" -eq 0 ] \
   && [ -f "$HOME/.grok/skillwiki.md" ] \
   && [ -f "$HOME/.grok/AGENTS.md" ] \
   && grep -qF "$BEGIN_MARKER" "$HOME/.grok/AGENTS.md" \
+  && grep -qF "$GROK_REFERENCE_LINE" "$HOME/.grok/AGENTS.md" \
+  && ! grep -qF "$STALE_REFERENCE_LINE" "$HOME/.grok/AGENTS.md" \
   && [ ! -e "$HOME/.claude/CLAUDE.md" ] \
   && [ ! -e "$HOME/.claude/skillwiki.md" ] \
   && [ ! -e "$HOME/.codex/AGENTS.md" ] \
@@ -83,7 +89,7 @@ fi
 rm -rf "$HOME"
 mkdir -p "$HOME/.claude" "$HOME/.grok"
 {
-  printf '%s\n%s\n%s\n\n' "$BEGIN_MARKER" "$REFERENCE_LINE" "$END_MARKER"
+  printf '%s\n%s\n%s\n\n' "$BEGIN_MARKER" "$STALE_REFERENCE_LINE" "$END_MARKER"
   printf '%s\n' "# User instructions"
   printf '%s\n' "Keep this."
 } > "$HOME/.claude/CLAUDE.md"
@@ -107,6 +113,7 @@ if [ "$rc" -eq 0 ] \
   && [ -f "$HOME/.claude/skillwiki.md" ] \
   && [ -f "$HOME/.claude/CLAUDE.md" ] \
   && grep -qF "$BEGIN_MARKER" "$HOME/.claude/CLAUDE.md" \
+  && grep -qF "$CLAUDE_REFERENCE_LINE" "$HOME/.claude/CLAUDE.md" \
   && [ -f "$HOME/.grok/AGENTS.md" ]; then
   assert_pass "--with-claude installs Claude activation"
 else
@@ -121,7 +128,8 @@ rc=$?
 if [ "$rc" -eq 0 ] \
   && [ -f "$HOME/.codex/skillwiki.md" ] \
   && [ -f "$HOME/.codex/AGENTS.md" ] \
-  && grep -qF "$BEGIN_MARKER" "$HOME/.codex/AGENTS.md"; then
+  && grep -qF "$BEGIN_MARKER" "$HOME/.codex/AGENTS.md" \
+  && grep -qF "$CODEX_REFERENCE_LINE" "$HOME/.codex/AGENTS.md"; then
   assert_pass "--with-codex installs Codex activation"
 else
   assert_fail_msg "--with-codex installs Codex activation" "rc=$rc out=$out"
@@ -150,6 +158,38 @@ if [ "$rc" -eq 0 ]; then
   assert_pass "check passes for Grok-only install"
 else
   assert_fail_msg "check passes for Grok-only install" "rc=$rc out=$out"
+fi
+
+# --- 8. check fails on stale Grok @skillwiki.md marker ---
+rm -rf "$HOME"
+mkdir -p "$HOME"
+bash "$INSTALLER" >/dev/null 2>&1
+{
+  printf '%s\n%s\n%s\n' "$BEGIN_MARKER" "$STALE_REFERENCE_LINE" "$END_MARKER"
+} > "$HOME/.grok/AGENTS.md"
+out="$(bash "$INSTALLER" --check 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q "stale reference line"; then
+  assert_pass "check fails on stale Grok @skillwiki.md marker"
+else
+  assert_fail_msg "check fails on stale Grok @skillwiki.md marker" "rc=$rc out=$out"
+fi
+
+# --- 9. apply upgrades a stale Grok marker ---
+rm -rf "$HOME"
+mkdir -p "$HOME/.grok"
+{
+  printf '%s\n%s\n%s\n' "$BEGIN_MARKER" "$STALE_REFERENCE_LINE" "$END_MARKER"
+} > "$HOME/.grok/AGENTS.md"
+cp "$REPO_ROOT/packages/skills/using-skillwiki/activation.md" "$HOME/.grok/skillwiki.md"
+out="$(bash "$INSTALLER" 2>&1)"
+rc=$?
+if [ "$rc" -eq 0 ] \
+  && grep -qF "$GROK_REFERENCE_LINE" "$HOME/.grok/AGENTS.md" \
+  && ! grep -qF "$STALE_REFERENCE_LINE" "$HOME/.grok/AGENTS.md"; then
+  assert_pass "apply upgrades stale Grok marker"
+else
+  assert_fail_msg "apply upgrades stale Grok marker" "rc=$rc out=$out agents=$(cat "$HOME/.grok/AGENTS.md" 2>/dev/null)"
 fi
 
 printf "\n%d passed, %d failed\n" "$PASS" "$FAIL"

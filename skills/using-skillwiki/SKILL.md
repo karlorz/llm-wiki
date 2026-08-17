@@ -1,6 +1,6 @@
 ---
 name: using-skillwiki
-description: Invoke at session start or when knowledge-base tasks arise — maps skillwiki skills, dev-loop alignment, adaptive workflow profiles, and vault routing
+description: Invoke when vault, wiki, knowledge-base, or SkillWiki setup work arises — maps skillwiki skills, dev-loop alignment, adaptive workflow profiles, and vault routing. Do not invoke for unrelated coding or creative tasks.
 ---
 *Note: If executing as a background subagent, skip this skill section.*
 
@@ -30,19 +30,21 @@ Use this section as procedural planning guidelines:
 
 **Claude Code** and **Codex** activate SkillWiki via the plugin SessionStart hook (`hooks/session-start` / `hooks/session-start-codex`). Do **not** install activation markers into `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md` when the plugin is present — that double-injects context and pollutes user-scope instruction files.
 
-On harnesses where SessionStart `additionalContext` does **not** fire (**Grok**), SkillWiki activation context is delivered via a compact file. Run `npm run install:activation` from the repo to install:
+On harnesses where SessionStart `additionalContext` does **not** fire (**Grok**), SkillWiki activation context is delivered via a compact file. Run `npm run install:activation` from the llm-wiki repo to install:
 
 - `~/.grok/skillwiki.md` — compact derivative covering identity, CLI probe, skill map, PRD bridge, fail-closed boundary, and drift warning.
-- `~/.grok/AGENTS.md` — prepended with a marker-wrapped reference: `Read @skillwiki.md for SkillWiki activation context.`
+- `~/.grok/AGENTS.md` — prepended with a marker-wrapped reference: `Read @~/.grok/skillwiki.md for SkillWiki activation context.`
 
 Default install is **Grok only**. Re-running `install:activation` also **removes** any prior Claude/Codex activation marker and matching `skillwiki.md` (cleanup for the earlier dual-target installer). Opt-in fallbacks only when the plugin SessionStart path is unavailable:
 
-- `npm run install:activation -- --with-claude` — `~/.claude/skillwiki.md` + `CLAUDE.md` marker
-- `npm run install:activation -- --with-codex` — `~/.codex/skillwiki.md` + `AGENTS.md` marker
+- `npm run install:activation -- --with-claude` — `~/.claude/skillwiki.md` + `CLAUDE.md` marker `Read @~/.claude/skillwiki.md …`
+- `npm run install:activation -- --with-codex` — `~/.codex/skillwiki.md` + `AGENTS.md` marker `Read @~/.codex/skillwiki.md …`
 
-The activation file is self-contained literal text (ADR-3). On harnesses with `@file` import support, the reference is inlined automatically. On Grok (no `@file` support), the agent reads the file manually when it sees the instructional reference.
+The activation file is self-contained literal text (ADR-3). On harnesses with `@file` import support, `@~/.grok/skillwiki.md` (or the Claude/Codex home path) is inlined. On Grok (no `@file` support), `read_file` the exact path `~/.grok/skillwiki.md`. Never `~/skillwiki.md`. Never a cwd-relative `skillwiki.md`. If that file is missing, say activation is absent and suggest `npm run install:activation` from the llm-wiki repo; do not create a home-level `skillwiki.md`.
 
-The template lives at `packages/skills/using-skillwiki/activation.md`. Run `npm run install:activation:check` to verify the Grok install matches the template and that Claude/Codex are not still carrying the activation block.
+The compact `~/.grok/skillwiki.md` is the session-start context. This full skill is for vault/wiki/setup work only — do not load it at the start of an unrelated session.
+
+The template lives at `packages/skills/using-skillwiki/activation.md`. Run `npm run install:activation:check` to verify the Grok install matches the template and that Claude/Codex are not still carrying the activation block. `skillwiki doctor` reports a warn on a missing file, a stale `@skillwiki.md` marker, or compact-file drift.
 
 ## When to Use These Skills
 Invoke a skillwiki skill when the user:

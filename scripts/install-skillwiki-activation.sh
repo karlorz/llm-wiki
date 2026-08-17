@@ -92,10 +92,27 @@ fi
 
 BEGIN_MARKER="<!-- skillwiki:begin -->"
 END_MARKER="<!-- skillwiki:end -->"
-REFERENCE_LINE="Read @skillwiki.md for SkillWiki activation context."
-BLOCK="${BEGIN_MARKER}
-${REFERENCE_LINE}
-${END_MARKER}"
+
+# Grok has no @file import. The path after @ must stay ~/.grok/skillwiki.md
+# so a read_file after stripping @ lands on the compact activation file (ADR-3).
+# Relative @skillwiki.md (ADR-6) resolves to ~/skillwiki.md or $CWD/skillwiki.md.
+reference_line_for() {
+  local dir="$1"
+  case "$dir" in
+    "$HOME/.grok")
+      printf '%s\n' "Read @~/.grok/skillwiki.md for SkillWiki activation context."
+      ;;
+    "$HOME/.claude")
+      printf '%s\n' "Read @~/.claude/skillwiki.md for SkillWiki activation context."
+      ;;
+    "$HOME/.codex")
+      printf '%s\n' "Read @~/.codex/skillwiki.md for SkillWiki activation context."
+      ;;
+    *)
+      printf '%s\n' "Read @~/.grok/skillwiki.md for SkillWiki activation context."
+      ;;
+  esac
+}
 
 # Harnesses without a working SessionStart additionalContext path.
 # Claude + Codex activate via plugin hooks (hooks.json / hooks-codex.json).
@@ -191,6 +208,11 @@ install_or_check_target() {
   local agents_file="$2"
   local agents_path="$dir/$agents_file"
   local activation_path="$dir/skillwiki.md"
+  local reference_line block
+  reference_line="$(reference_line_for "$dir")"
+  block="${BEGIN_MARKER}
+${reference_line}
+${END_MARKER}"
 
   if [ ! -d "$dir" ]; then
     if [ "$MODE" = "check" ]; then
@@ -229,7 +251,7 @@ install_or_check_target() {
           mv "${tmp_file}.tail2" "${tmp_file}.tail"
         fi
         {
-          printf '%s\n%s\n%s\n' "$BEGIN_MARKER" "$REFERENCE_LINE" "$END_MARKER"
+          printf '%s\n%s\n%s\n' "$BEGIN_MARKER" "$reference_line" "$END_MARKER"
           if [ -s "${tmp_file}.tail" ]; then
             printf '\n'
             cat "${tmp_file}.tail"
@@ -240,13 +262,13 @@ install_or_check_target() {
         info "updated marker block in $agents_path"
       else
         tmp_file="$(mktemp)"
-        printf '%s\n\n' "$BLOCK" > "$tmp_file"
+        printf '%s\n\n' "$block" > "$tmp_file"
         cat "$agents_path" >> "$tmp_file"
         mv "$tmp_file" "$agents_path"
         info "prepended marker block to $agents_path"
       fi
     else
-      printf '%s\n' "$BLOCK" > "$agents_path"
+      printf '%s\n' "$block" > "$agents_path"
       info "created $agents_path with marker block"
     fi
   else
@@ -256,7 +278,7 @@ install_or_check_target() {
       fail "$agents_path missing skillwiki marker block - run install first"
     elif ! grep -qF "$END_MARKER" "$agents_path"; then
       fail "$agents_path has begin marker but missing end marker - manual fix needed"
-    elif ! grep -qF "$REFERENCE_LINE" "$agents_path"; then
+    elif ! grep -qF "$reference_line" "$agents_path"; then
       fail "$agents_path marker block has stale reference line - run install to update"
     fi
   fi

@@ -321,6 +321,93 @@ function checkDuplicateSkills(home: string): CheckResult {
   return check(status, "skills_duplicate", "Skills not duplicated", parts.join("; "));
 }
 
+const GROK_ACTIVATION_REFERENCE =
+  "Read @~/.grok/skillwiki.md for SkillWiki activation context.";
+const STALE_GROK_ACTIVATION_REFERENCE = "Read @skillwiki.md";
+const ACTIVATION_FIX_HINT = "run `npm run install:activation` from the llm-wiki repo";
+
+function findGrokActivationTemplate(home: string, cwd?: string): string | undefined {
+  if (cwd) {
+    const src = join(cwd, "packages", "skills", "using-skillwiki", "activation.md");
+    if (existsSync(src)) return src;
+  }
+  const pluginsRoot = join(home, ".grok", "installed-plugins");
+  if (!existsSync(pluginsRoot)) return undefined;
+  let entries;
+  try {
+    entries = readdirSync(pluginsRoot, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const root = join(pluginsRoot, entry.name);
+    for (const rel of ["using-skillwiki/activation.md", "skills/using-skillwiki/activation.md"]) {
+      const candidate = join(root, rel);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return undefined;
+}
+
+/** Read-only Grok activation drift check. Never writes ~/.grok/AGENTS.md. */
+export function checkGrokActivation(home: string, cwd?: string): CheckResult {
+  const grokDir = join(home, ".grok");
+  if (!existsSync(grokDir)) {
+    return check("pass", "activation_grok", "Grok activation", "Not a Grok host");
+  }
+
+  const activationPath = join(grokDir, "skillwiki.md");
+  const agentsPath = join(grokDir, "AGENTS.md");
+  const hasActivation = existsSync(activationPath);
+  const issues: string[] = [];
+
+  if (!hasActivation) {
+    issues.push("~/.grok/skillwiki.md missing");
+  }
+
+  if (!existsSync(agentsPath)) {
+    issues.push("~/.grok/AGENTS.md missing");
+  } else {
+    const agents = readFileSync(agentsPath, "utf8");
+    const hasBegin = agents.includes("<!-- skillwiki:begin -->");
+    const hasExpected = agents.includes(GROK_ACTIVATION_REFERENCE);
+    const hasStale = agents.includes(STALE_GROK_ACTIVATION_REFERENCE);
+    if (!hasBegin) {
+      issues.push("AGENTS.md marker missing");
+    } else if (hasStale && !hasExpected) {
+      issues.push("AGENTS.md marker is stale (@skillwiki.md)");
+    } else if (!hasExpected) {
+      issues.push("AGENTS.md marker is stale");
+    }
+  }
+
+  if (hasActivation) {
+    const template = findGrokActivationTemplate(home, cwd);
+    if (template) {
+      try {
+        const installed = readFileSync(activationPath, "utf8");
+        const expected = readFileSync(template, "utf8");
+        if (installed !== expected) {
+          issues.push("~/.grok/skillwiki.md differs from template");
+        }
+      } catch {
+        // unreadable template or file — skip byte compare
+      }
+    }
+  }
+
+  if (issues.length > 0) {
+    return check(
+      "warn",
+      "activation_grok",
+      "Grok activation",
+      `${issues.join("; ")} — ${ACTIVATION_FIX_HINT}`,
+    );
+  }
+  return check("pass", "activation_grok", "Grok activation", "Marker and compact file are current");
+}
+
 function checkNpmUpdate(home: string, currentVersion: string): CheckResult {
   const { hasUpdate, latest, distTag } = latestFromCache(home, currentVersion);
   if (!latest) {
@@ -2000,6 +2087,7 @@ export async function runDoctor(
   checks.push(checkVfsCacheHealth(resolvedPath));
   checks.push(checkSkillsInstalled(input.home, input.cwd));
   checks.push(checkDuplicateSkills(input.home));
+  checks.push(checkGrokActivation(input.home, input.cwd));
   checks.push(checkNpmUpdate(input.home, input.currentVersion));
   checks.push(checkPluginVersionDrift(input.home, input.currentVersion, devSourceRun));
 

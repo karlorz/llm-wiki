@@ -8,6 +8,7 @@ import {
   runDoctor,
   checkSatelliteLastRun,
   checkSatelliteTimer,
+  checkGrokActivation,
   doctorReadOnlyScanRoot,
 } from "../../src/commands/doctor.js";
 
@@ -296,12 +297,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 50 checks", async () => {
+  it("always returns exactly 51 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(50);
+      expect(r.result.data.checks).toHaveLength(51);
       const freshness = r.result.data.checks.find(c => c.id === "s3_mount_freshness");
       expect(freshness).toBeDefined();
       expect(freshness?.status).toBe("pass");
@@ -952,6 +953,61 @@ describe("runDoctor", () => {
       expect(dup?.detail).toContain("~/.claude/skills/");
       expect(dup?.detail).toContain("~/.codex/skills/");
     }
+  });
+
+  describe("activation_grok", () => {
+    const grokRef = "Read @~/.grok/skillwiki.md for SkillWiki activation context.";
+    const staleRef = "Read @skillwiki.md for SkillWiki activation context.";
+    const templatePath = join(REPO_ROOT, "skills", "using-skillwiki", "activation.md");
+
+    function writeGrokMarker(h: string, line: string): void {
+      mkdirSync(join(h, ".grok"), { recursive: true });
+      writeFileSync(join(h, ".grok", "AGENTS.md"), `<!-- skillwiki:begin -->\n${line}\n<!-- skillwiki:end -->\n`);
+    }
+
+    it("passes when ~/.grok is absent", () => {
+      const r = checkGrokActivation(home());
+      expect(r.status).toBe("pass");
+      expect(r.detail).toContain("Not a Grok host");
+    });
+
+    it("warns when compact file is missing", () => {
+      const h = home();
+      writeGrokMarker(h, grokRef);
+      const r = checkGrokActivation(h);
+      expect(r.status).toBe("warn");
+      expect(r.detail).toContain("~/.grok/skillwiki.md missing");
+      expect(r.detail).toContain("npm run install:activation");
+    });
+
+    it("warns when the AGENTS.md marker is the relative @skillwiki.md form", () => {
+      const h = home();
+      mkdirSync(join(h, ".grok"), { recursive: true });
+      writeFileSync(join(h, ".grok", "skillwiki.md"), readFileSync(templatePath, "utf8"));
+      writeGrokMarker(h, staleRef);
+      const r = checkGrokActivation(h);
+      expect(r.status).toBe("warn");
+      expect(r.detail).toContain("stale");
+      expect(r.detail).toContain("@skillwiki.md");
+    });
+
+    it("warns when the compact file drifts from the template", () => {
+      const h = home();
+      writeGrokMarker(h, grokRef);
+      writeFileSync(join(h, ".grok", "skillwiki.md"), "# stale compact file\n");
+      const r = checkGrokActivation(h, join(REPO_ROOT, ".."));
+      expect(r.status).toBe("warn");
+      expect(r.detail).toContain("differs from template");
+    });
+
+    it("passes when marker and compact file match the template", () => {
+      const h = home();
+      writeGrokMarker(h, grokRef);
+      writeFileSync(join(h, ".grok", "skillwiki.md"), readFileSync(templatePath, "utf8"));
+      const r = checkGrokActivation(h, join(REPO_ROOT, ".."));
+      expect(r.status).toBe("pass");
+      expect(r.detail).toContain("current");
+    });
   });
 
   it("cli_channels passes with single channel", async () => {
