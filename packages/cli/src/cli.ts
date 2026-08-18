@@ -66,6 +66,7 @@ import { runSeed } from "./commands/seed.js";
 import { runCanvasGenerate } from "./commands/canvas.js";
 import { runQuery } from "./commands/query.js";
 import { runVectorsRebuild, runVectorsStatus } from "./commands/vectors.js";
+import { runVectorsReindexPage } from "./commands/vectors-reindex-page.js";
 import { runSourcesPending } from "./commands/sources.js";
 import { runSourceDisposition } from "./commands/source-disposition.js";
 import {
@@ -2077,6 +2078,15 @@ vectorsCmd
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runVectorsStatus({ vault: v.vault }), v.vault, { postCommit: false });
+  });
+vectorsCmd
+  .command("reindex-page <page> [vault]")
+  .description("incrementally reindex a single page in the TF-IDF cache")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (page, vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runVectorsReindexPage({ vault: v.vault, page }), v.vault, { postCommit: false });
   });
 
 // Emit deprecation warnings for any installed skills marked deprecated

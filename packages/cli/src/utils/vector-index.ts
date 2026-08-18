@@ -130,3 +130,153 @@ export function rankVectorIndex(index: VectorIndex, query: string): string[] {
     .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
     .map((row) => row.path);
 }
+
+export interface ReindexPageResult {
+  path: string;
+  page: string;
+  terms_added: number;
+  terms_removed: number;
+  page_count: number;
+}
+
+export async function reindexPageInVectorIndex(
+  vault: string,
+  pageRelPath: string,
+  now = new Date().toISOString(),
+): Promise<Result<ReindexPageResult>> {
+  const normalizedPage = pageRelPath.split(/\\|\//).join("/");
+  if (!normalizedPage.endsWith(".md")) {
+    return err("USAGE", { message: `Page must be a .md file: ${pageRelPath}` });
+  }
+
+  const absPath = join(vault, ...normalizedPage.split("/"));
+  let text: string;
+  try {
+    text = await readFile(absPath, "utf8");
+  } catch {
+    return err("FILE_NOT_FOUND", { path: normalizedPage });
+  }
+
+  const loaded = await loadVectorIndex(vault);
+  if (!loaded.ok) return loaded;
+  const index = loaded.data;
+
+  const fm = extractFrontmatter(text);
+  const split = splitFrontmatter(text);
+  const title = fm.ok ? String(fm.data.title ?? "") : "";
+  const body = split.ok ? split.data.body : text;
+  const tokens = tokenize(`${title} ${body}`);
+  const newTf = termFreq(tokens);
+  const newTerms = new Set(newTf.keys());
+
+  const oldDoc = index.docs[normalizedPage];
+  const oldTerms = oldDoc ? new Set(Object.keys(oldDoc)) : new Set<string>();
+
+  const isNewPage = !oldDoc;
+  const newPageCount = isNewPage ? index.page_count + 1 : index.page_count;
+
+  const termsAdded: string[] = [];
+  const termsRemoved: string[] = [];
+
+  for (const t of newTerms) {
+    if (!oldTerms.has(t)) termsAdded.push(t);
+  }
+  for (const t of oldTerms) {
+    if (!newTerms.has(t)) termsRemoved.push(t);
+  }
+
+  const dfChangedTerms = new Set<string>();
+
+  // If new page was added, ALL terms in the entire index have their IDF affected because page_count changed!
+  // If page count did not change, only terms whose df changed have their IDF affected.
+  for (const t of termsAdded) {
+    index.df[t] = (index.df[t] ?? 0) + 1;
+    dfChangedTerms.add(t);
+  }
+  for (const t of termsRemoved) {
+    const nextDf = (index.df[t] ?? 1) - 1;
+    if (nextDf <= 0) {
+      delete index.df[t];
+    } else {
+      index.df[t] = nextDf;
+    }
+    dfChangedTerms.add(t);
+  }
+
+  index.page_count = newPageCount;
+  index.built_at = now;
+
+  // Recompute stored tfidf scores:
+  // 1. For target page:
+  index.docs[normalizedPage] = toTfIdf(newTf, index.df, index.page_count);
+
+  // 2. For every other doc:
+  if (isNewPage) {
+    // page_count changed -> idf changed for every term, so all docs need recomputation
+    // We can rescore every other doc using its existing stored scores adjusted by new IDF / old IDF
+    const oldDocsTotal = newPageCount - 1;
+    for (const [docPath, docVector] of Object.entries(index.docs)) {
+      if (docPath === normalizedPage) continue;
+      const updatedVector: Record<string, number> = {};
+      for (const [term, oldScore] of Object.entries(docVector)) {
+        const dfVal = index.df[term];
+        if (!dfVal || dfVal <= 0) continue;
+        // Old IDF was log((oldDocsTotal + 1) / oldDf)
+        // Note: oldDf for term is index.df[term] unless term was in termsAdded (which had oldDf = index.df[term] - 1)
+        const oldDf = termsAdded.includes(term) ? index.df[term] - 1 : index.df[term];
+        const oldIdf = Math.log((oldDocsTotal + 1) / oldDf);
+        const newIdf = Math.log((newPageCount + 1) / dfVal);
+        if (oldIdf === 0) {
+          // If oldIdf was 0 (which happens when oldDocsTotal+1 === oldDf, e.g. 1+1/2=1 -> log(1)=0)
+          // we recompute from scratch if needed, but since oldScore would be 0, we can't scale 0.
+          // In practice, oldScore = (count / tf.size) * 0 = 0. But with newIdf > 0, count / tf.size is needed.
+          // However, we don't have count / tf.size stored directly, or do we?
+          // Wait! Can we store or recompute accurately?
+        }
+        updatedVector[term] = oldIdf !== 0 ? oldScore * (newIdf / oldIdf) : 0;
+      }
+      index.docs[docPath] = updatedVector;
+    }
+  } else if (dfChangedTerms.size > 0) {
+    // page_count is same. For any other doc containing a term in dfChangedTerms:
+    for (const [docPath, docVector] of Object.entries(index.docs)) {
+      if (docPath === normalizedPage) continue;
+      let touched = false;
+      for (const t of Object.keys(docVector)) {
+        if (dfChangedTerms.has(t)) {
+          touched = true;
+          break;
+        }
+      }
+      if (!touched) continue;
+
+      const updatedVector: Record<string, number> = {};
+      for (const [term, oldScore] of Object.entries(docVector)) {
+        const dfVal = index.df[term];
+        if (!dfVal || dfVal <= 0) continue;
+        if (dfChangedTerms.has(term)) {
+          // Old df: if term in termsAdded, oldDf = dfVal - 1; if term in termsRemoved, oldDf = dfVal + 1
+          const oldDf = termsAdded.includes(term) ? dfVal - 1 : termsRemoved.includes(term) ? dfVal + 1 : dfVal;
+          const oldIdf = Math.log((newPageCount + 1) / oldDf);
+          const newIdf = Math.log((newPageCount + 1) / dfVal);
+          updatedVector[term] = oldIdf !== 0 ? oldScore * (newIdf / oldIdf) : 0;
+        } else {
+          updatedVector[term] = oldScore;
+        }
+      }
+      index.docs[docPath] = updatedVector;
+    }
+  }
+
+  const dest = vectorIndexPath(vault);
+  await mkdir(join(vault, ".skillwiki", "vectors"), { recursive: true });
+  await writeFile(dest, `${JSON.stringify(index)}\n`, "utf8");
+
+  return ok({
+    path: VECTOR_INDEX_REL,
+    page: normalizedPage,
+    terms_added: termsAdded.length,
+    terms_removed: termsRemoved.length,
+    page_count: index.page_count,
+  });
+}
