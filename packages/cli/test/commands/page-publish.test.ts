@@ -211,7 +211,6 @@ describe("page publish", () => {
     const cases = [
       { target: "queries/novel.md", logNote: "two\nlines" },
       { target: "queries/novel.md", logNote: "a".repeat(501) },
-      { target: "concepts/novel.md", logNote: undefined },
     ];
 
     for (const input of cases) {
@@ -219,6 +218,20 @@ describe("page publish", () => {
       expect(result.result.ok).toBe(false);
       expect(snapshotFiles(vault)).toEqual(before);
     }
+
+    // A page type mismatch is an auto-hold (schema-invalid gate), not a hard
+    // reject: exit 0, held output, no page written; the review event file is
+    // the only vault change.
+    const schemaBefore = readFileSync(join(vault, "SCHEMA.md"), "utf8");
+    const held = await runPagePublish({ vault, draftPath: writeQueryDraft(), write: true, target: "concepts/novel.md" });
+    expect(held.exitCode).toBe(ExitCode.OK);
+    expect(held.result.ok).toBe(true);
+    if (held.result.ok) {
+      expect(held.result.data.held).toBe(true);
+      expect(held.result.data.hold_reasons).toContain("schema-invalid");
+    }
+    expect(existsSync(join(vault, "concepts", "novel.md"))).toBe(false);
+    expect(readFileSync(join(vault, "SCHEMA.md"), "utf8")).toBe(schemaBefore);
   });
 
   it("does not mutate any publication files for an invalid newly missing tag", async () => {

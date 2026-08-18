@@ -294,7 +294,7 @@ describe("deterministic auto-hold review gates", () => {
     expect(listing.items.some((i) => i.raw_path === "queries/missing-citation.md" && i.status === "open")).toBe(true);
   });
 
-  it("gate 4: sensitive-content in draft body holds on publish --write", async () => {
+  it("gate 4 (R10): sensitive-content in draft body is HARD-REJECTED, not held", async () => {
     const vault = makeVault();
     const draft = writeDraftFile(sensitiveContentDraft());
 
@@ -305,19 +305,93 @@ describe("deterministic auto-hold review gates", () => {
       write: true,
     });
 
+    // Security invariant: sensitive material is refused, never queued for review.
+    expect(result.exitCode).toBe(ExitCode.SENSITIVE_CONTENT_DETECTED);
+    expect(result.result.ok).toBe(false);
+    if (result.result.ok) throw new Error("expected hard reject");
+    expect(result.result.error).toBe("SENSITIVE_CONTENT_DETECTED");
+    expect(existsSync(join(vault, "queries", "sensitive.md"))).toBe(false);
+
+    const logEvents = await readLogEvents(vault);
+    expect(logEvents.ok).toBe(true);
+    if (!logEvents.ok) throw new Error("readLogEvents failed");
+    expect(logEvents.data).toEqual([]);
+  });
+
+  it("self-link on a new page is not a broken wikilink (R11): publishes clean", async () => {
+    const vault = makeVault();
+    const selfLinkDraft = `---
+title: Self Link Query
+aliases: []
+created: 2026-08-18
+updated: 2026-08-18
+type: query
+tags: [research]
+sources: [raw/articles/source.md]
+confidence: medium
+---
+
+# Self Link Query
+
+See [[self-link]] for context ^[raw/articles/source.md].
+
+## Sources
+
+- ^[raw/articles/source.md]
+`;
+    const draft = writeDraftFile(selfLinkDraft);
+
+    const result = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/self-link.md",
+      write: true,
+    });
+
+    expect(result.exitCode).toBe(ExitCode.OK);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("publish failed");
+    expect((result.result.data as { held?: boolean }).held).toBeFalsy();
+    expect(existsSync(join(vault, "queries", "self-link.md"))).toBe(true);
+  });
+
+  it("link to a different not-yet-published page still holds (R11 boundary)", async () => {
+    const vault = makeVault();
+    const futureLinkDraft = `---
+title: Future Link Query
+aliases: []
+created: 2026-08-18
+updated: 2026-08-18
+type: query
+tags: [research]
+sources: [raw/articles/source.md]
+confidence: medium
+---
+
+# Future Link Query
+
+See [[queries/other-future-page]] for context ^[raw/articles/source.md].
+
+## Sources
+
+- ^[raw/articles/source.md]
+`;
+    const draft = writeDraftFile(futureLinkDraft);
+
+    const result = await runPagePublish({
+      vault,
+      draftPath: draft,
+      target: "queries/future-link.md",
+      write: true,
+    });
+
     expect(result.exitCode).toBe(ExitCode.OK);
     expect(result.result.ok).toBe(true);
     if (!result.result.ok) throw new Error("hold publish failed");
-    const data = result.result.data as { held: boolean; hold_reasons: string[]; review_event_id?: string };
+    const data = result.result.data as { held: boolean; hold_reasons: string[] };
     expect(data.held).toBe(true);
-    expect(data.hold_reasons).toContain("sensitive-content");
-    expect(existsSync(join(vault, "queries", "sensitive.md"))).toBe(false);
-
-    const reviews = await runSourceReviews({ vault });
-    expect(reviews.result.ok).toBe(true);
-    if (!reviews.result.ok) throw new Error("listing failed");
-    const listing = reviews.result.data as { items: Array<{ raw_path: string; status: string }> };
-    expect(listing.items.some((i) => i.raw_path === "queries/sensitive.md" && i.status === "open")).toBe(true);
+    expect(data.hold_reasons).toContain("broken-wikilink");
+    expect(existsSync(join(vault, "queries", "future-link.md"))).toBe(false);
   });
 
   it("dry-run reports held: true + reasons as would-hold preview without writing anything or review events", async () => {

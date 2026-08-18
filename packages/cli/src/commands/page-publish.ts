@@ -186,8 +186,7 @@ function prepareFrozenPublication(
   } else if (
     page.error === "INVALID_FRONTMATTER" ||
     page.error === "MISSING_CLOSING_DELIMITER" ||
-    page.error === "SCHEME_REJECTED" ||
-    page.error === "SENSITIVE_CONTENT_DETECTED"
+    page.error === "SCHEME_REJECTED"
   ) {
     const fm = extractFrontmatter(input.content);
     let pageType = input.target.split("/")[0] ?? "queries";

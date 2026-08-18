@@ -10,7 +10,6 @@ import {
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { extractCitationMarkers } from "../parsers/citations.js";
-import { scanSensitiveContent } from "../utils/sensitive-content.js";
 import { buildWikilinkResolver } from "../utils/wikilink-resolver.js";
 import { scanVault, type VaultScan } from "../utils/vault.js";
 import { operationId } from "../utils/operation-id.js";
@@ -20,8 +19,7 @@ import type { PreparedPublicationCore } from "./types.js";
 export type PublicationHoldReason =
   | "schema-invalid"
   | "broken-wikilink"
-  | "citation-marker-missing"
-  | "sensitive-content";
+  | "citation-marker-missing";
 
 export interface HoldGateEvaluation {
   held: boolean;
@@ -75,12 +73,16 @@ export function evaluateSchemaGate(content: string, target: string, publisherKin
 /**
  * Gate 2: broken-wikilink
  * Resolves all wikilinks in draft body against current vault via wikilinkResolver.
+ * The draft's own target counts as resolvable (R11): a new page linking to
+ * itself is not broken, since the target exists once published.
  */
 export function evaluateBrokenWikilinkGate(
   body: string,
   scan: VaultScan,
+  ownTarget: string,
 ): boolean {
-  const resolver = buildWikilinkResolver(scan.allMarkdown);
+  const draftPage = { absPath: join(scan.root, ownTarget), relPath: ownTarget };
+  const resolver = buildWikilinkResolver([...scan.allMarkdown, draftPage]);
   const wikilinks = extractBodyWikilinks(body);
   for (const link of wikilinks) {
     const res = resolver.resolve(link);
@@ -111,17 +113,10 @@ export function evaluateCitationMarkerGate(content: string, body: string, publis
 }
 
 /**
- * Gate 4: sensitive-content
- * Scans draft body for sensitive tokens/keys.
- */
-export function evaluateSensitiveContentGate(body: string, target: string): boolean {
-  // Strip code fences and look for sensitive findings in body
-  const findings = scanSensitiveContent(body, { file: target });
-  return findings.length === 0;
-}
-
-/**
- * Evaluate all four configured publication hold gates against prepared draft content.
+ * Evaluate the configured publication hold gates against prepared draft content.
+ * Sensitive draft content is NOT a hold gate: it is hard-rejected upstream in
+ * prepareTypedPage (SENSITIVE_CONTENT_DETECTED), a strictly stronger response
+ * that keeps credentials out of any review-accept path (R10).
  */
 export async function evaluatePublicationHoldGates(input: {
   prepared: PreparedPublicationCore;
@@ -144,7 +139,7 @@ export async function evaluatePublicationHoldGates(input: {
   // 2. broken-wikilink
   const scanResult = input.scan ? { ok: true, data: input.scan } : await scanVault(input.vault);
   if (scanResult.ok) {
-    const wikilinksValid = evaluateBrokenWikilinkGate(body, scanResult.data);
+    const wikilinksValid = evaluateBrokenWikilinkGate(body, scanResult.data, target);
     if (!wikilinksValid) {
       hold_reasons.push("broken-wikilink");
     }
@@ -154,12 +149,6 @@ export async function evaluatePublicationHoldGates(input: {
   const citationValid = evaluateCitationMarkerGate(content, body, input.publisherKind);
   if (!citationValid) {
     hold_reasons.push("citation-marker-missing");
-  }
-
-  // 4. sensitive-content
-  const sensitiveValid = evaluateSensitiveContentGate(body, target);
-  if (!sensitiveValid) {
-    hold_reasons.push("sensitive-content");
   }
 
   return {
@@ -190,7 +179,7 @@ export async function handlePublicationHoldIfTripped(input: {
 
   const scanResult = await scanVault(input.vault);
   if (scanResult.ok) {
-    const wikilinksValid = evaluateBrokenWikilinkGate(body, scanResult.data);
+    const wikilinksValid = evaluateBrokenWikilinkGate(body, scanResult.data, input.target);
     if (!wikilinksValid) {
       hold_reasons.push("broken-wikilink");
     }
@@ -198,10 +187,6 @@ export async function handlePublicationHoldIfTripped(input: {
   const citationValid = evaluateCitationMarkerGate(input.content, body, input.publisherKind);
   if (!citationValid) {
     hold_reasons.push("citation-marker-missing");
-  }
-  const sensitiveValid = evaluateSensitiveContentGate(body, input.target);
-  if (!sensitiveValid) {
-    hold_reasons.push("sensitive-content");
   }
 
   if (hold_reasons.length === 0) return null;
