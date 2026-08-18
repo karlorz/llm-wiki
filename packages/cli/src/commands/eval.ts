@@ -7,6 +7,7 @@ import { extractIssuePage } from "../lint/fingerprints.js";
 import { defaultLintRunner, LintRunner } from "../lint/runner.js";
 import type { LintOutput, LintSeverity } from "../lint/types.js";
 import { referencesFromText } from "../utils/source-reference-index.js";
+import { extractGitTree } from "../utils/git-archive.js";
 import { resolveReadOnlyVaultRoot, scanVault, readPage, type VaultScan } from "../utils/vault.js";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 
@@ -303,16 +304,7 @@ export async function runEval(
 
     const tmpRoot = mkdtempSync(join(tmpdir(), "skillwiki-eval-delta-"));
     try {
-      const archive = execFileSync("git", ["archive", "--format=tar", baseRef], {
-        cwd: vaultPath,
-        stdio: ["pipe", "pipe", "pipe"],
-        maxBuffer: 256 * 1024 * 1024,
-      });
-      execFileSync("tar", ["-xf", "-"], {
-        cwd: tmpRoot,
-        input: archive,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      extractGitTree(vaultPath, baseRef, tmpRoot);
 
       const baseAggRes = await aggregateVault(tmpRoot, topLimit);
       if (!baseAggRes.ok) {
