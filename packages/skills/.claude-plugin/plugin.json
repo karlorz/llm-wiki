@@ -2,7 +2,7 @@
   "name": "skillwiki",
   "version": "0.10.49",
   "skills": "./",
-  "description": "Project-aware Karpathy-style knowledge base for Claude Code: 19 prompt-only skills (wiki-*, proj-*, using-skillwiki) backed by the deterministic `skillwiki` CLI.",
+  "description": "Project-aware Karpathy-style knowledge base for Claude Code: 20 prompt-only skills (wiki-*, proj-*, using-skillwiki) backed by the deterministic `skillwiki` CLI.",
   "author": {
     "name": "karlorz",
     "url": "https://github.com/karlorz"
