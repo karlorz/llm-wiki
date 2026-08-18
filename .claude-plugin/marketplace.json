@@ -6,13 +6,13 @@
   },
   "metadata": {
     "description": "Two-plugin marketplace for skillwiki and vault-sync — project-aware knowledge workflows and cross-platform vault synchronization.",
-    "version": "0.10.50"
+    "version": "0.10.51"
   },
   "plugins": [
     {
       "name": "skillwiki",
       "description": "20 prompt-only skills (wiki-*, proj-*, using-skillwiki) backed by the deterministic skillwiki CLI.",
-      "version": "0.10.50",
+      "version": "0.10.51",
       "source": "./packages/skills",
       "strict": true,
       "author": {
@@ -34,7 +34,7 @@
     {
       "name": "vault-sync",
       "description": "6 skills (vault-sync-install, vault-sync-status, vault-sync-uninstall, vault-presync, vault-snapshot, vault-fuse-freshness) for cross-platform vault sync: rclone push, fetch-notify, presync, snapshot, and Linux FUSE freshness refresh.",
-      "version": "0.10.50",
+      "version": "0.10.51",
       "source": "./packages/vault-sync",
       "strict": true,
       "author": {
