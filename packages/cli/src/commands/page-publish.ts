@@ -2,39 +2,49 @@ import { readFileSync, realpathSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { err, ok, ExitCode, type ErrResult, type Result } from "@skillwiki/shared";
-import { runLogAppend } from "./log-append.js";
 import { renderProjectIndex } from "./project-index.js";
-import { extractTaxonomy, reconcileTaxonomyDocument, taxonomyCommentForPage } from "../parsers/taxonomy.js";
+import { taxonomyCommentForPage } from "../parsers/taxonomy.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { atomicWriteText } from "../utils/atomic-write.js";
-import { git } from "../utils/git.js";
 import { upsertIndexEntry, renderIndexUpsert } from "../utils/index-entry.js";
 import {
-  runManagedWritePreflight,
-  runManagedWriteTransaction,
   type ManagedWritePreflightInput,
   type ManagedWriteReceipt,
   type ManagedWriteMode,
 } from "../utils/managed-write-preflight.js";
-import { writeLogEvent } from "../utils/log-events.js";
 import {
   buildApprovalPayload,
-  encodeApprovalToken,
   normalizeLogNote,
   operationIdFromApproval,
-  redactApprovalTokens,
   sha256Hex,
   verifyApprovalToken,
   type ApprovalPayload,
 } from "../utils/publication-approval.js";
-import { redactSensitiveContent, scanSensitiveContent } from "../utils/sensitive-content.js";
-import { safeWritePage } from "../utils/safe-write.js";
-import { acquireOwnedSyncLock, releaseOwnedSyncLock } from "../utils/sync-lock.js";
+import { scanSensitiveContent } from "../utils/sensitive-content.js";
 import {
   assertTargetInsideVault,
   prepareTypedPage,
   type PreparedTypedPage,
 } from "../utils/typed-page.js";
+import {
+  DEFAULT_PIPELINE_DEPS,
+  errorExitCode,
+  executePublicationPipeline,
+  publishPreparedWithReceipt as pipelinePublishWithReceipt,
+  readPageChanged,
+  redactDetail,
+  runPipelinePreview,
+} from "../publish/pipeline.js";
+import {
+  resolveRootAggregateMode,
+  type PipelineLockedState,
+  type PreparedPublicationCore,
+  type PublicationPipelineDeps,
+  type PublicationStrategy,
+  type RootAggregateMode,
+} from "../publish/types.js";
+
+export { resolveRootAggregateMode, type RootAggregateMode };
 
 export interface PagePublishInput {
   vault: string;
@@ -82,19 +92,8 @@ export interface PagePublishOutput {
   humanHint: string;
 }
 
-export interface PreparedPagePublication {
+export interface PreparedPagePublication extends PreparedPublicationCore {
   page: PreparedTypedPage;
-  source:
-    | { kind: "file"; realPath: string }
-    | { kind: "content" };
-  targetPath: string;
-  logNote?: string;
-  operationId: string;
-  date: string;
-  taxonomyComment: string;
-  draftSha256: string;
-  priorTargetSha256: string;
-  approvalPayload: ApprovalPayload;
 }
 
 export type PublishStage = "schema" | "page" | "verify" | "project-index" | "event" | "index" | "unlock" | "log";
@@ -110,49 +109,12 @@ export type PagePublishRun = { exitCode: number; result: Result<PagePublishOutpu
 
 const DEFAULT_DEPS: PagePublishDeps = {
   afterStage: async () => undefined,
-  preflight: (input) => runManagedWritePreflight(input),
+  preflight: (input) => DEFAULT_PIPELINE_DEPS.preflight(input),
 };
 
 /** Test-only hook factory; production callers use the immutable default dependency. */
 export function defaultPagePublishDeps(overrides: Partial<PagePublishDeps> = {}): PagePublishDeps {
   return { ...DEFAULT_DEPS, ...overrides };
-}
-
-function errorExitCode(error: string): number {
-  switch (error) {
-    case "FILE_NOT_FOUND":
-      return ExitCode.FILE_NOT_FOUND;
-    case "MISSING_CLOSING_DELIMITER":
-      return ExitCode.MISSING_CLOSING_DELIMITER;
-    case "SCHEME_REJECTED":
-    case "NO_TAXONOMY_BLOCK":
-      return ExitCode.SCHEME_REJECTED;
-    case "VAULT_PATH_INVALID":
-      return ExitCode.VAULT_PATH_INVALID;
-    case "SENSITIVE_CONTENT_DETECTED":
-      return ExitCode.SENSITIVE_CONTENT_DETECTED;
-    case "SYNC_LOCK_HELD":
-      return ExitCode.SYNC_LOCK_HELD;
-    case "PREFLIGHT_FAILED":
-      return ExitCode.PREFLIGHT_FAILED;
-    case "APPROVAL_REQUIRED":
-      return ExitCode.APPROVAL_REQUIRED;
-    case "APPROVAL_INVALID":
-      return ExitCode.APPROVAL_INVALID;
-    case "APPROVAL_MISMATCH":
-      return ExitCode.APPROVAL_MISMATCH;
-    case "TARGET_DRIFT":
-      return ExitCode.TARGET_DRIFT;
-    case "PROJECT_NOT_FOUND":
-      return ExitCode.PROJECT_NOT_FOUND;
-    case "USAGE":
-      return ExitCode.USAGE;
-    case "EVENT_IDENTITY_COLLISION":
-    case "WRITE_FAILED":
-      return ExitCode.WRITE_FAILED;
-    default:
-      return ExitCode.INVALID_FRONTMATTER;
-  }
 }
 
 function projectSlugForTarget(target: string): string | undefined {
@@ -204,15 +166,6 @@ async function refreshProjectIndexForTarget(
     if (written.data.changed) paths.push(rendered.data.index_path);
   }
   return ok({ changed: paths.length > 0, paths });
-}
-
-export type RootAggregateMode = "dual" | "source-only";
-
-export function resolveRootAggregateMode(env: Record<string, string | undefined> = process.env): RootAggregateMode {
-  // Explicit source-only for event-first hosts; dual remains the compatibility default
-  // until the attended canary cuts over via SKILLWIKI_ROOT_AGGREGATE_MODE=source-only.
-  if (env.SKILLWIKI_ROOT_AGGREGATE_MODE === "source-only") return "source-only";
-  return "dual";
 }
 
 function prepareFrozenPublication(
@@ -268,8 +221,13 @@ function prepareFrozenPublication(
 
   return ok({
     page: page.data,
-    source,
+    target: input.target,
     targetPath: target.data.absolutePath,
+    pageType: page.data.type,
+    tags: page.data.tags,
+    title: page.data.title,
+    content: input.content,
+    source,
     logNote,
     operationId: operationIdFromApproval(approvalPayload.data),
     date,
@@ -329,265 +287,6 @@ export async function preparePagePublication(
   );
 }
 
-interface LockedPublicationState {
-  taxonomyAdded: string[];
-  pageChanged: boolean;
-  indexUpdated: boolean;
-  projectIndexUpdated: boolean;
-  published: boolean;
-  changed: Set<string>;
-}
-
-type LockedPublicationOutcome =
-  | { ok: true; data: LockedPublicationState }
-  | {
-      ok: false;
-      exitCode: number;
-      stage: "target" | "schema" | "page" | "verify" | "project-index" | "index";
-      state: LockedPublicationState;
-      cause: ErrResult;
-    };
-
-function emptyLockedState(): LockedPublicationState {
-  return {
-    taxonomyAdded: [],
-    pageChanged: false,
-    indexUpdated: false,
-    projectIndexUpdated: false,
-    published: false,
-    changed: new Set<string>(),
-  };
-}
-
-function lockedFailure(
-  stage: Exclude<LockedPublicationOutcome, { ok: true }> ["stage"],
-  state: LockedPublicationState,
-  cause: ErrResult,
-  exitCode: number = ExitCode.WRITE_FAILED,
-): LockedPublicationOutcome {
-  return { ok: false, exitCode, stage, state, cause };
-}
-
-async function observeStage(
-  deps: PagePublishDeps,
-  stage: PublishStage,
-): Promise<ErrResult | undefined> {
-  try {
-    await deps.afterStage(stage);
-    return undefined;
-  } catch (error: unknown) {
-    return err("WRITE_FAILED", { message: `stage hook failed at ${stage}: ${String(error)}` });
-  }
-}
-
-async function runLockedPrimaryStages(
-  input: PreparedPagePublication,
-  vault: string,
-  deps: PagePublishDeps,
-): Promise<LockedPublicationOutcome> {
-  const state = emptyLockedState();
-
-  // A target path can change between a lock-free preparation/preview and the
-  // locked write. Revalidate under the owned lock before any mutation.
-  const freshTarget = assertTargetInsideVault(vault, input.page.target);
-  if (!freshTarget.ok) {
-    return lockedFailure("target", state, freshTarget, ExitCode.VAULT_PATH_INVALID);
-  }
-  if (freshTarget.data.absolutePath !== input.targetPath) {
-    return lockedFailure(
-      "target",
-      state,
-      err("VAULT_PATH_INVALID", { message: "target canonical path changed after preparation" }),
-      ExitCode.VAULT_PATH_INVALID,
-    );
-  }
-  if (
-    input.source.kind === "file" &&
-    freshTarget.data.existingRealPath !== undefined &&
-    freshTarget.data.existingRealPath === input.source.realPath
-  ) {
-    return lockedFailure(
-      "target",
-      state,
-      err("VAULT_PATH_INVALID", { message: "draft now aliases the final target" }),
-      ExitCode.VAULT_PATH_INVALID,
-    );
-  }
-
-  const schemaPath = join(vault, "SCHEMA.md");
-  let schemaText: string;
-  try {
-    schemaText = await readFile(schemaPath, "utf8");
-  } catch (error: unknown) {
-    return lockedFailure("schema", state, err("WRITE_FAILED", { message: String(error) }));
-  }
-  const reconciled = reconcileTaxonomyDocument(schemaText, {
-    tags: input.page.tags,
-    comment: input.taxonomyComment,
-  });
-  if (!reconciled.ok) {
-    return lockedFailure("schema", state, reconciled, errorExitCode(reconciled.error));
-  }
-  state.taxonomyAdded = reconciled.data.added;
-  if (reconciled.data.changed) {
-    const schemaWrite = await atomicWriteText(schemaPath, reconciled.data.text);
-    if (!schemaWrite.ok) return lockedFailure("schema", state, schemaWrite);
-    if (schemaWrite.data.changed) state.changed.add("SCHEMA.md");
-  }
-  const schemaHook = await observeStage(deps, "schema");
-  if (schemaHook) return lockedFailure("schema", state, schemaHook);
-
-  const pageWrite = await safeWritePage(input.targetPath, input.page.content);
-  if (!pageWrite.ok) return lockedFailure("page", state, pageWrite);
-  state.pageChanged = pageWrite.data.changed;
-  if (state.pageChanged) state.changed.add(input.page.target);
-  state.published = true;
-  const pageHook = await observeStage(deps, "page");
-  if (pageHook) return lockedFailure("page", state, pageHook);
-
-  let visible: string;
-  let visibleSchema: string;
-  try {
-    [visible, visibleSchema] = await Promise.all([
-      readFile(input.targetPath, "utf8"),
-      readFile(schemaPath, "utf8"),
-    ]);
-  } catch (error: unknown) {
-    return lockedFailure("verify", state, err("WRITE_FAILED", { message: String(error) }));
-  }
-  const visiblePage = prepareTypedPage(visible, input.page.target);
-  const visibleTaxonomy = extractTaxonomy(visibleSchema);
-  if (
-    !visiblePage.ok ||
-    visible !== input.page.content ||
-    !visibleTaxonomy.ok ||
-    input.page.tags.some((tag) => !visibleTaxonomy.data.includes(tag))
-  ) {
-    return lockedFailure(
-      "verify",
-      state,
-      err("WRITE_FAILED", { message: "published bytes or taxonomy verification failed" }),
-    );
-  }
-  const verifyHook = await observeStage(deps, "verify");
-  if (verifyHook) return lockedFailure("verify", state, verifyHook);
-
-  const projectSlugs = projectSlugsForPublication(input.page.target, input.page.content);
-  if (projectSlugs.length > 0) {
-    const projectIndex = await refreshProjectIndexForTarget(vault, projectSlugs, input.date);
-    if (!projectIndex.ok) return lockedFailure("project-index", state, projectIndex);
-    state.projectIndexUpdated = projectIndex.data.changed;
-    for (const path of projectIndex.data.paths) state.changed.add(path);
-    const projectIndexHook = await observeStage(deps, "project-index");
-    if (projectIndexHook) return lockedFailure("project-index", state, projectIndexHook);
-  }
-
-  const index = await upsertIndexEntry({
-    vault,
-    target: input.page.target,
-    title: input.page.title,
-    type: input.page.type,
-  });
-  if (!index.ok) return lockedFailure("index", state, index);
-  state.indexUpdated = index.data.changed;
-  if (state.indexUpdated) state.changed.add("index.md");
-  const indexHook = await observeStage(deps, "index");
-  if (indexHook) return lockedFailure("index", state, indexHook);
-
-  return { ok: true, data: state };
-}
-
-type PagePublishFailureStage =
-  | "target"
-  | "schema"
-  | "page"
-  | "verify"
-  | "project-index"
-  | "event"
-  | "index"
-  | "unlock"
-  | "log";
-
-function redactDetail(detail: unknown): unknown {
-  if (detail === undefined) return undefined;
-  try {
-    const encoded = JSON.stringify(detail);
-    return JSON.parse(redactApprovalTokens(redactSensitiveContent(encoded).text));
-  } catch {
-    return { message: "unserializable error detail omitted" };
-  }
-}
-
-function phaseFailure(
-  stage: PagePublishFailureStage,
-  input: PreparedPagePublication,
-  published: boolean,
-  cause: ErrResult,
-  context: Record<string, unknown> = {},
-  exitCode: number = ExitCode.WRITE_FAILED,
-): PagePublishRun {
-  return {
-    exitCode,
-    result: err("WRITE_FAILED", {
-      ...context,
-      stage,
-      published,
-      target: input.page.target,
-      operation_id: input.operationId,
-      retry_safe: stage !== "target",
-      cause_error: cause.error,
-      cause_detail: redactDetail(cause.detail),
-    }),
-  };
-}
-
-function successReceipt(
-  input: PreparedPagePublication,
-  taxonomyAdded: string[],
-  pageChanged: boolean,
-  indexUpdated: boolean,
-  projectIndexUpdated: boolean,
-  logAppended: boolean,
-  filesChanged: string[],
-  dryRun = false,
-  receipt: ManagedWriteReceipt | null = null,
-  approvalToken?: string,
-): PagePublishRun {
-  return {
-    exitCode: ExitCode.OK,
-    result: ok({
-      target: input.page.target,
-      page_type: input.page.type,
-      tags: [...input.page.tags],
-      taxonomy_added: [...taxonomyAdded],
-      page_changed: pageChanged,
-      index_updated: indexUpdated,
-      project_index_updated: projectIndexUpdated,
-      log_appended: logAppended,
-      operation_id: input.operationId,
-      dry_run: dryRun,
-      files_changed: filesChanged,
-      base_oid: receipt?.base_oid ?? null,
-      write_mode: receipt?.mode ?? null,
-      draft_sha256: input.draftSha256,
-      target_before: input.priorTargetSha256,
-      ...(approvalToken ? { approval_token: approvalToken } : {}),
-      ...(receipt ? {
-        mutation_vault: receipt.mutation_vault,
-        git_vault: receipt.git_vault,
-        convergence_source: receipt.convergence_source,
-      } : {}),
-      ...(receipt?.convergence_vault
-        ? { convergence_vault: receipt.convergence_vault }
-        : {}),
-      ...(receipt?.host_id ? { host_id: receipt.host_id } : {}),
-      humanHint: dryRun
-        ? `dry run: would publish ${input.page.target} (${input.operationId.slice(0, 12)})`
-        : `published ${input.page.target} (${input.operationId.slice(0, 12)})`,
-    }),
-  };
-}
-
 function renderPublicationLog(input: PreparedPagePublication, added: string[]): string {
   return [
     `## [${input.date}] page-publish | ${input.page.target}`,
@@ -598,14 +297,162 @@ function renderPublicationLog(input: PreparedPagePublication, added: string[]): 
   ].join("\n");
 }
 
-async function readPageChanged(targetPath: string, content: string): Promise<Result<boolean>> {
-  try {
-    return ok((await readFile(targetPath, "utf8")) !== content);
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return ok(true);
-    return err("WRITE_FAILED", { path: targetPath, message: String(error) });
-  }
-}
+export const PAGE_PUBLISH_STRATEGY: PublicationStrategy<PreparedPagePublication, PagePublishOutput> = {
+  publisherKind: "page",
+  taxonomyStageName: "schema",
+  requireApprovalOnWrite: false,
+  usesJournal: false,
+
+  async revalidateTargetUnderLock(prepared, vault) {
+    const freshTarget = assertTargetInsideVault(vault, prepared.page.target);
+    if (!freshTarget.ok) return freshTarget;
+    if (freshTarget.data.absolutePath !== prepared.targetPath) {
+      return err("VAULT_PATH_INVALID", { message: "target canonical path changed after preparation" });
+    }
+    if (
+      prepared.source.kind === "file" &&
+      freshTarget.data.existingRealPath !== undefined &&
+      freshTarget.data.existingRealPath === prepared.source.realPath
+    ) {
+      return err("VAULT_PATH_INVALID", { message: "draft now aliases the final target" });
+    }
+    return ok({ absolutePath: freshTarget.data.absolutePath });
+  },
+
+  verifyPublishedBytes(prepared, visible) {
+    const visiblePage = prepareTypedPage(visible, prepared.page.target);
+    return visiblePage.ok && visible === prepared.page.content;
+  },
+
+  async updateIndicesLocked(prepared, vault, state, observe) {
+    const projectSlugs = projectSlugsForPublication(prepared.page.target, prepared.page.content);
+    if (projectSlugs.length > 0) {
+      const projectIndex = await refreshProjectIndexForTarget(vault, projectSlugs, prepared.date);
+      if (!projectIndex.ok) {
+        const detail = typeof projectIndex.detail === "object" && projectIndex.detail !== null
+          ? projectIndex.detail
+          : { detail: projectIndex.detail };
+        return err(projectIndex.error, { ...detail, stage: "project-index" });
+      }
+      state.projectIndexUpdated = projectIndex.data.changed;
+      for (const path of projectIndex.data.paths) state.changed.add(path);
+      const projectIndexHook = await observe("project-index");
+      if (projectIndexHook) return projectIndexHook;
+    }
+
+    const index = await upsertIndexEntry({
+      vault,
+      target: prepared.page.target,
+      title: prepared.page.title,
+      type: prepared.page.type,
+    });
+    if (!index.ok) {
+      const detail = typeof index.detail === "object" && index.detail !== null
+        ? index.detail
+        : { detail: index.detail };
+      return err(index.error, { ...detail, stage: "index" });
+    }
+    state.indexUpdated = index.data.changed;
+    if (state.indexUpdated) state.changed.add("index.md");
+    const indexHook = await observe("index");
+    if (indexHook) return indexHook;
+
+    return undefined;
+  },
+
+  async previewIndices(prepared, vault, pageChanged) {
+    const indexPath = join(vault, "index.md");
+    let indexText: string;
+    try {
+      indexText = await readFile(indexPath, "utf8");
+    } catch (error: unknown) {
+      const result = err("FILE_NOT_FOUND", { path: indexPath, message: String(error) });
+      return { ok: false, exitCode: ExitCode.FILE_NOT_FOUND, result };
+    }
+    const index = renderIndexUpsert(indexText, {
+      target: prepared.page.target,
+      title: prepared.page.title,
+      type: prepared.page.type,
+    });
+    if (!index.ok) return { ok: false, exitCode: errorExitCode(index.error), result: index };
+
+    let projectIndexUpdated = false;
+    const projectIndexPaths: string[] = [];
+    for (const projectSlug of projectSlugsForPublication(prepared.page.target, prepared.page.content)) {
+      const renderedProject = await renderProjectIndex(vault, projectSlug, { today: prepared.date });
+      if (!renderedProject.ok) {
+        return { ok: false, exitCode: errorExitCode(renderedProject.error), result: renderedProject };
+      }
+      const projectIndexPath = join(vault, renderedProject.data.index_path);
+      const projectIndexChanged = await readPageChanged(projectIndexPath, renderedProject.data.text);
+      if (!projectIndexChanged.ok) {
+        return { ok: false, exitCode: errorExitCode(projectIndexChanged.error), result: projectIndexChanged };
+      }
+      if (projectIndexChanged.data || pageChanged) {
+        projectIndexUpdated = true;
+        projectIndexPaths.push(renderedProject.data.index_path);
+      }
+    }
+
+    return {
+      ok: true,
+      data: {
+        indexChanged: index.data.changed,
+        projectIndexChanged: projectIndexUpdated,
+        projectIndexPaths,
+      },
+    };
+  },
+
+  buildLogContent(prepared, added) {
+    return renderPublicationLog(prepared, added);
+  },
+
+  buildLogEvent(prepared, writeReceipt) {
+    return {
+      kind: "page-publish",
+      note: prepared.logNote ?? `Published ${prepared.page.title}`,
+      metadata: {
+        page_type: prepared.page.type,
+        tags: [...prepared.page.tags].sort(),
+        base_oid: writeReceipt.base_oid,
+      },
+    };
+  },
+
+  buildOutput(prepared, details) {
+    return {
+      target: prepared.page.target,
+      page_type: prepared.page.type,
+      tags: [...prepared.page.tags],
+      taxonomy_added: [...details.taxonomyAdded],
+      page_changed: details.pageChanged,
+      index_updated: details.indexUpdated ?? false,
+      project_index_updated: details.projectIndexChanged,
+      log_appended: details.logAppended,
+      operation_id: prepared.operationId,
+      dry_run: details.dryRun,
+      files_changed: details.filesChanged,
+      base_oid: details.receipt?.base_oid ?? null,
+      write_mode: details.receipt?.mode ?? null,
+      draft_sha256: prepared.draftSha256,
+      target_before: prepared.priorTargetSha256,
+      ...(details.approvalToken ? { approval_token: details.approvalToken } : {}),
+      ...(details.receipt ? {
+        mutation_vault: details.receipt.mutation_vault,
+        git_vault: details.receipt.git_vault,
+        convergence_source: details.receipt.convergence_source,
+      } : {}),
+      ...(details.receipt?.convergence_vault
+        ? { convergence_vault: details.receipt.convergence_vault }
+        : {}),
+      ...(details.receipt?.host_id ? { host_id: details.receipt.host_id } : {}),
+      humanHint: details.dryRun
+        ? `dry run: would publish ${prepared.page.target} (${prepared.operationId.slice(0, 12)})`
+        : `published ${prepared.page.target} (${prepared.operationId.slice(0, 12)})`,
+    };
+  },
+};
 
 /**
  * Compute the exact publication receipt without taking a lock or changing a
@@ -616,85 +463,7 @@ export async function previewPreparedPagePublication(
   input: PreparedPagePublication,
   vault: string,
 ): Promise<PagePublishRun> {
-  const schemaPath = join(vault, "SCHEMA.md");
-  let schemaText: string;
-  try {
-    schemaText = await readFile(schemaPath, "utf8");
-  } catch (error: unknown) {
-    const result = err("FILE_NOT_FOUND", { path: schemaPath, message: String(error) });
-    return { exitCode: ExitCode.FILE_NOT_FOUND, result };
-  }
-  const reconciled = reconcileTaxonomyDocument(schemaText, {
-    tags: input.page.tags,
-    comment: input.taxonomyComment,
-  });
-  if (!reconciled.ok) return { exitCode: errorExitCode(reconciled.error), result: reconciled };
-
-  const pageChanged = await readPageChanged(input.targetPath, input.page.content);
-  if (!pageChanged.ok) return { exitCode: errorExitCode(pageChanged.error), result: pageChanged };
-
-  const indexPath = join(vault, "index.md");
-  let indexText: string;
-  try {
-    indexText = await readFile(indexPath, "utf8");
-  } catch (error: unknown) {
-    const result = err("FILE_NOT_FOUND", { path: indexPath, message: String(error) });
-    return { exitCode: ExitCode.FILE_NOT_FOUND, result };
-  }
-  const index = renderIndexUpsert(indexText, {
-    target: input.page.target,
-    title: input.page.title,
-    type: input.page.type,
-  });
-  if (!index.ok) return { exitCode: errorExitCode(index.error), result: index };
-
-  let projectIndexUpdated = false;
-  const projectIndexPaths: string[] = [];
-  for (const projectSlug of projectSlugsForPublication(input.page.target, input.page.content)) {
-    const renderedProject = await renderProjectIndex(vault, projectSlug, { today: input.date });
-    if (!renderedProject.ok) return { exitCode: errorExitCode(renderedProject.error), result: renderedProject };
-    const projectIndexPath = join(vault, renderedProject.data.index_path);
-    const projectIndexChanged = await readPageChanged(projectIndexPath, renderedProject.data.text);
-    if (!projectIndexChanged.ok) {
-      return { exitCode: errorExitCode(projectIndexChanged.error), result: projectIndexChanged };
-    }
-    if (projectIndexChanged.data || pageChanged.data) {
-      projectIndexUpdated = true;
-      projectIndexPaths.push(renderedProject.data.index_path);
-    }
-  }
-
-  const logPath = join(vault, "log.md");
-  let logText: string;
-  try {
-    logText = await readFile(logPath, "utf8");
-  } catch (error: unknown) {
-    const result = err("FILE_NOT_FOUND", { path: logPath, message: String(error) });
-    return { exitCode: ExitCode.FILE_NOT_FOUND, result };
-  }
-  const logAppended = !logText.includes(`<!-- skillwiki-page-publish:${input.operationId} -->`);
-
-  const filesChanged = [
-    ...(reconciled.data.changed ? ["SCHEMA.md"] : []),
-    ...(pageChanged.data ? [input.page.target] : []),
-    ...projectIndexPaths,
-    ...(index.data.changed ? ["index.md"] : []),
-    ...(logAppended ? ["log.md"] : []),
-  ];
-  const token = encodeApprovalToken(input.approvalPayload);
-  if (!token.ok) return { exitCode: errorExitCode(token.error), result: token };
-  return successReceipt(
-    input,
-    reconciled.data.added,
-    pageChanged.data,
-    index.data.changed,
-    projectIndexUpdated,
-    logAppended,
-    filesChanged,
-    true,
-    null,
-    token.data,
-  );
+  return runPipelinePreview(PAGE_PUBLISH_STRATEGY, input, vault);
 }
 
 /** Publish a frozen page using an already-approved managed-write receipt. */
@@ -704,167 +473,11 @@ export async function publishPreparedPageWithReceipt(
   writeReceipt: ManagedWriteReceipt,
   deps: PagePublishDeps = DEFAULT_DEPS,
 ): Promise<PagePublishRun> {
-  const canonicalVault = resolve(vault);
-  if (writeReceipt.mutation_vault !== canonicalVault) {
-    return {
-      exitCode: ExitCode.PREFLIGHT_FAILED,
-      result: err("PREFLIGHT_FAILED", {
-        reason: "mutation-vault-receipt-mismatch",
-        expected: writeReceipt.mutation_vault,
-        actual: canonicalVault,
-      }),
-    };
-  }
-  if (writeReceipt.base_oid) {
-    const head = writeReceipt.git_vault
-      ? git(writeReceipt.git_vault, ["rev-parse", "HEAD"])
-      : null;
-    if (head !== writeReceipt.base_oid) {
-      return {
-        exitCode: ExitCode.PREFLIGHT_FAILED,
-        result: err("PREFLIGHT_FAILED", {
-          reason: "base-oid-drift",
-          expected: writeReceipt.base_oid,
-          actual: head,
-          git_vault: writeReceipt.git_vault,
-        }),
-      };
-    }
-  }
-  // Release B: immutable-record hosts may publish page + event without Git.
-  const aggregateMode = resolveRootAggregateMode();
-
-  let lock: ReturnType<typeof acquireOwnedSyncLock>;
-  try {
-    lock = acquireOwnedSyncLock(vault, {
-      summary: `page publish ${input.page.target}`,
-      ttlMinutes: 1,
-    });
-  } catch (error: unknown) {
-    return {
-      exitCode: ExitCode.WRITE_FAILED,
-      result: err("WRITE_FAILED", { stage: "lock", message: String(error) }),
-    };
-  }
-  if (!lock.ok) return { exitCode: errorExitCode(lock.error), result: lock };
-
-  let primary: LockedPublicationOutcome | undefined;
-  let released: Result<{ released: boolean }> | undefined;
-  try {
-    primary = await runLockedPrimaryStages(input, vault, deps);
-  } catch (error: unknown) {
-    primary = lockedFailure(
-      "schema",
-      emptyLockedState(),
-      err("WRITE_FAILED", { message: `unexpected primary-stage failure: ${String(error)}` }),
-    );
-  } finally {
-    released = releaseOwnedSyncLock(lock.data);
-  }
-
-  const primaryState = primary?.ok ? primary.data : primary?.state;
-  if (released === undefined || !released.ok || !released.data.released) {
-    return phaseFailure(
-      "unlock",
-      input,
-      primaryState?.published ?? false,
-      released && !released.ok ? released : err("WRITE_FAILED", { message: "lock release did not run" }),
-      {
-        primary_stage: primary && !primary.ok ? primary.stage : "complete",
-        primary_error: primary && !primary.ok ? primary.cause.error : undefined,
-      },
-    );
-  }
-  const unlockHook = await observeStage(deps, "unlock");
-  if (unlockHook) return phaseFailure("unlock", input, primaryState?.published ?? false, unlockHook);
-
-  if (primary === undefined) {
-    return phaseFailure(
-      "schema",
-      input,
-      false,
-      err("WRITE_FAILED", { message: "locked publication produced no result" }),
-    );
-  }
-  if (!primary.ok) {
-    return phaseFailure(
-      primary.stage,
-      input,
-      primary.state.published,
-      primary.cause,
-      undefined,
-      primary.exitCode,
-    );
-  }
-
-  const state = primary.data;
-
-  // Event-first: immutable record before optional root aggregate dual-write.
-  const event = await writeLogEvent(vault, {
-    schema: "skillwiki-log-event/v1",
-    operation_id: input.operationId,
-    occurred_at: `${input.date}T00:00:00.000Z`,
-    host_id: writeReceipt.host_id ?? "standalone",
-    actor: "skillwiki-cli",
-    kind: "page-publish",
-    target: input.page.target,
-    note: input.logNote ?? `Published ${input.page.title}`,
-    metadata: {
-      page_type: input.page.type,
-      // Stable for replay: do not embed schema-delta taxonomy_added (varies after first write).
-      tags: [...input.page.tags].sort(),
-      base_oid: writeReceipt.base_oid,
-    },
-  });
-  if (!event.ok) {
-    return phaseFailure(
-      "event",
-      input,
-      true,
-      event,
-      undefined,
-      event.error === "EVENT_IDENTITY_COLLISION" ? ExitCode.WRITE_FAILED : errorExitCode(event.error),
-    );
-  }
-  if (event.data.created) state.changed.add(event.data.path);
-  const eventHook = await observeStage(deps, "event");
-  if (eventHook) return phaseFailure("event", input, true, eventHook);
-
-  let logAppended = false;
-  if (aggregateMode === "dual") {
-    const log = await runLogAppend({
-      vault,
-      content: renderPublicationLog(input, state.taxonomyAdded),
-      operationId: input.operationId,
-      strictLock: true,
-      recordLastOp: false,
-    });
-    if (!log.result.ok) return phaseFailure("log", input, true, log.result);
-    if (log.exitCode !== ExitCode.OK) {
-      return phaseFailure(
-        "log",
-        input,
-        true,
-        err("WRITE_FAILED", { message: "log append returned inconsistent success state" }),
-      );
-    }
-    logAppended = log.result.data.appended;
-    if (logAppended) state.changed.add("log.md");
-    const logHook = await observeStage(deps, "log");
-    if (logHook) return phaseFailure("log", input, true, logHook);
-  }
-
-  return successReceipt(
-    input,
-    state.taxonomyAdded,
-    state.pageChanged,
-    state.indexUpdated,
-    state.projectIndexUpdated,
-    logAppended,
-    [...state.changed],
-    false,
-    writeReceipt,
-  );
+  const pipelineDeps: PublicationPipelineDeps = {
+    afterStage: (stage) => deps.afterStage(stage as PublishStage),
+    preflight: deps.preflight,
+  };
+  return pipelinePublishWithReceipt(PAGE_PUBLISH_STRATEGY, input, vault, writeReceipt, pipelineDeps);
 }
 
 /** Publish a frozen page in the durable order: preflight, schema, page, verify, index, event, log. */
@@ -873,14 +486,13 @@ export async function publishPreparedPage(
   vault: string,
   deps: PagePublishDeps = DEFAULT_DEPS,
 ): Promise<PagePublishRun> {
-  return runManagedWriteTransaction({
-    vault,
-    command: `page publish ${input.page.target}`,
-    allowImmutableRecord: true,
+  const pipelineDeps: PublicationPipelineDeps = {
+    afterStage: (stage) => deps.afterStage(stage as PublishStage),
     preflight: deps.preflight,
-    mutate: async (receipt) => publishPreparedPageWithReceipt(input, vault, receipt, deps),
-  });
+  };
+  return executePublicationPipeline(PAGE_PUBLISH_STRATEGY, input, vault, pipelineDeps);
 }
+
 /** File-based command entry point used by the grouped `page publish` CLI command. */
 export async function runPagePublish(
   input: PagePublishInput,
