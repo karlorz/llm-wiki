@@ -223,7 +223,7 @@ export function runLint(
 export async function runSyncLintDelta(
   input: SyncLintDeltaInput
 ): Promise<{ exitCode: number; result: Result<SyncLintDeltaOutput> }> {
-  const { mkdtempSync, rmSync, existsSync: fsExists } = await import("node:fs");
+  const { mkdtempSync, rmSync, writeFileSync, existsSync: fsExists } = await import("node:fs");
   const { join: pathJoin } = await import("node:path");
   const { tmpdir } = await import("node:os");
   const { execFileSync } = await import("node:child_process");
@@ -290,11 +290,30 @@ export async function runSyncLintDelta(
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 256 * 1024 * 1024,
     });
-    execFileSync("tar", ["-xf", "-"], {
-      cwd: tmpRoot,
-      input: archive,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    if (isWindows) {
+      // bsdtar's zip reader requires a seekable input (the central directory
+      // sits at the end of the archive), so piping zip over stdin fails.
+      const zipPath = `${tmpRoot}.zip`;
+      writeFileSync(zipPath, archive);
+      try {
+        execFileSync("tar", ["-xf", zipPath], {
+          cwd: tmpRoot,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+      } finally {
+        try {
+          rmSync(zipPath, { force: true });
+        } catch {
+          // best-effort cleanup
+        }
+      }
+    } else {
+      execFileSync("tar", ["-xf", "-"], {
+        cwd: tmpRoot,
+        input: archive,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    }
 
     // Minimal SCHEMA.md check — lint requires vault shape
     if (!fsExists(pathJoin(tmpRoot, "SCHEMA.md"))) {
