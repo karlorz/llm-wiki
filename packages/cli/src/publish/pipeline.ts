@@ -30,6 +30,10 @@ import { redactSensitiveContent } from "../utils/sensitive-content.js";
 import { safeWritePage } from "../utils/safe-write.js";
 import { acquireOwnedSyncLock, releaseOwnedSyncLock } from "../utils/sync-lock.js";
 import {
+  emitPublicationHoldReviewEvent,
+  evaluatePublicationHoldGates,
+} from "./hold-gates.js";
+import {
   resolveRootAggregateMode,
   type PipelineLockedState,
   type PipelineStageName,
@@ -208,6 +212,9 @@ export function successReceipt<TPrepared extends PreparedPublicationCore, TOutpu
     dryRun: boolean;
     approvalToken?: string;
     receipt?: ManagedWriteReceipt | null;
+    held?: boolean;
+    hold_reasons?: string[];
+    review_event_id?: string;
   },
 ): { exitCode: number; result: Result<TOutput> } {
   return {
@@ -268,6 +275,12 @@ export async function runPipelinePreview<TPrepared extends PreparedPublicationCo
   const token = encodeApprovalToken(prepared.approvalPayload);
   if (!token.ok) return { exitCode: errorExitCode(token.error), result: token };
 
+  const holdEval = await evaluatePublicationHoldGates({
+    prepared,
+    vault,
+    publisherKind: strategy.publisherKind,
+  });
+
   const filesChanged = strategy.publisherKind === "page"
     ? [
         ...(reconciled.data.changed ? ["SCHEMA.md"] : []),
@@ -292,6 +305,8 @@ export async function runPipelinePreview<TPrepared extends PreparedPublicationCo
     filesChanged,
     dryRun: true,
     approvalToken: token.data,
+    held: holdEval.held,
+    hold_reasons: holdEval.hold_reasons,
   });
 }
 
@@ -605,6 +620,42 @@ export async function publishPreparedWithReceipt<TPrepared extends PreparedPubli
         }),
       };
     }
+  }
+
+  // Preflight hold-gate evaluation: if any gate trips, page is HELD for review.
+  const holdEval = await evaluatePublicationHoldGates({
+    prepared,
+    vault,
+    publisherKind: strategy.publisherKind,
+  });
+
+  if (holdEval.held) {
+    const reviewEvent = await emitPublicationHoldReviewEvent({
+      vault,
+      prepared,
+      holdReasons: holdEval.hold_reasons,
+      hostId: writeReceipt.host_id,
+    });
+    if (!reviewEvent.ok) {
+      return {
+        exitCode: errorExitCode(reviewEvent.error),
+        result: reviewEvent,
+      };
+    }
+
+    return successReceipt(strategy, prepared, {
+      taxonomyAdded: [],
+      pageChanged: false,
+      indexUpdated: false,
+      projectIndexChanged: false,
+      logAppended: false,
+      filesChanged: [reviewEvent.data.event_path],
+      dryRun: false,
+      receipt: writeReceipt,
+      held: true,
+      hold_reasons: holdEval.hold_reasons,
+      review_event_id: reviewEvent.data.operation_id,
+    });
   }
 
   const aggregateMode = resolveRootAggregateMode();

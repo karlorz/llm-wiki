@@ -89,6 +89,9 @@ export interface PagePublishOutput {
   convergence_vault?: string;
   convergence_source?: ManagedWriteReceipt["convergence_source"];
   host_id?: string;
+  held?: boolean;
+  hold_reasons?: string[];
+  review_event_id?: string;
   humanHint: string;
 }
 
@@ -176,7 +179,39 @@ function prepareFrozenPublication(
   if (!target.ok) return target;
 
   const page = prepareTypedPage(input.content, input.target);
-  if (!page.ok) return page;
+  let pageData: PreparedTypedPage;
+
+  if (page.ok) {
+    pageData = page.data;
+  } else if (
+    page.error === "INVALID_FRONTMATTER" ||
+    page.error === "MISSING_CLOSING_DELIMITER" ||
+    page.error === "SCHEME_REJECTED" ||
+    page.error === "SENSITIVE_CONTENT_DETECTED"
+  ) {
+    const fm = extractFrontmatter(input.content);
+    let pageType = input.target.split("/")[0] ?? "queries";
+    let title = input.target.split("/").pop()?.replace(/\.md$/, "") ?? input.target;
+    let tags: string[] = [];
+
+    if (fm.ok && typeof fm.data === "object" && fm.data !== null) {
+      if (typeof fm.data.type === "string") pageType = fm.data.type;
+      if (typeof fm.data.title === "string") title = fm.data.title;
+      if (Array.isArray(fm.data.tags)) {
+        tags = fm.data.tags.filter((t): t is string => typeof t === "string");
+      }
+    }
+
+    pageData = {
+      target: input.target,
+      title,
+      type: pageType,
+      tags,
+      content: input.content,
+    };
+  } else {
+    return page;
+  }
 
   if (input.logNote !== undefined && /[\r\n]/.test(input.logNote)) {
     return err("SCHEME_REJECTED", { message: "log note must be one line" });
@@ -220,12 +255,12 @@ function prepareFrozenPublication(
   if (!approvalPayload.ok) return approvalPayload;
 
   return ok({
-    page: page.data,
+    page: pageData,
     target: input.target,
     targetPath: target.data.absolutePath,
-    pageType: page.data.type,
-    tags: page.data.tags,
-    title: page.data.title,
+    pageType: pageData.type,
+    tags: pageData.tags,
+    title: pageData.title,
     content: input.content,
     source,
     logNote,
@@ -438,6 +473,9 @@ export const PAGE_PUBLISH_STRATEGY: PublicationStrategy<PreparedPagePublication,
       draft_sha256: prepared.draftSha256,
       target_before: prepared.priorTargetSha256,
       ...(details.approvalToken ? { approval_token: details.approvalToken } : {}),
+      ...(details.held !== undefined ? { held: details.held } : {}),
+      ...(details.hold_reasons !== undefined ? { hold_reasons: details.hold_reasons } : {}),
+      ...(details.review_event_id !== undefined ? { review_event_id: details.review_event_id } : {}),
       ...(details.receipt ? {
         mutation_vault: details.receipt.mutation_vault,
         git_vault: details.receipt.git_vault,
@@ -447,9 +485,13 @@ export const PAGE_PUBLISH_STRATEGY: PublicationStrategy<PreparedPagePublication,
         ? { convergence_vault: details.receipt.convergence_vault }
         : {}),
       ...(details.receipt?.host_id ? { host_id: details.receipt.host_id } : {}),
-      humanHint: details.dryRun
-        ? `dry run: would publish ${prepared.page.target} (${prepared.operationId.slice(0, 12)})`
-        : `published ${prepared.page.target} (${prepared.operationId.slice(0, 12)})`,
+      humanHint: details.held
+        ? (details.dryRun
+            ? `dry run: would hold ${prepared.page.target} for review (${details.hold_reasons?.join(", ")})`
+            : `held ${prepared.page.target} for review (${details.hold_reasons?.join(", ")})`)
+        : (details.dryRun
+            ? `dry run: would publish ${prepared.page.target} (${prepared.operationId.slice(0, 12)})`
+            : `published ${prepared.page.target} (${prepared.operationId.slice(0, 12)})`),
     };
   },
 };

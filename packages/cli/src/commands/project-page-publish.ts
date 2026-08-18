@@ -14,6 +14,7 @@ import { dirname, join, resolve } from "node:path";
 import { err, ok, ExitCode, type Result } from "@skillwiki/shared";
 import { renderProjectIndex } from "./project-index.js";
 import { taxonomyCommentForPage } from "../parsers/taxonomy.js";
+import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { atomicWriteText } from "../utils/atomic-write.js";
 import {
   assertArchitectureTargetInsideVault,
@@ -89,6 +90,9 @@ export interface ProjectPagePublishOutput {
   convergence_vault?: string;
   convergence_source?: ManagedWriteReceipt["convergence_source"];
   host_id?: string;
+  held?: boolean;
+  hold_reasons?: string[];
+  review_event_id?: string;
   humanHint: string;
 }
 
@@ -179,7 +183,29 @@ export async function prepareProjectPagePublication(
 
   const isNew = target.data.existingRealPath === undefined;
   const page = prepareArchitecturePage(content, input.target, input.project, { isNew });
-  if (!page.ok) return page;
+  const fm = extractFrontmatter(content);
+  let pageType = "concept";
+  let title = input.target.split("/").pop()?.replace(/\.md$/, "") ?? input.target;
+  let tags: string[] = isNew ? ["adr"] : [];
+
+  if (fm.ok && typeof fm.data === "object" && fm.data !== null) {
+    if (typeof fm.data.type === "string") pageType = fm.data.type;
+    if (typeof fm.data.title === "string") title = fm.data.title;
+    if (Array.isArray(fm.data.tags)) {
+      tags = fm.data.tags.filter((t): t is string => typeof t === "string");
+    }
+  }
+
+  const fallbackPage: PreparedArchitecturePage = {
+    target: input.target,
+    title,
+    type: "concept",
+    tags,
+    project: input.project,
+    content,
+    isNew,
+  };
+  const pageData = page.ok ? page.data : fallbackPage;
 
   const logNote = validateLogNote(input.logNote);
   if (!logNote.ok) return logNote;
@@ -212,13 +238,13 @@ export async function prepareProjectPagePublication(
   });
 
   return ok({
-    page: page.data,
+    page: pageData,
     project: input.project,
     target: input.target,
     targetPath: target.data.absolutePath,
-    pageType: page.data.type,
-    tags: page.data.tags,
-    title: page.data.title,
+    pageType: pageData.type,
+    tags: pageData.tags,
+    title: pageData.title,
     content,
     source: { kind: "file", realPath: draftRealPath },
     logNote: logNote.data,
@@ -387,6 +413,9 @@ export const PROJECT_PAGE_PUBLISH_STRATEGY: PublicationStrategy<
       target_before: prepared.priorTargetSha256,
       base_oid: details.receipt?.base_oid ?? null,
       write_mode: details.receipt?.mode ?? null,
+      ...(details.held !== undefined ? { held: details.held } : {}),
+      ...(details.hold_reasons !== undefined ? { hold_reasons: details.hold_reasons } : {}),
+      ...(details.review_event_id !== undefined ? { review_event_id: details.review_event_id } : {}),
       ...(details.receipt
         ? {
             mutation_vault: details.receipt.mutation_vault,
@@ -398,9 +427,13 @@ export const PROJECT_PAGE_PUBLISH_STRATEGY: PublicationStrategy<
         ? { convergence_vault: details.receipt.convergence_vault }
         : {}),
       ...(details.receipt?.host_id ? { host_id: details.receipt.host_id } : {}),
-      humanHint: details.dryRun
-        ? `dry run: would publish ${prepared.page.target} (${prepared.operationId.slice(0, 12)})`
-        : `published ${prepared.page.target} (${prepared.operationId.slice(0, 12)})`,
+      humanHint: details.held
+        ? (details.dryRun
+            ? `dry run: would hold ${prepared.page.target} for review (${details.hold_reasons?.join(", ")})`
+            : `held ${prepared.page.target} for review (${details.hold_reasons?.join(", ")})`)
+        : (details.dryRun
+            ? `dry run: would publish ${prepared.page.target} (${prepared.operationId.slice(0, 12)})`
+            : `published ${prepared.page.target} (${prepared.operationId.slice(0, 12)})`),
     };
   },
 };

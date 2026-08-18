@@ -116,6 +116,9 @@ export interface PublicationStrategy<
       dryRun: boolean;
       approvalToken?: string;
       receipt?: ManagedWriteReceipt | null;
+      held?: boolean;
+      hold_reasons?: string[];
+      review_event_id?: string;
     },
   ): TOutput;
 }
