@@ -2263,4 +2263,37 @@ describe("lint fingerprints and runSyncLintDelta", () => {
     expect(result.ok).toBe(false);
     expect(exitCode).toBe(23);
   }, 30000);
+
+  it("CJK (Unicode) tracked path in base extracts and lints without archive failure (#30)", async () => {
+    const dir = makeTempDir();
+    git(dir, ["init"]);
+    git(dir, ["config", "user.email", "t@t"]);
+    git(dir, ["config", "user.name", "t"]);
+    initVault(dir);
+    // Tracked Unicode path in the base tree - issue #30 reproduction shape.
+    mkdirSync(join(dir, "raw", "articles"), { recursive: true });
+    writeFileSync(join(dir, "raw/articles/中文文件.md"), "---\ntitle: 中文\ntype: article\nsource: https://example.test/a\ncreated: 2026-07-23\nupdated: 2026-07-23\n---\n\n# 中文文件\n\nbody\n");
+    writeFileSync(join(dir, "concepts/clean.md"), "# clean\n\n## Overview\n\nbody\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "base with CJK path"]);
+    git(dir, ["branch", "-M", "main"]);
+    const remote = makeTempDir();
+    git(remote, ["init", "--bare"]);
+    git(dir, ["remote", "add", "origin", remote]);
+    git(dir, ["push", "-u", "origin", "main"]);
+
+    // Outgoing keeps the CJK file unchanged - 0 new errors expected.
+    writeFileSync(join(dir, "concepts/ok.md"), "# ok\n\n## Overview\n\nbody\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "outgoing clean edit"]);
+
+    const { exitCode, result } = await runSyncLintDelta({ vault: dir, baseRef: "origin/main" });
+    // The Windows failure mode was LINT_DELTA_ARCHIVE_FAILED (result.ok=false).
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.new_errors).toBe(0);
+      expect(result.data.base_errors).toBe(0);
+    }
+    expect(exitCode).not.toBe(23); // not blocking
+  }, 60000);
 });

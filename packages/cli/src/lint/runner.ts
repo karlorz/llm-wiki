@@ -279,7 +279,13 @@ export async function runSyncLintDelta(
   // Export base tree to temp dir via git archive
   const tmpRoot = mkdtempSync(pathJoin(tmpdir(), "skillwiki-lint-delta-"));
   try {
-    const archive = execFileSync("git", ["archive", "--format=tar", baseRef], {
+    // Windows bsdtar cannot reliably restore Unicode (e.g. CJK) paths from a
+    // Git tar stream under a non-UTF-8 active code page (#30); it extracts the
+    // same archive as zip correctly. GNU tar on Linux cannot read zip, and
+    // POSIX tar handles Unicode paths fine, so keep tar there.
+    const isWindows = process.platform === "win32";
+    const archiveFormat = isWindows ? "zip" : "tar";
+    const archive = execFileSync("git", ["archive", `--format=${archiveFormat}`, baseRef], {
       cwd: vault,
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: 256 * 1024 * 1024,
