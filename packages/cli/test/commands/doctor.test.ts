@@ -297,12 +297,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 54 checks", async () => {
+  it("always returns exactly 55 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(54);
+      expect(r.result.data.checks).toHaveLength(55);
       const freshness = r.result.data.checks.find(c => c.id === "s3_mount_freshness");
       expect(freshness).toBeDefined();
       expect(freshness?.status).toBe("pass");
@@ -1118,6 +1118,22 @@ describe("runDoctor", () => {
     return logPath;
   }
 
+  function createVaultSyncCacheDir(home: string): string {
+    const isMac = process.platform === "darwin";
+    const dir = isMac
+      ? join(home, "Library", "Caches", "vault-sync")
+      : join(home, ".cache", "vault-sync");
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  function createVaultSyncPushState(home: string, lines: string[]): string {
+    const cacheDir = createVaultSyncCacheDir(home);
+    const statePath = join(cacheDir, "wiki-push-result.state");
+    writeFileSync(statePath, lines.join("\n") + "\n");
+    return statePath;
+  }
+
   function createVaultSyncSnapshotLog(home: string, lines: string[]): string {
     const logDir = createVaultSyncLogDir(home);
     const logPath = join(logDir, "wiki-snapshot.log");
@@ -1135,6 +1151,7 @@ describe("runDoctor", () => {
         "vault_sync_installed", "vault_sync_jobs_enabled",
         "vault_sync_snapshot_service_result",
         "vault_sync_last_push_age",
+        "vault_sync_last_push_result",
         "vault_sync_snapshot_consecutive_failures",
         "vault_sync_last_fetch_status",
         "vault_sync_filter_present", "vault_sync_snapshot_guard",
@@ -1205,7 +1222,8 @@ describe("runDoctor", () => {
       const h = home();
       vaultSyncConfig(h, true);
       createVaultSyncShareDir(h);
-      createVaultSyncLog(h, ["2026-05-25T10:00:00Z FAIL rclone exit=1 duration=3s"]);
+      const ts = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+      createVaultSyncLog(h, [`${ts} FAIL rclone exit=1 duration=3s`]);
       const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
       expect(r.result.ok).toBe(true);
       if (!r.result.ok) return;
@@ -1213,6 +1231,99 @@ describe("runDoctor", () => {
       expect(age).toBeDefined();
       expect(age!.status).toBe("error");
       expect(age!.detail).toContain("FAIL");
+    });
+
+    it("vault_sync_last_push_age passes when log contains lint-delta JSON with FAIL tokens and state file result=ok", async () => {
+      const h = home();
+      vaultSyncConfig(h, true);
+      createVaultSyncShareDir(h);
+      const ts = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+      createVaultSyncPushState(h, [
+        "result=ok",
+        "reason=",
+        `timestamp=${ts}`,
+        "duration=2",
+      ]);
+      createVaultSyncLog(h, [
+        `${ts} OK push (no changes) duration=0s`,
+        '{"status":"failed","reason":"LINT_DELTA_FULL_FAILED","summary":{"errors":1,"by_severity":{"error":["PREFLIGHT_FAILED"]}}}',
+      ]);
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const age = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
+      expect(age).toBeDefined();
+      expect(age!.status).toBe("pass");
+      expect(age!.detail).toContain("s ago");
+
+      const resultCheck = r.result.data.checks.find(c => c.id === "vault_sync_last_push_result");
+      expect(resultCheck).toBeDefined();
+      expect(resultCheck!.status).toBe("pass");
+      expect(resultCheck!.detail).toBe(`result=ok timestamp=${ts}`);
+    });
+
+    it("vault_sync_last_push_age warns and falls back to tightened log parse when state file is missing", async () => {
+      const h = home();
+      vaultSyncConfig(h, true);
+      createVaultSyncShareDir(h);
+      const ts = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+      // Log has an OK push followed by lint JSON with FAIL tokens (not a timestamped FAIL journal line)
+      createVaultSyncLog(h, [
+        `${ts} OK push (no changes) duration=0s`,
+        '{"status":"failed","reason":"LINT_DELTA_FULL_FAILED","errors":0}',
+      ]);
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const age = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
+      expect(age).toBeDefined();
+      expect(age!.status).toBe("pass");
+      expect(age!.detail).toContain("s ago");
+
+      const resultCheck = r.result.data.checks.find(c => c.id === "vault_sync_last_push_result");
+      expect(resultCheck).toBeDefined();
+      expect(resultCheck!.status).toBe("warn");
+      expect(resultCheck!.detail).toContain("no push result state file");
+    });
+
+    it("vault_sync_last_push_age errors when state file has result=refused", async () => {
+      const h = home();
+      vaultSyncConfig(h, true);
+      createVaultSyncShareDir(h);
+      const ts = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+      createVaultSyncPushState(h, [
+        "result=refused",
+        "reason=dirty_backlog",
+        `timestamp=${ts}`,
+      ]);
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const age = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
+      expect(age).toBeDefined();
+      expect(age!.status).toBe("error");
+      expect(age!.detail).toBe("Last push refused: dirty_backlog");
+
+      const resultCheck = r.result.data.checks.find(c => c.id === "vault_sync_last_push_result");
+      expect(resultCheck).toBeDefined();
+      expect(resultCheck!.status).toBe("error");
+      expect(resultCheck!.detail).toBe(`result=refused reason=dirty_backlog timestamp=${ts}`);
+    });
+
+    it("vault_sync_last_push_result warns when state file is malformed", async () => {
+      const h = home();
+      vaultSyncConfig(h, true);
+      createVaultSyncShareDir(h);
+      createVaultSyncPushState(h, [
+        "corrupted data without result field",
+      ]);
+      const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const resultCheck = r.result.data.checks.find(c => c.id === "vault_sync_last_push_result");
+      expect(resultCheck).toBeDefined();
+      expect(resultCheck!.status).toBe("warn");
+      expect(resultCheck!.detail).toContain("malformed state file");
     });
 
     it("vault_sync_filter_present warns on missing required excludes", async () => {
