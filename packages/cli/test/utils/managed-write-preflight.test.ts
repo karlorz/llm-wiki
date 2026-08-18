@@ -1008,14 +1008,6 @@ hosts:
 
   it.each([
     {
-      label: "live writer overlap",
-      output: makePeerOutput({
-        managed_writers: { count: 2, kinds: ["vault-sync"], blocking: true },
-        blocking: true,
-      }),
-      reason: "live-writer-overlap",
-    },
-    {
       label: "foreign lock",
       output: makePeerOutput({
         locks: [
@@ -1168,5 +1160,334 @@ hosts:
 
     expect(run).toMatchObject({ exitCode: ExitCode.OK, result: { ok: true, data: { mutated: true } } });
     expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
+  describe("live-writer-overlap bounded wait", () => {
+    it("proceeds to mutate when live writer clears within deadline and emits heartbeats", async () => {
+      const vault = mkdtempSync(join(tmpdir(), "managed-peer-gate-wait-clear-"));
+      const mutate = vi.fn(async () => ({ exitCode: ExitCode.OK, result: ok({ mutated: true }) }));
+
+      let callCount = 0;
+      const syncPeers = vi.fn(() => {
+        callCount++;
+        if (callCount <= 2) {
+          return {
+            exitCode: ExitCode.OK,
+            result: ok(
+              makePeerOutput({
+                managed_writers: { count: 1, kinds: ["wiki-push"], blocking: true },
+                blocking: true,
+              }),
+            ),
+          };
+        }
+        return {
+          exitCode: ExitCode.OK,
+          result: ok(makePeerOutput()),
+        };
+      });
+
+      let currentTime = 1_000_000;
+      const nowMs = vi.fn(() => currentTime);
+      const sleepMs = vi.fn(async (ms: number) => {
+        currentTime += ms;
+      });
+      const heartbeats: string[] = [];
+      const logHeartbeat = vi.fn((msg: string) => {
+        heartbeats.push(msg);
+      });
+
+      const run = await runManagedWriteTransaction(
+        {
+          vault,
+          command: "test live writer clears",
+          allowImmutableRecord: false,
+          preflight: async () => ({
+            exitCode: ExitCode.OK,
+            result: ok(makeReceipt(vault, "git-writer")),
+          }),
+          mutate,
+        },
+        { converge: vi.fn(), syncPeers, nowMs, sleepMs, logHeartbeat },
+      );
+
+      expect(run).toMatchObject({ exitCode: ExitCode.OK, result: { ok: true, data: { mutated: true } } });
+      expect(mutate).toHaveBeenCalledTimes(1);
+      expect(syncPeers).toHaveBeenCalledTimes(3);
+      expect(sleepMs).toHaveBeenCalledTimes(2);
+      expect(heartbeats.length).toBe(2);
+      expect(heartbeats[0]).toBe("skillwiki: waiting for live vault writer (wiki-push), 240s left");
+      expect(heartbeats[1]).toBe("skillwiki: waiting for live vault writer (wiki-push), 238s left");
+    });
+
+    it("returns PREFLIGHT_FAILED exit 13 with waited_ms when live writer persists past deadline", async () => {
+      const vault = mkdtempSync(join(tmpdir(), "managed-peer-gate-wait-timeout-"));
+      const mutate = vi.fn(async () => ({ exitCode: ExitCode.OK, result: ok({ mutated: true }) }));
+
+      const syncPeers = vi.fn(() => ({
+        exitCode: ExitCode.OK,
+        result: ok(
+          makePeerOutput({
+            managed_writers: { count: 2, kinds: ["wiki-push", "vault-sync"], blocking: true },
+            blocking: true,
+          }),
+        ),
+      }));
+
+      let currentTime = 1_000_000;
+      const nowMs = vi.fn(() => currentTime);
+      const sleepMs = vi.fn(async (ms: number) => {
+        currentTime += ms;
+      });
+      const heartbeats: string[] = [];
+      const logHeartbeat = vi.fn((msg: string) => {
+        heartbeats.push(msg);
+      });
+
+      const run = await runManagedWriteTransaction(
+        {
+          vault,
+          command: "test live writer timeout",
+          allowImmutableRecord: false,
+          preflight: async () => ({
+            exitCode: ExitCode.OK,
+            result: ok(makeReceipt(vault, "git-writer")),
+          }),
+          mutate,
+        },
+        { converge: vi.fn(), syncPeers, nowMs, sleepMs, logHeartbeat },
+      );
+
+      expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+      expect(run.result).toMatchObject({
+        ok: false,
+        error: "PREFLIGHT_FAILED",
+        detail: {
+          reason: "live-writer-overlap",
+          managed_writer_count: 2,
+          managed_writer_kinds: ["wiki-push", "vault-sync"],
+          blocking: true,
+          waited_ms: 240000,
+        },
+      });
+      expect(mutate).not.toHaveBeenCalled();
+      expect(heartbeats.length).toBe(121);
+      expect(heartbeats[0]).toBe("skillwiki: waiting for live vault writer (wiki-push, vault-sync), 240s left");
+    });
+
+    it("respects SKILLWIKI_MANAGED_WRITE_WAIT_MS env override", async () => {
+      const vault = mkdtempSync(join(tmpdir(), "managed-peer-gate-env-override-"));
+      const mutate = vi.fn(async () => ({ exitCode: ExitCode.OK, result: ok({ mutated: true }) }));
+
+      const syncPeers = vi.fn(() => ({
+        exitCode: ExitCode.OK,
+        result: ok(
+          makePeerOutput({
+            managed_writers: { count: 1, kinds: ["wiki-push"], blocking: true },
+            blocking: true,
+          }),
+        ),
+      }));
+
+      let currentTime = 0;
+      const nowMs = vi.fn(() => currentTime);
+      const sleepMs = vi.fn(async (ms: number) => {
+        currentTime += ms;
+      });
+      const heartbeats: string[] = [];
+      const logHeartbeat = vi.fn((msg: string) => {
+        heartbeats.push(msg);
+      });
+
+      const run = await runManagedWriteTransaction(
+        {
+          vault,
+          command: "test custom wait ms",
+          allowImmutableRecord: false,
+          env: { SKILLWIKI_MANAGED_WRITE_WAIT_MS: "5000" },
+          preflight: async () => ({
+            exitCode: ExitCode.OK,
+            result: ok(makeReceipt(vault, "git-writer")),
+          }),
+          mutate,
+        },
+        { converge: vi.fn(), syncPeers, nowMs, sleepMs, logHeartbeat },
+      );
+
+      expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+      expect(run.result).toMatchObject({
+        ok: false,
+        error: "PREFLIGHT_FAILED",
+        detail: {
+          reason: "live-writer-overlap",
+          waited_ms: 5000,
+        },
+      });
+      expect(mutate).not.toHaveBeenCalled();
+      // At t=0, sleep 2000 -> t=2000, sleep 2000 -> t=4000, sleep 1000 (remainingMs min) -> t=5000 >= deadline -> loop exit
+      expect(heartbeats.length).toBe(4);
+      expect(heartbeats[0]).toBe("skillwiki: waiting for live vault writer (wiki-push), 5s left");
+    });
+
+    it("falls back to default wait ms if SKILLWIKI_MANAGED_WRITE_WAIT_MS is invalid or non-positive", async () => {
+      const vault = mkdtempSync(join(tmpdir(), "managed-peer-gate-env-invalid-"));
+      const mutate = vi.fn(async () => ({ exitCode: ExitCode.OK, result: ok({ mutated: true }) }));
+
+      const syncPeers = vi.fn(() => ({
+        exitCode: ExitCode.OK,
+        result: ok(
+          makePeerOutput({
+            managed_writers: { count: 1, kinds: ["wiki-push"], blocking: true },
+            blocking: true,
+          }),
+        ),
+      }));
+
+      let currentTime = 0;
+      const nowMs = vi.fn(() => currentTime);
+      const sleepMs = vi.fn(async (ms: number) => {
+        currentTime += ms;
+      });
+      const heartbeats: string[] = [];
+      const logHeartbeat = vi.fn((msg: string) => {
+        heartbeats.push(msg);
+      });
+
+      const run = await runManagedWriteTransaction(
+        {
+          vault,
+          command: "test invalid wait ms",
+          allowImmutableRecord: false,
+          env: { SKILLWIKI_MANAGED_WRITE_WAIT_MS: "invalid-number" },
+          preflight: async () => ({
+            exitCode: ExitCode.OK,
+            result: ok(makeReceipt(vault, "git-writer")),
+          }),
+          mutate,
+        },
+        { converge: vi.fn(), syncPeers, nowMs, sleepMs, logHeartbeat },
+      );
+
+      expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+      expect(run.result).toMatchObject({
+        ok: false,
+        error: "PREFLIGHT_FAILED",
+        detail: {
+          reason: "live-writer-overlap",
+          waited_ms: 240000,
+        },
+      });
+      expect(heartbeats[0]).toBe("skillwiki: waiting for live vault writer (wiki-push), 240s left");
+    });
+
+    it("proceeds immediately with zero polling or heartbeats on zero-overlap path", async () => {
+      const vault = mkdtempSync(join(tmpdir(), "managed-peer-gate-zero-overlap-"));
+      const mutate = vi.fn(async () => ({ exitCode: ExitCode.OK, result: ok({ mutated: true }) }));
+      const syncPeers = vi.fn(() => ({
+        exitCode: ExitCode.OK,
+        result: ok(makePeerOutput()),
+      }));
+      const sleepMs = vi.fn();
+      const logHeartbeat = vi.fn();
+
+      const run = await runManagedWriteTransaction(
+        {
+          vault,
+          command: "test zero overlap",
+          allowImmutableRecord: false,
+          preflight: async () => ({
+            exitCode: ExitCode.OK,
+            result: ok(makeReceipt(vault, "git-writer")),
+          }),
+          mutate,
+        },
+        { converge: vi.fn(), syncPeers, sleepMs, logHeartbeat },
+      );
+
+      expect(run).toMatchObject({ exitCode: ExitCode.OK, result: { ok: true, data: { mutated: true } } });
+      expect(mutate).toHaveBeenCalledTimes(1);
+      expect(syncPeers).toHaveBeenCalledTimes(1);
+      expect(sleepMs).not.toHaveBeenCalled();
+      expect(logHeartbeat).not.toHaveBeenCalled();
+    });
+
+    it("aborts immediately without waiting if non-overlap blocking signal (e.g. peer lock) appears during wait", async () => {
+      const vault = mkdtempSync(join(tmpdir(), "managed-peer-gate-foreign-lock-during-wait-"));
+      const mutate = vi.fn(async () => ({ exitCode: ExitCode.OK, result: ok({ mutated: true }) }));
+
+      let callCount = 0;
+      const syncPeers = vi.fn(() => {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            exitCode: ExitCode.OK,
+            result: ok(
+              makePeerOutput({
+                managed_writers: { count: 1, kinds: ["wiki-push"], blocking: true },
+                blocking: true,
+              }),
+            ),
+          };
+        }
+        return {
+          exitCode: ExitCode.OK,
+          result: ok(
+            makePeerOutput({
+              locks: [
+                {
+                  session_id: "peer-session",
+                  pid: 42,
+                  cwd: "/private/peer-vault",
+                  summary: "secret peer command",
+                  acquired: "2026-08-03T00:00:00.000Z",
+                  expires: "2026-08-03T01:00:00.000Z",
+                  is_self: false,
+                },
+              ],
+              blocking: true,
+            }),
+          ),
+        };
+      });
+
+      let currentTime = 0;
+      const nowMs = vi.fn(() => currentTime);
+      const sleepMs = vi.fn(async (ms: number) => {
+        currentTime += ms;
+      });
+      const heartbeats: string[] = [];
+      const logHeartbeat = vi.fn((msg: string) => {
+        heartbeats.push(msg);
+      });
+
+      const run = await runManagedWriteTransaction(
+        {
+          vault,
+          command: "test foreign lock during wait",
+          allowImmutableRecord: false,
+          preflight: async () => ({
+            exitCode: ExitCode.OK,
+            result: ok(makeReceipt(vault, "git-writer")),
+          }),
+          mutate,
+        },
+        { converge: vi.fn(), syncPeers, nowMs, sleepMs, logHeartbeat },
+      );
+
+      expect(run.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+      expect(run.result).toMatchObject({
+        ok: false,
+        error: "PREFLIGHT_FAILED",
+        detail: {
+          reason: "peer-lock",
+          foreign_lock_count: 1,
+          blocking: true,
+        },
+      });
+      expect(mutate).not.toHaveBeenCalled();
+      expect(syncPeers).toHaveBeenCalledTimes(2);
+      expect(sleepMs).toHaveBeenCalledTimes(1);
+      expect(heartbeats.length).toBe(1);
+    });
   });
 });
