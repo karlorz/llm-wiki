@@ -9,6 +9,7 @@ import { runHash } from "./commands/hash.js";
 import { runFetchGuard } from "./commands/fetch-guard.js";
 import { runValidate } from "./commands/validate.js";
 import { runGraphBuild } from "./commands/graph.js";
+import { runEval } from "./commands/eval.js";
 import { runOverlap } from "./commands/overlap.js";
 import { runOrphans } from "./commands/orphans.js";
 import { runAudit } from "./commands/audit.js";
@@ -265,6 +266,18 @@ canvasCmd
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else return emitGuardedVaultWrite(v.vault, "canvas generate", () => runCanvasGenerate({ vault: v.vault, graphPath: opts.graphPath }));
+  });
+
+program
+  .command("eval [vault]")
+  .description("produce an aggregate per-page vault health score")
+  .option("--base <git-ref>", "compare health against a base git ref")
+  .option("--top <n>", "number of worst pages to report", (s) => parseInt(s, 10), 10)
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runEval({ vault: v.vault, baseRef: opts.base, top: opts.top }), v.vault, { postCommit: false });
   });
 
 program

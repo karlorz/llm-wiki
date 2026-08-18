@@ -23,7 +23,7 @@ describe("cli-surface drift detection", () => {
   it("surface includes all known top-level commands", () => {
     const surface = buildCliSurface();
     const knownCommands = [
-      "hash", "fetch-guard", "validate", "graph", "canvas", "overlap",
+      "hash", "fetch-guard", "validate", "graph", "canvas", "eval", "overlap",
       "query", "sources", "orphans", "audit", "install", "path", "lang", "init",
       "links", "tag-audit", "index", "index-check", "index-link-format",
       "topic-map-check", "stale", "claim", "pagesize", "log-rotate",
@@ -74,7 +74,7 @@ describe("cli-surface drift detection", () => {
   it("surface has no extra top-level commands beyond the known set", () => {
     const surface = buildCliSurface();
     const knownCommands = new Set([
-      "hash", "fetch-guard", "validate", "graph", "canvas", "overlap",
+      "hash", "fetch-guard", "validate", "graph", "canvas", "eval", "overlap",
       "query", "sources", "orphans", "audit", "install", "path", "lang", "init",
       "links", "tag-audit", "index", "index-check", "index-link-format",
       "topic-map-check", "stale", "claim", "pagesize", "log-rotate",
