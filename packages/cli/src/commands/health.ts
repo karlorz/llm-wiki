@@ -239,12 +239,16 @@ function classifyLog(path: string, id: string, label: string, okPattern: RegExp)
 
   // Some sync scripts append diagnostic JSON after the status line. Use the
   // most recent explicit status entry instead of blindly trusting the tail.
+  // Failure tokens are anchored to the timestamped journal prefix so raw
+  // lint-delta JSON (e.g. "errors": 0, LINT_DELTA_FULL_FAILED) never matches;
+  // ERROR is included because wiki-fetch-notify.sh logs failures as
+  // timestamped "ERROR: ..." lines (see skeptic finding on PR #56).
   const statusLine = [...lines].reverse().find(line =>
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z /.test(line)
-    && (okPattern.test(line) || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z FAIL\b/.test(line)),
+    && (okPattern.test(line) || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z (FAIL|ERROR)\b/.test(line)),
   );
   const last = statusLine ?? lines[lines.length - 1]!;
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z FAIL\b/.test(last)) return { id, label, status: "error", detail: last.slice(0, 120) };
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z (FAIL|ERROR)\b/.test(last)) return { id, label, status: "error", detail: last.slice(0, 120) };
   if (okPattern.test(last)) return { id, label, status: "pass", detail: last.slice(0, 120) };
   return { id, label, status: "warn", detail: last.slice(0, 120) };
 }
