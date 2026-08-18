@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildVectorIndex, loadVectorIndex, rankVectorIndex, vectorIndexStatus } from "../../src/utils/vector-index.js";
+import { buildVectorIndex, loadVectorIndex, pruneVectorIndex, rankVectorIndex, vectorIndexStatus } from "../../src/utils/vector-index.js";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -43,4 +43,28 @@ describe("vector index", () => {
     expect(loaded.ok).toBe(false);
     if (!loaded.ok) expect(loaded.error).toBe("HYBRID_INDEX_MISSING");
   });
+
+  it("prunes orphans and matches full rebuild (golden equivalence)", async () => {
+    const root = vault();
+    await buildVectorIndex(root);
+    rmSync(join(root, "concepts", "alpha.md"));
+    const pruned = await pruneVectorIndex(root);
+    expect(pruned.ok).toBe(true);
+    if (!pruned.ok) return;
+    expect(pruned.data.orphans).toEqual(["concepts/alpha.md"]);
+    expect(pruned.data.removed).toBe(1);
+
+    const loadedPruned = await loadVectorIndex(root);
+    expect(loadedPruned.ok).toBe(true);
+    if (!loadedPruned.ok) return;
+
+    const rebuilt = await buildVectorIndex(root);
+    expect(rebuilt.ok).toBe(true);
+    if (!rebuilt.ok) return;
+
+    expect(loadedPruned.data.df).toEqual(rebuilt.data.df);
+    expect(loadedPruned.data.page_count).toBe(rebuilt.data.page_count);
+    expect(Object.keys(loadedPruned.data.docs).sort()).toEqual(Object.keys(rebuilt.data.docs).sort());
+  });
 });
+

@@ -1,7 +1,9 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { err, ok, type Result } from "@skillwiki/shared";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
+import { atomicWriteText } from "./atomic-write.js";
 import { readPage, scanVault } from "./vault.js";
 
 export const VECTOR_INDEX_REL = ".skillwiki/vectors/index.json";
@@ -87,7 +89,7 @@ export async function buildVectorIndex(vault: string, now = new Date().toISOStri
   };
   const dest = vectorIndexPath(vault);
   await mkdir(join(vault, ".skillwiki", "vectors"), { recursive: true });
-  await writeFile(dest, `${JSON.stringify(index)}\n`, "utf8");
+  await atomicWriteText(dest, `${JSON.stringify(index)}\n`);
   return ok(index);
 }
 
@@ -270,7 +272,7 @@ export async function reindexPageInVectorIndex(
 
   const dest = vectorIndexPath(vault);
   await mkdir(join(vault, ".skillwiki", "vectors"), { recursive: true });
-  await writeFile(dest, `${JSON.stringify(index)}\n`, "utf8");
+  await atomicWriteText(dest, `${JSON.stringify(index)}\n`);
 
   return ok({
     path: VECTOR_INDEX_REL,
@@ -280,3 +282,120 @@ export async function reindexPageInVectorIndex(
     page_count: index.page_count,
   });
 }
+
+export interface PruneVectorIndexResult {
+  path: string;
+  orphans: string[];
+  removed: number;
+  page_count: number;
+  terms_pruned: number;
+}
+
+export interface PruneVectorIndexOptions {
+  dryRun?: boolean;
+  now?: string;
+}
+
+export async function pruneVectorIndex(
+  vault: string,
+  opts?: PruneVectorIndexOptions,
+): Promise<Result<PruneVectorIndexResult>> {
+  const loaded = await loadVectorIndex(vault);
+  if (!loaded.ok) return loaded;
+  const index = loaded.data;
+
+  const orphans: string[] = [];
+  for (const docKey of Object.keys(index.docs)) {
+    const normalizedKey = docKey.split(/\\|\//).join("/");
+    const absPath = join(vault, ...normalizedKey.split("/"));
+    if (!existsSync(absPath)) {
+      orphans.push(normalizedKey);
+    }
+  }
+
+  if (orphans.length === 0) {
+    return ok({
+      path: VECTOR_INDEX_REL,
+      orphans: [],
+      removed: 0,
+      page_count: index.page_count,
+      terms_pruned: 0,
+    });
+  }
+
+  const oldPageCount = index.page_count;
+  const newPageCount = Math.max(0, oldPageCount - orphans.length);
+
+  // For df tracking: collect terms from all orphaned docs
+  let termsPrunedCount = 0;
+  const orphanedDocsTerms: Array<Record<string, number>> = [];
+  for (const orphanKey of orphans) {
+    const orphanDoc = index.docs[orphanKey] ?? {};
+    orphanedDocsTerms.push(orphanDoc);
+    for (const term of Object.keys(orphanDoc)) {
+      const nextDf = (index.df[term] ?? 1) - 1;
+      if (nextDf <= 0) {
+        delete index.df[term];
+        termsPrunedCount++;
+      } else {
+        index.df[term] = nextDf;
+      }
+    }
+    delete index.docs[orphanKey];
+  }
+
+  index.page_count = newPageCount;
+  const now = opts?.now ?? new Date().toISOString();
+  index.built_at = now;
+
+  // Scan remaining docs and re-read their text to calculate exact TF and recompute toTfIdf
+  const scan = await scanVault(vault);
+  if (!scan.ok) return scan;
+
+  const remainingPagesByRel = new Map<string, typeof scan.data.typedKnowledge[number]>();
+  for (const p of scan.data.typedKnowledge) {
+    remainingPagesByRel.set(p.relPath, p);
+  }
+
+  for (const docKey of Object.keys(index.docs)) {
+    const page = remainingPagesByRel.get(docKey);
+    if (page) {
+      const text = await readPage(page);
+      const fm = extractFrontmatter(text);
+      const split = splitFrontmatter(text);
+      const title = fm.ok ? String(fm.data.title ?? "") : "";
+      const body = split.ok ? split.data.body : text;
+      const tokens = tokenize(`${title} ${body}`);
+      index.docs[docKey] = toTfIdf(termFreq(tokens), index.df, newPageCount);
+    } else {
+      // If docKey is not in typedKnowledge (e.g. if scan didn't find it or different category),
+      // we remove or keep? But orphans check already checked existsSync. If it exists but not in typedKnowledge:
+      try {
+        const text = await readFile(join(vault, ...docKey.split("/")), "utf8");
+        const fm = extractFrontmatter(text);
+        const split = splitFrontmatter(text);
+        const title = fm.ok ? String(fm.data.title ?? "") : "";
+        const body = split.ok ? split.data.body : text;
+        const tokens = tokenize(`${title} ${body}`);
+        index.docs[docKey] = toTfIdf(termFreq(tokens), index.df, newPageCount);
+      } catch {
+        delete index.docs[docKey];
+      }
+    }
+  }
+
+  if (!opts?.dryRun) {
+    const dest = vectorIndexPath(vault);
+    await mkdir(join(vault, ".skillwiki", "vectors"), { recursive: true });
+    await atomicWriteText(dest, `${JSON.stringify(index)}\n`);
+  }
+
+  return ok({
+    path: VECTOR_INDEX_REL,
+    orphans,
+    removed: orphans.length,
+    page_count: newPageCount,
+    terms_pruned: termsPrunedCount,
+  });
+}
+
