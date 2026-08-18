@@ -112,7 +112,7 @@ export class LintRunner {
     // Check for rule-specific fast path when --only is provided
     if (input.only) {
       const rule = this.findRuleForBucket(input.only);
-      if (rule && rule.runFastPath) {
+      if (rule && rule.id === input.only && rule.runFastPath) {
         return rule.runFastPath(input);
       }
     }

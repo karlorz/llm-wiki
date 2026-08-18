@@ -88,4 +88,71 @@ describe("LintRunner custom rule execution and selection", () => {
       expect(res.result.data.by_severity.info).toEqual([]);
     }
   });
+
+  it("does not take fast path for secondary produced buckets like raw_source_identity_conflict", async () => {
+    const v = createEmptyVault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(
+      join(v, "raw", "articles", "hermes-llm-wiki-SKILL-v2.1.0.md"),
+      `---
+source_url: https://raw.githubusercontent.com/obra/superpowers/main/README.md
+ingested: 2026-06-05
+sha256: ${"a".repeat(64)}
+---
+
+# Superpowers
+
+Superpowers is a complete software development methodology for your coding agents.
+`
+    );
+
+    const res = await runLint({
+      vault: v,
+      days: 90,
+      lines: 200,
+      logThreshold: 500,
+      only: "raw_source_identity_conflict",
+    });
+
+    expect(res.exitCode).toBe(23);
+    expect(res.result.ok).toBe(true);
+    if (res.result.ok) {
+      const bucket = res.result.data.by_severity.error.find((b) => b.kind === "raw_source_identity_conflict");
+      expect(bucket?.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            file: "raw/articles/hermes-llm-wiki-SKILL-v2.1.0.md",
+            status: "conflict",
+          }),
+        ])
+      );
+      // Ensure file_source_url bucket was not returned instead
+      const fileSourceUrlBucket = res.result.data.by_severity.warning.find((b) => b.kind === "file_source_url");
+      expect(fileSourceUrlBucket).toBeUndefined();
+    }
+  });
+
+  it("still exercises fast path for primary rule file_source_url", async () => {
+    const v = createEmptyVault();
+    mkdirSync(join(v, "raw", "articles"), { recursive: true });
+    writeFileSync(
+      join(v, "raw", "articles", "local-file.md"),
+      `---\nsource_url: file:///Users/me/Downloads/article.html\ningested: 2026-07-05\nsha256: abc123\n---\n\ncontent\n`
+    );
+
+    const res = await runLint({
+      vault: v,
+      days: 90,
+      lines: 200,
+      logThreshold: 500,
+      only: "file_source_url",
+    });
+
+    expect(res.exitCode).toBe(22);
+    expect(res.result.ok).toBe(true);
+    if (res.result.ok) {
+      const bucket = res.result.data.by_severity.warning.find((b) => b.kind === "file_source_url");
+      expect(bucket?.items).toEqual(["raw/articles/local-file.md"]);
+    }
+  });
 });
