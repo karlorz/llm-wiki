@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ExitCode } from "@skillwiki/shared";
-import { classifyManagedWriterProcesses, classifyStash, runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "../../src/commands/sync.js";
+import { classifyManagedWriterProcesses, classifyStash, collectManagedWriterAncestorPids, runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers } from "../../src/commands/sync.js";
 import { appendLastOp } from "../../src/utils/last-op.js";
 
 let tmpDirs: string[] = [];
@@ -992,6 +992,36 @@ describe("runSyncPeers", () => {
       kinds: ["vault-sync"],
       blocking: true,
     });
+  });
+
+  it("skips ancestor snapshot helpers so projection writes do not self-block", () => {
+    const observation = classifyManagedWriterProcesses(
+      "123 /root/.local/share/vault-sync/bin/wiki-snapshot.sh\n124 bash /opt/vault-sync/bin/wiki-pull-with-auto-resolve.sh\n125 /usr/bin/rclone copy remote:/vault /private/user/wiki-git\n126 unrelated",
+      2000,
+      [123],
+    );
+    expect(observation).toEqual({
+      count: 2,
+      kinds: ["rclone", "vault-sync"],
+      blocking: true,
+    });
+  });
+
+  it("collects ancestor PIDs from a PPid chain and stops at pid 1", () => {
+    const statusByPid: Record<number, string> = {
+      2000: "Name:\tskillwiki\nPPid:\t123\n",
+      123: "Name:\twiki-snapshot.sh\nPPid:\t1\n",
+    };
+    expect(collectManagedWriterAncestorPids(2000, (pid) => statusByPid[pid] ?? null)).toEqual(new Set([123, 1]));
+  });
+
+  it("stops ancestor collection on missing status and cycles", () => {
+    expect(collectManagedWriterAncestorPids(7, () => null)).toEqual(new Set());
+    const cyclic: Record<number, string> = {
+      8: "PPid:\t9\n",
+      9: "PPid:\t8\n",
+    };
+    expect(collectManagedWriterAncestorPids(8, (pid) => cyclic[pid] ?? null)).toEqual(new Set([9, 8]));
   });
 
   it("treats rclone write verbs as managed writers", () => {

@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
@@ -647,9 +647,39 @@ const MANAGED_WRITER_SPECS = [
   // never match.
   ["rclone", /(?:^rclone(?:\.exe)?$)|(?:\brclone(?:\.exe)?\s+(?:copy|sync|move|delete|purge|deletefile|copyto|moveto|dedupe|mkdir|rmdir|rmdirs|touch|settier|bisync|copyurl)(?:\s|$))/i],
   // Writing helper scripts on Unix; Windows image name only.
+  // The invoking process tree is excluded separately so snapshot/pull
+  // children can run managed writes without live-writer-overlap.
   ["vault-sync", /(?:^vault-sync(?:\.exe)?$)|(?:wiki-(?:snapshot|pull-with-auto-resolve|git-repair-v3)\.sh(?:\s|$))/i],
 ] as const;
 export const MANAGED_WRITER_KINDS = MANAGED_WRITER_SPECS.map(([kind]) => kind);
+
+export function collectManagedWriterAncestorPids(
+  startPid: number,
+  readStatus: (pid: number) => string | null = readProcStatus,
+): Set<number> {
+  const ids = new Set<number>();
+  let pid = startPid;
+  for (let i = 0; i < 64; i++) {
+    if (!Number.isInteger(pid) || pid <= 1) break;
+    const status = readStatus(pid);
+    if (status == null) break;
+    const match = status.match(/^PPid:\s+(\d+)/m);
+    if (!match) break;
+    const ppid = Number(match[1]);
+    if (!Number.isInteger(ppid) || ppid <= 0 || ids.has(ppid)) break;
+    ids.add(ppid);
+    pid = ppid;
+  }
+  return ids;
+}
+
+function readProcStatus(pid: number): string | null {
+  try {
+    return readFileSync(`/proc/${pid}/status`, "utf8");
+  } catch {
+    return null;
+  }
+}
 
 export function classifyStash(
   ageMinutes: number,
@@ -666,8 +696,10 @@ export function classifyStash(
 export function classifyManagedWriterProcesses(
   snapshot: string,
   currentPid: number = process.pid,
+  ancestorPids: Iterable<number> = collectManagedWriterAncestorPids(currentPid),
 ): ManagedWriterObservation {
   const kinds = new Set<string>();
+  const ancestors = ancestorPids instanceof Set ? ancestorPids : new Set(ancestorPids);
   let count = 0;
   for (const line of snapshot.split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -687,7 +719,7 @@ export function classifyManagedWriterProcesses(
       pid = Number(pidMatch[1]);
       processName = pidMatch[2]!;
     }
-    if (pid === currentPid) continue;
+    if (pid === currentPid || ancestors.has(pid)) continue;
     const kind = MANAGED_WRITER_SPECS.find(([, pattern]) => pattern.test(processName))?.[0];
     if (!kind) continue;
     count += 1;
