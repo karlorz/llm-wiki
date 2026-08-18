@@ -31,7 +31,8 @@ afterEach(() => {
 });
 
 describe("source-skipped visibility events and sources skipped command", () => {
-  it("emits exactly one event across two inventory runs for unreadable raw (idempotency)", async () => {
+  // chmod 0o000 is not enforced on Windows, so unreadable-raw triggers are POSIX-only.
+  it.skipIf(process.platform === "win32")("emits exactly one event across two inventory runs for unreadable raw (idempotency)", async () => {
     const root = makeVault();
     const unreadablePath = join(root, "raw", "articles", "unreadable.md");
     writeFileSync(unreadablePath, "some content that cannot be read");
