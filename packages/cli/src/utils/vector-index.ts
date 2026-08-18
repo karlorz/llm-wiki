@@ -24,6 +24,14 @@ export function tokenize(text: string): string[] {
     .filter((t) => t.length > 1);
 }
 
+function extractPageTokens(text: string): string[] {
+  const fm = extractFrontmatter(text);
+  const split = splitFrontmatter(text);
+  const title = fm.ok ? String(fm.data.title ?? "") : "";
+  const body = split.ok ? split.data.body : text;
+  return tokenize(`${title} ${body}`);
+}
+
 export function vectorIndexPath(vault: string): string {
   return join(vault, ...VECTOR_INDEX_REL.split("/"));
 }
@@ -66,11 +74,7 @@ export async function buildVectorIndex(vault: string, now = new Date().toISOStri
   const tokenized: Array<{ path: string; tokens: string[] }> = [];
   for (const page of scan.data.typedKnowledge) {
     const text = await readPage(page);
-    const fm = extractFrontmatter(text);
-    const split = splitFrontmatter(text);
-    const title = fm.ok ? String(fm.data.title ?? "") : "";
-    const body = split.ok ? split.data.body : text;
-    tokenized.push({ path: page.relPath, tokens: tokenize(`${title} ${body}`) });
+    tokenized.push({ path: page.relPath, tokens: extractPageTokens(text) });
   }
   const df: Record<string, number> = {};
   for (const doc of tokenized) {
@@ -163,11 +167,7 @@ export async function reindexPageInVectorIndex(
   if (!loaded.ok) return loaded;
   const index = loaded.data;
 
-  const fm = extractFrontmatter(text);
-  const split = splitFrontmatter(text);
-  const title = fm.ok ? String(fm.data.title ?? "") : "";
-  const body = split.ok ? split.data.body : text;
-  const tokens = tokenize(`${title} ${body}`);
+  const tokens = extractPageTokens(text);
   const newTf = termFreq(tokens);
   const newTerms = new Set(newTf.keys());
 
@@ -228,13 +228,6 @@ export async function reindexPageInVectorIndex(
         const oldDf = termsAdded.includes(term) ? index.df[term] - 1 : index.df[term];
         const oldIdf = Math.log((oldDocsTotal + 1) / oldDf);
         const newIdf = Math.log((newPageCount + 1) / dfVal);
-        if (oldIdf === 0) {
-          // If oldIdf was 0 (which happens when oldDocsTotal+1 === oldDf, e.g. 1+1/2=1 -> log(1)=0)
-          // we recompute from scratch if needed, but since oldScore would be 0, we can't scale 0.
-          // In practice, oldScore = (count / tf.size) * 0 = 0. But with newIdf > 0, count / tf.size is needed.
-          // However, we don't have count / tf.size stored directly, or do we?
-          // Wait! Can we store or recompute accurately?
-        }
         updatedVector[term] = oldIdf !== 0 ? oldScore * (newIdf / oldIdf) : 0;
       }
       index.docs[docPath] = updatedVector;
@@ -359,22 +352,14 @@ export async function pruneVectorIndex(
     const page = remainingPagesByRel.get(docKey);
     if (page) {
       const text = await readPage(page);
-      const fm = extractFrontmatter(text);
-      const split = splitFrontmatter(text);
-      const title = fm.ok ? String(fm.data.title ?? "") : "";
-      const body = split.ok ? split.data.body : text;
-      const tokens = tokenize(`${title} ${body}`);
+      const tokens = extractPageTokens(text);
       index.docs[docKey] = toTfIdf(termFreq(tokens), index.df, newPageCount);
     } else {
       // If docKey is not in typedKnowledge (e.g. if scan didn't find it or different category),
       // we remove or keep? But orphans check already checked existsSync. If it exists but not in typedKnowledge:
       try {
         const text = await readFile(join(vault, ...docKey.split("/")), "utf8");
-        const fm = extractFrontmatter(text);
-        const split = splitFrontmatter(text);
-        const title = fm.ok ? String(fm.data.title ?? "") : "";
-        const body = split.ok ? split.data.body : text;
-        const tokens = tokenize(`${title} ${body}`);
+        const tokens = extractPageTokens(text);
         index.docs[docKey] = toTfIdf(termFreq(tokens), index.df, newPageCount);
       } catch {
         delete index.docs[docKey];

@@ -73,12 +73,12 @@ export class DoctorRunner {
       devSourceRun,
       vsConfig,
       resolvedPath,
+      wikiPathSource: resolved.ok ? resolved.data.source : undefined,
       gitCheckPath,
       fleetLoad,
       readOnlyScanRoot,
       satelliteGate,
     };
-    (ctx as any).wikiPathSource = resolved.ok ? resolved.data.source : undefined;
 
     const checks: CheckResult[] = [];
     for (const probe of this.probes) {

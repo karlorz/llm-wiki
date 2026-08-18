@@ -6,9 +6,7 @@ import { ExitCode, err, ok, type Result } from "@skillwiki/shared";
 import { extractIssuePage } from "../lint/fingerprints.js";
 import { defaultLintRunner, LintRunner } from "../lint/runner.js";
 import type { LintOutput, LintSeverity } from "../lint/types.js";
-import { extractCitationMarkers } from "../parsers/citations.js";
-import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
-import { normalizeRawSourceTarget } from "../utils/raw-source.js";
+import { referencesFromText } from "../utils/source-reference-index.js";
 import { resolveReadOnlyVaultRoot, scanVault, readPage, type VaultScan } from "../utils/vault.js";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 
@@ -75,27 +73,6 @@ interface VaultEvalAggregation {
   worstPages: EvalPageFindingsSummary[];
 }
 
-function canonicalTarget(value: string): string | null {
-  const normalized = normalizeRawSourceTarget(value);
-  if (!normalized) return null;
-  return normalized.endsWith(".md") ? normalized : `${normalized}.md`;
-}
-
-function hasCitation(text: string): boolean {
-  const fm = extractFrontmatter(text);
-  if (fm.ok && Array.isArray(fm.data.sources)) {
-    for (const entry of fm.data.sources) {
-      if (canonicalTarget(String(entry)) !== null) return true;
-    }
-  }
-  const split = splitFrontmatter(text);
-  const body = split.ok ? split.data.body : text;
-  for (const marker of extractCitationMarkers(body)) {
-    if (canonicalTarget(marker.target) !== null) return true;
-  }
-  return false;
-}
-
 async function computeCitationCoverage(scan: VaultScan): Promise<EvalCitationCoverage> {
   const typedPages = scan.typedKnowledge;
   const total = typedPages.length;
@@ -112,7 +89,7 @@ async function computeCitationCoverage(scan: VaultScan): Promise<EvalCitationCov
   for (const page of typedPages) {
     try {
       const text = await readPage(page);
-      if (hasCitation(text)) citedCount++;
+      if (referencesFromText(text).length > 0) citedCount++;
     } catch {
       // Unreadable page counts as uncited
     }

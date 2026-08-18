@@ -28,55 +28,13 @@ import {
   appendLintFixLastOp,
   lintReadVault,
   lintVaultOutput,
+  outputForOnlyBucket,
   readMirrorHintLines,
   severityForBucket,
   summarizeLintOutput,
 } from "./helpers.js";
 import { collectLintErrorFingerprints } from "./fingerprints.js";
 import { LINT_RULES } from "./rules.js";
-
-function outputForOnlyBucket(
-  input: LintInput | LintSummaryInput,
-  match: Bucket[],
-  fixed: string[],
-  unresolved: string[],
-  readVault = lintReadVault(input)
-): { exitCode: number; result: Result<LintOutput | LintSummaryOutput> } {
-  const severity = severityForBucket(input.only!);
-  const filtered =
-    severity === "error"
-      ? { error: match, warning: [], info: [] }
-      : severity === "warning"
-        ? { error: [], warning: match, info: [] }
-        : { error: [], warning: [], info: match };
-  const summary = {
-    errors: filtered.error.reduce((n, b) => n + b.items.length, 0),
-    warnings: filtered.warning.reduce((n, b) => n + b.items.length, 0),
-    info: filtered.info.reduce((n, b) => n + b.items.length, 0),
-  };
-  let exitCode: ExitCodeValue = ExitCode.OK;
-  if (summary.errors > 0) exitCode = ExitCode.LINT_HAS_ERRORS;
-  else if (summary.warnings > 0 || summary.info > 0) exitCode = ExitCode.LINT_HAS_WARNINGS;
-  const vault = lintVaultOutput(input, readVault);
-  const hintLines = [
-    ...readMirrorHintLines(vault),
-    `--only ${input.only}`,
-    match.length === 0 ? "0 violations" : match.map((b) => `  ${b.kind}: ${b.items.length}`).join("\n"),
-  ];
-  const output: LintOutput = {
-    vault,
-    summary,
-    by_severity: filtered,
-    fixed,
-    unresolved,
-    humanHint: hintLines.join("\n"),
-  };
-  if (input.fix) appendLintFixLastOp(input.vault, fixed);
-  return {
-    exitCode,
-    result: ok(input.summary ? summarizeLintOutput(output, input.examplesLimit) : output),
-  };
-}
 
 export class LintRunner {
   private rules: readonly LintRuleModule[];
@@ -203,7 +161,9 @@ export class LintRunner {
     // --only: filter to a single bucket
     if (input.only) {
       const match = [...errorOut, ...warningOut, ...infoOut].filter((b) => b.kind === input.only);
-      return outputForOnlyBucket(input, match, fixed, unresolved, readVault);
+      const out = outputForOnlyBucket(input, match, fixed, unresolved, readVault);
+      if (input.fix) appendLintFixLastOp(input.vault, fixed);
+      return out;
     }
 
     const summary = {

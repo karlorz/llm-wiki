@@ -173,8 +173,7 @@ async function checkProjectLocalOverride(cwd?: string): Promise<CheckResult> {
 
 function checkWikiPathSet(ctx: DoctorContext): CheckResult {
   if (ctx.resolvedPath) {
-    // Note: resolvedPath comes from resolveRuntimePath. We can capture source if stored or resolved
-    return check("pass", "wiki_path_set", "WIKI_PATH configured", `Resolved via ${(ctx as any).wikiPathSource ?? "unknown"}: ${ctx.resolvedPath}`);
+    return check("pass", "wiki_path_set", "WIKI_PATH configured", `Resolved via ${ctx.wikiPathSource ?? "unknown"}: ${ctx.resolvedPath}`);
   }
   return check("error", "wiki_path_set", "WIKI_PATH configured", "No vault configured. Run `skillwiki init` or pass --vault.");
 }
