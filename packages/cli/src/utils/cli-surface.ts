@@ -25,6 +25,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("validate").option("--apply").option("--vault <dir>").option("--wiki <name>");
   program.command("graph"); // has subcommands
   program.command("canvas"); // has subcommands
+  program.command("eval").option("--base <git-ref>").option("--top <n>").option("--wiki <name>");
   program.command("overlap").option("--wiki <name>");
   program.command("query").option("--limit <n>").option("--include-pending").option("--hybrid").option("--wiki <name>");
   program.command("vectors");
