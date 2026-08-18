@@ -44,8 +44,8 @@ describe("cli-surface drift detection", () => {
     const surface = buildCliSurface();
     const subcommandGroups = [
       { parent: "graph", subs: ["build"] },
-      { parent: "sources", subs: ["pending", "disposition", "compile", "review", "reviews", "dispose"] },
-      { parent: "vectors", subs: ["rebuild", "status"] },
+      { parent: "sources", subs: ["pending", "skipped", "disposition", "compile", "review", "reviews", "dispose"] },
+      { parent: "vectors", subs: ["rebuild", "status", "reindex-page"] },
       { parent: "canvas", subs: ["generate"] },
       { parent: "config", subs: ["get", "set", "list", "path"] },
       { parent: "compound", subs: ["promote", "list", "delete"] },

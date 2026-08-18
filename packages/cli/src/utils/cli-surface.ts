@@ -129,6 +129,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   const vectorsCmd = program.commands.find(c => c.name() === "vectors")!;
   vectorsCmd.command("rebuild").option("--wiki <name>");
   vectorsCmd.command("status").option("--wiki <name>");
+  vectorsCmd.command("reindex-page").option("--wiki <name>");
 
   const sourcesCmd = program.commands.find(c => c.name() === "sources")!;
   sourcesCmd.command("pending")
@@ -144,6 +145,8 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--include-archived")
     .option("--include-duplicates")
     .option("--include-legacy-archived")
+    .option("--wiki <name>");
+  sourcesCmd.command("skipped")
     .option("--wiki <name>");
   sourcesCmd.command("disposition")
     .requiredOption("--status <status>")
