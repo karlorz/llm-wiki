@@ -674,6 +674,9 @@ export function collectManagedWriterAncestorPids(
 }
 
 function readProcStatus(pid: number): string | null {
+  // /proc/<pid>/status is Linux-only; return null elsewhere (empty ancestor
+  // set, i.e. no extra peer-gate weakening) without paying an ENOENT throw.
+  if (process.platform !== "linux") return null;
   try {
     return readFileSync(`/proc/${pid}/status`, "utf8");
   } catch {
