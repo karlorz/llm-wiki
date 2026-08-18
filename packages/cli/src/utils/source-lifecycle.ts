@@ -1,11 +1,14 @@
-import { basename } from "node:path";
+import { createHash } from "node:crypto";
+import { readFile, readdir } from "node:fs/promises";
+import { basename, join, relative, sep } from "node:path";
 import { RawSourceSchema } from "@skillwiki/shared";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { readPage, scanVault } from "./vault.js";
 import { buildSourceReferenceIndex } from "./source-reference-index.js";
 import { bodySha256, completeSha256, effectiveSourceDisposition, projectSourceDispositions, type SourceDisposition } from "./source-dispositions.js";
 import { buildSourceRelocationProjection, projectSourceRelocations } from "./source-relocations.js";
-import { readLogEvents } from "./log-events.js";
+import { readLogEvents, writeLogEvent } from "./log-events.js";
+import { operationId } from "./operation-id.js";
 
 export type SourceSchemaStatus = "valid" | "legacy" | "invalid";
 export type SourceStorageStatus = "active" | "archived" | "duplicate" | "legacy-archived";
@@ -131,9 +134,40 @@ function classifySchema(fmResult: ReturnType<typeof extractFrontmatter>): {
   return { fm, status: recognizedLegacy ? "legacy" : "invalid", issues };
 }
 
+async function scanNonMarkdownSourceFiles(vault: string): Promise<Array<{ relPath: string; absPath: string }>> {
+  const targets = [join(vault, "raw", "articles"), join(vault, "raw", "papers")];
+  const out: Array<{ relPath: string; absPath: string }> = [];
+
+  async function walkDir(dir: string): Promise<void> {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walkDir(fullPath);
+      } else if (entry.isFile() && !entry.name.endsWith(".md")) {
+        const rel = relative(vault, fullPath).split(sep).join("/");
+        out.push({ relPath: rel, absPath: fullPath });
+      }
+    }
+  }
+
+  for (const target of targets) {
+    await walkDir(target);
+  }
+  return out;
+}
+
 export async function inventorySources(input: {
   vault: string;
   today?: string;
+  now?: string;
+  actor?: string;
+  hostId?: string;
 }): Promise<{ exitCode: number; output?: SourceInventoryOutput; error?: unknown }> {
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: 9, error: scan };
@@ -182,12 +216,35 @@ export async function inventorySources(input: {
     });
   }
 
+  const occurredAt = input.now ?? new Date().toISOString();
+  const hostId = input.hostId ?? "local";
+  const actor = input.actor ?? "skillwiki-cli";
+
   for (const page of pages) {
     let text: string;
     try {
       text = await readPage(page);
     } catch (error) {
       diagnostics.push({ raw_path: page.relPath, code: "source_unreadable", message: String(error) });
+      const rawPath = page.relPath.split(sep).join("/");
+      const reason = `source unreadable: ${String(error)}`;
+      const stage = "inventory";
+      const opId = operationId("source-skipped", [rawPath, reason, stage, ""]);
+      await writeLogEvent(input.vault, {
+        schema: "skillwiki-log-event/v1",
+        operation_id: opId,
+        occurred_at: occurredAt,
+        host_id: hostId,
+        actor,
+        kind: "source-skipped",
+        target: rawPath,
+        note: reason,
+        metadata: {
+          path: rawPath,
+          reason,
+          stage,
+        },
+      });
       continue;
     }
     const classification = classifySchema(extractFrontmatter(text));
@@ -233,6 +290,38 @@ export async function inventorySources(input: {
       referenced_elsewhere: elsewhere,
       ...(projectedDisposition.disposition ? { effective_disposition: projectedDisposition.disposition } : {}),
       ...(projectedDisposition.identityMismatch ? { disposition_identity_mismatch: true } : {}),
+    });
+  }
+
+  // Observe non-markdown files under raw/articles/** and raw/papers/**
+  const nonMarkdownSources = await scanNonMarkdownSourceFiles(input.vault);
+  for (const file of nonMarkdownSources) {
+    let sha256: string | undefined;
+    try {
+      const bytes = await readFile(file.absPath);
+      sha256 = createHash("sha256").update(bytes).digest("hex");
+    } catch {
+      sha256 = undefined;
+    }
+    const rawPath = file.relPath.split(sep).join("/");
+    const reason = "non-markdown file in source directory";
+    const stage = "inventory";
+    const opId = operationId("source-skipped", [rawPath, reason, stage, sha256 ?? ""]);
+    await writeLogEvent(input.vault, {
+      schema: "skillwiki-log-event/v1",
+      operation_id: opId,
+      occurred_at: occurredAt,
+      host_id: hostId,
+      actor,
+      kind: "source-skipped",
+      target: rawPath,
+      note: reason,
+      metadata: {
+        path: rawPath,
+        reason,
+        stage,
+        ...(sha256 ? { sha256 } : {}),
+      },
     });
   }
 

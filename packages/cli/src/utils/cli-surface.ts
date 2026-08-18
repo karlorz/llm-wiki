@@ -146,6 +146,8 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--include-duplicates")
     .option("--include-legacy-archived")
     .option("--wiki <name>");
+  sourcesCmd.command("skipped")
+    .option("--wiki <name>");
   sourcesCmd.command("disposition")
     .requiredOption("--status <status>")
     .requiredOption("--reason <text>")
