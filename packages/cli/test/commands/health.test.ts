@@ -307,4 +307,70 @@ Body
       expect(pushCheck?.detail).toContain("FAIL");
     }
   });
+
+  it("classifies fetch log as error when a timestamped ERROR line follows an older OK line (skeptic finding on #56)", async () => {
+    const home = makeHome();
+    const vault = makeVault();
+    const isMac = process.platform === "darwin";
+    const binDir = isMac
+      ? join(home, "Library", "Application Support", "vault-sync", "bin")
+      : join(home, ".local", "share", "vault-sync", "bin");
+    const logDir = isMac
+      ? join(home, "Library", "Logs")
+      : join(home, ".local", "state", "vault-sync", "log");
+
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "wiki-push.sh"), "#!/bin/sh\n");
+    if (isMac) {
+      mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
+      writeFileSync(join(home, "Library", "LaunchAgents", "com.karlchow.wiki-push.plist"), "<plist/>");
+      writeFileSync(join(home, "Library", "LaunchAgents", "com.karlchow.wiki-fetch.plist"), "<plist/>");
+    } else {
+      mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-push.timer"), "[Timer]\n");
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-fetch.timer"), "[Timer]\n");
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-fuse-refresh.timer"), "[Timer]\n");
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-fuse-refresh.service"), "[Service]\n");
+    }
+    mkdirSync(logDir, { recursive: true });
+    const older = new Date(Date.now() - 3600_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const newer = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    // Old OK fetch, then a recent timestamped ERROR failure (wiki-fetch-notify.sh shape).
+    writeFileSync(
+      join(logDir, "wiki-fetch.log"),
+      [`${older} OK behind=0 delta=0 (no notify)`, `${newer} ERROR: /vault is not a git repo`].join("\n"),
+    );
+    writeFileSync(
+      join(logDir, "wiki-push.log"),
+      `${older} OK push (no changes) duration=61s\n`,
+    );
+    mkdirSync(join(home, ".config", "rclone"), { recursive: true });
+    writeFileSync(
+      join(home, ".config", "rclone", "wiki-push-filters.txt"),
+      [
+        "remotely-save/data.json",
+        ".skillwiki/sync.lock",
+        ".skillwiki/memory/",
+        ".skillwiki/memory-topics.json",
+        ".claude/settings.local.json",
+      ].join("\n"),
+    );
+
+    const r = await runHealth({
+      vault,
+      home,
+      envValue: undefined,
+      argv: ["node", "skillwiki", "health"],
+      currentVersion: "0.8.5-test",
+      sync: "optional",
+      noFail: true,
+    });
+
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const fetchCheck = r.result.data.components.vault_sync.checks.find(check => check.id === "vault_sync_last_fetch_status");
+      expect(fetchCheck?.status).toBe("error");
+      expect(fetchCheck?.detail).toContain("ERROR");
+    }
+  });
 });
