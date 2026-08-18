@@ -71,8 +71,14 @@ export interface ManagedWritePreflightInput {
 export interface ManagedWritePreflightDeps {
   converge(input: VaultSyncPullHelperInput): Promise<Result<VaultSyncPullReceipt>>;
   resolveConfiguredSnapshotWorktree?(home: string): string | undefined;
-  /** Test/host adapter for the single pre-mutation peer observation. */
+  /** Test/host adapter for the pre-mutation peer observation. */
   syncPeers?(input: SyncPeersInput): { exitCode: number; result: Result<SyncPeersOutput> };
+  /** Test/host adapter for sleep between peer polls. Defaults to setTimeout promise. */
+  sleepMs?(ms: number): Promise<void>;
+  /** Test/host adapter for wall clock. Defaults to Date.now. */
+  nowMs?(): number;
+  /** Test/host adapter for heartbeat logger. Defaults to writing to process.stderr. */
+  logHeartbeat?(message: string): void;
 }
 
 export interface ManagedWriteTransactionInput<T> {
@@ -92,10 +98,34 @@ export interface ManagedWriteTransactionInput<T> {
   mutate(receipt: ManagedWriteReceipt): Promise<{ exitCode: number; result: Result<T> }>;
 }
 
+/**
+ * Default bounded wait time in milliseconds when a live writer (e.g. wiki-push)
+ * is active during managed write preflight. Overridden by SKILLWIKI_MANAGED_WRITE_WAIT_MS.
+ */
+export const DEFAULT_MANAGED_WRITE_WAIT_MS = 240_000;
+
+/**
+ * Polling interval in milliseconds when waiting for live writer overlap to clear.
+ */
+export const MANAGED_WRITE_POLL_INTERVAL_MS = 2_000;
+
+export function resolveManagedWriteWaitMs(env?: Record<string, string | undefined>): number {
+  const raw = env?.SKILLWIKI_MANAGED_WRITE_WAIT_MS ?? process.env.SKILLWIKI_MANAGED_WRITE_WAIT_MS;
+  if (!raw) return DEFAULT_MANAGED_WRITE_WAIT_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_MANAGED_WRITE_WAIT_MS;
+  return parsed;
+}
+
 const DEFAULT_DEPS: ManagedWritePreflightDeps = {
   converge: (input) => runVaultSyncPullHelper(input),
   resolveConfiguredSnapshotWorktree,
   syncPeers: runSyncPeers,
+  sleepMs: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+  nowMs: () => Date.now(),
+  logHeartbeat: (message: string) => {
+    process.stderr.write(`${message}\n`);
+  },
 };
 
 const SAFE_MANAGED_WRITER_KINDS = new Set<string>(MANAGED_WRITER_KINDS);
@@ -223,19 +253,32 @@ function peerCheckFailure<T>(reason: string, detail: Record<string, unknown> = {
   };
 }
 
-function runManagedWritePeerGate<T>(
+type PeerGateDecision<T> =
+  | { status: "pass" }
+  | {
+      status: "overlap";
+      count: number;
+      kinds: string[];
+      failure: { exitCode: number; result: Result<T> };
+    }
+  | {
+      status: "block";
+      failure: { exitCode: number; result: Result<T> };
+    };
+
+function evaluateManagedWritePeerGate<T>(
   vault: string,
   mode: ManagedWriteMode,
   deps: ManagedWritePreflightDeps,
-): { exitCode: number; result: Result<T> } | null {
+): PeerGateDecision<T> {
   try {
     const check = (deps.syncPeers ?? DEFAULT_DEPS.syncPeers!)({ vault });
     if (check.exitCode !== ExitCode.OK || !check.result.ok) {
-      return peerCheckFailure<T>("peer-check-failed");
+      return { status: "block", failure: peerCheckFailure<T>("peer-check-failed") };
     }
     const validated = validateSyncPeersOutput(check.result.data);
     if (!validated) {
-      return peerCheckFailure<T>("peer-check-failed");
+      return { status: "block", failure: peerCheckFailure<T>("peer-check-failed") };
     }
 
     const { output: peerOutput, foreignLockCount, recentPeerStashCount } = validated;
@@ -243,7 +286,7 @@ function runManagedWritePeerGate<T>(
     const writerOnly = peerOutput.managed_writers.blocking && !nonWriterBlockingSignal;
     // Process snapshots are machine-wide, so they are meaningful only for a
     // fleet-managed Git writer. Locks and stash audits remain vault-scoped.
-    if (mode !== "git-writer" && writerOnly) return null;
+    if (mode !== "git-writer" && writerOnly) return { status: "pass" };
 
     const managedWriterBlocking = mode === "git-writer" && peerOutput.managed_writers.blocking;
     const hasKnownBlockingSignal =
@@ -251,35 +294,98 @@ function runManagedWritePeerGate<T>(
       managedWriterBlocking ||
       recentPeerStashCount > 0;
     if (!peerOutput.blocking) {
-      return hasKnownBlockingSignal ? peerCheckFailure<T>("peer-check-failed") : null;
+      return hasKnownBlockingSignal
+        ? { status: "block", failure: peerCheckFailure<T>("peer-check-failed") }
+        : { status: "pass" };
     }
 
     if (managedWriterBlocking) {
-      return peerCheckFailure<T>("live-writer-overlap", {
-        managed_writer_count: peerOutput.managed_writers.count,
-        managed_writer_kinds: peerOutput.managed_writers.kinds.slice(0, 8),
-        blocking: true,
-      });
+      const kinds = peerOutput.managed_writers.kinds.slice(0, 8);
+      return {
+        status: "overlap",
+        count: peerOutput.managed_writers.count,
+        kinds,
+        failure: peerCheckFailure<T>("live-writer-overlap", {
+          managed_writer_count: peerOutput.managed_writers.count,
+          managed_writer_kinds: kinds,
+          blocking: true,
+        }),
+      };
     }
 
     if (foreignLockCount > 0) {
-      return peerCheckFailure<T>("peer-lock", {
-        foreign_lock_count: foreignLockCount,
-        blocking: true,
-      });
+      return {
+        status: "block",
+        failure: peerCheckFailure<T>("peer-lock", {
+          foreign_lock_count: foreignLockCount,
+          blocking: true,
+        }),
+      };
     }
 
     if (recentPeerStashCount > 0) {
-      return peerCheckFailure<T>("recent-peer-stash", {
-        recent_peer_stash_count: recentPeerStashCount,
-        stash_classification: "recent_known_peer_stash",
+      return {
+        status: "block",
+        failure: peerCheckFailure<T>("recent-peer-stash", {
+          recent_peer_stash_count: recentPeerStashCount,
+          stash_classification: "recent_known_peer_stash",
+          blocking: true,
+        }),
+      };
+    }
+
+    return {
+      status: "block",
+      failure: peerCheckFailure<T>("peer-blocked", { blocking: true }),
+    };
+  } catch {
+    return { status: "block", failure: peerCheckFailure<T>("peer-check-failed") };
+  }
+}
+
+export async function runManagedWritePeerGate<T>(
+  vault: string,
+  mode: ManagedWriteMode,
+  deps: ManagedWritePreflightDeps = DEFAULT_DEPS,
+  env?: Record<string, string | undefined>,
+): Promise<{ exitCode: number; result: Result<T> } | null> {
+  const now = deps.nowMs ?? DEFAULT_DEPS.nowMs!;
+  const sleep = deps.sleepMs ?? DEFAULT_DEPS.sleepMs!;
+  const logHeartbeat = deps.logHeartbeat ?? DEFAULT_DEPS.logHeartbeat!;
+  const waitMs = resolveManagedWriteWaitMs(env);
+
+  const initial = evaluateManagedWritePeerGate<T>(vault, mode, deps);
+  if (initial.status === "pass") return null;
+  if (initial.status === "block") return initial.failure;
+
+  // status === "overlap": live-writer-overlap detected. Bounded wait-and-retry.
+  const startedAt = now();
+  const deadline = startedAt + waitMs;
+  let lastOverlap = initial;
+
+  for (;;) {
+    const elapsed = Math.max(0, now() - startedAt);
+    const remainingMs = Math.max(0, deadline - now());
+    const remainingSec = Math.ceil(remainingMs / 1000);
+    const writerKindDesc = lastOverlap.kinds.length > 0 ? lastOverlap.kinds.join(", ") : "unknown";
+    logHeartbeat(`skillwiki: waiting for live vault writer (${writerKindDesc}), ${remainingSec}s left`);
+
+    if (now() >= deadline) {
+      return peerCheckFailure<T>("live-writer-overlap", {
+        managed_writer_count: lastOverlap.count,
+        managed_writer_kinds: lastOverlap.kinds,
         blocking: true,
+        waited_ms: elapsed,
       });
     }
 
-    return peerCheckFailure<T>("peer-blocked", { blocking: true });
-  } catch {
-    return peerCheckFailure<T>("peer-check-failed");
+    const nextSleepMs = Math.min(MANAGED_WRITE_POLL_INTERVAL_MS, remainingMs);
+    await sleep(nextSleepMs);
+
+    const check = evaluateManagedWritePeerGate<T>(vault, mode, deps);
+    if (check.status === "pass") return null;
+    if (check.status === "block") return check.failure;
+    lastOverlap = check;
   }
 }
 
@@ -614,7 +720,7 @@ export async function runManagedWriteTransaction<T>(
         }) as Result<T>,
       };
     }
-    const peerGate = runManagedWritePeerGate<T>(mutationVault, receipt.mode, deps);
+    const peerGate = await runManagedWritePeerGate<T>(mutationVault, receipt.mode, deps, input.env);
     if (peerGate) return peerGate;
     return await input.mutate(receipt);
   } finally {
