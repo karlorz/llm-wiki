@@ -70,7 +70,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--remote-delete")
     .option("--max-remote-deletes <n>")
     .option("--reason <text>");
-  program.command("drift").option("--apply").option("--new <date>").option("--wiki <name>");
+  program.command("drift").option("--apply").option("--affected-pages").option("--new <date>").option("--wiki <name>");
   program.command("dedup")
     .option("--apply")
     .option("--approve <token>")

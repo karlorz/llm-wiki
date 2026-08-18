@@ -1273,6 +1273,7 @@ program
   .command("drift [vault]")
   .description("detect content drift in raw sources")
   .option("--apply", "update sha256 in drifted sources")
+  .option("--affected-pages", "include deterministic list of pages citing each drifted source")
   .option("--new <date>", "list raw files ingested on/after this date (YYYY-MM-DD)")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
@@ -1281,9 +1282,9 @@ program
     else if (opts.apply) return emitGuardedVaultWrite(
       v.vault,
       "drift --apply",
-      () => runDrift({ vault: v.vault, apply: true, newSince: opts.new })
+      () => runDrift({ vault: v.vault, apply: true, newSince: opts.new, affectedPages: !!opts.affectedPages })
     );
-    else emit(await runDrift({ vault: v.vault, apply: false, newSince: opts.new }), v.vault);
+    else emit(await runDrift({ vault: v.vault, apply: false, newSince: opts.new, affectedPages: !!opts.affectedPages }), v.vault);
   });
 
 // dedup
