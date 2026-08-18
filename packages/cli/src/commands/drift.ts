@@ -4,6 +4,7 @@ import { scanVault, readPage } from "../utils/vault.js";
 import { splitFrontmatter } from "../parsers/frontmatter.js";
 import { controlledFetch, type FetchOptions } from "../utils/fetch.js";
 import { assessSourceIdentity, type SourceIdentityAssessment } from "../utils/source-identity.js";
+import { buildSourceReferenceIndex } from "../utils/source-reference-index.js";
 
 const FETCH_OPTS: FetchOptions = { timeoutMs: 10000, maxBytes: 5_000_000, maxRedirects: 5 };
 
@@ -11,6 +12,7 @@ export interface DriftInput {
   vault: string;
   apply?: boolean;
   newSince?: string;
+  affectedPages?: boolean;
   fetchFn?: (url: string, opts: FetchOptions) => Promise<Result<{ body: string }>>;
 }
 
@@ -23,6 +25,7 @@ export interface DriftSource {
   fetch_error?: string;
   ingested?: string;
   identity?: SourceIdentityAssessment;
+  affected_pages?: string[];
 }
 
 export interface DriftOutput {
@@ -128,12 +131,39 @@ export async function runDrift(input: DriftInput): Promise<{ exitCode: number; r
   const updated = results.filter(r => r.status === "updated");
   const unchanged = results.filter(r => r.status === "unchanged").length;
 
+  if (input.affectedPages && drifted.length > 0) {
+    let integratedBy: Map<string, string[]> | undefined;
+    try {
+      const index = await buildSourceReferenceIndex({
+        typedPages: scan.data.typedKnowledge,
+        availableRawPaths: scan.data.raw.map(page => page.relPath),
+      });
+      integratedBy = index.integratedBy;
+    } catch {
+      // Degrade gracefully if index build fails
+    }
+
+    for (const d of drifted) {
+      d.affected_pages = integratedBy?.get(d.raw_path) ?? [];
+    }
+  }
+
   // Exit 32 if drift or identity conflicts remain; exit 0 if no drift or all drift was updated via --apply
   const exitCode = drifted.length > 0 || identityConflicts.length > 0 ? ExitCode.DRIFT_DETECTED : ExitCode.OK;
 
   const hintLines: string[] = [`scanned: ${results.length}, unchanged: ${unchanged}`];
   if (newResults.length > 0) hintLines.push(`new: ${newResults.length}`, ...newResults.map(n => `  ${n.raw_path} (ingested: ${n.ingested})`));
-  if (drifted.length > 0) hintLines.push(`drifted: ${drifted.length}`, ...drifted.map(d => `  ${d.raw_path}`));
+  if (drifted.length > 0) {
+    hintLines.push(`drifted: ${drifted.length}`);
+    for (const d of drifted) {
+      hintLines.push(`  ${d.raw_path}`);
+      if (input.affectedPages && d.affected_pages && d.affected_pages.length > 0) {
+        for (const page of d.affected_pages) {
+          hintLines.push(`    affected: ${page}`);
+        }
+      }
+    }
+  }
   if (identityConflicts.length > 0) {
     hintLines.push(
       `identity_conflicts: ${identityConflicts.length}`,

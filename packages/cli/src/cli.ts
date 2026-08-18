@@ -67,6 +67,7 @@ import { runCanvasGenerate } from "./commands/canvas.js";
 import { runQuery } from "./commands/query.js";
 import { runVectorsRebuild, runVectorsStatus } from "./commands/vectors.js";
 import { runVectorsReindexPage } from "./commands/vectors-reindex-page.js";
+import { runVectorsPrunePage } from "./commands/vectors-prune-page.js";
 import { runSourcesPending } from "./commands/sources.js";
 import { runSourcesSkipped } from "./commands/sources-skipped.js";
 import { runSourceDisposition } from "./commands/source-disposition.js";
@@ -1272,6 +1273,7 @@ program
   .command("drift [vault]")
   .description("detect content drift in raw sources")
   .option("--apply", "update sha256 in drifted sources")
+  .option("--affected-pages", "include deterministic list of pages citing each drifted source")
   .option("--new <date>", "list raw files ingested on/after this date (YYYY-MM-DD)")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
@@ -1280,9 +1282,9 @@ program
     else if (opts.apply) return emitGuardedVaultWrite(
       v.vault,
       "drift --apply",
-      () => runDrift({ vault: v.vault, apply: true, newSince: opts.new })
+      () => runDrift({ vault: v.vault, apply: true, newSince: opts.new, affectedPages: !!opts.affectedPages })
     );
-    else emit(await runDrift({ vault: v.vault, apply: false, newSince: opts.new }), v.vault);
+    else emit(await runDrift({ vault: v.vault, apply: false, newSince: opts.new, affectedPages: !!opts.affectedPages }), v.vault);
   });
 
 // dedup
@@ -2098,6 +2100,16 @@ vectorsCmd
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runVectorsReindexPage({ vault: v.vault, page }), v.vault, { postCommit: false });
+  });
+vectorsCmd
+  .command("prune-page [vault]")
+  .description("prune deleted pages from the TF-IDF cache")
+  .option("--dry-run", "report orphans without pruning")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runVectorsPrunePage({ vault: v.vault, dryRun: opts.dryRun }), v.vault, { postCommit: false });
   });
 
 // Emit deprecation warnings for any installed skills marked deprecated

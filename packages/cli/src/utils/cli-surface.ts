@@ -70,7 +70,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--remote-delete")
     .option("--max-remote-deletes <n>")
     .option("--reason <text>");
-  program.command("drift").option("--apply").option("--new <date>").option("--wiki <name>");
+  program.command("drift").option("--apply").option("--affected-pages").option("--new <date>").option("--wiki <name>");
   program.command("dedup")
     .option("--apply")
     .option("--approve <token>")
@@ -130,6 +130,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   vectorsCmd.command("rebuild").option("--wiki <name>");
   vectorsCmd.command("status").option("--wiki <name>");
   vectorsCmd.command("reindex-page").option("--wiki <name>");
+  vectorsCmd.command("prune-page").option("--dry-run").option("--wiki <name>");
 
   const sourcesCmd = program.commands.find(c => c.name() === "sources")!;
   sourcesCmd.command("pending")
