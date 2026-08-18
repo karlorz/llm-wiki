@@ -130,6 +130,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   vectorsCmd.command("rebuild").option("--wiki <name>");
   vectorsCmd.command("status").option("--wiki <name>");
   vectorsCmd.command("reindex-page").option("--wiki <name>");
+  vectorsCmd.command("prune-page").option("--dry-run").option("--wiki <name>");
 
   const sourcesCmd = program.commands.find(c => c.name() === "sources")!;
   sourcesCmd.command("pending")
