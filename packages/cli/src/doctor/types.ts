@@ -43,6 +43,7 @@ export interface DoctorContext {
   devSourceRun: boolean;
   vsConfig: VaultSyncRuntimeConfig;
   resolvedPath: string | undefined;
+  wikiPathSource?: string;
   gitCheckPath: string | undefined;
   fleetLoad: FleetManifestAndHost | null;
   readOnlyScanRoot: string | undefined;

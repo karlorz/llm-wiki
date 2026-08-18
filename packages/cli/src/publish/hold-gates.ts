@@ -158,42 +158,6 @@ export async function evaluatePublicationHoldGates(input: {
 }
 
 /**
- * Unused legacy export kept for backwards-compatibility with experimental harness callers.
- */
-export async function handlePublicationHoldIfTripped(input: {
-  content: string;
-  target: string;
-  vault: string;
-  publisherKind: "page" | "project-page";
-  logNote?: string;
-  now?: Date;
-  write: boolean;
-}): Promise<HoldGateEvaluation | null> {
-  const hold_reasons: PublicationHoldReason[] = [];
-  const schemaValid = evaluateSchemaGate(input.content, input.target, input.publisherKind);
-  if (!schemaValid) {
-    hold_reasons.push("schema-invalid");
-  }
-  const split = splitFrontmatter(input.content);
-  const body = split.ok ? split.data.body : input.content;
-
-  const scanResult = await scanVault(input.vault);
-  if (scanResult.ok) {
-    const wikilinksValid = evaluateBrokenWikilinkGate(body, scanResult.data, input.target);
-    if (!wikilinksValid) {
-      hold_reasons.push("broken-wikilink");
-    }
-  }
-  const citationValid = evaluateCitationMarkerGate(input.content, body, input.publisherKind);
-  if (!citationValid) {
-    hold_reasons.push("citation-marker-missing");
-  }
-
-  if (hold_reasons.length === 0) return null;
-  return { held: true, hold_reasons };
-}
-
-/**
  * Emit a source-review hold event into meta/log-events for a held publication.
  */
 export async function emitPublicationHoldReviewEvent(input: {

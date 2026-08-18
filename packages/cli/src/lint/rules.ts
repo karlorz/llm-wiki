@@ -57,55 +57,13 @@ import {
   hasDuplicateFrontmatter,
   lintReadVault,
   lintVaultOutput,
+  outputForOnlyBucket,
   readMirrorHintLines,
   severityForBucket,
   shouldCheckCanonicalLocalSourceAssertion,
   summarizeLintOutput,
   walkMarkdownFiles,
 } from "./helpers.js";
-
-// Helper for standalone single-bucket responses (used by fast paths)
-function outputForOnlyBucket(
-  input: LintInput | LintSummaryInput,
-  match: Bucket[],
-  fixed: string[],
-  unresolved: string[],
-  readVault = lintReadVault(input)
-): { exitCode: number; result: Result<LintOutput | LintSummaryOutput> } {
-  const severity = severityForBucket(input.only!);
-  const filtered =
-    severity === "error"
-      ? { error: match, warning: [], info: [] }
-      : severity === "warning"
-        ? { error: [], warning: match, info: [] }
-        : { error: [], warning: [], info: match };
-  const summary = {
-    errors: filtered.error.reduce((n, b) => n + b.items.length, 0),
-    warnings: filtered.warning.reduce((n, b) => n + b.items.length, 0),
-    info: filtered.info.reduce((n, b) => n + b.items.length, 0),
-  };
-  let exitCode: number = ExitCode.OK;
-  if (summary.errors > 0) exitCode = ExitCode.LINT_HAS_ERRORS;
-  else if (summary.warnings > 0 || summary.info > 0) exitCode = ExitCode.LINT_HAS_WARNINGS;
-  const vault = lintVaultOutput(input, readVault);
-  const hintLines = [
-    ...readMirrorHintLines(vault),
-    `--only ${input.only}`,
-    match.length === 0 ? "0 violations" : match.map((b) => `  ${b.kind}: ${b.items.length}`).join("\n"),
-  ];
-  const output: LintOutput = {
-    vault,
-    summary,
-    by_severity: filtered,
-    fixed,
-    unresolved,
-    humanHint: hintLines.join("\n"),
-  };
-  return {
-    exitCode,
-    result: ok(input.summary ? summarizeLintOutput(output, input.examplesLimit) : output),
-  };
-}
 
 async function collectCliRefsPages(vault: string): Promise<Result<VaultPage[]>> {
   if (!existsSync(join(vault, "SCHEMA.md"))) {

@@ -15,7 +15,7 @@ function canonicalTarget(value: string): string | null {
   return normalized.endsWith(".md") ? normalized : `${normalized}.md`;
 }
 
-function referencesFromText(text: string): string[] {
+export function referencesFromText(text: string): string[] {
   const references = new Set<string>();
   const fm = extractFrontmatter(text);
   if (fm.ok && Array.isArray(fm.data.sources)) {
