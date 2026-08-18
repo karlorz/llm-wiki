@@ -240,4 +240,71 @@ Body
       expect(pushCheck?.detail).toContain("OK push (no changes)");
     }
   });
+
+  it("classifies push log as error when explicit FAIL timestamped line is present even if trailing JSON exists", async () => {
+    const home = makeHome();
+    const vault = makeVault();
+    const isMac = process.platform === "darwin";
+    const binDir = isMac
+      ? join(home, "Library", "Application Support", "vault-sync", "bin")
+      : join(home, ".local", "share", "vault-sync", "bin");
+    const logDir = isMac
+      ? join(home, "Library", "Logs")
+      : join(home, ".local", "state", "vault-sync", "log");
+
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "wiki-push.sh"), "#!/bin/sh\n");
+    if (isMac) {
+      mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
+      writeFileSync(join(home, "Library", "LaunchAgents", "com.karlchow.wiki-push.plist"), "<plist/>");
+      writeFileSync(join(home, "Library", "LaunchAgents", "com.karlchow.wiki-fetch.plist"), "<plist/>");
+    } else {
+      mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-push.timer"), "[Timer]\n");
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-fetch.timer"), "[Timer]\n");
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-fuse-refresh.timer"), "[Timer]\n");
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-fuse-refresh.service"), "[Service]\n");
+    }
+    mkdirSync(logDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    writeFileSync(
+      join(logDir, "wiki-push.log"),
+      [
+        `${ts} FAIL rclone copy failed exit=1`,
+        '{"status":"failed","reason":"LINT_DELTA_FULL_FAILED","errors":0}',
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(logDir, "wiki-fetch.log"),
+      `${ts} OK behind=0 delta=0 (no notify)\n`,
+    );
+    mkdirSync(join(home, ".config", "rclone"), { recursive: true });
+    writeFileSync(
+      join(home, ".config", "rclone", "wiki-push-filters.txt"),
+      [
+        "remotely-save/data.json",
+        ".skillwiki/sync.lock",
+        ".skillwiki/memory/",
+        ".skillwiki/memory-topics.json",
+        ".claude/settings.local.json",
+      ].join("\n"),
+    );
+
+    const r = await runHealth({
+      vault,
+      home,
+      envValue: undefined,
+      argv: ["node", "skillwiki", "health"],
+      currentVersion: "0.8.5-test",
+      sync: "optional",
+      noFail: true,
+    });
+
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const pushCheck = r.result.data.components.vault_sync.checks.find(check => check.id === "vault_sync_last_push_age");
+      expect(pushCheck?.status).toBe("error");
+      expect(pushCheck?.detail).toContain("FAIL");
+    }
+  });
 });

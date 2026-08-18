@@ -102,6 +102,7 @@ describe("doctor golden parity tests", () => {
       "vault_sync_installed",
       "vault_sync_jobs_enabled",
       "vault_sync_last_push_age",
+      "vault_sync_last_push_result",
       "vault_sync_last_fetch_status",
       "vault_sync_filter_present",
       "vault_sync_snapshot_guard",
@@ -123,7 +124,7 @@ describe("doctor golden parity tests", () => {
     ];
 
     expect(checkIds).toEqual(expectedCheckIds);
-    expect(res.result.data.checks.length).toBe(52);
+    expect(res.result.data.checks.length).toBe(53);
     expect(res.result.data.summary).toEqual({
       pass: expect.any(Number),
       info: 5, // 5 vault metrics
@@ -134,7 +135,7 @@ describe("doctor golden parity tests", () => {
     expect(res.result.data.humanHint).toContain("Vault log size");
   });
 
-  it("captures golden check ID sequence for unconfigured home (54 checks)", async () => {
+  it("captures golden check ID sequence for unconfigured home (55 checks)", async () => {
     const h = createHome();
 
     const res = await runDoctor({
@@ -147,7 +148,7 @@ describe("doctor golden parity tests", () => {
     expect(res.result.ok).toBe(true);
     if (!res.result.ok) return;
 
-    expect(res.result.data.checks.length).toBe(54);
+    expect(res.result.data.checks.length).toBe(55);
 
     // Verify unconfigured checks fail or skip as expected
     const wp = res.result.data.checks.find(c => c.id === "wiki_path_set");

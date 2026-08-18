@@ -8,7 +8,41 @@ import { listReviewRequiredOps } from "../../utils/operation-journal.js";
 import type { CheckResult, DoctorContext, DoctorProbe, VaultSyncRuntimeConfig } from "../types.js";
 import { check } from "./helpers.js";
 
-// Read vault_sync.* keys from the .env file bypassing the whitelist filter.
+function readPushResultState(stateFile: string): {
+  exists: boolean;
+  result?: string;
+  reason?: string;
+  timestamp?: string;
+  duration?: string;
+  malformed?: boolean;
+} {
+  if (!existsSync(stateFile)) return { exists: false };
+  try {
+    const content = readFileSync(stateFile, "utf8");
+    let result: string | undefined;
+    let reason: string | undefined;
+    let timestamp: string | undefined;
+    let duration: string | undefined;
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      const k = trimmed.slice(0, eq).trim();
+      const v = trimmed.slice(eq + 1).trim();
+      if (k === "result") result = v;
+      else if (k === "reason") reason = v;
+      else if (k === "timestamp") timestamp = v;
+      else if (k === "duration") duration = v;
+    }
+    if (result !== "ok" && result !== "refused") {
+      return { exists: true, malformed: true, result, reason, timestamp, duration };
+    }
+    return { exists: true, result, reason, timestamp, duration };
+  } catch {
+    return { exists: true, malformed: true };
+  }
+}
 export function readVaultSyncConfig(home: string): VaultSyncRuntimeConfig {
   try {
     const content = readFileSync(join(home, ".skillwiki", ".env"), "utf8");
@@ -130,6 +164,60 @@ function parseIsoToMs(ts: string | undefined | null): number | null {
 function ageMinutes(nowMs: number, tsMs: number | null): number | null {
   if (tsMs == null) return null;
   return Math.floor((nowMs - tsMs) / 60000);
+}
+
+function checkPushAgeFromTimestamp(ts: string): CheckResult {
+  const lastPush = new Date(ts).getTime();
+  if (isNaN(lastPush)) {
+    return check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+      `Unparseable push timestamp: ${ts}`);
+  }
+  const ageSec = (Date.now() - lastPush) / 1000;
+  if (ageSec <= 180) {
+    return check("pass", "vault_sync_last_push_age", "Vault sync last push recency",
+      `Last push ${ageSec.toFixed(0)}s ago`);
+  }
+  return check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+    `Last push ${Math.round(ageSec)}s ago (>3 min)`);
+}
+
+function checkPushAgeFromLog(logDir: string, logFile: string): CheckResult {
+  try {
+    const logContent = readFileSync(logFile, "utf8");
+    const lines = logContent.trim().split("\n").filter(Boolean);
+    if (lines.length === 0) {
+      return check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+        "Log file is empty");
+    }
+    const lastLine = [...lines].reverse().find(line =>
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z (OK push|FAIL)/.test(line),
+    );
+    if (!lastLine) {
+      const tail = lines[lines.length - 1]!;
+      return check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+        `Last log entry: ${tail.slice(0, 80)}`);
+    }
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z FAIL/.test(lastLine)) {
+      return check("error", "vault_sync_last_push_age", "Vault sync last push recency",
+        `Last push failed: ${lastLine}`);
+    }
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z OK push/.test(lastLine)) {
+      const tsMatch = lastLine.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/);
+      if (tsMatch) {
+        return checkPushAgeFromTimestamp(tsMatch[1]!);
+      }
+      return check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+        `Unparseable push line: ${lastLine.slice(0, 80)}`);
+    }
+    return check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+      `Last log entry: ${lastLine.slice(0, 80)}`);
+  } catch {
+    return existsSync(logDir)
+      ? check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+        `Log file not found at ${logFile}`)
+      : check("error", "vault_sync_last_push_age", "Vault sync last push recency",
+        `Log directory not found at ${logDir}`);
+  }
 }
 
 export function snapshotterHealthChecks(
@@ -255,6 +343,7 @@ interface VaultSyncInput {
   vaultSyncServiceScope?: string;
   os?: string;
   logDir?: string;
+  cacheDir?: string;
   shareDir?: string;
   filterPath?: string;
   snapshotScriptPath?: string;
@@ -273,6 +362,7 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
       skip("vault_sync_jobs_enabled", "Vault sync jobs enabled"),
       skip("vault_sync_snapshot_service_result", "Vault sync snapshot service result"),
       skip("vault_sync_last_push_age", "Vault sync last push recency"),
+      skip("vault_sync_last_push_result", "Vault sync last push result"),
       skip("vault_sync_snapshot_consecutive_failures", "Vault sync snapshot consecutive failures"),
       skip("vault_sync_last_fetch_status", "Vault sync last fetch status"),
       skip("vault_sync_filter_present", "Vault sync filter file present"),
@@ -286,6 +376,11 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
     (isMac
       ? join(home, "Library", "Logs")
       : join(home, ".local", "state", "vault-sync", "log"));
+  const cacheDir =
+    input.cacheDir ??
+    (isMac
+      ? join(home, "Library", "Caches", "vault-sync")
+      : join(home, ".cache", "vault-sync"));
   const shareDir =
     input.shareDir ??
     (isMac
@@ -369,46 +464,48 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
       "Scheduler check failed — run vault-sync-install");
   }
 
+  const stateFile = join(cacheDir, "wiki-push-result.state");
+  const pushState = readPushResultState(stateFile);
+
   const logFile = join(logDir, "wiki-push.log");
   let c3: CheckResult;
-  try {
-    const logContent = readFileSync(logFile, "utf8");
-    const lines = logContent.trim().split("\n").filter(Boolean);
-    if (lines.length === 0) {
-      c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
-        "Log file is empty");
-    } else {
-      const lastLine = [...lines].reverse().find(line => /FAIL|OK push/.test(line)) ?? lines[lines.length - 1];
-      if (/FAIL/.test(lastLine)) {
-        c3 = check("error", "vault_sync_last_push_age", "Vault sync last push recency",
-          `Last push failed: ${lastLine}`);
-      } else if (/OK push/.test(lastLine)) {
-        const tsMatch = lastLine.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/);
-        if (tsMatch) {
-          const lastPush = new Date(tsMatch[1]).getTime();
-          const ageSec = (Date.now() - lastPush) / 1000;
-          if (ageSec <= 180) {
-            c3 = check("pass", "vault_sync_last_push_age", "Vault sync last push recency",
-              `Last push ${ageSec.toFixed(0)}s ago`);
-          } else {
-            c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
-              `Last push ${Math.round(ageSec)}s ago (>3 min)`);
-          }
-        } else {
-          c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
-          `Unparseable push line: ${lastLine.slice(0, 80)}`);
-        }
+  if (pushState.exists && !pushState.malformed) {
+    if (pushState.result === "refused") {
+      const reasonSuffix = pushState.reason ? `: ${pushState.reason}` : "";
+      c3 = check("error", "vault_sync_last_push_age", "Vault sync last push recency",
+        `Last push refused${reasonSuffix}`);
+    } else if (pushState.result === "ok") {
+      if (pushState.timestamp) {
+        c3 = checkPushAgeFromTimestamp(pushState.timestamp);
       } else {
         c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
-          `Last log entry: ${lastLine.slice(0, 80)}`);
+          "State file missing timestamp");
       }
+    } else {
+      c3 = checkPushAgeFromLog(logDir, logFile);
     }
-  } catch {
-    c3 = existsSync(logDir)
-      ? check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
-        `Log file not found at ${logFile}`)
-      : check("error", "vault_sync_last_push_age", "Vault sync last push recency",
-        `Log directory not found at ${logDir}`);
+  } else {
+    c3 = checkPushAgeFromLog(logDir, logFile);
+  }
+
+  let cPushResult: CheckResult;
+  if (pushState.exists) {
+    if (pushState.malformed) {
+      cPushResult = check("warn", "vault_sync_last_push_result", "Vault sync last push result",
+        `malformed state file: ${stateFile}`);
+    } else if (pushState.result === "ok") {
+      cPushResult = check("pass", "vault_sync_last_push_result", "Vault sync last push result",
+        `result=ok timestamp=${pushState.timestamp ?? ""}`);
+    } else if (pushState.result === "refused") {
+      cPushResult = check("error", "vault_sync_last_push_result", "Vault sync last push result",
+        `result=refused reason=${pushState.reason ?? ""} timestamp=${pushState.timestamp ?? ""}`);
+    } else {
+      cPushResult = check("warn", "vault_sync_last_push_result", "Vault sync last push result",
+        `malformed state file: ${stateFile}`);
+    }
+  } else {
+    cPushResult = check("warn", "vault_sync_last_push_result", "Vault sync last push result",
+      `no push result state file (push may not have run yet): ${stateFile}`);
   }
 
   const fetchLogFile = join(logDir, "wiki-fetch.log");
@@ -490,7 +587,7 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
     }
   }
 
-  return [c1, c2, c3, cFetch, c4, c5];
+  return [c1, c2, c3, cPushResult, cFetch, c4, c5];
 }
 
 function checkVaultSyncPullHelper(home: string, env: NodeJS.ProcessEnv): CheckResult {
