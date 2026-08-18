@@ -328,10 +328,8 @@ export async function pruneVectorIndex(
 
   // For df tracking: collect terms from all orphaned docs
   let termsPrunedCount = 0;
-  const orphanedDocsTerms: Array<Record<string, number>> = [];
   for (const orphanKey of orphans) {
     const orphanDoc = index.docs[orphanKey] ?? {};
-    orphanedDocsTerms.push(orphanDoc);
     for (const term of Object.keys(orphanDoc)) {
       const nextDf = (index.df[term] ?? 1) - 1;
       if (nextDf <= 0) {
