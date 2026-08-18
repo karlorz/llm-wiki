@@ -46,6 +46,7 @@ export const WARNING_ORDER = [
   "orphaned_project_pages",
   "missing_overview",
   "missing_diagram",
+  "cycle_traps",
 ] as const;
 
 export const INFO_ORDER = [

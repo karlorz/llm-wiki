@@ -115,8 +115,9 @@ describe("runLint", () => {
 
   it("clean fixture exits 0", async () => {
     const v = vault();
-    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "> **TL;DR:** Summary about alpha.\n\n## Overview\n\nContent about alpha [[alpha]].\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[alpha]]\n");
-    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n");
+    writeFileSync(join(v, "concepts", "alpha.md"), FM(["model"]) + "> **TL;DR:** Summary about alpha.\n\n## Overview\n\nContent about alpha.\n\n## Details\n\nMore details here.\n\n## Related\n\n- [[beta]]\n");
+    writeFileSync(join(v, "concepts", "beta.md"), FM(["model"]) + "> **TL;DR:** Summary about beta.\n\n## Overview\n\nContent about beta.\n\n## Details\n\nMore details here.\n\n## Related\n\nNo links.\n");
+    writeFileSync(join(v, "index.md"), "# Index\n\n## Concepts\n- [[alpha]]\n- [[beta]]\n");
     const r = await runLint({ vault: v, days: 90, lines: 200, logThreshold: 500 });
     expect(r.exitCode).toBe(0);
     if (r.result.ok) {

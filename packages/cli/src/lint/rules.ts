@@ -29,6 +29,7 @@ import {
   type VaultScan,
 } from "../utils/vault.js";
 import { splitFrontmatter, extractFrontmatter } from "../parsers/frontmatter.js";
+import { extractBodyWikilinks } from "../parsers/wikilinks.js";
 import { extractCitationMarkers, isLegacyCitationStyle, hasOrphanedCitations, hasWikilinkCitations } from "../parsers/citations.js";
 import { buildCliSurface, validateCliRefs } from "../utils/cli-surface.js";
 import { parseExpiryAnnotations } from "../parsers/expiry-annotations.js";
@@ -1591,6 +1592,104 @@ export const staleSectionsRule: LintRuleModule = {
   },
 };
 
+// 25. Cycle Traps rule
+export const cycleTrapsRule: LintRuleModule = {
+  id: "cycle_traps",
+  severity: "warning",
+  async run(ctx: LintRuleContext): Promise<LintRuleResult> {
+    const pages = ctx.scan.typedKnowledge;
+    const pagePaths = new Set(pages.map((p) => p.relPath));
+
+    // Build adjacency list for typed pages
+    const adj = new Map<string, string[]>();
+    for (const p of pages) {
+      adj.set(p.relPath, []);
+    }
+
+    const perPageTargets = await mapWithConcurrency(pages, vaultIoConcurrency(), async (p) => {
+      try {
+        const text = await readPageCached(p, ctx.pageTextCache);
+        const split = splitFrontmatter(text);
+        const body = split.ok ? split.data.body : text;
+        const targets: string[] = [];
+        for (const slug of extractBodyWikilinks(body)) {
+          const resolution = ctx.wikilinkResolver.resolve(slug);
+          if (resolution.path && pagePaths.has(resolution.path)) {
+            targets.push(resolution.path);
+          }
+        }
+        return { relPath: p.relPath, targets };
+      } catch {
+        return { relPath: p.relPath, targets: [] };
+      }
+    });
+
+    for (const item of perPageTargets) {
+      adj.set(item.relPath, item.targets);
+    }
+
+    // Tarjan's Strongly Connected Components algorithm
+    let index = 0;
+    const indices = new Map<string, number>();
+    const lowlink = new Map<string, number>();
+    const onStack = new Set<string>();
+    const stack: string[] = [];
+    const cyclePages = new Set<string>();
+
+    function strongConnect(v: string) {
+      indices.set(v, index);
+      lowlink.set(v, index);
+      index++;
+      stack.push(v);
+      onStack.add(v);
+
+      const neighbors = adj.get(v) ?? [];
+      for (const w of neighbors) {
+        if (!indices.has(w)) {
+          strongConnect(w);
+          lowlink.set(v, Math.min(lowlink.get(v)!, lowlink.get(w)!));
+        } else if (onStack.has(w)) {
+          lowlink.set(v, Math.min(lowlink.get(v)!, indices.get(w)!));
+        }
+      }
+
+      if (lowlink.get(v) === indices.get(v)) {
+        const scc: string[] = [];
+        let node: string;
+        do {
+          node = stack.pop()!;
+          onStack.delete(node);
+          scc.push(node);
+        } while (node !== v);
+
+        if (scc.length > 1) {
+          for (const member of scc) {
+            cyclePages.add(member);
+          }
+        } else if (scc.length === 1) {
+          // Self-loop check (1-cycle)
+          const single = scc[0]!;
+          if ((adj.get(single) ?? []).includes(single)) {
+            cyclePages.add(single);
+          }
+        }
+      }
+    }
+
+    for (const p of pages) {
+      if (!indices.has(p.relPath)) {
+        strongConnect(p.relPath);
+      }
+    }
+
+    const buckets: Record<string, unknown[]> = {};
+    if (cyclePages.size > 0) {
+      buckets.cycle_traps = [...cyclePages].sort();
+    }
+    return { buckets };
+  },
+};
+
 // Registered rule list in default execution order
 export const LINT_RULES: readonly LintRuleModule[] = [
   brokenWikilinksRule,
@@ -1626,4 +1725,5 @@ export const LINT_RULES: readonly LintRuleModule[] = [
   orphanedProjectPagesRule,
   cliRefsRule,
   staleSectionsRule,
+  cycleTrapsRule,
 ];
