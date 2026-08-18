@@ -20,6 +20,9 @@ describe("DoctorRunner probe registry and execution", () => {
       "vault_sync",
       "satellite",
       "metrics",
+      "fuse_staleness",
+      "activation_marker",
+      "ds_store_noise",
     ]);
   });
 

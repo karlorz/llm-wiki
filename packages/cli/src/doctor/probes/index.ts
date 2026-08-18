@@ -8,6 +8,9 @@ import { skillsPluginsProbe } from "./skills-plugins.js";
 import { vaultSyncProbe } from "./vault-sync.js";
 import { satelliteProbe } from "./satellite.js";
 import { metricsProbe } from "./metrics.js";
+import { fuseStalenessProbe } from "./fuse-staleness.js";
+import { activationMarkerProbe } from "./activation-marker.js";
+import { dsStoreNoiseProbe } from "./ds-store-noise.js";
 
 export const DOCTOR_PROBES: readonly DoctorProbe[] = [
   environmentProbe,
@@ -19,4 +22,7 @@ export const DOCTOR_PROBES: readonly DoctorProbe[] = [
   vaultSyncProbe,
   satelliteProbe,
   metricsProbe,
+  fuseStalenessProbe,
+  activationMarkerProbe,
+  dsStoreNoiseProbe,
 ];

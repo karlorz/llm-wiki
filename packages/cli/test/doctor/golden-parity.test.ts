@@ -116,10 +116,14 @@ describe("doctor golden parity tests", () => {
       "vault_metric_bridges",
       "vault_metric_cohesion",
       "vault_metric_log_size",
+      // 10. Hardening Probes (T5)
+      "fuse_staleness",
+      "activation_marker",
+      "ds_store_noise",
     ];
 
     expect(checkIds).toEqual(expectedCheckIds);
-    expect(res.result.data.checks.length).toBe(49);
+    expect(res.result.data.checks.length).toBe(52);
     expect(res.result.data.summary).toEqual({
       pass: expect.any(Number),
       info: 5, // 5 vault metrics
@@ -130,7 +134,7 @@ describe("doctor golden parity tests", () => {
     expect(res.result.data.humanHint).toContain("Vault log size");
   });
 
-  it("captures golden check ID sequence for unconfigured home (51 checks)", async () => {
+  it("captures golden check ID sequence for unconfigured home (54 checks)", async () => {
     const h = createHome();
 
     const res = await runDoctor({
@@ -143,7 +147,7 @@ describe("doctor golden parity tests", () => {
     expect(res.result.ok).toBe(true);
     if (!res.result.ok) return;
 
-    expect(res.result.data.checks.length).toBe(51);
+    expect(res.result.data.checks.length).toBe(54);
 
     // Verify unconfigured checks fail or skip as expected
     const wp = res.result.data.checks.find(c => c.id === "wiki_path_set");
@@ -165,7 +169,7 @@ describe("doctor golden parity tests", () => {
     expect(res.exitCode).toBe(29); // ExitCode.DOCTOR_HAS_ERRORS
   });
 
-  it("captures snapshotter role check ID sequence (51 checks)", async () => {
+  it("captures snapshotter role check ID sequence (54 checks)", async () => {
     const h = createHome();
     const v = createFullVault();
     const fixturePath = join(FIXTURE_DIR, "01-enabled-timer-successful-service-fresh-pushed.json");
@@ -198,7 +202,7 @@ describe("doctor golden parity tests", () => {
     expect(res.result.ok).toBe(true);
     if (!res.result.ok) return;
 
-    expect(res.result.data.checks.length).toBe(51);
+    expect(res.result.data.checks.length).toBe(54);
     const snapIds = [
       "vault_sync_installed",
       "vault_sync_jobs_enabled",
