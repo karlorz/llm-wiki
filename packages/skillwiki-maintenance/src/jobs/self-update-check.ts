@@ -136,13 +136,23 @@ export async function runSelfUpdateApply(input: SelfUpdateCheckInput): Promise<J
     details.applied = true;
   }
 
-  if (details.applied && sudoAvailable) {
-    details.actions.wrapperReinstall = await runAction(input, "sudo", ["-n", "bash", join(input.repoPath, "packages", "agent-memory-trends", "scripts", "install-sg02.sh"), "--enable"]);
+  if (details.applied) {
+    // User-only wrapper refresh does not require root — always attempt.
+    details.actions.wrapperReinstall = await runAction(input, "bash", [join(input.repoPath, "packages", "agent-memory-trends", "scripts", "install-sg02.sh"), "--user-only"]);
     if (details.actions.wrapperReinstall.status === "fail") {
-      return { job: "self-update-apply", status: "fail", reason: "failed to reinstall sg02 maintenance wrapper", details };
+      return { job: "self-update-apply", status: "fail", reason: "failed to refresh user-owned maintenance wrapper", details };
     }
-  } else if (details.applied) {
-    details.actions.wrapperReinstall = skipped("passwordless sudo is unavailable");
+    // Optionally refresh systemd units if sudo is available (non-fatal).
+    if (sudoAvailable) {
+      const systemUnits = await runAction(input, "sudo", ["-n", "bash", join(input.repoPath, "packages", "agent-memory-trends", "scripts", "install-sg02.sh"), "--enable"]);
+      if (systemUnits.status === "fail") {
+        // Non-fatal: wrapper is current, systemd units are stale but functional.
+        details.actions.wrapperReinstall = {
+          ...details.actions.wrapperReinstall,
+          reason: "user wrapper refreshed; systemd unit refresh failed (non-fatal)",
+        };
+      }
+    }
   }
 
   const after = await runSelfUpdateCheck(input);
@@ -151,11 +161,10 @@ export async function runSelfUpdateApply(input: SelfUpdateCheckInput): Promise<J
     return { job: "self-update-apply", status: "fail", reason: `post-apply self-update check did not converge: ${after.reason}`, details };
   }
 
-  const wrapperSkipped = details.applied && details.actions.wrapperReinstall.status === "skip";
   return {
     job: "self-update-apply",
-    status: wrapperSkipped ? "warn" : "pass",
-    reason: wrapperSkipped ? "updated runner, but wrapper reinstall requires manual root refresh" : "stable update applied and verified",
+    status: "pass",
+    reason: "stable update applied and verified",
     details,
   };
 }

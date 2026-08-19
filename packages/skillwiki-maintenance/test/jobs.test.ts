@@ -182,6 +182,7 @@ describe("runSelfUpdateApply", () => {
         "npm install -g skillwiki@latest": result("changed 1 package\n"),
         "sudo -n npm install -g skillwiki@latest": result("changed 1 package\n"),
         "git -C /repo merge --ff-only origin/main": result("Updating aaa111..bbb222\n"),
+        [`bash ${join("/repo", "packages", "agent-memory-trends", "scripts", "install-sg02.sh")} --user-only`]: result("[agent-memory-trends-install] user-only refresh complete; systemd units not touched\n"),
         [`sudo -n bash ${join("/repo", "packages", "agent-memory-trends", "scripts", "install-sg02.sh")} --enable`]: result("[agent-memory-trends-install] --enable supplied; enabling timer\n"),
       }),
     });
@@ -193,6 +194,61 @@ describe("runSelfUpdateApply", () => {
     expect(check.details.actions.repoFastForward.status).toBe("pass");
     expect(check.details.actions.wrapperReinstall.status).toBe("pass");
     expect(check.details.after?.repo.status).toBe("current");
+  });
+
+  it("passes with user-only wrapper refresh when sudo is unavailable", async () => {
+    const check = await runSelfUpdateApply({
+      repoPath: "/repo",
+      runCommand: mockRunner({
+        "npm view skillwiki version": [result("0.8.11\n"), result("0.8.11\n")],
+        "skillwiki --version": [result("0.8.10\n"), result("0.8.11\n")],
+        "git -C /repo status --porcelain --untracked-files=all": [result(""), result("")],
+        "git -C /repo fetch origin main": [result(""), result("")],
+        "git -C /repo rev-parse HEAD": [result("aaa111\n"), result("bbb222\n")],
+        "git -C /repo rev-parse origin/main": [result("bbb222\n"), result("bbb222\n")],
+        "git -C /repo merge-base --is-ancestor HEAD origin/main": result(""),
+        "node -p require('./package.json').version": [result("0.8.10\n"), result("0.8.11\n")],
+        "node -p require('./packages/agent-memory-trends/package.json').version": [result("0.8.10\n"), result("0.8.11\n")],
+        "sudo -n true": result("", 1, "sudo: a password is required\n"),
+        "npm install -g skillwiki@latest": result("changed 1 package\n"),
+        "git -C /repo merge --ff-only origin/main": result("Updating aaa111..bbb222\n"),
+        [`bash ${join("/repo", "packages", "agent-memory-trends", "scripts", "install-sg02.sh")} --user-only`]: result("[agent-memory-trends-install] user-only refresh complete; systemd units not touched\n"),
+      }),
+    });
+
+    expect(check.status).toBe("pass");
+    expect(check.details.applied).toBe(true);
+    expect(check.details.actions.npmInstall.status).toBe("pass");
+    expect(check.details.actions.systemNpmInstall.status).toBe("skip");
+    expect(check.details.actions.systemNpmInstall.reason).toBe("passwordless sudo is unavailable");
+    expect(check.details.actions.repoFastForward.status).toBe("pass");
+    expect(check.details.actions.wrapperReinstall.status).toBe("pass");
+    expect(check.details.after?.repo.status).toBe("current");
+  });
+
+  it("fails when user-only wrapper refresh fails", async () => {
+    const check = await runSelfUpdateApply({
+      repoPath: "/repo",
+      runCommand: mockRunner({
+        "npm view skillwiki version": [result("0.8.11\n"), result("0.8.11\n")],
+        "skillwiki --version": [result("0.8.10\n"), result("0.8.11\n")],
+        "git -C /repo status --porcelain --untracked-files=all": [result(""), result("")],
+        "git -C /repo fetch origin main": [result(""), result("")],
+        "git -C /repo rev-parse HEAD": [result("aaa111\n"), result("bbb222\n")],
+        "git -C /repo rev-parse origin/main": [result("bbb222\n"), result("bbb222\n")],
+        "git -C /repo merge-base --is-ancestor HEAD origin/main": result(""),
+        "node -p require('./package.json').version": [result("0.8.10\n"), result("0.8.11\n")],
+        "node -p require('./packages/agent-memory-trends/package.json').version": [result("0.8.10\n"), result("0.8.11\n")],
+        "sudo -n true": result("", 1, "sudo: a password is required\n"),
+        "npm install -g skillwiki@latest": result("changed 1 package\n"),
+        "git -C /repo merge --ff-only origin/main": result("Updating aaa111..bbb222\n"),
+        [`bash ${join("/repo", "packages", "agent-memory-trends", "scripts", "install-sg02.sh")} --user-only`]: result("", 1, "install-sg02.sh: line 42: cannot create /home/agent-memory/.local/bin/agent-memory-trends-daily: Permission denied\n"),
+      }),
+    });
+
+    expect(check.status).toBe("fail");
+    expect(check.reason).toContain("failed to refresh user-owned maintenance wrapper");
+    expect(check.details.actions.wrapperReinstall.status).toBe("fail");
   });
 
   it("fails without applying when the checkout is dirty", async () => {

@@ -16,22 +16,27 @@ ENV_FILE="$CONFIG_DIR/env"
 ENV_EXAMPLE="$CONFIG_DIR/env.example"
 UNIT_DIR="/etc/systemd/system"
 ENABLE_TIMER=0
+USER_ONLY=0
 
 # Default env example path on sg02:
 # /home/agent-memory/.config/agent-memory-trends/env.example
 
 usage() {
   cat <<USAGE
-Usage: sudo bash packages/agent-memory-trends/scripts/install-sg02.sh [--enable]
+Usage: bash packages/agent-memory-trends/scripts/install-sg02.sh [--enable] [--user-only]
 
 Prepares sg02 for the private agent-memory-trends nightly writer.
 
 Options:
-  --enable   Enable and start agent-memory-trends.timer,
-             agent-memory-session-brief-refresh.timer, and
-             agent-memory-self-update.timer after installing files.
-             Use only after the manual auth gates and a manual live run pass.
-  --help     Show this help.
+  --user-only  Refresh only user-owned files (wrappers, env, dirs).
+               Does not require root. Skips systemd unit installation
+               and timer enablement. Used by self-update-apply.
+  --enable     Enable and start agent-memory-trends.timer,
+               agent-memory-session-brief-refresh.timer, and
+               agent-memory-self-update.timer after installing files.
+               Use only after the manual auth gates and a manual live run pass.
+               Requires root; ignored with --user-only.
+  --help       Show this help.
 
 Environment overrides:
   AGENT_MEMORY_USER      Dedicated Unix user (default: agent-memory)
@@ -62,6 +67,10 @@ while [ "$#" -gt 0 ]; do
       ENABLE_TIMER=1
       shift
       ;;
+    --user-only)
+      USER_ONLY=1
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -72,17 +81,26 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-require_root
+if [ "$USER_ONLY" -eq 0 ]; then
+  require_root
+fi
 
 if [ ! -f "$PACKAGE_ROOT/service-units/systemd/agent-memory-trends.service" ]; then
   fatal "missing service unit under $PACKAGE_ROOT/service-units/systemd"
 fi
 
-if ! id "$SERVICE_USER" >/dev/null 2>&1; then
-  log "creating user $SERVICE_USER"
-  useradd --system --create-home --home-dir "$SERVICE_HOME" --shell /bin/bash "$SERVICE_USER"
-else
-  log "user $SERVICE_USER already exists"
+# ---------------------------------------------------------------------------
+# User phase — directories, env files, wrapper scripts.
+# All files are owned by $SERVICE_USER and do not require root.
+# ---------------------------------------------------------------------------
+
+if [ "$USER_ONLY" -eq 0 ]; then
+  if ! id "$SERVICE_USER" >/dev/null 2>&1; then
+    log "creating user $SERVICE_USER"
+    useradd --system --create-home --home-dir "$SERVICE_HOME" --shell /bin/bash "$SERVICE_USER"
+  else
+    log "user $SERVICE_USER already exists"
+  fi
 fi
 
 install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$CONFIG_DIR" "$BIN_DIR" "$LOG_DIR"
@@ -199,6 +217,16 @@ export SKILLWIKI_MAINTENANCE_MODE
 EOF
 chown "$SERVICE_USER:$SERVICE_USER" "$BIN_DIR/agent-memory-trends-daily"
 chmod 0750 "$BIN_DIR/agent-memory-trends-daily"
+
+# ---------------------------------------------------------------------------
+# Root phase — systemd unit files, daemon-reload, timer enable.
+# Requires root. Skipped entirely when --user-only is supplied.
+# ---------------------------------------------------------------------------
+
+if [ "$USER_ONLY" -eq 1 ]; then
+  log "user-only refresh complete; systemd units not touched"
+  exit 0
+fi
 
 for unit in \
   agent-memory-trends.service \
