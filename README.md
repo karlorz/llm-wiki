@@ -46,6 +46,29 @@ npm run materialize:plugins
 npm run materialize:plugins:check
 ```
 
+### Option D — Cursor Team marketplace / Grok Bot catalog
+
+Cursor / Grok Bot use a **Team marketplace GitHub import** of this
+repo, not a public [Cursor Marketplace](https://cursor.com/marketplace)
+listing. A GitHub or npm release does not move that snapshot; Reinstall
+repeats the pinned `/add-plugin` commit. Until the Team row advances,
+use Option B or `grok plugin update skillwiki`.
+
+To update the Team snapshot:
+
+1. Push the release tag.
+2. [Dashboard → Plugins](https://cursor.com/dashboard) → `karlorz/llm-wiki`
+   → **Refresh** or Enable **Auto Refresh** (needs the
+   [Cursor GitHub App](https://cursor.com/docs/integrations/github);
+   re-index at most every 10 minutes).
+3. Refocus or restart Cursor / Grok Bot.
+4. Confirm
+   `~/.cursor/plugins/cache/llm-wiki/skillwiki/<git-sha>/plugin.json`
+   `version` matches the release.
+
+If the SHA is unchanged, re-import `https://github.com/karlorz/llm-wiki`
+in Team marketplace and Refresh again.
+
 ## Skills
 
 | Namespace | Skills |
