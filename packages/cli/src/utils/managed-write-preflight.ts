@@ -255,16 +255,8 @@ function peerCheckFailure<T>(reason: string, detail: Record<string, unknown> = {
 
 type PeerGateDecision<T> =
   | { status: "pass" }
-  | {
-      status: "overlap";
-      count: number;
-      kinds: string[];
-      failure: { exitCode: number; result: Result<T> };
-    }
-  | {
-      status: "block";
-      failure: { exitCode: number; result: Result<T> };
-    };
+  | { status: "overlap"; count: number; kinds: string[] }
+  | { status: "block"; failure: { exitCode: number; result: Result<T> } };
 
 function evaluateManagedWritePeerGate<T>(
   vault: string,
@@ -300,16 +292,10 @@ function evaluateManagedWritePeerGate<T>(
     }
 
     if (managedWriterBlocking) {
-      const kinds = peerOutput.managed_writers.kinds.slice(0, 8);
       return {
         status: "overlap",
         count: peerOutput.managed_writers.count,
-        kinds,
-        failure: peerCheckFailure<T>("live-writer-overlap", {
-          managed_writer_count: peerOutput.managed_writers.count,
-          managed_writer_kinds: kinds,
-          blocking: true,
-        }),
+        kinds: peerOutput.managed_writers.kinds.slice(0, 8),
       };
     }
 
@@ -364,13 +350,14 @@ export async function runManagedWritePeerGate<T>(
   let lastOverlap = initial;
 
   for (;;) {
-    const elapsed = Math.max(0, now() - startedAt);
-    const remainingMs = Math.max(0, deadline - now());
+    const t = now();
+    const elapsed = Math.max(0, t - startedAt);
+    const remainingMs = Math.max(0, deadline - t);
     const remainingSec = Math.ceil(remainingMs / 1000);
     const writerKindDesc = lastOverlap.kinds.length > 0 ? lastOverlap.kinds.join(", ") : "unknown";
     logHeartbeat(`skillwiki: waiting for live vault writer (${writerKindDesc}), ${remainingSec}s left`);
 
-    if (now() >= deadline) {
+    if (t >= deadline) {
       return peerCheckFailure<T>("live-writer-overlap", {
         managed_writer_count: lastOverlap.count,
         managed_writer_kinds: lastOverlap.kinds,
