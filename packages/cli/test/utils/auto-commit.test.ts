@@ -221,6 +221,75 @@ describe("postCommit", () => {
     expect(existsSync(lastOpPath)).toBe(false);
   });
 
+  it("does not leak pre-staged unrelated index entries into auto-commit (P1)", async () => {
+    const vault = initTestRepo();
+    makeDotenv("true");
+    process.env.HOME = join(TMP, "home");
+
+    // 2. Write last-op file log.md and appendLastOp with files: ["log.md"]
+    writeFileSync(join(vault, "log.md"), "# Log\n\n## [2026-08-19] append\n");
+    appendLastOp(vault, {
+      operation: "log-append",
+      summary: "appended log entry",
+      files: ["log.md"],
+      timestamp: new Date().toISOString(),
+    });
+
+    // 3. Write queries/wip.md and git add it (staged, not just dirty)
+    mkdirSync(join(vault, "queries"), { recursive: true });
+    writeFileSync(join(vault, "queries", "wip.md"), "# WIP Query\n");
+    execFileSync("git", ["-C", vault, "add", "queries/wip.md"], { encoding: "utf8" });
+
+    // 4. Call shipped postCommit(vault, 0)
+    await postCommit(vault, 0);
+
+    // 5. Assert HEAD names only log.md (no hardcoded commit hash)
+    const committedFiles = execFileSync("git", ["-C", vault, "show", "--name-only", "--pretty=format:", "HEAD"], { encoding: "utf8" })
+      .trim()
+      .split("\n")
+      .filter((f) => f.length > 0)
+      .sort();
+    expect(committedFiles).toEqual(["log.md"]);
+
+    // 6. Assert queries/wip.md is still present as staged/uncommitted (git status --porcelain still lists it)
+    const porcelain = execFileSync("git", ["-C", vault, "status", "--porcelain"], { encoding: "utf8" });
+    expect(porcelain).toMatch(/^[AMRD].*queries\/wip\.md/m);
+
+    // last-op should be cleared
+    const lastOpPath = join(vault, ".skillwiki", "last-op.json");
+    expect(existsSync(lastOpPath)).toBe(false);
+  });
+
+  it("falls back to staging vault content when last-op files is empty (e.g. backup-restore) (P2)", async () => {
+    const vault = initTestRepo();
+    makeDotenv("true");
+    process.env.HOME = join(TMP, "home");
+
+    // 1. appendLastOp with operation: "backup-restore", files: []
+    appendLastOp(vault, {
+      operation: "backup-restore",
+      summary: "restored 1 files from S3",
+      files: [],
+      timestamp: new Date().toISOString(),
+    });
+
+    // 2. Plant a restored content file (e.g. raw/articles/restored.md)
+    writeFileSync(join(vault, "raw", "articles", "restored.md"), "# Restored Article\n");
+
+    // 3. postCommit(vault, 0)
+    await postCommit(vault, 0);
+
+    // 4. Assert that file is in HEAD and last-op is cleared
+    const committedArticle = execFileSync("git", ["-C", vault, "show", "HEAD:raw/articles/restored.md"], { encoding: "utf8" });
+    expect(committedArticle).toBe("# Restored Article\n");
+
+    const lastOpPath = join(vault, ".skillwiki", "last-op.json");
+    expect(existsSync(lastOpPath)).toBe(false);
+
+    const log = execFileSync("git", ["-C", vault, "log", "-1", "--format=%s"], { encoding: "utf8" }).trim();
+    expect(log).toContain("backup-restore: restored 1 files from S3");
+  });
+
   it("does nothing when last-op is empty", async () => {
     const vault = initTestRepo();
     makeDotenv("true");

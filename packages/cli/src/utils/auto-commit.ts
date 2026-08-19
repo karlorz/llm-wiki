@@ -4,7 +4,7 @@ import { git, gitStrict } from "./git.js";
 import { readLastOp, clearLastOp } from "./last-op.js";
 import { parseDotenvFile } from "./dotenv.js";
 import { configPath } from "../commands/config.js";
-import { VAULT_COMMIT_PATHSPEC, VAULT_GENERATED_COMMIT_PATHS } from "./vault-git-pathspec.js";
+import { VAULT_COMMIT_PATHSPEC, VAULT_GENERATED_COMMIT_PATHS, stageVaultContentChanges } from "./vault-git-pathspec.js";
 
 function isValidLastOpPath(file: string): boolean {
   if (!file || typeof file !== "string") return false;
@@ -49,14 +49,22 @@ export async function postCommit(vault: string, exitCode: number): Promise<void>
 
   const rawFiles = lastOps.flatMap(op => op.files ?? []);
   const candidateFiles = Array.from(new Set(rawFiles)).filter(isValidLastOpPath);
-  if (candidateFiles.length === 0) return;
 
-  // Stage only files listed in last-op entries
-  try {
-    gitStrict(vault, ["add", "--", ...candidateFiles]);
-  } catch (e: unknown) {
-    process.stderr.write(`auto-commit: git add failed: ${String(e)}\n`);
-    return;
+  if (candidateFiles.length === 0) {
+    try {
+      stageVaultContentChanges(vault);
+    } catch (e: unknown) {
+      process.stderr.write(`auto-commit: stage vault content failed: ${String(e)}\n`);
+      return;
+    }
+  } else {
+    // Stage only files listed in last-op entries
+    try {
+      gitStrict(vault, ["add", "--", ...candidateFiles]);
+    } catch (e: unknown) {
+      process.stderr.write(`auto-commit: git add failed: ${String(e)}\n`);
+      return;
+    }
   }
 
   // Guard: ensure something was actually staged before committing
@@ -68,7 +76,10 @@ export async function postCommit(vault: string, exitCode: number): Promise<void>
 
   // Commit
   try {
-    gitStrict(vault, ["commit", "-m", commitMessage]);
+    const commitArgs = candidateFiles.length === 0
+      ? ["commit", "-m", commitMessage]
+      : ["commit", "-m", commitMessage, "--", ...candidateFiles];
+    gitStrict(vault, commitArgs);
   } catch (e: unknown) {
     process.stderr.write(`auto-commit: git commit failed: ${String(e)}\n`);
     return;
