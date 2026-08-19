@@ -212,5 +212,19 @@ describe("sensitive-content", () => {
       expect(findings[0]!.kind).toBe("token");
       expect(JSON.stringify(findings)).not.toContain(secret);
     });
+
+    it("ignores vault-relative paths after Session: and token: labels (path FP)", () => {
+      const transcriptLine = "- Session: raw/transcripts/2026-08-19-session-log-cursor-claude-mcp-migration-resume.md\n";
+      const projectLine = "Session: projects/llm-wiki/history/specs/2026-05-02-llm-wiki-skill-design.md\n";
+      const tokenPath = "token: path/to/some/subfolder/file.md\n";
+
+      expect(scanSensitiveContent(transcriptLine)).toEqual([]);
+      expect(scanSensitiveContent(projectLine)).toEqual([]);
+      expect(scanSensitiveContent(tokenPath)).toEqual([]);
+
+      const transcriptRedact = redactSensitiveContent(transcriptLine);
+      expect(transcriptRedact.changed).toBe(false);
+      expect(transcriptRedact.text).toBe(transcriptLine);
+    });
   });
 });

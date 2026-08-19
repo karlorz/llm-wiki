@@ -135,15 +135,19 @@ function isSyntheticPlaceholder(value: string): boolean {
 }
 
 /**
- * Token-only value filters (G1/G3).
+ * Token-only value filters (G1/G3/G4).
  * G1: session://… captures as //… under the token matcher.
  * G3: dotted/alphanumeric hyphenated compounds (English prose, model
  *     names like gpt-5.6-luna-max) are not credentials — unless the
  *     shape is pure hex (session UUIDs and hex identifiers stay
  *     captured). Subsumes the former G2 pure-lowercase rule.
+ * G4: vault-relative file paths (containing /) after Session:/token: labels
+ *     are file references, not credentials. Session UUIDs and sess_ IDs
+ *     do not contain slashes.
  */
 function isNonSecretTokenCapture(value: string): boolean {
   if (value.startsWith("//")) return true;
+  if (value.includes("/")) return true;
   if (/^[a-z0-9.]+(?:-[a-z0-9.]+)+$/.test(value) && !/^[0-9a-f]+(?:-[0-9a-f]+)+$/.test(value)) return true;
   return false;
 }
