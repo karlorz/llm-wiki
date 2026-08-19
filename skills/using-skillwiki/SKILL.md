@@ -287,6 +287,7 @@ skillwiki has multiple distribution channels that can drift:
 | Claude plugin | `~/.claude/plugins/cache/llm-wiki/` | `claude plugin update skillwiki@llm-wiki` |
 | Codex plugin | `~/.codex/plugins/cache/llm-wiki/` | `codex plugin marketplace upgrade llm-wiki`, then reinstall or restart Codex as needed |
 | Grok plugin | `~/.grok/installed-plugins/` (marketplace cache under `~/.grok/marketplace-cache/`) | `grok plugin update skillwiki`, then start a new session or reload plugins |
+| Cursor / Grok Bot (Team GitHub import) | `~/.cursor/plugins/cache/llm-wiki/` and `~/.cursor/plugins/marketplaces/github.com/karlorz/llm-wiki/<sha>/` | Cursor Dashboard → Plugins → **Refresh** or Enable Auto Refresh on `karlorz/llm-wiki`. Reinstall does not move a pinned snapshot. |
 | Local git dev | source repo checkout | `npm link ./packages/cli` (from repo root) |
 **Check versions:** `skillwiki doctor` reports Plugin/CLI version mismatch warnings when installed channels disagree. For Grok, also inspect `~/.grok/installed-plugins/*/.claude-plugin/plugin.json` version and agent frontmatter under `agents/*.md`.
 **Plugin channel rule:** Plugin-managed skills and agents are not refreshed with `skillwiki install`. When Claude, Codex, or Grok plugin is installed and enabled, the plugin install root is the skill/agent provider; `skillwiki install` is only a legacy/standalone copier for `~/.claude/skills/`.
