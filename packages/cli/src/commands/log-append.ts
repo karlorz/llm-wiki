@@ -244,10 +244,14 @@ export async function runLogAppend(input: LogAppendInput): Promise<LogAppendRun>
 
   if (outcome.result.ok && outcome.result.data.appended && input.recordLastOp !== false) {
     try {
+      const files = ["log.md"];
+      if (eventPath) {
+        files.push(eventPath);
+      }
       appendLastOp(input.vault, {
         operation: "log-append",
         summary: `appended log entry (${outcome.result.data.entries_before}->${outcome.result.data.entries_after})`,
-        files: ["log.md"],
+        files,
         timestamp: new Date().toISOString(),
       });
     } catch (error: unknown) {

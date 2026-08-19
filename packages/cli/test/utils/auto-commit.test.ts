@@ -180,6 +180,47 @@ describe("postCommit", () => {
     expect(committedArticle).toBe("content");
   });
 
+  it("commits only last-op log-append files and leaves unrelated dirty WIP uncommitted", async () => {
+    const vault = initTestRepo();
+    makeDotenv("true");
+    process.env.HOME = join(TMP, "home");
+
+    // Plant last-op log-append files
+    writeFileSync(join(vault, "log.md"), "# Log\n\n## [2026-08-19] append\n");
+    mkdirSync(join(vault, "meta", "log-events", "2026-08-19"), { recursive: true });
+    const eventFile = "meta/log-events/2026-08-19/aa112233445566778899aabbccddeeff00112233445566778899aabbccddeeff.json";
+    writeFileSync(join(vault, eventFile), JSON.stringify({ ok: true }));
+
+    // Plant unrelated dirty vault file
+    mkdirSync(join(vault, "queries"), { recursive: true });
+    writeFileSync(join(vault, "queries", "wip.md"), "# WIP Query\n");
+
+    appendLastOp(vault, {
+      operation: "log-append",
+      summary: "appended log entry (2->3)",
+      files: ["log.md", eventFile],
+      timestamp: new Date().toISOString(),
+    });
+
+    await postCommit(vault, 0);
+
+    // Commit should only contain log.md and event file
+    const committedFiles = execFileSync("git", ["-C", vault, "show", "--name-only", "--pretty=format:", "HEAD"], { encoding: "utf8" })
+      .trim()
+      .split("\n")
+      .filter((f) => f.length > 0)
+      .sort();
+    expect(committedFiles).toEqual(["log.md", eventFile].sort());
+
+    // Unrelated dirty WIP should remain uncommitted in git status
+    const status = execFileSync("git", ["-C", vault, "status", "--porcelain", "-uall"], { encoding: "utf8" });
+    expect(status).toContain("queries/wip.md");
+
+    // last-op should be cleared
+    const lastOpPath = join(vault, ".skillwiki", "last-op.json");
+    expect(existsSync(lastOpPath)).toBe(false);
+  });
+
   it("does nothing when last-op is empty", async () => {
     const vault = initTestRepo();
     makeDotenv("true");
