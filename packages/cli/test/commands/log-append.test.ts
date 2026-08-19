@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runLogAppend } from "../../src/commands/log-append.js";
 import { acquireLogLock, logLockPath, releaseLogLock } from "../../src/utils/log-lock.js";
+import { readLastOp } from "../../src/utils/last-op.js";
 
 function vault(entries = 2): string {
   const dir = mkdtempSync(join(tmpdir(), "vault-la-"));
@@ -170,6 +171,28 @@ describe("runLogAppend", () => {
 
     expect(result.result).toMatchObject({ ok: true, data: { appended: true } });
     expect(readFileSync(join(dir, ".skillwiki", "last-op.json"), "utf8")).toContain("log-append");
+  });
+
+  it("records last-op files containing both log.md and event_path when writeEvent is enabled with operationId", async () => {
+    const dir = vault(2);
+    const opId = "d".repeat(64);
+    const content = "## [2026-08-19] test-event | test entry";
+
+    const result = await runLogAppend({
+      vault: dir,
+      content,
+      operationId: opId,
+      writeEvent: true,
+      eventKind: "log-append",
+    });
+
+    expect(result.result.ok).toBe(true);
+    if (result.result.ok) {
+      expect(result.result.data.event_path).toBeDefined();
+      const lastOps = readLastOp(dir);
+      expect(lastOps).toHaveLength(1);
+      expect(lastOps[0].files).toEqual(["log.md", result.result.data.event_path]);
+    }
   });
 
   it("can append an operation-marked entry without recording last-op", async () => {

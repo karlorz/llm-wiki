@@ -1,10 +1,25 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, normalize } from "node:path";
 import { git, gitStrict } from "./git.js";
 import { readLastOp, clearLastOp } from "./last-op.js";
 import { parseDotenvFile } from "./dotenv.js";
 import { configPath } from "../commands/config.js";
-import { VAULT_COMMIT_PATHSPEC, stageVaultContentChanges } from "./vault-git-pathspec.js";
+import { VAULT_COMMIT_PATHSPEC, VAULT_GENERATED_COMMIT_PATHS, stageVaultContentChanges } from "./vault-git-pathspec.js";
+
+function isValidLastOpPath(file: string): boolean {
+  if (!file || typeof file !== "string") return false;
+  const trimmed = file.trim();
+  if (trimmed.length === 0) return false;
+  if (isAbsolute(trimmed)) return false;
+  const normalized = normalize(trimmed).replace(/\\/g, "/");
+  if (normalized.startsWith("../") || normalized === ".." || normalized.includes("/../")) return false;
+  for (const generatedPath of VAULT_GENERATED_COMMIT_PATHS) {
+    if (normalized === generatedPath || normalized.startsWith(`${generatedPath}/`)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 /**
  * Auto-commit vault changes after a successful command.
@@ -32,20 +47,39 @@ export async function postCommit(vault: string, exitCode: number): Promise<void>
   const porcelain = git(vault, ["status", "--porcelain", "--", ...VAULT_COMMIT_PATHSPEC]);
   if (!porcelain || porcelain.trim().length === 0) return;
 
-  // Stage content changes while excluding generated cache paths.
-  try {
-    stageVaultContentChanges(vault);
-  } catch (e: unknown) {
-    process.stderr.write(`auto-commit: git add failed: ${String(e)}\n`);
-    return;
+  const rawFiles = lastOps.flatMap(op => op.files ?? []);
+  const candidateFiles = Array.from(new Set(rawFiles)).filter(isValidLastOpPath);
+
+  if (candidateFiles.length === 0) {
+    try {
+      stageVaultContentChanges(vault);
+    } catch (e: unknown) {
+      process.stderr.write(`auto-commit: stage vault content failed: ${String(e)}\n`);
+      return;
+    }
+  } else {
+    // Stage only files listed in last-op entries
+    try {
+      gitStrict(vault, ["add", "--", ...candidateFiles]);
+    } catch (e: unknown) {
+      process.stderr.write(`auto-commit: git add failed: ${String(e)}\n`);
+      return;
+    }
   }
+
+  // Guard: ensure something was actually staged before committing
+  const staged = git(vault, ["diff", "--cached", "--name-only"]);
+  if (!staged || staged.trim().length === 0) return;
 
   // Build commit message from last-op entries (same format as sync push)
   const commitMessage = lastOps.map(op => `${op.operation}: ${op.summary} (${op.files.length} files)`).join("; ");
 
   // Commit
   try {
-    gitStrict(vault, ["commit", "-m", commitMessage]);
+    const commitArgs = candidateFiles.length === 0
+      ? ["commit", "-m", commitMessage]
+      : ["commit", "-m", commitMessage, "--", ...candidateFiles];
+    gitStrict(vault, commitArgs);
   } catch (e: unknown) {
     process.stderr.write(`auto-commit: git commit failed: ${String(e)}\n`);
     return;
