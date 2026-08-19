@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ExitCode } from "@skillwiki/shared";
 import { runArchive } from "../../src/commands/archive.js";
+import { readLastOp } from "../../src/utils/last-op.js";
 
 const FM = `---
 title: t
@@ -370,6 +371,15 @@ describe("runArchive", () => {
     expect(baz).toContain("raw/articles/other.md");
     // Index stripped
     expect(readFileSync(join(dir, "index.md"), "utf8")).not.toContain("[[alpha]]");
+
+    const ops = readLastOp(dir);
+    expect(ops).toHaveLength(1);
+    expect(ops[0].operation).toBe("archive-cascade");
+    expect(ops[0].files).toContain("concepts/alpha.md");
+    expect(ops[0].files).toContain("_archive/concepts/alpha.md");
+    expect(ops[0].files).toContain("meta/delete-intents/concepts__alpha.md.json");
+    expect(ops[0].files).toContain("concepts/baz.md");
+    expect(ops[0].files).toContain("index.md");
   });
 
   it("--cascade --apply preserves shared entities (sources entry removed, page kept)", async () => {

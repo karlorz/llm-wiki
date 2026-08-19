@@ -201,6 +201,7 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
   }
 
   // ----- Apply cascade mutations (sources arrays only) -----
+  const rewrittenCascadePages: string[] = [];
   if ((input.cascade || isRaw) && input.apply && cascade) {
     for (const ref of cascade.source_array_refs) {
       const absPath = join(input.vault, ref.page);
@@ -224,6 +225,7 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
         }
         const write = await safeWritePage(absPath, updated);
         if (!write.ok) return { exitCode: ExitCode.WRITE_FAILED, result: write };
+        rewrittenCascadePages.push(ref.page);
       }
     }
     if (isRaw) {
@@ -235,6 +237,7 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
         if (updated !== original) {
           const write = await safeWritePage(absPath, updated);
           if (!write.ok) return { exitCode: ExitCode.WRITE_FAILED, result: write };
+          rewrittenCascadePages.push(ref.page);
         }
       }
     }
@@ -273,10 +276,14 @@ export async function runArchive(input: ArchiveInput): Promise<{ exitCode: numbe
   });
   const tombstonePath = await writeDeleteIntent(input.vault, archiveIntent);
 
+  const lastOpFiles = [relPath, archivePath, tombstonePath, ...rewrittenCascadePages];
+  if (indexUpdated) lastOpFiles.push("index.md");
+  const uniqueLastOpFiles = [...new Set(lastOpFiles)];
+
   appendLastOp(input.vault, {
     operation: input.cascade ? "archive-cascade" : "archive",
     summary: `moved ${relPath} to ${archivePath}${input.cascade ? ` (cascade: ${cascade?.source_array_refs.length ?? 0} source arrays updated)` : ""}; tombstone ${tombstonePath}`,
-    files: [relPath, archivePath, tombstonePath],
+    files: uniqueLastOpFiles,
     timestamp: new Date().toISOString(),
   });
 

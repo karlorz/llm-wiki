@@ -4,6 +4,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runSessionBrief } from "../../src/commands/session-brief.js";
+import { readLastOp } from "../../src/utils/last-op.js";
 
 async function makeVault(): Promise<string> {
   const vault = await mkdtemp(join(tmpdir(), "session-brief-vault-"));
@@ -128,6 +129,15 @@ describe("runSessionBrief", () => {
 
     const log = readFileSync(join(vault, "log.md"), "utf8");
     expect(log.match(/session-brief \| refreshed: meta\/latest-session-brief\.md/g)).toHaveLength(1);
+
+    const ops = readLastOp(vault);
+    expect(ops).toHaveLength(1);
+    expect(ops[0].operation).toBe("session-brief");
+    expect(ops[0].files).toContain("meta/latest-session-brief.md");
+    expect(ops[0].files).toContain(".skillwiki/session-brief.md");
+    expect(ops[0].files).toContain(".skillwiki/session-brief.json");
+    expect(ops[0].files).toContain("log.md");
+    expect(ops[0].files).toContain("index.md");
   });
 
   it("renders memory topic pointers from the derived project cache", async () => {

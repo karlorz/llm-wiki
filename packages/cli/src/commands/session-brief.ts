@@ -556,14 +556,17 @@ async function writeBriefArtifacts(vault: string, input: {
   }
 
   if (materialChange) {
+    const files = [
+      "meta/latest-session-brief.md",
+      ".skillwiki/session-brief.md",
+      ".skillwiki/session-brief.json",
+    ];
+    if (indexUpdated) files.push("index.md");
+    if (logUpdated) files.push("log.md");
     appendLastOp(vault, {
       operation: "session-brief",
       summary: "refreshed latest session brief",
-      files: [
-        "meta/latest-session-brief.md",
-        ".skillwiki/session-brief.md",
-        ".skillwiki/session-brief.json",
-      ],
+      files,
       timestamp: input.generatedAt,
     });
   }
