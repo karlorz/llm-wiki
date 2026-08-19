@@ -243,12 +243,13 @@ function classifyLog(path: string, id: string, label: string, okPattern: RegExp)
   // lint-delta JSON (e.g. "errors": 0, LINT_DELTA_FULL_FAILED) never matches;
   // ERROR is included because wiki-fetch-notify.sh logs failures as
   // timestamped "ERROR: ..." lines (see skeptic finding on PR #56).
+  const journalFailRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z (FAIL|ERROR)\b/;
   const statusLine = [...lines].reverse().find(line =>
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z /.test(line)
-    && (okPattern.test(line) || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z (FAIL|ERROR)\b/.test(line)),
+    && (okPattern.test(line) || journalFailRe.test(line)),
   );
   const last = statusLine ?? lines[lines.length - 1]!;
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z (FAIL|ERROR)\b/.test(last)) return { id, label, status: "error", detail: last.slice(0, 120) };
+  if (journalFailRe.test(last)) return { id, label, status: "error", detail: last.slice(0, 120) };
   if (okPattern.test(last)) return { id, label, status: "pass", detail: last.slice(0, 120) };
   return { id, label, status: "warn", detail: last.slice(0, 120) };
 }

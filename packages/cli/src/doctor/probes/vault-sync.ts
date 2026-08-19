@@ -13,7 +13,6 @@ function readPushResultState(stateFile: string): {
   result?: string;
   reason?: string;
   timestamp?: string;
-  duration?: string;
   malformed?: boolean;
 } {
   if (!existsSync(stateFile)) return { exists: false };
@@ -22,7 +21,6 @@ function readPushResultState(stateFile: string): {
     let result: string | undefined;
     let reason: string | undefined;
     let timestamp: string | undefined;
-    let duration: string | undefined;
     for (const line of content.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#")) continue;
@@ -33,12 +31,9 @@ function readPushResultState(stateFile: string): {
       if (k === "result") result = v;
       else if (k === "reason") reason = v;
       else if (k === "timestamp") timestamp = v;
-      else if (k === "duration") duration = v;
     }
-    if (result !== "ok" && result !== "refused") {
-      return { exists: true, malformed: true, result, reason, timestamp, duration };
-    }
-    return { exists: true, result, reason, timestamp, duration };
+    const malformed = result !== "ok" && result !== "refused";
+    return { exists: true, result, reason, timestamp, malformed };
   } catch {
     return { exists: true, malformed: true };
   }
@@ -189,28 +184,26 @@ function checkPushAgeFromLog(logDir: string, logFile: string): CheckResult {
       return check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
         "Log file is empty");
     }
-    const lastLine = [...lines].reverse().find(line =>
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z (OK push|FAIL)/.test(line),
-    );
-    if (!lastLine) {
+    const journalRe = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z) (OK push|FAIL)/;
+    let lastLine: string | undefined;
+    let match: RegExpMatchArray | null = null;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      match = lines[i]!.match(journalRe);
+      if (match) {
+        lastLine = lines[i];
+        break;
+      }
+    }
+    if (!lastLine || !match) {
       const tail = lines[lines.length - 1]!;
       return check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
         `Last log entry: ${tail.slice(0, 80)}`);
     }
-    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z FAIL/.test(lastLine)) {
+    if (match[2] === "FAIL") {
       return check("error", "vault_sync_last_push_age", "Vault sync last push recency",
         `Last push failed: ${lastLine}`);
     }
-    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z OK push/.test(lastLine)) {
-      const tsMatch = lastLine.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)/);
-      if (tsMatch) {
-        return checkPushAgeFromTimestamp(tsMatch[1]!);
-      }
-      return check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
-        `Unparseable push line: ${lastLine.slice(0, 80)}`);
-    }
-    return check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
-      `Last log entry: ${lastLine.slice(0, 80)}`);
+    return checkPushAgeFromTimestamp(match[1]!);
   } catch {
     return existsSync(logDir)
       ? check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
@@ -469,43 +462,32 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
 
   const logFile = join(logDir, "wiki-push.log");
   let c3: CheckResult;
-  if (pushState.exists && !pushState.malformed) {
-    if (pushState.result === "refused") {
-      const reasonSuffix = pushState.reason ? `: ${pushState.reason}` : "";
-      c3 = check("error", "vault_sync_last_push_age", "Vault sync last push recency",
-        `Last push refused${reasonSuffix}`);
-    } else if (pushState.result === "ok") {
-      if (pushState.timestamp) {
-        c3 = checkPushAgeFromTimestamp(pushState.timestamp);
-      } else {
-        c3 = check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
-          "State file missing timestamp");
-      }
-    } else {
-      c3 = checkPushAgeFromLog(logDir, logFile);
-    }
+  if (pushState.exists && !pushState.malformed && pushState.result === "refused") {
+    const reasonSuffix = pushState.reason ? `: ${pushState.reason}` : "";
+    c3 = check("error", "vault_sync_last_push_age", "Vault sync last push recency",
+      `Last push refused${reasonSuffix}`);
+  } else if (pushState.exists && !pushState.malformed && pushState.result === "ok") {
+    c3 = pushState.timestamp
+      ? checkPushAgeFromTimestamp(pushState.timestamp)
+      : check("warn", "vault_sync_last_push_age", "Vault sync last push recency",
+        "State file missing timestamp");
   } else {
     c3 = checkPushAgeFromLog(logDir, logFile);
   }
 
   let cPushResult: CheckResult;
-  if (pushState.exists) {
-    if (pushState.malformed) {
-      cPushResult = check("warn", "vault_sync_last_push_result", "Vault sync last push result",
-        `malformed state file: ${stateFile}`);
-    } else if (pushState.result === "ok") {
-      cPushResult = check("pass", "vault_sync_last_push_result", "Vault sync last push result",
-        `result=ok timestamp=${pushState.timestamp ?? ""}`);
-    } else if (pushState.result === "refused") {
-      cPushResult = check("error", "vault_sync_last_push_result", "Vault sync last push result",
-        `result=refused reason=${pushState.reason ?? ""} timestamp=${pushState.timestamp ?? ""}`);
-    } else {
-      cPushResult = check("warn", "vault_sync_last_push_result", "Vault sync last push result",
-        `malformed state file: ${stateFile}`);
-    }
-  } else {
+  if (!pushState.exists) {
     cPushResult = check("warn", "vault_sync_last_push_result", "Vault sync last push result",
       `no push result state file (push may not have run yet): ${stateFile}`);
+  } else if (pushState.malformed) {
+    cPushResult = check("warn", "vault_sync_last_push_result", "Vault sync last push result",
+      `malformed state file: ${stateFile}`);
+  } else if (pushState.result === "ok") {
+    cPushResult = check("pass", "vault_sync_last_push_result", "Vault sync last push result",
+      `result=ok timestamp=${pushState.timestamp ?? ""}`);
+  } else {
+    cPushResult = check("error", "vault_sync_last_push_result", "Vault sync last push result",
+      `result=refused reason=${pushState.reason ?? ""} timestamp=${pushState.timestamp ?? ""}`);
   }
 
   const fetchLogFile = join(logDir, "wiki-fetch.log");
