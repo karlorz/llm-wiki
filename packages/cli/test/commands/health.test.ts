@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { runHealth } from "../../src/commands/health.js";
+import { VAULT_SYNC_FILTER_REQUIRED_EXCLUDES } from "../../src/utils/vault-hygiene-ignores.js";
 
 const SCHEMA = `# Vault Schema
 
@@ -214,24 +215,7 @@ Body
     mkdirSync(join(home, ".config", "rclone"), { recursive: true });
     writeFileSync(
       join(home, ".config", "rclone", "wiki-push-filters.txt"),
-      [
-        "remotely-save/data.json",
-        ".skillwiki/sync.lock",
-        ".skillwiki/managed-write.lock",
-        ".skillwiki/graph.json",
-        ".skillwiki/memory/",
-        ".skillwiki/memory-topics.json",
-        ".skillwiki/work-complete/",
-        ".skillwiki/last-op.json",
-        ".claude/settings.local.json",
-        ".playwright-cli/",
-        ".pytest_cache/",
-        ".snapshots/",
-        ".superpowers/",
-        ".antigravitycli/",
-        ".obsidian/plugins/*/main.js",
-        ".claude/dev-loop/",
-      ].join("\n"),
+      VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n"),
     );
 
     const r = await runHealth({
@@ -292,24 +276,7 @@ Body
     mkdirSync(join(home, ".config", "rclone"), { recursive: true });
     writeFileSync(
       join(home, ".config", "rclone", "wiki-push-filters.txt"),
-      [
-        "remotely-save/data.json",
-        ".skillwiki/sync.lock",
-        ".skillwiki/managed-write.lock",
-        ".skillwiki/graph.json",
-        ".skillwiki/memory/",
-        ".skillwiki/memory-topics.json",
-        ".skillwiki/work-complete/",
-        ".skillwiki/last-op.json",
-        ".claude/settings.local.json",
-        ".playwright-cli/",
-        ".pytest_cache/",
-        ".snapshots/",
-        ".superpowers/",
-        ".antigravitycli/",
-        ".obsidian/plugins/*/main.js",
-        ".claude/dev-loop/",
-      ].join("\n"),
+      VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n"),
     );
 
     const r = await runHealth({
@@ -369,24 +336,7 @@ Body
     mkdirSync(join(home, ".config", "rclone"), { recursive: true });
     writeFileSync(
       join(home, ".config", "rclone", "wiki-push-filters.txt"),
-      [
-        "remotely-save/data.json",
-        ".skillwiki/sync.lock",
-        ".skillwiki/managed-write.lock",
-        ".skillwiki/graph.json",
-        ".skillwiki/memory/",
-        ".skillwiki/memory-topics.json",
-        ".skillwiki/work-complete/",
-        ".skillwiki/last-op.json",
-        ".claude/settings.local.json",
-        ".playwright-cli/",
-        ".pytest_cache/",
-        ".snapshots/",
-        ".superpowers/",
-        ".antigravitycli/",
-        ".obsidian/plugins/*/main.js",
-        ".claude/dev-loop/",
-      ].join("\n"),
+      VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n"),
     );
 
     const r = await runHealth({
