@@ -35,7 +35,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("install").option("--target <dir>").option("--dry-run").option("--skills-root <dir>").option("--symlink");
   program.command("path").option("--vault <dir>").option("--target <dir>").option("--wiki <name>").option("--init-time").option("--explain").option("--plain");
   program.command("lang").option("--lang <code>").option("--explain");
-  program.command("init").option("--target <dir>").requiredOption("--domain <text>").option("--taxonomy <csv>").option("--lang <code>").option("--force").option("--no-env").option("--profile <name>");
+  program.command("init").option("--target <dir>").requiredOption("--domain <text>").option("--taxonomy <csv>").option("--lang <code>").option("--force").option("--no-env").option("--profile <name>").option("--no-gitignore").option("--write-gitignore");
   program.command("links").option("--wiki <name>");
   program.command("tag-audit").option("--wiki <name>");
   program.command("index-check").option("--wiki <name>");

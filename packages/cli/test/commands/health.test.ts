@@ -217,8 +217,12 @@ Body
       [
         "remotely-save/data.json",
         ".skillwiki/sync.lock",
+        ".skillwiki/managed-write.lock",
+        ".skillwiki/graph.json",
         ".skillwiki/memory/",
         ".skillwiki/memory-topics.json",
+        ".skillwiki/work-complete/",
+        ".skillwiki/last-op.json",
         ".claude/settings.local.json",
       ].join("\n"),
     );
@@ -284,8 +288,12 @@ Body
       [
         "remotely-save/data.json",
         ".skillwiki/sync.lock",
+        ".skillwiki/managed-write.lock",
+        ".skillwiki/graph.json",
         ".skillwiki/memory/",
         ".skillwiki/memory-topics.json",
+        ".skillwiki/work-complete/",
+        ".skillwiki/last-op.json",
         ".claude/settings.local.json",
       ].join("\n"),
     );
@@ -350,8 +358,12 @@ Body
       [
         "remotely-save/data.json",
         ".skillwiki/sync.lock",
+        ".skillwiki/managed-write.lock",
+        ".skillwiki/graph.json",
         ".skillwiki/memory/",
         ".skillwiki/memory-topics.json",
+        ".skillwiki/work-complete/",
+        ".skillwiki/last-op.json",
         ".claude/settings.local.json",
       ].join("\n"),
     );

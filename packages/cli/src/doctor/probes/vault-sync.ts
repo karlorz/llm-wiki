@@ -6,6 +6,7 @@ import { systemdPropertyFor } from "@skillwiki/shared";
 import { resolveVaultSyncPullHelper } from "../../utils/vault-sync-helper.js";
 import { listReviewRequiredOps } from "../../utils/operation-journal.js";
 import type { CheckResult, DoctorContext, DoctorProbe, VaultSyncRuntimeConfig } from "../types.js";
+import { VAULT_SYNC_FILTER_REQUIRED_EXCLUDES } from "../../utils/vault-hygiene-ignores.js";
 import { check } from "./helpers.js";
 
 function readPushResultState(stateFile: string): {
@@ -523,14 +524,7 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
         `Filter file not found at ${filterPath}`);
     } else {
       const content = readFileSync(filterPath, "utf8");
-      const requiredExcludes = [
-        "remotely-save/data.json",
-        ".skillwiki/sync.lock",
-        ".skillwiki/memory/",
-        ".skillwiki/memory-topics.json",
-        ".claude/settings.local.json",
-      ];
-      const missing = requiredExcludes.filter(ex => !content.includes(ex));
+      const missing = VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.filter(ex => !content.includes(ex));
       if (missing.length > 0) {
         c4 = check("warn", "vault_sync_filter_present", "Vault sync filter file present",
           `Missing required excludes: ${missing.join(", ")}`);

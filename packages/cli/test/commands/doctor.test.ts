@@ -297,12 +297,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 55 checks", async () => {
+  it("always returns exactly 57 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(55);
+      expect(r.result.data.checks).toHaveLength(57);
       const freshness = r.result.data.checks.find(c => c.id === "s3_mount_freshness");
       expect(freshness).toBeDefined();
       expect(freshness?.status).toBe("pass");
@@ -1637,6 +1637,81 @@ hosts:
       if (!r.result.ok) return;
       const lastRun = r.result.data.checks.find(c => c.id === "satellite_job_last_run");
       expect(lastRun?.status).toBe("error");
+    });
+  });
+
+  describe("vault gitignore hygiene", () => {
+    it("skips gitignore checks when the vault has no git remote", async () => {
+      const h = home();
+      const v = mkdtempSync(join(tmpdir(), "vault-"));
+      writeFileSync(join(v, "SCHEMA.md"), SCHEMA);
+      for (const d of ["raw", "entities", "concepts", "meta"]) mkdirSync(join(v, d), { recursive: true });
+      execSync("git init", { cwd: v, stdio: "pipe" });
+      const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const hygiene = r.result.data.checks.find(c => c.id === "vault_gitignore_hygiene");
+      expect(hygiene?.status).toBe("pass");
+      expect(hygiene?.detail).toMatch(/no remote|not GitHub-synced/i);
+    });
+
+    it("warns when a GitHub-synced vault is missing work-complete ignore", async () => {
+      const h = home();
+      const v = fullVault();
+      writeFileSync(join(v, ".gitignore"), ".skillwiki/last-op.json\n");
+      const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const hygiene = r.result.data.checks.find(c => c.id === "vault_gitignore_hygiene");
+      expect(hygiene?.status).toBe("warn");
+      expect(hygiene?.detail).toContain(".skillwiki/work-complete/");
+    });
+
+    it("passes when required hygiene patterns are present", async () => {
+      const h = home();
+      const v = fullVault();
+      writeFileSync(join(v, ".gitignore"), [
+        ".skillwiki/last-op.json",
+        ".skillwiki/graph.json",
+        ".skillwiki/sync.lock",
+        ".skillwiki/managed-write.lock",
+        ".skillwiki/memory/",
+        ".skillwiki/memory-topics.json",
+        ".skillwiki/work-complete/",
+        ".skillwiki/vectors/",
+        "",
+      ].join("\n"));
+      const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const hygiene = r.result.data.checks.find(c => c.id === "vault_gitignore_hygiene");
+      expect(hygiene?.status).toBe("pass");
+    });
+
+    it("warns when work-complete journals are already tracked", async () => {
+      const h = home();
+      const v = fullVault();
+      writeFileSync(join(v, ".gitignore"), [
+        ".skillwiki/last-op.json",
+        ".skillwiki/graph.json",
+        ".skillwiki/sync.lock",
+        ".skillwiki/managed-write.lock",
+        ".skillwiki/memory/",
+        ".skillwiki/memory-topics.json",
+        ".skillwiki/work-complete/",
+        ".skillwiki/vectors/",
+        "",
+      ].join("\n"));
+      mkdirSync(join(v, ".skillwiki", "work-complete"), { recursive: true });
+      writeFileSync(join(v, ".skillwiki", "work-complete", "abcd.env"), "phase=done\n");
+      execSync("git add -f .skillwiki/work-complete/abcd.env", { cwd: v, stdio: "pipe" });
+      execSync("git -c user.name=test -c user.email=test@test commit -m tracked-journal", { cwd: v, stdio: "pipe" });
+      const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const tracked = r.result.data.checks.find(c => c.id === "vault_gitignore_tracked_scratch");
+      expect(tracked?.status).toBe("warn");
+      expect(tracked?.detail).toMatch(/git rm --cached/);
     });
   });
 

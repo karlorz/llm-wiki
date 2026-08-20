@@ -11,6 +11,8 @@
 #   .skillwiki/graph.json                       → local-only graph cache
 #   .skillwiki/memory/                          → local-only derived memory cache
 #   .skillwiki/memory-topics.json               → legacy local-only memory cache
+#   .skillwiki/work-complete/                   → local work-complete retry journals
+#   .skillwiki/last-op.json                     → session last-op scratch
 #
 # Noise exclusions (regenerable / per-machine state):
 #   .obsidian/workspace.json                    → Obsidian window state
@@ -43,6 +45,9 @@
 - .skillwiki/graph.json
 - .skillwiki/memory/
 - .skillwiki/memory-topics.json
+- .skillwiki/work-complete/
+- .skillwiki/last-op.json
+- .skillwiki/vectors/
 - .obsidian/workspace.json
 - .obsidian/plugins/*/main.js
 - .playwright-cli/

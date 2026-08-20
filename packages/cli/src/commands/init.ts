@@ -7,6 +7,11 @@ import { parseDotenvText, writeDotenv, profileKey, type DotenvMap } from "../uti
 import { extractTaxonomy } from "../parsers/taxonomy.js";
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { appendLastOp } from "../utils/last-op.js";
+import {
+  VAULT_HYGIENE_GITIGNORE_PATTERNS,
+  mergeGitignore,
+  renderVaultGitignoreTemplate,
+} from "../utils/vault-hygiene-ignores.js";
 
 const DEFAULT_TAXONOMY = [
   "research", "comparison", "timeline", "summary", "person",
@@ -38,6 +43,8 @@ export interface InitInput {
   force: boolean;
   noEnv?: boolean;
   profile?: string;
+  noGitignore?: boolean;
+  writeGitignoreOnly?: boolean;
 }
 
 export interface InitOutput {
@@ -57,6 +64,8 @@ export interface InitOutput {
   web_clipper_readme_path: string;
   web_clipper_template_created: boolean;
   web_clipper_template_preserved: boolean;
+  gitignore_written: boolean;
+  gitignore_preserved: boolean;
 }
 
 function extractDomainFromSchema(text: string): string {
@@ -90,6 +99,25 @@ async function discoverTagsFromPages(target: string, knownSlugs: string[]): Prom
   return [...discovered].sort();
 }
 
+async function applyVaultGitignore(target: string): Promise<{ written: boolean; preserved: boolean }> {
+  const dest = join(target, ".gitignore");
+  let existing = "";
+  let existed = false;
+  try {
+    existing = await readFile(dest, "utf8");
+    existed = true;
+  } catch { /* new file */ }
+  const next = existed
+    ? mergeGitignore(existing, VAULT_HYGIENE_GITIGNORE_PATTERNS)
+    : { text: renderVaultGitignoreTemplate(), changed: true, added: [...VAULT_HYGIENE_GITIGNORE_PATTERNS] };
+  if (!next.changed) {
+    return { written: false, preserved: true };
+  }
+  await mkdir(dirname(dest), { recursive: true });
+  await writeFile(dest, next.text, "utf8");
+  return { written: true, preserved: existed };
+}
+
 export async function runInit(input: InitInput): Promise<{ exitCode: number; result: Result<InitOutput> }> {
   const pathRes = await resolveInitTimePath({ flag: input.flag, envValue: input.envValue, home: input.home });
   const target = pathRes.path;
@@ -100,6 +128,36 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
   let oldSchemaText: string | undefined;
   try { oldSchemaText = await readFile(join(target, "SCHEMA.md"), "utf8"); } catch { /* no existing schema */ }
   if (oldSchemaText && !input.force) {
+    if (input.writeGitignoreOnly && !input.noGitignore) {
+      try {
+        const gi = await applyVaultGitignore(target);
+        return {
+          exitCode: ExitCode.OK,
+          result: ok({
+            vault: target,
+            domain: input.domain,
+            taxonomy: input.taxonomy && input.taxonomy.length > 0 ? input.taxonomy : DEFAULT_TAXONOMY,
+            lang: canonicalLang,
+            created: gi.written ? [".gitignore"] : [],
+            preserved: gi.preserved ? [".gitignore"] : [],
+            env_written: "",
+            env_skipped: true,
+            imported_from_hermes: false,
+            discovered_tags: 0,
+            humanHint: `vault: ${target}\ngitignore: ${gi.written ? "merged" : "unchanged"} (write-gitignore only)`,
+            templates_created: false,
+            web_clipper_template_path: WEB_CLIPPER_TEMPLATE_REL,
+            web_clipper_readme_path: WEB_CLIPPER_README_REL,
+            web_clipper_template_created: false,
+            web_clipper_template_preserved: false,
+            gitignore_written: gi.written,
+            gitignore_preserved: gi.preserved,
+          }),
+        };
+      } catch (e: unknown) {
+        return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: ".gitignore", message: String(e) }) };
+      }
+    }
     return {
       exitCode: ExitCode.INIT_TARGET_NOT_EMPTY,
       result: err("INIT_TARGET_NOT_EMPTY", { target })
@@ -293,6 +351,20 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
 
   const importedFromHermes = pathRes.source === "hermes-dotenv" && !swDotenvHadPath;
 
+  let gitignoreWritten = false;
+  let gitignorePreserved = false;
+  if (!input.noGitignore) {
+    try {
+      const gi = await applyVaultGitignore(target);
+      gitignoreWritten = gi.written;
+      gitignorePreserved = gi.preserved;
+      if (gi.written) created.push(".gitignore");
+      else if (gi.preserved) preserved.push(".gitignore");
+    } catch (e: unknown) {
+      return { exitCode: ExitCode.WRITE_FAILED, result: err("WRITE_FAILED", { file: ".gitignore", message: String(e) }) };
+    }
+  }
+
   const humanHint = [
     `vault: ${target}`,
     `domain: ${domain}`,
@@ -300,6 +372,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
     `created: ${created.length}, preserved: ${preserved.length}`,
     `discovered tags: ${discovered_tags}`,
     skipEnv ? "env: skipped" : `env: ${envWritten}`,
+    input.noGitignore ? "gitignore: skipped" : `gitignore: ${gitignoreWritten ? "written" : "unchanged"}`,
     `web clipper template: ${WEB_CLIPPER_TEMPLATE_REL}`,
     "web clipper import: open Obsidian Web Clipper Settings and import the JSON in each browser profile",
   ].join("\n");
@@ -332,6 +405,8 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
       web_clipper_readme_path: WEB_CLIPPER_README_REL,
       web_clipper_template_created: created.includes(WEB_CLIPPER_TEMPLATE_REL),
       web_clipper_template_preserved: preserved.includes(WEB_CLIPPER_TEMPLATE_REL),
+      gitignore_written: gitignoreWritten,
+      gitignore_preserved: gitignorePreserved,
     })
   };
 }

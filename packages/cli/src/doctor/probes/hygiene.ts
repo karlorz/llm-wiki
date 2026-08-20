@@ -1,6 +1,12 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { scanVaultConflictMarkers } from "../../utils/conflict-markers.js";
+import { git } from "../../utils/git.js";
+import {
+  VAULT_HYGIENE_GENERATED_COMMIT_PATHS,
+  VAULT_HYGIENE_GITIGNORE_PATTERNS,
+  missingIgnorePatterns,
+} from "../../utils/vault-hygiene-ignores.js";
 import type { CheckResult, DoctorContext, DoctorProbe } from "../types.js";
 import { check } from "./helpers.js";
 
@@ -49,12 +55,63 @@ function checkVaultConflictMarkers(resolvedPath: string | undefined): CheckResul
   );
 }
 
+function githubSyncedGitRoot(gitRoot: string | undefined): { ok: true; gitRoot: string } | { ok: false; reason: string } {
+  if (gitRoot === undefined) return { ok: false, reason: "No vault path — check skipped" };
+  if (!existsSync(join(gitRoot, ".git"))) return { ok: false, reason: "Not a git repository — check skipped" };
+  if (!git(gitRoot, ["remote"])) return { ok: false, reason: "No git remote — not GitHub-synced, check skipped" };
+  return { ok: true, gitRoot };
+}
+
+function checkVaultGitignoreHygiene(synced: ReturnType<typeof githubSyncedGitRoot>): CheckResult {
+  if (!synced.ok) {
+    return check("pass", "vault_gitignore_hygiene", "Vault gitignore hygiene", synced.reason);
+  }
+  let content = "";
+  try {
+    content = readFileSync(join(synced.gitRoot, ".gitignore"), "utf8");
+  } catch {
+    content = "";
+  }
+  const missing = missingIgnorePatterns(content, VAULT_HYGIENE_GITIGNORE_PATTERNS);
+  if (missing.length === 0) {
+    return check("pass", "vault_gitignore_hygiene", "Vault gitignore hygiene", "Required local-scratch patterns present");
+  }
+  return check(
+    "warn",
+    "vault_gitignore_hygiene",
+    "Vault gitignore hygiene",
+    `Missing ${missing.join(", ")} — run \`skillwiki init --target <vault> --domain existing --write-gitignore\``,
+  );
+}
+
+function checkTrackedHygieneScratch(synced: ReturnType<typeof githubSyncedGitRoot>): CheckResult {
+  if (!synced.ok) {
+    return check("pass", "vault_gitignore_tracked_scratch", "Tracked hygiene scratch", synced.reason);
+  }
+  const listed = git(synced.gitRoot, ["ls-files", "--", ...VAULT_HYGIENE_GENERATED_COMMIT_PATHS]);
+  const files = listed ? listed.split("\n").filter(Boolean) : [];
+  if (files.length === 0) {
+    return check("pass", "vault_gitignore_tracked_scratch", "Tracked hygiene scratch", "No local-scratch paths tracked");
+  }
+  const sample = files.slice(0, 3).join(", ");
+  const more = files.length > 3 ? ` (+${files.length - 3} more)` : "";
+  return check(
+    "warn",
+    "vault_gitignore_tracked_scratch",
+    "Tracked hygiene scratch",
+    `${files.length} tracked scratch path(s) (${sample}${more}) — untrack with: git rm --cached -- ${files[0]}`,
+  );
+}
+
 export const hygieneProbe: DoctorProbe = {
   id: "hygiene",
   run(ctx: DoctorContext): CheckResult[] {
+    const synced = githubSyncedGitRoot(ctx.gitCheckPath);
     return [
       checkDotStoreClean(ctx.readOnlyScanRoot),
       checkVaultConflictMarkers(ctx.readOnlyScanRoot),
+      checkVaultGitignoreHygiene(synced),
+      checkTrackedHygieneScratch(synced),
     ];
   },
 };

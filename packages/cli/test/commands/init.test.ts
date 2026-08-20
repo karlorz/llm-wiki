@@ -467,4 +467,60 @@ Finance and markets knowledge base — HK/Asia, US, commodities.
     expect(schema).toContain("New domain override");
     expect(schema).not.toContain("Old domain text");
   });
+
+  it("writes a hygiene .gitignore including work-complete journals", async () => {
+    const h = home();
+    const target = vault();
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: undefined, force: false,
+    });
+    expect(r.exitCode).toBe(0);
+    const gitignore = readFileSync(join(target, ".gitignore"), "utf8");
+    expect(gitignore).toContain(".skillwiki/work-complete/");
+    expect(gitignore).toContain(".skillwiki/last-op.json");
+    expect(gitignore).toMatch(/session-brief/);
+    if (r.result.ok) expect(r.result.data.gitignore_written).toBe(true);
+  });
+
+  it("merges missing hygiene lines into an existing .gitignore", async () => {
+    const h = home();
+    const target = vault();
+    writeFileSync(join(target, ".gitignore"), "custom-keep\n");
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: undefined, force: false,
+    });
+    expect(r.exitCode).toBe(0);
+    const gitignore = readFileSync(join(target, ".gitignore"), "utf8");
+    expect(gitignore).toContain("custom-keep");
+    expect(gitignore).toContain(".skillwiki/work-complete/");
+  });
+
+  it("--no-gitignore skips writing .gitignore", async () => {
+    const h = home();
+    const target = vault();
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: undefined, force: false,
+      noGitignore: true,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(() => readFileSync(join(target, ".gitignore"), "utf8")).toThrow();
+    if (r.result.ok) expect(r.result.data.gitignore_written).toBe(false);
+  });
+
+  it("--write-gitignore repairs an existing vault without rewriting SCHEMA.md", async () => {
+    const h = home();
+    const target = tmp();
+    writeFileSync(join(target, "SCHEMA.md"), "keep-me-please\n");
+    const r = await runInit({
+      flag: target, envValue: undefined, home: h, templates: TEMPLATES,
+      domain: "X", taxonomy: undefined, lang: undefined, force: false,
+      writeGitignoreOnly: true,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(readFileSync(join(target, "SCHEMA.md"), "utf8")).toBe("keep-me-please\n");
+    expect(readFileSync(join(target, ".gitignore"), "utf8")).toContain(".skillwiki/work-complete/");
+  });
 });

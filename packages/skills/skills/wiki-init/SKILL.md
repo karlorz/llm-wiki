@@ -22,6 +22,11 @@ None for the first run.
 3. Propose a 10–15 tag taxonomy tailored to the domain. Confirm or accept the user's revision.
 4. Ask the language question: "What language should generated page prose use? Default is `en`. Aliases like `chinese-traditional` or `zh-Hant` are accepted."
 5. Run `skillwiki init --target <dir> --domain "<answer>" --taxonomy "<comma list>" --lang "<lang>"`.
+   Init always writes or merges a vault `.gitignore` for GitHub-sync hygiene
+   (work-complete journals, last-op, locks, memory/graph caches). It does **not**
+   ignore `session-brief.*` or `agent-memory-trends/`. Pass `--no-gitignore` only
+   when the user explicitly does not want that file. For an existing vault:
+   `skillwiki init --target <dir> --domain existing --write-gitignore`.
 6. Report the installed Web Clipper assets at
    `_Templates/web-clipper/llm-wiki-clippings.json` and
    `_Templates/web-clipper/readme.txt`. Tell the user to open Obsidian Web

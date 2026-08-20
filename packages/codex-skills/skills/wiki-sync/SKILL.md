@@ -197,6 +197,7 @@ High-signal safety rule:
 - Do **not** run `git reset --hard`, direct commits, or manual snapshot scripts to "fix" divergence.
 - Promotion is owned by `wiki-snapshot.timer` by default. Publishers never start systemd units.
 - `skillwiki work-complete` may finish with `committed=false` on sg01; later snapshot promotion owns the Git commit/push.
+- `.skillwiki/work-complete/*.env` journals are local retry hygiene, not GitHub SSOT. Do not treat them as publishable. Prefer last-op pathspecs over a raw `git add -A` when staging a managed completion. Vault `.gitignore` and rclone push filters must exclude `work-complete/` and `last-op.json`.
 
 ### Authorized Git leaf rules
 

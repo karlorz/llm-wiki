@@ -81,8 +81,12 @@ printf '2026-06-10T00:00:00Z OK behind=0 delta=0 (no notify)\n' > "$log_dir/wiki
 printf '%s\n' \
   '- remotely-save/data.json' \
   '- .skillwiki/sync.lock' \
+  '- .skillwiki/managed-write.lock' \
+  '- .skillwiki/graph.json' \
   '- .skillwiki/memory/' \
   '- .skillwiki/memory-topics.json' \
+  '- .skillwiki/work-complete/' \
+  '- .skillwiki/last-op.json' \
   '- .claude/settings.local.json' > "$home_dir/.config/rclone/wiki-push-filters.txt"
 ln -s "$home_dir/missing/wiki-sync.sh" "$home_dir/bin/wiki-sync.sh"
 

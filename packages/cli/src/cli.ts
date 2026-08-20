@@ -663,6 +663,8 @@ program
   .option("--force", "override existing target / env conflict", false)
   .option("--no-env", "skip writing ~/.skillwiki/.env")
   .option("--profile <name>", "write as named wiki profile instead of WIKI_PATH")
+  .option("--no-gitignore", "skip writing the vault .gitignore hygiene template")
+  .option("--write-gitignore", "merge hygiene .gitignore only (existing vault; does not rewrite SCHEMA.md)", false)
   .action(async (opts) => {
     const templates = new URL("../templates/", import.meta.url).pathname;
     const taxonomy = typeof opts.taxonomy === "string"
@@ -678,7 +680,9 @@ program
       lang: opts.lang,
       force: !!opts.force,
       noEnv: opts.env === false,
-      profile: opts.profile
+      profile: opts.profile,
+      noGitignore: opts.gitignore === false,
+      writeGitignoreOnly: !!opts.writeGitignore,
     }));
   });
 

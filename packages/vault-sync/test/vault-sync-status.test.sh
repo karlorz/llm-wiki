@@ -53,8 +53,12 @@ prepare_home() {
   cat > "$(rclone_config_for_home "$home")/wiki-push-filters.txt" <<'FILTERS'
 - remotely-save/data.json
 - .skillwiki/sync.lock
+- .skillwiki/managed-write.lock
+- .skillwiki/graph.json
 - .skillwiki/memory/**
 - .skillwiki/memory-topics.json
+- .skillwiki/work-complete/
+- .skillwiki/last-op.json
 - .claude/settings.local.json
 FILTERS
 }
@@ -74,8 +78,12 @@ prepare_macos_home() {
   cat > "$home/.config/rclone/wiki-push-filters.txt" <<'FILTERS'
 - remotely-save/data.json
 - .skillwiki/sync.lock
+- .skillwiki/managed-write.lock
+- .skillwiki/graph.json
 - .skillwiki/memory/**
 - .skillwiki/memory-topics.json
+- .skillwiki/work-complete/
+- .skillwiki/last-op.json
 - .claude/settings.local.json
 FILTERS
 }
