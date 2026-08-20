@@ -224,6 +224,13 @@ Body
         ".skillwiki/work-complete/",
         ".skillwiki/last-op.json",
         ".claude/settings.local.json",
+        ".playwright-cli/",
+        ".pytest_cache/",
+        ".snapshots/",
+        ".superpowers/",
+        ".antigravitycli/",
+        ".obsidian/plugins/*/main.js",
+        ".claude/dev-loop/",
       ].join("\n"),
     );
 
@@ -295,6 +302,13 @@ Body
         ".skillwiki/work-complete/",
         ".skillwiki/last-op.json",
         ".claude/settings.local.json",
+        ".playwright-cli/",
+        ".pytest_cache/",
+        ".snapshots/",
+        ".superpowers/",
+        ".antigravitycli/",
+        ".obsidian/plugins/*/main.js",
+        ".claude/dev-loop/",
       ].join("\n"),
     );
 
@@ -365,6 +379,13 @@ Body
         ".skillwiki/work-complete/",
         ".skillwiki/last-op.json",
         ".claude/settings.local.json",
+        ".playwright-cli/",
+        ".pytest_cache/",
+        ".snapshots/",
+        ".superpowers/",
+        ".antigravitycli/",
+        ".obsidian/plugins/*/main.js",
+        ".claude/dev-loop/",
       ].join("\n"),
     );
 

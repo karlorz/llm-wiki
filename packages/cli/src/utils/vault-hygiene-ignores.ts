@@ -18,6 +18,13 @@ export const VAULT_HYGIENE_GITIGNORE_PATTERNS = [
   ".skillwiki/memory-topics.json",
   ".skillwiki/work-complete/",
   ".skillwiki/vectors/",
+  ".playwright-cli/",
+  ".pytest_cache/",
+  ".snapshots/",
+  ".superpowers/",
+  ".antigravitycli/",
+  ".obsidian/plugins/*/main.js",
+  ".claude/dev-loop/",
 ] as const;
 
 /** Paths to unstage from `git add -A` (gitignore patterns without trailing slash). */
@@ -35,6 +42,13 @@ export const VAULT_SYNC_FILTER_REQUIRED_EXCLUDES = [
   ".skillwiki/work-complete/",
   ".skillwiki/last-op.json",
   ".claude/settings.local.json",
+  ".playwright-cli/",
+  ".pytest_cache/",
+  ".snapshots/",
+  ".superpowers/",
+  ".antigravitycli/",
+  ".obsidian/plugins/*/main.js",
+  ".claude/dev-loop/",
 ] as const;
 
 export function missingIgnorePatterns(

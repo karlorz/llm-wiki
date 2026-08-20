@@ -53,6 +53,9 @@
 - .playwright-cli/
 - .pytest_cache/
 - .snapshots/
+- .superpowers/
+- .antigravitycli/
+- .claude/dev-loop/
 - logs/
 # Root aggregates are projection-authority-only; non-authority leaves must not push them.
 - /index.md

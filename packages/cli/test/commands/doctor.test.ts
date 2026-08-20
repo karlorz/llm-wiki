@@ -1679,6 +1679,13 @@ hosts:
         ".skillwiki/memory-topics.json",
         ".skillwiki/work-complete/",
         ".skillwiki/vectors/",
+        ".playwright-cli/",
+        ".pytest_cache/",
+        ".snapshots/",
+        ".superpowers/",
+        ".antigravitycli/",
+        ".obsidian/plugins/*/main.js",
+        ".claude/dev-loop/",
         "",
       ].join("\n"));
       const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
@@ -1700,6 +1707,13 @@ hosts:
         ".skillwiki/memory-topics.json",
         ".skillwiki/work-complete/",
         ".skillwiki/vectors/",
+        ".playwright-cli/",
+        ".pytest_cache/",
+        ".snapshots/",
+        ".superpowers/",
+        ".antigravitycli/",
+        ".obsidian/plugins/*/main.js",
+        ".claude/dev-loop/",
         "",
       ].join("\n"));
       mkdirSync(join(v, ".skillwiki", "work-complete"), { recursive: true });
@@ -1712,6 +1726,67 @@ hosts:
       const tracked = r.result.data.checks.find(c => c.id === "vault_gitignore_tracked_scratch");
       expect(tracked?.status).toBe("warn");
       expect(tracked?.detail).toMatch(/git rm --cached/);
+    });
+
+    it("warns when a GitHub-synced vault is missing .obsidian/plugins/*/main.js", async () => {
+      const h = home();
+      const v = fullVault();
+      writeFileSync(join(v, ".gitignore"), [
+        ".skillwiki/last-op.json",
+        ".skillwiki/graph.json",
+        ".skillwiki/sync.lock",
+        ".skillwiki/managed-write.lock",
+        ".skillwiki/memory/",
+        ".skillwiki/memory-topics.json",
+        ".skillwiki/work-complete/",
+        ".skillwiki/vectors/",
+        ".playwright-cli/",
+        ".pytest_cache/",
+        ".snapshots/",
+        ".superpowers/",
+        ".antigravitycli/",
+        ".claude/dev-loop/",
+        "",
+      ].join("\n"));
+      const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const hygiene = r.result.data.checks.find(c => c.id === "vault_gitignore_hygiene");
+      expect(hygiene?.status).toBe("warn");
+      expect(hygiene?.detail).toContain(".obsidian/plugins/*/main.js");
+    });
+
+    it("warns when tracked .obsidian/plugins/custom-sort/main.js is found", async () => {
+      const h = home();
+      const v = fullVault();
+      writeFileSync(join(v, ".gitignore"), [
+        ".skillwiki/last-op.json",
+        ".skillwiki/graph.json",
+        ".skillwiki/sync.lock",
+        ".skillwiki/managed-write.lock",
+        ".skillwiki/memory/",
+        ".skillwiki/memory-topics.json",
+        ".skillwiki/work-complete/",
+        ".skillwiki/vectors/",
+        ".playwright-cli/",
+        ".pytest_cache/",
+        ".snapshots/",
+        ".superpowers/",
+        ".antigravitycli/",
+        ".obsidian/plugins/*/main.js",
+        ".claude/dev-loop/",
+        "",
+      ].join("\n"));
+      mkdirSync(join(v, ".obsidian", "plugins", "custom-sort"), { recursive: true });
+      writeFileSync(join(v, ".obsidian", "plugins", "custom-sort", "main.js"), "console.log('plugin');\n");
+      execSync("git add -f .obsidian/plugins/custom-sort/main.js", { cwd: v, stdio: "pipe" });
+      execSync("git -c user.name=test -c user.email=test@test commit -m tracked-plugin-binary", { cwd: v, stdio: "pipe" });
+      const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const tracked = r.result.data.checks.find(c => c.id === "vault_gitignore_tracked_scratch");
+      expect(tracked?.status).toBe("warn");
+      expect(tracked?.detail).toContain(".obsidian/plugins/custom-sort/main.js");
     });
   });
 
