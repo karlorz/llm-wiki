@@ -407,8 +407,6 @@ conflict_marker_guard
 # Inherited debt is logged. Malformed/missing delta evidence fails closed.
 if command -v skillwiki >/dev/null 2>&1; then
     DELTA_OUT=$(skillwiki sync lint-delta "$WIKI_DIR" --base-ref origin/main 2>&1) || true
-    printf '%s
-' "$DELTA_OUT" >>"$LOG_FILE"
     eval "$(printf '%s\n' "$DELTA_OUT" | python3 -c '
 import json,sys
 try:

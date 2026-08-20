@@ -55,6 +55,7 @@
 - .snapshots/
 - .superpowers/
 - .antigravitycli/
+- .drafts/
 - .claude/dev-loop/
 - logs/
 # Root aggregates are projection-authority-only; non-authority leaves must not push them.

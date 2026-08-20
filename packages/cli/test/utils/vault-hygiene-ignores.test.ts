@@ -22,10 +22,13 @@ describe("vault hygiene ignore contract", () => {
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".snapshots/");
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".superpowers/");
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".antigravitycli/");
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".drafts/");
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".obsidian/plugins/*/main.js");
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".claude/dev-loop/");
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS.join("\n")).not.toMatch(/session-brief/);
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS.join("\n")).not.toMatch(/agent-memory-trends/);
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS.join("\n")).not.toMatch(/concepts\//);
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS.join("\n")).not.toMatch(/entities\//);
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS.join("\n")).not.toMatch(/manifest\.json/);
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS.join("\n")).not.toMatch(/custom-sort\/data\.json/);
   });
@@ -39,10 +42,13 @@ describe("vault hygiene ignore contract", () => {
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".snapshots/");
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".superpowers/");
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".antigravitycli/");
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".drafts/");
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".obsidian/plugins/*/main.js");
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".claude/dev-loop/");
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n")).not.toMatch(/session-brief/);
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n")).not.toMatch(/agent-memory-trends/);
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n")).not.toMatch(/concepts\//);
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n")).not.toMatch(/entities\//);
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n")).not.toMatch(/manifest\.json/);
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n")).not.toMatch(/custom-sort\/data\.json/);
   });
@@ -62,6 +68,16 @@ describe("vault hygiene ignore contract", () => {
     expect(merged.text).toContain("custom-keep");
     expect(merged.text).toContain(".skillwiki/work-complete/");
     expect(merged.added).toContain(".skillwiki/work-complete/");
+  });
+
+  it("merges missing hygiene lines without duplicate comment block if comment exists", () => {
+    const comment = "# SkillWiki local scratch (not GitHub SSOT; keep session-brief and agent-memory-trends)";
+    const existing = `${comment}\n.skillwiki/last-op.json\n`;
+    const merged = mergeGitignore(existing, VAULT_HYGIENE_GITIGNORE_PATTERNS);
+    expect(merged.changed).toBe(true);
+    const commentCount = (merged.text.match(new RegExp(comment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length;
+    expect(commentCount).toBe(1);
+    expect(merged.added).toContain(".drafts/");
   });
 
   it("is a no-op merge when every required pattern is already present", () => {

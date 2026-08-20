@@ -23,6 +23,7 @@ export const VAULT_HYGIENE_GITIGNORE_PATTERNS = [
   ".snapshots/",
   ".superpowers/",
   ".antigravitycli/",
+  ".drafts/",
   ".obsidian/plugins/*/main.js",
   ".claude/dev-loop/",
 ] as const;
@@ -47,6 +48,7 @@ export const VAULT_SYNC_FILTER_REQUIRED_EXCLUDES = [
   ".snapshots/",
   ".superpowers/",
   ".antigravitycli/",
+  ".drafts/",
   ".obsidian/plugins/*/main.js",
   ".claude/dev-loop/",
 ] as const;
@@ -67,12 +69,13 @@ export function mergeGitignore(
     return { text: existing, changed: false, added: [] };
   }
   const base = existing.length === 0 || existing.endsWith("\n") ? existing : `${existing}\n`;
-  const block = [
-    "# SkillWiki local scratch (not GitHub SSOT; keep session-brief and agent-memory-trends)",
-    ...added,
-    "",
-  ].join("\n");
-  return { text: `${base}${block}`, changed: true, added };
+  const comment = "# SkillWiki local scratch (not GitHub SSOT; keep session-brief and agent-memory-trends)";
+  const lines: string[] = [];
+  if (!existing.includes(comment)) {
+    lines.push(comment);
+  }
+  lines.push(...added, "");
+  return { text: `${base}${lines.join("\n")}`, changed: true, added };
 }
 
 export function renderVaultGitignoreTemplate(): string {

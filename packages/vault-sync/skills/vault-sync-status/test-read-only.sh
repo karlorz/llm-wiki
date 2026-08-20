@@ -73,9 +73,11 @@ esac
 
 touch "$share_bin/wiki-push.sh"
 chmod +x "$share_bin/wiki-push.sh"
-cat > "$log_dir/wiki-push.log" <<'EOF'
+recent_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$log_dir/wiki-push.log" <<EOF
 2026-06-10T00:00:00Z OK push (no changes)
-{"ok":true,"data":{"summary":{"errors":0}}}
+$recent_ts OK push (no changes)
+{"ok":false,"status":"failed","reason":"ERROR: lint-delta failed","summary":{"errors":1}}
 EOF
 printf '2026-06-10T00:00:00Z OK behind=0 delta=0 (no notify)\n' > "$log_dir/wiki-fetch.log"
 printf '%s\n' \
@@ -107,7 +109,7 @@ if ! grep -q '"status":"warn"' "$helper_out" || ! grep -q 'broken symlink' "$hel
   exit 1
 fi
 
-if ! grep -q '"id":"vault_sync_last_push_age".*"status":"pass".*OK push' "$helper_out"; then
+if ! grep -q '"id":"vault_sync_last_push_age".*"status":"pass".*Last push' "$helper_out"; then
   cat "$helper_out" >&2
   rm -f "$helper_out"
   echo "FAIL: expected push recency check to use last meaningful OK push line" >&2

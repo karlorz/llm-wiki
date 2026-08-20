@@ -398,11 +398,9 @@ classify_log_tail() {
 
   local tail_lines last
   tail_lines=$(tail -n 20 "$file")
-  last=$(printf '%s
-' "$tail_lines" | grep -E "FAIL|ERROR|$ok_regex" | tail -n 1 || true)
+  last=$(printf '%s\n' "$tail_lines" | grep -E "FAIL|ERROR|$ok_regex" | tail -n 1 || true)
   if [ -z "$last" ]; then
-    last=$(printf '%s
-' "$tail_lines" | tail -n 1)
+    last=$(printf '%s\n' "$tail_lines" | tail -n 1)
   fi
   if [ -z "$last" ]; then
     add_check "$check_id" "$label" "warn" "log file empty: $file"
@@ -415,6 +413,114 @@ classify_log_tail() {
     add_check "$check_id" "$label" "pass" "$last"
   else
     add_check "$check_id" "$label" "warn" "$last"
+  fi
+}
+
+classify_push_age() {
+  local log_dir="$1"
+  local log_file="$2"
+  local state_file="$3"
+  local check_id="vault_sync_last_push_age"
+  local label="Vault sync last push recency"
+
+  # 1. State file preference (durable terminal state)
+  if [ -f "$state_file" ]; then
+    local push_res push_reason push_ts
+    push_res="$(grep '^result=' "$state_file" 2>/dev/null | cut -d= -f2 || true)"
+    push_reason="$(grep '^reason=' "$state_file" 2>/dev/null | cut -d= -f2 || true)"
+    push_ts="$(grep '^timestamp=' "$state_file" 2>/dev/null | cut -d= -f2 || true)"
+
+    if [ "$push_res" = "refused" ]; then
+      local suffix=""
+      [ -n "$push_reason" ] && suffix=": $push_reason"
+      add_check "$check_id" "$label" "error" "Last push refused${suffix}"
+      return 0
+    elif [ "$push_res" = "ok" ]; then
+      if [ -n "$push_ts" ]; then
+        local age_sec
+        age_sec="$(python3 -c "
+try:
+    from datetime import datetime, timezone
+    import time
+    start = datetime.fromisoformat('$push_ts'.replace('Z','+00:00'))
+    now = datetime.now(timezone.utc)
+    diff = int((now - start).total_seconds())
+    print(diff)
+except Exception:
+    print(-1)
+" 2>/dev/null || echo "-1")"
+        if [ "$age_sec" = "-1" ]; then
+          add_check "$check_id" "$label" "warn" "Unparseable push timestamp: $push_ts"
+        elif [ "$age_sec" -le 180 ]; then
+          add_check "$check_id" "$label" "pass" "Last push ${age_sec}s ago"
+        else
+          add_check "$check_id" "$label" "warn" "Last push ${age_sec}s ago (>3 min)"
+        fi
+        return 0
+      else
+        add_check "$check_id" "$label" "warn" "State file missing timestamp"
+        return 0
+      fi
+    fi
+    # If state file is malformed or other result, fall through to log check
+  fi
+
+  # 2. Journal fallback
+  if [ ! -f "$log_file" ]; then
+    if [ -d "$log_dir" ]; then
+      add_check "$check_id" "$label" "warn" "Log file not found at $log_file"
+    else
+      add_check "$check_id" "$label" "error" "Log directory not found at $log_dir"
+    fi
+    return 0
+  fi
+
+  # Skip JSON lines and find latest journal entry: ^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z) (OK push|FAIL)
+  local journal_line
+  journal_line="$(grep -v '^[[:space:]]*{' "$log_file" | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z (OK push|FAIL)' | tail -n 1 || true)"
+
+  if [ -z "$journal_line" ]; then
+    local tail_line
+    tail_line="$(grep -v '^[[:space:]]*{' "$log_file" | tail -n 1 || true)"
+    if [ -z "$tail_line" ]; then
+      tail_line="$(tail -n 1 "$log_file" || true)"
+    fi
+    if [ -z "$tail_line" ]; then
+      add_check "$check_id" "$label" "warn" "Log file is empty"
+    else
+      local truncated
+      truncated="$(printf '%s' "$tail_line" | cut -c 1-80)"
+      add_check "$check_id" "$label" "warn" "Last log entry: $truncated"
+    fi
+    return 0
+  fi
+
+  if printf '%s' "$journal_line" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z FAIL'; then
+    local truncated
+    truncated="$(printf '%s' "$journal_line" | cut -c 1-80)"
+    add_check "$check_id" "$label" "error" "Last push failed: $truncated"
+    return 0
+  fi
+
+  local ts
+  ts="$(printf '%s' "$journal_line" | awk '{print $1}')"
+  local age_sec
+  age_sec="$(python3 -c "
+try:
+    from datetime import datetime, timezone
+    start = datetime.fromisoformat('$ts'.replace('Z','+00:00'))
+    now = datetime.now(timezone.utc)
+    diff = int((now - start).total_seconds())
+    print(diff)
+except Exception:
+    print(-1)
+" 2>/dev/null || echo "-1")"
+  if [ "$age_sec" = "-1" ]; then
+    add_check "$check_id" "$label" "warn" "Unparseable push timestamp: $ts"
+  elif [ "$age_sec" -le 180 ]; then
+    add_check "$check_id" "$label" "pass" "Last push ${age_sec}s ago"
+  else
+    add_check "$check_id" "$label" "warn" "Last push ${age_sec}s ago (>3 min)"
   fi
 }
 
@@ -1189,14 +1295,14 @@ if [ "$ROLE" = "snapshotter" ]; then
   add_check "vault_sync_filter_present" "Vault sync filter file present" "pass" "Snapshotter host — leaf wiki-push filter not applicable"
 else
   # Check 3: last push recency/result
-  classify_log_tail "$LOG_DIR/wiki-push.log" "vault_sync_last_push_age" "Vault sync last push recency" 'OK push'
+  PUSH_RESULT_FILE="$(platform_cache_dir)/wiki-push-result.state"
+  classify_push_age "$LOG_DIR" "$LOG_DIR/wiki-push.log" "$PUSH_RESULT_FILE"
 
   # M6: last push result from the durable terminal-state file (wiki-push-result.state).
   # This survives log rotation (1 MB x5) and records the outcome of the most
   # recent push attempt: OK or refused+reason. The log-tail check above can
   # miss refusals when the log rotates or when FAIL lines are suppressed by the
   # P1 dedup cooldown. This check reads the machine-readable state file directly.
-  PUSH_RESULT_FILE="$(platform_cache_dir)/wiki-push-result.state"
   if [ -f "$PUSH_RESULT_FILE" ]; then
     push_result_value="$(grep '^result=' "$PUSH_RESULT_FILE" 2>/dev/null | cut -d= -f2 || true)"
     push_result_reason="$(grep '^reason=' "$PUSH_RESULT_FILE" 2>/dev/null | cut -d= -f2 || true)"
