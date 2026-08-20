@@ -137,21 +137,16 @@ export async function runSelfUpdateApply(input: SelfUpdateCheckInput): Promise<J
   }
 
   if (details.applied) {
-    // User-only wrapper refresh does not require root — always attempt.
-    details.actions.wrapperReinstall = await runAction(input, "bash", [join(input.repoPath, "packages", "agent-memory-trends", "scripts", "install-sg02.sh"), "--user-only"]);
-    if (details.actions.wrapperReinstall.status === "fail") {
-      return { job: "self-update-apply", status: "fail", reason: "failed to refresh user-owned maintenance wrapper", details };
-    }
-    // Optionally refresh systemd units if sudo is available (non-fatal).
+    const installScript = join(input.repoPath, "packages", "agent-memory-trends", "scripts", "install-sg02.sh");
     if (sudoAvailable) {
-      const systemUnits = await runAction(input, "sudo", ["-n", "bash", join(input.repoPath, "packages", "agent-memory-trends", "scripts", "install-sg02.sh"), "--enable"]);
-      if (systemUnits.status === "fail") {
-        // Non-fatal: wrapper is current, systemd units are stale but functional.
-        details.actions.wrapperReinstall = {
-          ...details.actions.wrapperReinstall,
-          reason: "user wrapper refreshed; systemd unit refresh failed (non-fatal)",
-        };
-      }
+      // Full install handles both user wrappers and systemd units in one pass.
+      details.actions.wrapperReinstall = await runAction(input, "sudo", ["-n", "bash", installScript, "--enable"]);
+    } else {
+      // User-only refresh: wrapper scripts only, no root required.
+      details.actions.wrapperReinstall = await runAction(input, "bash", [installScript, "--user-only"]);
+    }
+    if (details.actions.wrapperReinstall.status === "fail") {
+      return { job: "self-update-apply", status: "fail", reason: "failed to refresh maintenance wrapper", details };
     }
   }
 

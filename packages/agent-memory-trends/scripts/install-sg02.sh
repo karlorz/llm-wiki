@@ -81,6 +81,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ "$USER_ONLY" -eq 1 ] && [ "$ENABLE_TIMER" -eq 1 ]; then
+  fatal "--enable cannot be used with --user-only"
+fi
+
 if [ "$USER_ONLY" -eq 0 ]; then
   require_root
 fi
@@ -103,8 +107,13 @@ if [ "$USER_ONLY" -eq 0 ]; then
   fi
 fi
 
-install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$CONFIG_DIR" "$BIN_DIR" "$LOG_DIR"
-install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0755 "$REPO_DIR" "$VAULT_DIR"
+if [ "$USER_ONLY" -eq 0 ]; then
+  install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0700 "$CONFIG_DIR" "$BIN_DIR" "$LOG_DIR"
+  install -d -o "$SERVICE_USER" -g "$SERVICE_USER" -m 0755 "$REPO_DIR" "$VAULT_DIR"
+else
+  install -d -m 0700 "$CONFIG_DIR" "$BIN_DIR" "$LOG_DIR"
+  install -d -m 0755 "$REPO_DIR" "$VAULT_DIR"
+fi
 
 if [ ! -f "$ENV_EXAMPLE" ]; then
   cat > "$ENV_EXAMPLE" <<EOF
@@ -169,7 +178,7 @@ fi
 
 exec npm run -w @skillwiki/agent-memory-trends --silent "$COMMAND" -- "$@"
 EOF
-chown "$SERVICE_USER:$SERVICE_USER" "$BIN_DIR/agent-memory-trends"
+[ "$USER_ONLY" -eq 0 ] && chown "$SERVICE_USER:$SERVICE_USER" "$BIN_DIR/agent-memory-trends"
 chmod 0750 "$BIN_DIR/agent-memory-trends"
 
 cat > "$BIN_DIR/agent-memory-trends-daily" <<'EOF'
@@ -215,7 +224,7 @@ export SKILLWIKI_MAINTENANCE_MODE
     --mode "$SKILLWIKI_MAINTENANCE_MODE"
 } 2>&1 | tee -a "$LOG_DIR/daily.log"
 EOF
-chown "$SERVICE_USER:$SERVICE_USER" "$BIN_DIR/agent-memory-trends-daily"
+[ "$USER_ONLY" -eq 0 ] && chown "$SERVICE_USER:$SERVICE_USER" "$BIN_DIR/agent-memory-trends-daily"
 chmod 0750 "$BIN_DIR/agent-memory-trends-daily"
 
 # ---------------------------------------------------------------------------

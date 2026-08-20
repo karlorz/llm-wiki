@@ -182,7 +182,6 @@ describe("runSelfUpdateApply", () => {
         "npm install -g skillwiki@latest": result("changed 1 package\n"),
         "sudo -n npm install -g skillwiki@latest": result("changed 1 package\n"),
         "git -C /repo merge --ff-only origin/main": result("Updating aaa111..bbb222\n"),
-        [`bash ${join("/repo", "packages", "agent-memory-trends", "scripts", "install-sg02.sh")} --user-only`]: result("[agent-memory-trends-install] user-only refresh complete; systemd units not touched\n"),
         [`sudo -n bash ${join("/repo", "packages", "agent-memory-trends", "scripts", "install-sg02.sh")} --enable`]: result("[agent-memory-trends-install] --enable supplied; enabling timer\n"),
       }),
     });
@@ -247,7 +246,7 @@ describe("runSelfUpdateApply", () => {
     });
 
     expect(check.status).toBe("fail");
-    expect(check.reason).toContain("failed to refresh user-owned maintenance wrapper");
+    expect(check.reason).toContain("failed to refresh maintenance wrapper");
     expect(check.details.actions.wrapperReinstall.status).toBe("fail");
   });
 
