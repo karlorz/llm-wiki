@@ -479,6 +479,8 @@ Finance and markets knowledge base — HK/Asia, US, commodities.
     const gitignore = readFileSync(join(target, ".gitignore"), "utf8");
     expect(gitignore).toContain(".skillwiki/work-complete/");
     expect(gitignore).toContain(".skillwiki/last-op.json");
+    expect(gitignore).toContain(".playwright-cli/");
+    expect(gitignore).toContain(".obsidian/plugins/*/main.js");
     expect(gitignore).toMatch(/session-brief/);
     if (r.result.ok) expect(r.result.data.gitignore_written).toBe(true);
   });
@@ -495,6 +497,8 @@ Finance and markets knowledge base — HK/Asia, US, commodities.
     const gitignore = readFileSync(join(target, ".gitignore"), "utf8");
     expect(gitignore).toContain("custom-keep");
     expect(gitignore).toContain(".skillwiki/work-complete/");
+    expect(gitignore).toContain(".playwright-cli/");
+    expect(gitignore).toContain(".obsidian/plugins/*/main.js");
   });
 
   it("--no-gitignore skips writing .gitignore", async () => {

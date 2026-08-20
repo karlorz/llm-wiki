@@ -11,6 +11,11 @@ import {
   checkGrokActivation,
   doctorReadOnlyScanRoot,
 } from "../../src/commands/doctor.js";
+import { VAULT_HYGIENE_GITIGNORE_PATTERNS } from "../../src/utils/vault-hygiene-ignores.js";
+
+function hygieneGitignore(omit: readonly string[] = []): string {
+  return [...VAULT_HYGIENE_GITIGNORE_PATTERNS.filter((pattern) => !omit.includes(pattern)), ""].join("\n");
+}
 
 // This file lives at packages/cli/test/commands/ -> up 3 dirnames reaches
 // packages/cli, then ../.. reaches the repo root. Be careful not to double
@@ -1670,17 +1675,7 @@ hosts:
     it("passes when required hygiene patterns are present", async () => {
       const h = home();
       const v = fullVault();
-      writeFileSync(join(v, ".gitignore"), [
-        ".skillwiki/last-op.json",
-        ".skillwiki/graph.json",
-        ".skillwiki/sync.lock",
-        ".skillwiki/managed-write.lock",
-        ".skillwiki/memory/",
-        ".skillwiki/memory-topics.json",
-        ".skillwiki/work-complete/",
-        ".skillwiki/vectors/",
-        "",
-      ].join("\n"));
+      writeFileSync(join(v, ".gitignore"), hygieneGitignore());
       const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
       expect(r.result.ok).toBe(true);
       if (!r.result.ok) return;
@@ -1691,17 +1686,7 @@ hosts:
     it("warns when work-complete journals are already tracked", async () => {
       const h = home();
       const v = fullVault();
-      writeFileSync(join(v, ".gitignore"), [
-        ".skillwiki/last-op.json",
-        ".skillwiki/graph.json",
-        ".skillwiki/sync.lock",
-        ".skillwiki/managed-write.lock",
-        ".skillwiki/memory/",
-        ".skillwiki/memory-topics.json",
-        ".skillwiki/work-complete/",
-        ".skillwiki/vectors/",
-        "",
-      ].join("\n"));
+      writeFileSync(join(v, ".gitignore"), hygieneGitignore());
       mkdirSync(join(v, ".skillwiki", "work-complete"), { recursive: true });
       writeFileSync(join(v, ".skillwiki", "work-complete", "abcd.env"), "phase=done\n");
       execSync("git add -f .skillwiki/work-complete/abcd.env", { cwd: v, stdio: "pipe" });
@@ -1712,6 +1697,34 @@ hosts:
       const tracked = r.result.data.checks.find(c => c.id === "vault_gitignore_tracked_scratch");
       expect(tracked?.status).toBe("warn");
       expect(tracked?.detail).toMatch(/git rm --cached/);
+    });
+
+    it("warns when a GitHub-synced vault is missing .obsidian/plugins/*/main.js", async () => {
+      const h = home();
+      const v = fullVault();
+      writeFileSync(join(v, ".gitignore"), hygieneGitignore([".obsidian/plugins/*/main.js"]));
+      const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const hygiene = r.result.data.checks.find(c => c.id === "vault_gitignore_hygiene");
+      expect(hygiene?.status).toBe("warn");
+      expect(hygiene?.detail).toContain(".obsidian/plugins/*/main.js");
+    });
+
+    it("warns when tracked .obsidian/plugins/custom-sort/main.js is found", async () => {
+      const h = home();
+      const v = fullVault();
+      writeFileSync(join(v, ".gitignore"), hygieneGitignore());
+      mkdirSync(join(v, ".obsidian", "plugins", "custom-sort"), { recursive: true });
+      writeFileSync(join(v, ".obsidian", "plugins", "custom-sort", "main.js"), "console.log('plugin');\n");
+      execSync("git add -f .obsidian/plugins/custom-sort/main.js", { cwd: v, stdio: "pipe" });
+      execSync("git -c user.name=test -c user.email=test@test commit -m tracked-plugin-binary", { cwd: v, stdio: "pipe" });
+      const r = await runDoctor({ home: h, envValue: v, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const tracked = r.result.data.checks.find(c => c.id === "vault_gitignore_tracked_scratch");
+      expect(tracked?.status).toBe("warn");
+      expect(tracked?.detail).toContain(".obsidian/plugins/custom-sort/main.js");
     });
   });
 

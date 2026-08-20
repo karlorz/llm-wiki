@@ -17,14 +17,34 @@ describe("vault hygiene ignore contract", () => {
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".skillwiki/work-complete/");
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".skillwiki/last-op.json");
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".skillwiki/managed-write.lock");
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".playwright-cli/");
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".pytest_cache/");
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".snapshots/");
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".superpowers/");
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".antigravitycli/");
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".obsidian/plugins/*/main.js");
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS).toContain(".claude/dev-loop/");
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS.join("\n")).not.toMatch(/session-brief/);
     expect(VAULT_HYGIENE_GITIGNORE_PATTERNS.join("\n")).not.toMatch(/agent-memory-trends/);
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS.join("\n")).not.toMatch(/manifest\.json/);
+    expect(VAULT_HYGIENE_GITIGNORE_PATTERNS.join("\n")).not.toMatch(/custom-sort\/data\.json/);
   });
 
-  it("requires rclone excludes for work-complete and last-op", () => {
+  it("requires rclone excludes for work-complete, last-op, and new host scratch", () => {
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".skillwiki/work-complete/");
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".skillwiki/last-op.json");
     expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".skillwiki/sync.lock");
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".playwright-cli/");
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".pytest_cache/");
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".snapshots/");
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".superpowers/");
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".antigravitycli/");
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".obsidian/plugins/*/main.js");
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES).toContain(".claude/dev-loop/");
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n")).not.toMatch(/session-brief/);
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n")).not.toMatch(/agent-memory-trends/);
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n")).not.toMatch(/manifest\.json/);
+    expect(VAULT_SYNC_FILTER_REQUIRED_EXCLUDES.join("\n")).not.toMatch(/custom-sort\/data\.json/);
   });
 
   it("reports missing gitignore patterns", () => {
