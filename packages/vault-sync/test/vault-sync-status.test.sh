@@ -1074,6 +1074,111 @@ test_s3_reachability_warns_when_configured_remote_fails() {
   fi
 }
 
+# --- Task 6: push recency and push result state matching doctor ---
+
+test_last_push_age_passes_with_state_file_ok_and_json_error_in_log() {
+  local home="$TEST_ROOT/home-push-state-ok"
+  prepare_home "$home"
+  prepare_vault_clean "$home"
+
+  local cache_dir log_dir
+  if [ "$(uname -s)" = "Darwin" ]; then
+    cache_dir="$home/Library/Caches/vault-sync"
+    log_dir="$home/Library/Logs"
+  else
+    cache_dir="$home/.cache/vault-sync"
+    log_dir="$home/.local/state/vault-sync/log"
+  fi
+  mkdir -p "$cache_dir" "$log_dir"
+
+  local now_ts
+  now_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  cat > "$cache_dir/wiki-push-result.state" <<EOF
+result=ok
+reason=
+timestamp=$now_ts
+duration=2
+EOF
+
+  cat > "$log_dir/wiki-push.log" <<EOF
+$now_ts OK push (no changes) duration=0s
+{"status":"failed","reason":"ERROR: lint-delta failed","summary":{"errors":1}}
+EOF
+
+  local json status result_status
+  json="$(status_json_for_home "$home")"
+  status="$(check_status "$json" "vault_sync_last_push_age")"
+  result_status="$(check_status "$json" "vault_sync_last_push_result")"
+
+  assert_eq "last_push_age passes from state file when log has json ERROR" "$status" "pass"
+  assert_eq "last_push_result passes from state file" "$result_status" "pass"
+}
+
+test_last_push_age_errors_when_state_file_result_refused() {
+  local home="$TEST_ROOT/home-push-state-refused"
+  prepare_home "$home"
+  prepare_vault_clean "$home"
+
+  local cache_dir log_dir
+  if [ "$(uname -s)" = "Darwin" ]; then
+    cache_dir="$home/Library/Caches/vault-sync"
+    log_dir="$home/Library/Logs"
+  else
+    cache_dir="$home/.cache/vault-sync"
+    log_dir="$home/.local/state/vault-sync/log"
+  fi
+  mkdir -p "$cache_dir" "$log_dir"
+
+  local now_ts
+  now_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  cat > "$cache_dir/wiki-push-result.state" <<EOF
+result=refused
+reason=lint-delta-new-errors
+timestamp=$now_ts
+EOF
+
+  local json status detail
+  json="$(status_json_for_home "$home")"
+  status="$(check_status "$json" "vault_sync_last_push_age")"
+  detail="$(check_detail "$json" "vault_sync_last_push_age")"
+
+  assert_eq "last_push_age errors when state file refused" "$status" "error"
+  if printf '%s' "$detail" | grep -q 'Last push refused: lint-delta-new-errors'; then
+    printf "PASS: last_push_age detail contains refusal reason\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: last_push_age detail missing reason — %s\n" "$detail"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+test_last_push_age_journal_fallback_skips_json_with_error() {
+  local home="$TEST_ROOT/home-push-journal-fallback"
+  prepare_home "$home"
+  prepare_vault_clean "$home"
+
+  local log_dir
+  if [ "$(uname -s)" = "Darwin" ]; then
+    log_dir="$home/Library/Logs"
+  else
+    log_dir="$home/.local/state/vault-sync/log"
+  fi
+  mkdir -p "$log_dir"
+
+  local now_ts
+  now_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  cat > "$log_dir/wiki-push.log" <<EOF
+$now_ts OK push (no changes) duration=0s
+{"status":"failed","reason":"ERROR: lint-delta failed","summary":{"errors":1}}
+EOF
+
+  local json status
+  json="$(status_json_for_home "$home")"
+  status="$(check_status "$json" "vault_sync_last_push_age")"
+
+  assert_eq "last_push_age journal fallback passes by skipping JSON line" "$status" "pass"
+}
+
 # --- Task 5: cwd independence + runtime proof ---
 
 test_status_identical_from_arbitrary_cwd() {
@@ -1248,6 +1353,9 @@ test_status_identical_from_arbitrary_cwd
 test_status_warns_runtime_hash_mismatch
 test_status_reports_runtime_match_when_hashes_equal
 test_status_runtime_registration_warns_when_jobs_enabled_and_mismatch
+test_last_push_age_passes_with_state_file_ok_and_json_error_in_log
+test_last_push_age_errors_when_state_file_result_refused
+test_last_push_age_journal_fallback_skips_json_with_error
 
 # ── --fail-on modes (v0.10.14) ────────────────────────────────
 # Default standalone status is report-only (exit 0). --fail-on error exits
