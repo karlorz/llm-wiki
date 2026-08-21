@@ -59,7 +59,7 @@ import { runPagePublish } from "./commands/page-publish.js";
 import { runProjectPagePublish } from "./commands/project-page-publish.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers, runSyncLintDelta } from "./commands/sync.js";
 import { runSyncJournalList, runSyncJournalClearStale } from "./commands/sync-journal.js";
-import { runSnapshotMaintenanceDryRun, runSnapshotMaintenanceExecute } from "./commands/snapshot-maintenance.js";
+import { runSnapshotMaintenanceDryRun, runSnapshotMaintenanceExecute, runProjectionConflictRepairDryRun, runProjectionConflictRepairExecute } from "./commands/snapshot-maintenance.js";
 import { getCliSessionId } from "./utils/sync-lock.js";
 import { runBackupSync, runBackupRestore } from "./commands/backup.js";
 import { runStatus } from "./commands/status.js";
@@ -1647,6 +1647,28 @@ snapMaintJournalCmd
       emit(await runSnapshotMaintenanceDryRun({ snapshotWorktree, dryRun: true, reason: opts.reason }));
     } else if (opts.approve) {
       emit(await runSnapshotMaintenanceExecute({ snapshotWorktree, dryRun: false, approvalId: opts.approve, reason: opts.reason }));
+    } else {
+      emit({ exitCode: ExitCode.USAGE, result: err("USAGE", "provide --dry-run for a plan, or --approve <id> --reason <text> to execute") });
+    }
+  });
+
+const snapMaintProjectionCmd = snapshotMaintenanceCmd.command("projection-conflict").description("attended projection-owned unmerged-path repair");
+snapMaintProjectionCmd
+  .command("repair [snapshot-worktree]")
+  .description("rematerialize allowlisted UU log.md/index.md on a protected snapshotter (attended, one-shot)")
+  .option("--dry-run", "non-mutating plan + approval ID (no execution)", false)
+  .option("--approve <id>", "state-bound approval ID from a prior --dry-run")
+  .option("--reason <text>", "non-empty operator reason for the maintenance")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (snapshotWorktree, opts) => {
+    if (!snapshotWorktree) {
+      emit({ exitCode: ExitCode.USAGE, result: err("USAGE", "snapshot-maintenance projection-conflict repair requires a snapshot-worktree path argument") });
+      return;
+    }
+    if (opts.dryRun) {
+      emit(await runProjectionConflictRepairDryRun({ snapshotWorktree, dryRun: true, reason: opts.reason }));
+    } else if (opts.approve) {
+      emit(await runProjectionConflictRepairExecute({ snapshotWorktree, dryRun: false, approvalId: opts.approve, reason: opts.reason }));
     } else {
       emit({ exitCode: ExitCode.USAGE, result: err("USAGE", "provide --dry-run for a plan, or --approve <id> --reason <text> to execute") });
     }

@@ -302,12 +302,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 57 checks", async () => {
+  it("always returns exactly 58 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(57);
+      expect(r.result.data.checks).toHaveLength(58);
       const freshness = r.result.data.checks.find(c => c.id === "s3_mount_freshness");
       expect(freshness).toBeDefined();
       expect(freshness?.status).toBe("pass");

@@ -263,6 +263,8 @@ export function buildCliSurface(): Map<string, Set<string>> {
   const snapshotMaintenanceCmd = program.commands.find(c => c.name() === "snapshot-maintenance")!;
   const snapMaintJournalCmd = snapshotMaintenanceCmd.command("journal");
   snapMaintJournalCmd.command("clear-stale").option("--dry-run").option("--approve <id>").option("--reason <text>").option("--wiki <name>");
+  const snapMaintProjectionCmd = snapshotMaintenanceCmd.command("projection-conflict");
+  snapMaintProjectionCmd.command("repair").option("--dry-run").option("--approve <id>").option("--reason <text>").option("--wiki <name>");
 
   const memoryCmd = program.commands.find(c => c.name() === "memory")!;
   memoryCmd.command("topics").option("--project <slug>").option("--limit <n>").option("--wiki <name>");

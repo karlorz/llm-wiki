@@ -1475,6 +1475,267 @@ test_snapshot_emits_canonical_completion_record_on_pushed_success
 test_snapshot_emits_canonical_completion_record_on_no_change_success
 test_snapshot_does_not_emit_completion_record_on_failure
 
+# ── Same-opid inhibit (snapshot-health-honesty C3) ────────────
+# uname-stubbed so these run on macOS. HOME is isolated so inhibit state
+# cannot leak into the developer cache.
+
+setup_inhibit_fixture() {
+  local root="$1"
+  local git_dir="$root/wiki-git" bin_dir="$root/bin"
+  local log_file="$root/wiki-snapshot.log" lock_file="$root/wiki-snapshot.lock"
+  mkdir -p "$git_dir" "$bin_dir" "$root/home" "$root/wiki"
+  make_live_vault_fixture "$root"
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  printf '# Index\n' > "$git_dir/index.md"
+  printf '# Log\n' > "$git_dir/log.md"
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" add -A >/dev/null
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m init >/dev/null
+  git -C "$git_dir" clone --bare . "$root/origin.git" >/dev/null 2>&1
+  git -C "$git_dir" remote add origin "$root/origin.git" >/dev/null 2>&1
+  git -C "$git_dir" fetch origin main >/dev/null 2>&1 || true
+  git -C "$git_dir" branch --set-upstream-to=origin/main main >/dev/null 2>&1 || true
+
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  cat > "$bin_dir/flock" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "lsf" ]; then
+  printf 'SCHEMA.md\nindex.md\nlog.md\n'
+  exit 0
+fi
+exit 1
+STUB
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/skillwiki.calls"
+if [ "$1" = "projections" ] && [ "$2" = "materialize" ]; then
+  printf '{"ok":false,"error":"PREFLIGHT_FAILED","detail":{"reason":"unmerged-paths","unmerged_paths":["log.md"],"operation_id":"op-same"}}\n'
+  exit 13
+fi
+exit 0
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/rclone" "$bin_dir/skillwiki"
+  : > "$root/skillwiki.calls"
+  : > "$root/rclone.calls"
+  printf '%s\n' "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+}
+
+run_inhibit_snapshot() {
+  local root="$1"
+  local git_dir="$2" bin_dir="$3" log_file="$4" lock_file="$5"
+  HOME="$root/home" \
+    SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    WIKI_SNAPSHOT_SKILLWIKI_BIN="$bin_dir/skillwiki" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    WIKI_SNAPSHOT_INHIBIT_AFTER="${WIKI_SNAPSHOT_INHIBIT_AFTER:-2}" \
+    WIKI_SNAPSHOT_INHIBIT_RECHECK_RUNS="${WIKI_SNAPSHOT_INHIBIT_RECHECK_RUNS:-6}" \
+    WIKI_SNAPSHOT_INHIBIT_RECHECK_SECONDS="${WIKI_SNAPSHOT_INHIBIT_RECHECK_SECONDS:-21600}" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+}
+
+test_snapshot_inhibits_after_identical_opid_failures() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir log_file lock_file
+  setup="$(setup_inhibit_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
+  lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
+
+  WIKI_SNAPSHOT_INHIBIT_AFTER=2 run_inhibit_snapshot "$root" "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+  WIKI_SNAPSHOT_INHIBIT_AFTER=2 run_inhibit_snapshot "$root" "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+  local calls_before
+  calls_before="$(grep -c 'projections materialize' "$root/skillwiki.calls" 2>/dev/null || true)"
+  : "${calls_before:=0}"
+  : > "$log_file"
+  WIKI_SNAPSHOT_INHIBIT_AFTER=2 run_inhibit_snapshot "$root" "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+  local rc=$?
+  local calls_after
+  calls_after="$(grep -c 'projections materialize' "$root/skillwiki.calls" 2>/dev/null || true)"
+  : "${calls_after:=0}"
+  local state
+  state="$root/home/.cache/vault-sync/wiki-snapshot-inhibit.state"
+
+  if [ "$rc" -ne 0 ] \
+      && grep -q 'SNAPSHOT_INHIBITED schema=v1 opid=op-same' "$log_file" \
+      && [ "$calls_after" = "$calls_before" ] \
+      && [ -f "$state" ] \
+      && grep -q '^opid=op-same$' "$state"; then
+    printf "PASS: same-opid inhibit skips materialize after N failures\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: same-opid inhibit (rc=%s calls_before=%s calls_after=%s log=%s state=%s)\n" \
+      "$rc" "$calls_before" "$calls_after" \
+      "$(tr '\n' ' ' < "$log_file" 2>/dev/null)" \
+      "$(tr '\n' ' ' < "$state" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_inhibit_resets_on_different_opid() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir log_file lock_file
+  setup="$(setup_inhibit_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
+  lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
+
+  WIKI_SNAPSHOT_INHIBIT_AFTER=2 run_inhibit_snapshot "$root" "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/skillwiki.calls"
+if [ "$1" = "projections" ] && [ "$2" = "materialize" ]; then
+  printf '{"ok":false,"error":"PREFLIGHT_FAILED","detail":{"reason":"unmerged-paths","unmerged_paths":["log.md"],"operation_id":"op-other"}}\n'
+  exit 13
+fi
+exit 0
+STUB
+  chmod +x "$bin_dir/skillwiki"
+  : > "$log_file"
+  WIKI_SNAPSHOT_INHIBIT_AFTER=2 run_inhibit_snapshot "$root" "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+  local state
+  state="$root/home/.cache/vault-sync/wiki-snapshot-inhibit.state"
+
+  if ! grep -q 'SNAPSHOT_INHIBITED' "$log_file" \
+      && grep -q '^opid=op-other$' "$state" \
+      && grep -q '^count=1$' "$state"; then
+    printf "PASS: different opid resets inhibit count\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: different opid reset (log=%s state=%s)\n" \
+      "$(tr '\n' ' ' < "$log_file" 2>/dev/null)" \
+      "$(tr '\n' ' ' < "$state" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_inhibit_recheck_runs_materialize() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir log_file lock_file
+  setup="$(setup_inhibit_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
+  lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
+
+  WIKI_SNAPSHOT_INHIBIT_AFTER=2 WIKI_SNAPSHOT_INHIBIT_RECHECK_RUNS=1 \
+    run_inhibit_snapshot "$root" "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+  WIKI_SNAPSHOT_INHIBIT_AFTER=2 WIKI_SNAPSHOT_INHIBIT_RECHECK_RUNS=1 \
+    run_inhibit_snapshot "$root" "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+  # Third run skips (skips_since_full=0 < 1)
+  WIKI_SNAPSHOT_INHIBIT_AFTER=2 WIKI_SNAPSHOT_INHIBIT_RECHECK_RUNS=1 \
+    run_inhibit_snapshot "$root" "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+  local calls_after_skip
+  calls_after_skip="$(grep -c 'projections materialize' "$root/skillwiki.calls" 2>/dev/null || true)"
+  : "${calls_after_skip:=0}"
+  : > "$log_file"
+  # Fourth run rechecks because skips_since_full >= 1
+  WIKI_SNAPSHOT_INHIBIT_AFTER=2 WIKI_SNAPSHOT_INHIBIT_RECHECK_RUNS=1 \
+    run_inhibit_snapshot "$root" "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+  local calls_after_recheck
+  calls_after_recheck="$(grep -c 'projections materialize' "$root/skillwiki.calls" 2>/dev/null || true)"
+  : "${calls_after_recheck:=0}"
+
+  if [ "$calls_after_recheck" -gt "$calls_after_skip" ] \
+      && ! grep -q 'SNAPSHOT_INHIBITED' "$log_file"; then
+    printf "PASS: inhibit recheck performs a full materialize attempt\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: inhibit recheck (after_skip=%s after_recheck=%s log=%s)\n" \
+      "$calls_after_skip" "$calls_after_recheck" \
+      "$(tr '\n' ' ' < "$log_file" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_complete_clears_inhibit_state() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir log_file lock_file
+  setup="$(setup_inhibit_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
+  lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
+
+  WIKI_SNAPSHOT_INHIBIT_AFTER=2 run_inhibit_snapshot "$root" "$git_dir" "$bin_dir" "$log_file" "$lock_file"
+  local state
+  state="$root/home/.cache/vault-sync/wiki-snapshot-inhibit.state"
+  if [ ! -f "$state" ]; then
+    printf "FAIL: inhibit state missing after failure\n"
+    FAIL=$((FAIL + 1))
+    rm -rf "$root"
+    return
+  fi
+
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/skillwiki.calls"
+exit 0
+STUB
+  cat > "$bin_dir/rclone" <<STUB
+#!/bin/bash
+if [ "\$1" = "lsf" ]; then
+  printf 'SCHEMA.md\nindex.md\nlog.md\n'
+  exit 0
+fi
+if [ "\$1" = "sync" ]; then
+  exit 0
+fi
+exit 0
+STUB
+  chmod +x "$bin_dir/skillwiki" "$bin_dir/rclone"
+  : > "$log_file"
+  HOME="$root/home" \
+    SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    WIKI_SNAPSHOT_SKILLWIKI_BIN="$bin_dir/skillwiki" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1 || true
+
+  if grep -q 'SNAPSHOT_COMPLETE schema=v1' "$log_file" \
+      && [ ! -f "$state" ]; then
+    printf "PASS: SNAPSHOT_COMPLETE clears inhibit state\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: complete did not clear inhibit (log=%s state_exists=%s)\n" \
+      "$(tr '\n' ' ' < "$log_file" 2>/dev/null)" \
+      "$( [ -f "$state" ] && echo yes || echo no )"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_inhibits_after_identical_opid_failures
+test_snapshot_inhibit_resets_on_different_opid
+test_snapshot_inhibit_recheck_runs_materialize
+test_snapshot_complete_clears_inhibit_state
+
 if [ "$(uname -s)" != "Linux" ]; then
   printf "SKIP: Linux-only runtime snapshot guard test\n"
   printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"

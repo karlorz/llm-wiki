@@ -6,10 +6,13 @@ import { execSync } from "node:child_process";
 import {
   runSnapshotMaintenanceDryRun,
   runSnapshotMaintenanceExecute,
+  runProjectionConflictRepairDryRun,
+  runProjectionConflictRepairExecute,
   MAINTENANCE_SCHEMA_VERSION,
   type SnapshotMaintenanceInput,
   type MaintenanceAuditEvent,
 } from "../../src/commands/snapshot-maintenance.js";
+import { ok } from "@skillwiki/shared";
 import type { FleetManifestAndHost } from "../../src/commands/fleet.js";
 
 // Build an isolated protected-snapshotter fixture: fleet manifest, configured
@@ -524,3 +527,148 @@ describe("snapshot-maintenance journal clear-stale", () => {
     });
   });
 });
+
+function makeUnmerged(repo: string, path: string): void {
+  const start = git(repo, "rev-parse", "--abbrev-ref", "HEAD") || "main";
+  writeFileSync(join(repo, path), "base\n");
+  git(repo, "add", path);
+  git(repo, "commit", "-m", "base");
+  git(repo, "checkout", "-b", "side");
+  writeFileSync(join(repo, path), "side\n");
+  git(repo, "add", path);
+  git(repo, "commit", "-m", "side");
+  git(repo, "checkout", start);
+  writeFileSync(join(repo, path), "main\n");
+  git(repo, "add", path);
+  git(repo, "commit", "-m", "main");
+  try {
+    execSync(`git -C "${repo}" merge side`, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+  } catch {
+    // expected
+  }
+}
+
+const stubRender = {
+  renderIndex: async () => ok({ text: "# Index rematerialized\n" }),
+  renderLog: async () => ok({ text: "# Log rematerialized\n" }),
+};
+
+describe("snapshot-maintenance projection-conflict repair", () => {
+  it("dry-run emits approval for allowlisted UU log.md", async () => {
+    const f = makeFixture({});
+    makeUnmerged(f.worktree, "log.md");
+    const r = await runProjectionConflictRepairDryRun({
+      snapshotWorktree: f.worktree, dryRun: true, reason: "repair uu log",
+      fleetLoad: f.fleetLoad, home: f.home, liveVaultPath: f.liveVault, isTty: true,
+      snapshotLockPath: f.lockPath,
+    });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.plan!.unmerged_paths).toContain("log.md");
+      expect(r.result.data.plan!.approval_id).toMatch(/^smap1-[0-9a-f]{32}$/);
+      expect(r.result.data.plan!.command).toBe("snapshot-maintenance projection-conflict repair");
+    }
+    rmSync(f.home, { recursive: true, force: true });
+  });
+
+  it("refuses non-allowlisted unmerged paths", async () => {
+    const f = makeFixture({});
+    makeUnmerged(f.worktree, "README.md");
+    const r = await runProjectionConflictRepairDryRun({
+      snapshotWorktree: f.worktree, dryRun: true, reason: "repair",
+      fleetLoad: f.fleetLoad, home: f.home, liveVaultPath: f.liveVault, isTty: true,
+    });
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toBe("MAINTENANCE_UNMERGED_PATHS");
+    rmSync(f.home, { recursive: true, force: true });
+  });
+
+  it("execute rematerializes and commits without force-push", async () => {
+    const f = makeFixture({});
+    makeUnmerged(f.worktree, "log.md");
+    const events: MaintenanceAuditEvent[] = [];
+    const dry = await runProjectionConflictRepairDryRun({
+      snapshotWorktree: f.worktree, dryRun: true, reason: "repair uu log",
+      fleetLoad: f.fleetLoad, home: f.home, liveVaultPath: f.liveVault, isTty: true,
+      snapshotLockPath: f.lockPath, auditSink: (e) => events.push(e),
+    });
+    expect(dry.result.ok).toBe(true);
+    const approvalId = dry.result.ok ? dry.result.data.plan!.approval_id! : "";
+    const before = git(f.worktree, "rev-parse", "HEAD");
+    const r = await runProjectionConflictRepairExecute({
+      snapshotWorktree: f.worktree, dryRun: false, reason: "repair uu log",
+      approvalId, fleetLoad: f.fleetLoad, home: f.home, liveVaultPath: f.liveVault,
+      isTty: true, skipFlock: true, snapshotLockPath: f.lockPath,
+      auditSink: (e) => events.push(e),
+      ...stubRender,
+    });
+    expect(r.result.ok).toBe(true);
+    const after = git(f.worktree, "rev-parse", "HEAD");
+    expect(after).not.toBe(before);
+    expect(readFileSync(join(f.worktree, "log.md"), "utf8")).toBe("# Log rematerialized\n");
+    expect(readFileSync(join(f.worktree, "index.md"), "utf8")).toBe("# Index rematerialized\n");
+    expect(git(f.worktree, "diff", "--name-only", "--diff-filter=U")).toBe("");
+    const log = git(f.worktree, "log", "-1", "--format=%s");
+    expect(log).toContain("rematerialize projection conflict");
+    expect(events.some(e => e.result === "success" && e.command.includes("projection-conflict"))).toBe(true);
+    rmSync(f.home, { recursive: true, force: true });
+  });
+
+  it("execute refuses without TTY", async () => {
+    const f = makeFixture({});
+    makeUnmerged(f.worktree, "log.md");
+    const r = await runProjectionConflictRepairExecute({
+      snapshotWorktree: f.worktree, dryRun: false, reason: "repair",
+      approvalId: "smap1-fake", fleetLoad: f.fleetLoad, home: f.home,
+      liveVaultPath: f.liveVault, isTty: false, skipFlock: true,
+    });
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toBe("MAINTENANCE_NO_TTY");
+    rmSync(f.home, { recursive: true, force: true });
+  });
+
+  it("execute refuses stale approval id", async () => {
+    const f = makeFixture({});
+    makeUnmerged(f.worktree, "log.md");
+    const r = await runProjectionConflictRepairExecute({
+      snapshotWorktree: f.worktree, dryRun: false, reason: "repair uu log",
+      approvalId: "smap1-stalefake", fleetLoad: f.fleetLoad, home: f.home,
+      liveVaultPath: f.liveVault, isTty: true, skipFlock: true, snapshotLockPath: f.lockPath,
+      ...stubRender,
+    });
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toBe("MAINTENANCE_STALE_APPROVAL_ID");
+    rmSync(f.home, { recursive: true, force: true });
+  });
+
+  it("journal clear-stale execute still refuses unmerged paths", async () => {
+    const f = makeFixture({ withJournal: true });
+    makeUnmerged(f.worktree, "log.md");
+    const dry = await runSnapshotMaintenanceDryRun({
+      snapshotWorktree: f.worktree, dryRun: true, reason: "recovery",
+      fleetLoad: f.fleetLoad, home: f.home, liveVaultPath: f.liveVault, isTty: true,
+      snapshotLockPath: f.lockPath,
+    });
+    const approvalId = dry.result.ok ? dry.result.data.plan!.approval_id : null;
+    // unmerged journals are skipped so approval may be null; execute must still refuse
+    const r = await runSnapshotMaintenanceExecute({
+      snapshotWorktree: f.worktree, dryRun: false, reason: "recovery",
+      approvalId: approvalId ?? "smap1-none", fleetLoad: f.fleetLoad, home: f.home,
+      liveVaultPath: f.liveVault, isTty: true, skipFlock: true, snapshotLockPath: f.lockPath,
+    });
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) {
+      expect(["MAINTENANCE_UNMERGED_PATHS", "MAINTENANCE_NO_ELIGIBLE_JOURNALS", "MAINTENANCE_STALE_APPROVAL_ID"]).toContain(r.result.error);
+    }
+    if (!r.result.ok) {
+      expect(r.result.error).not.toBeUndefined();
+    }
+    // specifically: if a journal was eligible, unmerged must block
+    if (approvalId) {
+      expect(r.result.ok).toBe(false);
+      if (!r.result.ok) expect(r.result.error).toBe("MAINTENANCE_UNMERGED_PATHS");
+    }
+    rmSync(f.home, { recursive: true, force: true });
+  });
+});
+

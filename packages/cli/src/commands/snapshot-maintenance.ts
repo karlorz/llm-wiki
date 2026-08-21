@@ -1,5 +1,5 @@
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
-import { existsSync, readFileSync, mkdirSync, appendFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { execSync, spawn } from "node:child_process";
 import { platform } from "node:os";
@@ -14,15 +14,21 @@ import {
   hasActiveGitSequencer,
   isWorktreeClean,
 } from "../utils/operation-journal.js";
-import { git } from "../utils/git.js";
+import { git, gitStrict } from "../utils/git.js";
 import { resolveConfiguredSnapshotWorktree } from "../utils/snapshot-worktree.js";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
+import { renderRootIndex } from "../utils/index-projection.js";
+import { readLogEvents } from "../utils/log-events.js";
+import { renderLogProjection } from "../utils/log-projection.js";
 
 /**
- * snapshot-maintenance journal clear-stale (v0.10.14).
+ * snapshot-maintenance: attended protected-snapshotter mutations.
  *
- * The ONE allowlisted mutating operation that may cross the protected
- * snapshotter boundary: safe stale-journal supersession. Requires a known
+ * journal clear-stale (v0.10.14) supersedes stale review-required journals
+ * and still refuses every unmerged path.
+ *
+ * projection-conflict repair (v0.10.60+ honesty) rematerializes allowlisted
+ * root projections (`log.md`, `index.md`) only. Requires a known
  * protected snapshotter identity, the exact configured snapshot worktree,
  * an attended TTY, a non-empty reason, a state-bound approval digest from a
  * prior dry run, and the production snapshot flock.
@@ -55,6 +61,9 @@ export interface SnapshotMaintenanceInput {
   sessionId?: string;
   /** When set, do not perform the final JSONL audit append (tests). */
   auditSink?: (event: MaintenanceAuditEvent) => void;
+  /** Injectable projection renderers (tests). */
+  renderIndex?: (vault: string) => Promise<Result<{ text: string }>>;
+  renderLog?: (vault: string) => Promise<Result<{ text: string }>>;
 }
 
 export interface MaintenancePlanJournal {
@@ -115,6 +124,8 @@ export interface SnapshotMaintenanceOutput {
 }
 
 const MAINTENANCE_COMMAND = "snapshot-maintenance journal clear-stale";
+const REPAIR_COMMAND = "snapshot-maintenance projection-conflict repair";
+const PROJECTION_CONFLICT_ALLOWLIST = ["index.md", "log.md"] as const;
 
 export { resolveConfiguredSnapshotWorktree };
 
@@ -326,11 +337,12 @@ function makeAuditEvent(
   result: MaintenanceAuditEvent["result"],
   errorCode?: string,
   approvalId?: string,
+  command: string = MAINTENANCE_COMMAND,
 ): MaintenanceAuditEvent {
   return {
     ts: new Date(now).toISOString(),
     schema_version: MAINTENANCE_SCHEMA_VERSION,
-    command: MAINTENANCE_COMMAND,
+    command,
     host: hostId,
     actor: input.env?.USER ?? process.env.USER ?? "unknown",
     session: input.sessionId ?? "unknown",
@@ -475,6 +487,313 @@ async function performSupersession(
         : `execution: ${superseded.length} journal(s) superseded; skipped=${skipped.length}`,
     }),
   };
+}
+
+export interface ProjectionConflictPlan {
+  schema_version: number;
+  command: string;
+  host_id: string;
+  snapshot_worktree: string;
+  git_directory: string;
+  branch: string;
+  head_oid: string;
+  unmerged_paths: string[];
+  allowlisted_paths: string[];
+  operator_reason: string;
+  approval_id: string | null;
+}
+
+export interface ProjectionConflictExecution {
+  resolved_paths: string[];
+  commit_oid: string;
+  approval_id: string;
+}
+
+function computeRepairApprovalId(plan: Omit<ProjectionConflictPlan, "approval_id">): string {
+  const paths = [...plan.unmerged_paths].sort().join(",");
+  const payload = [
+    `v${plan.schema_version}`,
+    plan.command,
+    plan.host_id,
+    plan.snapshot_worktree,
+    plan.git_directory,
+    plan.branch,
+    plan.head_oid,
+    paths,
+    normalizeReason(plan.operator_reason),
+  ].join("|");
+  return "smap1-" + createHash("sha256").update(payload).digest("hex").slice(0, 32);
+}
+
+function nonMergeSequencerActive(repo: string): boolean {
+  const gitDir = git(repo, ["rev-parse", "--absolute-git-dir"]);
+  if (!gitDir) return false;
+  for (const m of ["CHERRY_PICK_HEAD", "REVERT_HEAD"]) {
+    if (existsSync(join(gitDir, m))) return true;
+  }
+  return existsSync(join(gitDir, "rebase-merge")) || existsSync(join(gitDir, "rebase-apply"));
+}
+
+function extraUnmergedPaths(unmerged: string[]): string[] {
+  const allow = new Set<string>(PROJECTION_CONFLICT_ALLOWLIST);
+  return unmerged.filter((p) => !allow.has(p));
+}
+
+async function authorizeRepairContext(
+  input: SnapshotMaintenanceInput,
+): Promise<{ exitCode: number; result: Result<SnapshotMaintenanceOutput> } | {
+  hostId: string;
+  requested: string;
+  gitDirectory: string;
+  branch: string;
+  headOid: string;
+  unmerged: string[];
+}> {
+  const env = input.env ?? process.env;
+  const home = input.home ?? env.HOME ?? "";
+  const audit = input.auditSink ?? defaultAuditSink(home);
+  const now = input.now ?? Date.now();
+
+  const liveVaultPath = input.liveVaultPath
+    ? canonicalize(input.liveVaultPath)
+    : (await resolveLiveVault({ env, home }));
+
+  const fleetLoad = input.fleetLoad !== undefined
+    ? input.fleetLoad
+    : await loadFleetManifestAndHost({
+        vault: liveVaultPath,
+        env,
+        home,
+        cwd: process.cwd(),
+        osHostname: env.HOSTNAME,
+        user: env.USER,
+      });
+
+  if (!fleetLoad || !fleetLoad.hostId || fleetLoad.identityStatus !== "known") {
+    audit(makeAuditEvent(input, fleetLoad?.hostId ?? "unknown", now, "refusal", "MAINTENANCE_UNKNOWN_IDENTITY", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_UNKNOWN_IDENTITY", "unknown or unresolved fleet identity; cannot authorize snapshot maintenance") };
+  }
+
+  const host = fleetLoad.manifest.hosts[fleetLoad.hostId];
+  if (!host || host.role !== "snapshotter" || host.protected !== true) {
+    audit(makeAuditEvent(input, fleetLoad.hostId, now, "refusal", "MAINTENANCE_NOT_PROTECTED_SNAPSHOTTER", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_NOT_PROTECTED_SNAPSHOTTER", `host '${fleetLoad.hostId}' is not a protected snapshotter (role=${host?.role ?? "missing"}, protected=${host?.protected ?? false})`) };
+  }
+
+  const configuredWorktree = resolveConfiguredSnapshotWorktree(home);
+  if (!configuredWorktree) {
+    audit(makeAuditEvent(input, fleetLoad.hostId, now, "refusal", "MAINTENANCE_NO_CONFIGURED_WORKTREE", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_NO_CONFIGURED_WORKTREE", "no configured snapshot worktree (vault_sync.snapshot_worktree or snapshot_profile required)") };
+  }
+
+  const requested = canonicalize(input.snapshotWorktree);
+  if (requested !== canonicalize(configuredWorktree)) {
+    audit(makeAuditEvent(input, fleetLoad.hostId, now, "refusal", "MAINTENANCE_WRONG_WORKTREE", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_WRONG_WORKTREE", `requested path '${requested}' is not the configured snapshot worktree '${canonicalize(configuredWorktree)}'`) };
+  }
+
+  if (!existsSync(requested) || !existsSync(join(requested, ".git"))) {
+    audit(makeAuditEvent(input, fleetLoad.hostId, now, "refusal", "MAINTENANCE_MISSING_GIT_REPO", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_MISSING_GIT_REPO", `snapshot worktree is not a git repository: ${requested}`) };
+  }
+
+  if (liveVaultPath && requested === canonicalize(liveVaultPath)) {
+    audit(makeAuditEvent(input, fleetLoad.hostId, now, "refusal", "MAINTENANCE_LIVE_VAULT_TARGET", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_LIVE_VAULT_TARGET", "requested path is the live vault, not the snapshot worktree") };
+  }
+
+  if (nonMergeSequencerActive(requested)) {
+    audit(makeAuditEvent(input, fleetLoad.hostId, now, "refusal", "MAINTENANCE_ACTIVE_SEQUENCER", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_ACTIVE_SEQUENCER", "git sequencer (rebase/cherry-pick/revert) is active") };
+  }
+
+  const unmerged = hasUnmergedPaths(requested);
+  const extra = extraUnmergedPaths(unmerged);
+  if (extra.length > 0) {
+    audit(makeAuditEvent(input, fleetLoad.hostId, now, "refusal", "MAINTENANCE_UNMERGED_PATHS", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_UNMERGED_PATHS", `unmerged paths not in projection allowlist: ${extra.join(", ")}`) };
+  }
+  if (unmerged.length === 0) {
+    audit(makeAuditEvent(input, fleetLoad.hostId, now, "refusal", "MAINTENANCE_NO_PROJECTION_CONFLICT", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_NO_PROJECTION_CONFLICT", "no unmerged projection paths") };
+  }
+
+  return {
+    hostId: fleetLoad.hostId,
+    requested,
+    gitDirectory: git(requested, ["rev-parse", "--absolute-git-dir"]) || "",
+    branch: git(requested, ["rev-parse", "--abbrev-ref", "HEAD"]) || "HEAD",
+    headOid: git(requested, ["rev-parse", "HEAD"]) || "",
+    unmerged,
+  };
+}
+
+export async function runProjectionConflictRepairDryRun(
+  input: SnapshotMaintenanceInput,
+): Promise<{ exitCode: number; result: Result<SnapshotMaintenanceOutput> }> {
+  const env = input.env ?? process.env;
+  const home = input.home ?? env.HOME ?? "";
+  const audit = input.auditSink ?? defaultAuditSink(home);
+  const now = input.now ?? Date.now();
+  const ctx = await authorizeRepairContext(input);
+  if ("exitCode" in ctx) return ctx;
+
+  const planBase: Omit<ProjectionConflictPlan, "approval_id"> = {
+    schema_version: MAINTENANCE_SCHEMA_VERSION,
+    command: REPAIR_COMMAND,
+    host_id: ctx.hostId,
+    snapshot_worktree: ctx.requested,
+    git_directory: ctx.gitDirectory,
+    branch: ctx.branch,
+    head_oid: ctx.headOid,
+    unmerged_paths: ctx.unmerged,
+    allowlisted_paths: [...PROJECTION_CONFLICT_ALLOWLIST],
+    operator_reason: normalizeReason(input.reason ?? ""),
+  };
+  const approvalId = computeRepairApprovalId(planBase);
+  const plan: ProjectionConflictPlan = { ...planBase, approval_id: approvalId };
+  audit(makeAuditEvent(input, ctx.hostId, now, "dry-run", undefined, approvalId, REPAIR_COMMAND));
+
+  return {
+    exitCode: ExitCode.OK,
+    result: ok({
+      dry_run: true,
+      plan: {
+        schema_version: plan.schema_version,
+        command: plan.command,
+        host_id: plan.host_id,
+        role: "snapshotter",
+        protected: true,
+        snapshot_worktree: plan.snapshot_worktree,
+        snapshot_lock_path: input.snapshotLockPath ?? "/var/lock/wiki-snapshot.lock",
+        git_directory: plan.git_directory,
+        branch: plan.branch,
+        head_oid: plan.head_oid,
+        worktree_clean: false,
+        active_sequencer: false,
+        unmerged_paths: plan.unmerged_paths,
+        eligible_journals: [],
+        skipped_journals: [],
+        approval_id: approvalId,
+        operator_reason: plan.operator_reason,
+      },
+      humanHint: `dry-run: rematerialize ${plan.unmerged_paths.join(", ")}; approval_id=${approvalId}`,
+    }),
+  };
+}
+
+async function rematerializeProjections(
+  input: SnapshotMaintenanceInput,
+  worktree: string,
+): Promise<Result<{ index: string; log: string }>> {
+  if (input.renderIndex && input.renderLog) {
+    const index = await input.renderIndex(worktree);
+    if (!index.ok) return index;
+    const log = await input.renderLog(worktree);
+    if (!log.ok) return log;
+    return ok({ index: index.data.text, log: log.data.text });
+  }
+  const indexProj = await renderRootIndex({ vault: worktree });
+  if (!indexProj.ok) return indexProj;
+  const events = await readLogEvents(worktree);
+  if (!events.ok) return events;
+  return ok({ index: indexProj.data.text, log: renderLogProjection(events.data) });
+}
+
+async function performProjectionRepair(
+  input: SnapshotMaintenanceInput,
+  plan: MaintenancePlan,
+  audit: (e: MaintenanceAuditEvent) => void,
+  now: number,
+): Promise<{ exitCode: number; result: Result<SnapshotMaintenanceOutput> }> {
+  const rendered = await rematerializeProjections(input, plan.snapshot_worktree);
+  if (!rendered.ok) {
+    audit(makeAuditEvent(input, plan.host_id, now, "refusal", "MAINTENANCE_REMATERIALIZE_FAILED", plan.approval_id ?? undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.WRITE_FAILED, result: rendered };
+  }
+  try {
+    writeFileSync(join(plan.snapshot_worktree, "index.md"), rendered.data.index);
+    writeFileSync(join(plan.snapshot_worktree, "log.md"), rendered.data.log);
+    gitStrict(plan.snapshot_worktree, ["add", "--", "index.md", "log.md"]);
+    gitStrict(plan.snapshot_worktree, [
+      "commit",
+      "-m",
+      "snapshot-maintenance: rematerialize projection conflict",
+    ]);
+  } catch (e) {
+    audit(makeAuditEvent(input, plan.host_id, now, "refusal", "MAINTENANCE_COMMIT_FAILED", plan.approval_id ?? undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.WRITE_FAILED, result: refusalErr("MAINTENANCE_COMMIT_FAILED", String(e)) };
+  }
+  const remaining = hasUnmergedPaths(plan.snapshot_worktree);
+  if (remaining.length > 0) {
+    audit(makeAuditEvent(input, plan.host_id, now, "refusal", "MAINTENANCE_UNMERGED_PATHS", plan.approval_id ?? undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_UNMERGED_PATHS", `unmerged paths remain: ${remaining.join(", ")}`) };
+  }
+  const commitOid = git(plan.snapshot_worktree, ["rev-parse", "HEAD"]);
+  audit(makeAuditEvent(input, plan.host_id, now, "success", undefined, plan.approval_id ?? undefined, REPAIR_COMMAND));
+  return {
+    exitCode: ExitCode.OK,
+    result: ok({
+      dry_run: false,
+      execution: {
+        superseded: [],
+        skipped: [],
+        approval_id: plan.approval_id!,
+        no_op: false,
+      },
+      humanHint: `execution: rematerialized index.md,log.md commit=${commitOid}`,
+    }),
+  };
+}
+
+export async function runProjectionConflictRepairExecute(
+  input: SnapshotMaintenanceInput,
+): Promise<{ exitCode: number; result: Result<SnapshotMaintenanceOutput> }> {
+  const env = input.env ?? process.env;
+  const home = input.home ?? env.HOME ?? "";
+  const audit = input.auditSink ?? defaultAuditSink(home);
+  const now = input.now ?? Date.now();
+  const isTty = input.isTty ?? !!process.stdin.isTTY;
+
+  if (!isTty) {
+    audit(makeAuditEvent(input, "unknown", now, "refusal", "MAINTENANCE_NO_TTY", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_NO_TTY", "snapshot maintenance requires an attended TTY") };
+  }
+  const reason = normalizeReason(input.reason ?? "");
+  if (!reason) {
+    audit(makeAuditEvent(input, "unknown", now, "refusal", "MAINTENANCE_NO_REASON", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_NO_REASON", "snapshot maintenance requires a non-empty operator reason") };
+  }
+  if (!input.approvalId) {
+    audit(makeAuditEvent(input, "unknown", now, "refusal", "MAINTENANCE_NO_APPROVAL_ID", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_NO_APPROVAL_ID", "snapshot maintenance requires an approval ID from a prior dry run") };
+  }
+
+  const dryRunResult = await runProjectionConflictRepairDryRun(input);
+  if (!dryRunResult.result.ok) return dryRunResult;
+  const plan = dryRunResult.result.data.plan!;
+  if (!plan.approval_id) {
+    audit(makeAuditEvent(input, plan.host_id, now, "refusal", "MAINTENANCE_NO_PROJECTION_CONFLICT", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_NO_PROJECTION_CONFLICT", "no unmerged projection paths") };
+  }
+  if (plan.approval_id !== input.approvalId) {
+    audit(makeAuditEvent(input, plan.host_id, now, "refusal", "MAINTENANCE_STALE_APPROVAL_ID", undefined, REPAIR_COMMAND));
+    return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_STALE_APPROVAL_ID", "approval ID does not match the current state; rerun dry run") };
+  }
+
+  if (!input.skipFlock) {
+    const flockResult = acquireSnapshotFlock(plan.snapshot_lock_path);
+    if (!flockResult.acquired) {
+      audit(makeAuditEvent(input, plan.host_id, now, "refusal", "MAINTENANCE_FLOCK_BUSY", undefined, REPAIR_COMMAND));
+      return { exitCode: ExitCode.PROTECTED_SNAPSHOTTER_WRITE_BLOCKED, result: refusalErr("MAINTENANCE_FLOCK_BUSY", `snapshot flock busy: ${plan.snapshot_lock_path}`) };
+    }
+    try {
+      return await performProjectionRepair(input, plan, audit, now);
+    } finally {
+      releaseSnapshotFlock(flockResult);
+    }
+  }
+  return performProjectionRepair(input, plan, audit, now);
 }
 
 interface FlockHandle { acquired: boolean; path: string; holder?: { kill: () => void }; }
