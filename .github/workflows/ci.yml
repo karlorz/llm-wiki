@@ -18,6 +18,8 @@ jobs:
         run: bash scripts/verify-manifests.sh
       - name: Run plugin metadata regression fixtures
         run: npm run test:plugin-metadata
+      - name: Run e2e-common readonly-skew helper tests
+        run: npm run test:e2e-common-readonly-skew
       - name: Verify plugin.json version bumped on main
         if: github.ref == 'refs/heads/main'
         run: |

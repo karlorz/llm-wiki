@@ -93,40 +93,35 @@ printf "%s\n" "--- Plugin version ---"
 PLUGIN_VERSION=$(ssh "$SSH_TARGET" "find '$PLUGIN_CACHE_ROOT' -maxdepth 3 -name plugin.json -exec head -4 {} \; 2>/dev/null | grep version | head -1 | sed 's/.*: \"\\(.*\\)\",/\\1/'")
 if [ -z "$PLUGIN_VERSION" ]; then
   FAIL=$((FAIL + 1)); printf "  \u2717 plugin version not found under %s\n" "$PLUGIN_CACHE_ROOT"
-elif [ "$PLUGIN_VERSION" = "$EXPECTED_VERSION" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 plugin version is %s\n" "$PLUGIN_VERSION"
-elif [ "$READONLY_VERIFY" = "true" ]; then
-  PASS=$((PASS + 1)); printf "  \u26a0 plugin version is %s, expected %s (read-only host not auto-upgraded)\n" "$PLUGIN_VERSION" "$EXPECTED_VERSION"
 else
-  FAIL=$((FAIL + 1)); printf "  \u2717 plugin version is %s, expected %s\n" "$PLUGIN_VERSION" "$EXPECTED_VERSION"
+  assert_eq_or_readonly_skew "$PLUGIN_VERSION" "$EXPECTED_VERSION" \
+    "plugin version is $PLUGIN_VERSION" \
+    "plugin version is $PLUGIN_VERSION, expected $EXPECTED_VERSION (read-only host not auto-upgraded)" \
+    "plugin version is $PLUGIN_VERSION, expected $EXPECTED_VERSION"
 fi
 
 REMOTE_CLI_VERSION=$(ssh "$SSH_TARGET" "$REMOTE_CLI --version 2>/dev/null || true")
-if [ "$REMOTE_CLI_VERSION" = "$EXPECTED_VERSION" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 remote CLI version is %s\n" "$REMOTE_CLI_VERSION"
-elif [ "$READONLY_VERIFY" = "true" ]; then
-  PASS=$((PASS + 1)); printf "  \u26a0 remote CLI version is %s, expected %s (read-only host not auto-upgraded)\n" "${REMOTE_CLI_VERSION:-unknown}" "$EXPECTED_VERSION"
-else
-  FAIL=$((FAIL + 1)); printf "  \u2717 remote CLI version is %s, expected %s\n" "${REMOTE_CLI_VERSION:-unknown}" "$EXPECTED_VERSION"
-fi
+REMOTE_CLI_VERSION_DISPLAY="${REMOTE_CLI_VERSION:-unknown}"
+assert_eq_or_readonly_skew "$REMOTE_CLI_VERSION" "$EXPECTED_VERSION" \
+  "remote CLI version is $REMOTE_CLI_VERSION_DISPLAY" \
+  "remote CLI version is $REMOTE_CLI_VERSION_DISPLAY, expected $EXPECTED_VERSION (read-only host not auto-upgraded)" \
+  "remote CLI version is $REMOTE_CLI_VERSION_DISPLAY, expected $EXPECTED_VERSION"
 
 PLUGIN_ROOT="$PLUGIN_CACHE_ROOT/${PLUGIN_VERSION:-$EXPECTED_VERSION}"
 
 # ---- 1. Verify plugin installed with expected skills ----
 printf "%s\n" "--- Plugin installation ---"
-SKILL_COUNT=$(ssh "$SSH_TARGET" "find '$PLUGIN_ROOT' -maxdepth 2 -name 'SKILL.md' 2>/dev/null | wc -l")
-if [ "$SKILL_COUNT" -eq "$EXPECTED_SKILLS" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 plugin has %s root-level SKILL.md files\n" "$SKILL_COUNT"
-else
-  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s root-level SKILL.md files, expected %s\n" "$SKILL_COUNT" "$EXPECTED_SKILLS"
-fi
+SKILL_COUNT=$(ssh "$SSH_TARGET" "find '$PLUGIN_ROOT' -maxdepth 2 -name 'SKILL.md' 2>/dev/null | wc -l | tr -d ' '")
+assert_eq_or_readonly_skew "$SKILL_COUNT" "$EXPECTED_SKILLS" \
+  "plugin has $SKILL_COUNT root-level SKILL.md files" \
+  "plugin has $SKILL_COUNT root-level SKILL.md files, expected $EXPECTED_SKILLS (read-only host not auto-upgraded)" \
+  "plugin has $SKILL_COUNT root-level SKILL.md files, expected $EXPECTED_SKILLS"
 
-CODEX_SKILL_COUNT=$(ssh "$SSH_TARGET" "find '$PLUGIN_ROOT' -path '*/skills/*/SKILL.md' 2>/dev/null | wc -l")
-if [ "$CODEX_SKILL_COUNT" -eq "$EXPECTED_CODEX_SKILLS" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 plugin has %s Codex mirror SKILL.md files\n" "$CODEX_SKILL_COUNT"
-else
-  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s Codex mirror SKILL.md files, expected %s\n" "$CODEX_SKILL_COUNT" "$EXPECTED_CODEX_SKILLS"
-fi
+CODEX_SKILL_COUNT=$(ssh "$SSH_TARGET" "find '$PLUGIN_ROOT' -path '*/skills/*/SKILL.md' 2>/dev/null | wc -l | tr -d ' '")
+assert_eq_or_readonly_skew "$CODEX_SKILL_COUNT" "$EXPECTED_CODEX_SKILLS" \
+  "plugin has $CODEX_SKILL_COUNT Codex mirror SKILL.md files" \
+  "plugin has $CODEX_SKILL_COUNT Codex mirror SKILL.md files, expected $EXPECTED_CODEX_SKILLS (read-only host not auto-upgraded)" \
+  "plugin has $CODEX_SKILL_COUNT Codex mirror SKILL.md files, expected $EXPECTED_CODEX_SKILLS"
 
 if [ "$READONLY_VERIFY" = "true" ]; then
   printf "\n--- Read-only canonical vault guard ---\n"
@@ -134,7 +129,7 @@ if [ "$READONLY_VERIFY" = "true" ]; then
 
   printf "\n"
   summary
-  exit 0
+  exit $?
 fi
 
 # Verify skill discovery via claude (using-skillwiki is hook-injected, not listed by /skills)
