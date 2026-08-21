@@ -21,6 +21,10 @@ branch_policy:
   # scripts/release.sh. Record that existing repository authority explicitly
   # so deterministic write preflight agrees with the release controller.
   direct_push_to_release_branch: true
+# EXECUTE isolates in `.worktrees/<slug>` by default (dev-loop 1.26.31+).
+# Trivial / vault-only / git-only fast-path still skips isolation.
+worktree_policy:
+  enabled: true
 knowledge_layer: skillwiki
 
 # Knowledge backend registry — explicit declaration for BACKEND_CAPS resolution
@@ -356,15 +360,20 @@ publish workflow fires on `v*` tag push via OIDC, with no `NPM_TOKEN` needed.
 
 ```yaml
 # CI discovery is observational and does not authorize merging.
+# Landing: attended finishing menu (local merge first; PR+CI is option 2).
+# Unattended local-merge-then-push requires merge_auto_approved: true.
 merge_policy:
   strategy: repo-policy
   auto_merge: false
+  allow_local_merge: true
   merge_method: squash
   require_work_item_approval: true
 ```
 
-Auto-merge remains disabled for llm-wiki unless repository policy is changed
-and the active work-item spec separately records `merge_auto_approved: true`.
+GitHub PR auto-merge remains disabled. Attended cycles present the finishing
+menu after tests pass: (1) merge locally into `main`, (2) push and open PR,
+(3) keep branch/worktree. Unattended `/goal` stays on the PR route unless the
+work-item spec records `merge_auto_approved: true`.
 
 ## Notes
 
@@ -398,10 +407,13 @@ notes:
        spec so future cycles can detect drift between config and shipped artifact.
     8. Never run `npm dist-tag add` or `npm publish` locally — OIDC tag routing only.
   release_policy_notes: |
-    PUSH (step 10) is intentionally separate from MERGE (step 6b). MERGE always
-    commits + pushes/PRs the code change. PUSH bumps + tags + lets CI publish.
-    A cycle that only edits vault/, docs, or CLAUDE.md should commit (MERGE)
-    but skip PUSH. The trigger_globs / skip_globs lists encode this decision.
+    PUSH (step 10) is intentionally separate from MERGE (step 6b). MERGE commits
+    on the feature-branch worktree, then lands via the attended finishing menu
+    (local merge into main by default; PR+CI remains option 2). PUSH bumps +
+    tags + lets CI publish from clean main. A cycle that only edits vault/,
+    docs, or CLAUDE.md should commit (MERGE) but skip PUSH. The trigger_globs /
+    skip_globs lists encode this decision. Trivial fast-path skips worktree
+    isolation for vault-only / git-only / no product-repo edits.
   vault_sync_deploy_workflow: |
     Changes under packages/vault-sync/** are shipped through the normal release
     path, but the live launchd/systemd jobs execute copied scripts from the
