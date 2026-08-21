@@ -217,6 +217,8 @@ describe("Hardening Probes (T5)", () => {
       expect(res.detail).toContain("~/.grok/skillwiki.md missing");
     });
 
+    // Pass REPO_ROOT so lookup uses tracked packages/skills/.../activation.md.
+    // Do not require the gitignored packages/cli/skills/ copy.
     it("warns when marker in AGENTS.md uses stale relative reference (@skillwiki.md)", () => {
       const h = createHome();
       mkdirSync(join(h, ".grok"), { recursive: true });
@@ -225,7 +227,7 @@ describe("Hardening Probes (T5)", () => {
         `<!-- skillwiki:begin -->\n${staleMarker}\n<!-- skillwiki:end -->\n`,
       );
       writeFileSync(join(h, ".grok", "skillwiki.md"), readFileSync(ACTIVATION_TEMPLATE_PATH, "utf8"));
-      const res = checkActivationMarker(h, join(REPO_ROOT, "packages", "cli"));
+      const res = checkActivationMarker(h, REPO_ROOT);
       expect(res.status).toBe("warn");
       expect(res.detail).toContain("stale (@skillwiki.md)");
     });
@@ -238,7 +240,7 @@ describe("Hardening Probes (T5)", () => {
         `<!-- skillwiki:begin -->\n${validMarker}\n<!-- skillwiki:end -->\n`,
       );
       writeFileSync(join(h, ".grok", "skillwiki.md"), "# Modified compact file\n");
-      const res = checkActivationMarker(h, join(REPO_ROOT, "packages", "cli"));
+      const res = checkActivationMarker(h, REPO_ROOT);
       expect(res.status).toBe("warn");
       expect(res.detail).toContain("differs from template");
     });
@@ -251,7 +253,7 @@ describe("Hardening Probes (T5)", () => {
         `<!-- skillwiki:begin -->\n${validMarker}\n<!-- skillwiki:end -->\n`,
       );
       writeFileSync(join(h, ".grok", "skillwiki.md"), readFileSync(ACTIVATION_TEMPLATE_PATH, "utf8"));
-      const res = checkActivationMarker(h, join(REPO_ROOT, "packages", "cli"));
+      const res = checkActivationMarker(h, REPO_ROOT);
       expect(res.status).toBe("pass");
       expect(res.detail).toContain("home-path contract");
     });

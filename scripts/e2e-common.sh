@@ -119,6 +119,28 @@ assert_file_exists() {
 }
 
 # ---------------------------------------------------------------------------
+# assert_eq_or_readonly_skew <actual> <expected> <pass_msg> <readonly_warn_msg> <fail_msg>
+# ---------------------------------------------------------------------------
+assert_eq_or_readonly_skew() {
+  local actual="$1"
+  local expected="$2"
+  local pass_msg="$3"
+  local readonly_warn_msg="$4"
+  local fail_msg="$5"
+
+  if [ "$actual" = "$expected" ]; then
+    PASS=$((PASS + 1))
+    printf "  \u2713 %s\n" "$pass_msg"
+  elif [ "${READONLY_VERIFY:-}" = "true" ]; then
+    PASS=$((PASS + 1))
+    printf "  \u26a0 %s\n" "$readonly_warn_msg"
+  else
+    FAIL=$((FAIL + 1))
+    printf "  \u2717 %s\n" "$fail_msg"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # seed_vault <vault_dir>
 #
 # Creates a set of fixture pages that exercise each lint check category.

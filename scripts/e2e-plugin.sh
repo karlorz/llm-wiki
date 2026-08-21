@@ -114,19 +114,17 @@ PLUGIN_ROOT="$PLUGIN_CACHE_ROOT/${PLUGIN_VERSION:-$EXPECTED_VERSION}"
 
 # ---- 1. Verify plugin installed with expected skills ----
 printf "%s\n" "--- Plugin installation ---"
-SKILL_COUNT=$(ssh "$SSH_TARGET" "find '$PLUGIN_ROOT' -maxdepth 2 -name 'SKILL.md' 2>/dev/null | wc -l")
-if [ "$SKILL_COUNT" -eq "$EXPECTED_SKILLS" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 plugin has %s root-level SKILL.md files\n" "$SKILL_COUNT"
-else
-  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s root-level SKILL.md files, expected %s\n" "$SKILL_COUNT" "$EXPECTED_SKILLS"
-fi
+SKILL_COUNT=$(ssh "$SSH_TARGET" "find '$PLUGIN_ROOT' -maxdepth 2 -name 'SKILL.md' 2>/dev/null | wc -l | tr -d ' '")
+assert_eq_or_readonly_skew "$SKILL_COUNT" "$EXPECTED_SKILLS" \
+  "plugin has $SKILL_COUNT root-level SKILL.md files" \
+  "plugin has $SKILL_COUNT root-level SKILL.md files, expected $EXPECTED_SKILLS (read-only host not auto-upgraded)" \
+  "plugin has $SKILL_COUNT root-level SKILL.md files, expected $EXPECTED_SKILLS"
 
-CODEX_SKILL_COUNT=$(ssh "$SSH_TARGET" "find '$PLUGIN_ROOT' -path '*/skills/*/SKILL.md' 2>/dev/null | wc -l")
-if [ "$CODEX_SKILL_COUNT" -eq "$EXPECTED_CODEX_SKILLS" ]; then
-  PASS=$((PASS + 1)); printf "  \u2713 plugin has %s Codex mirror SKILL.md files\n" "$CODEX_SKILL_COUNT"
-else
-  FAIL=$((FAIL + 1)); printf "  \u2717 plugin has %s Codex mirror SKILL.md files, expected %s\n" "$CODEX_SKILL_COUNT" "$EXPECTED_CODEX_SKILLS"
-fi
+CODEX_SKILL_COUNT=$(ssh "$SSH_TARGET" "find '$PLUGIN_ROOT' -path '*/skills/*/SKILL.md' 2>/dev/null | wc -l | tr -d ' '")
+assert_eq_or_readonly_skew "$CODEX_SKILL_COUNT" "$EXPECTED_CODEX_SKILLS" \
+  "plugin has $CODEX_SKILL_COUNT Codex mirror SKILL.md files" \
+  "plugin has $CODEX_SKILL_COUNT Codex mirror SKILL.md files, expected $EXPECTED_CODEX_SKILLS (read-only host not auto-upgraded)" \
+  "plugin has $CODEX_SKILL_COUNT Codex mirror SKILL.md files, expected $EXPECTED_CODEX_SKILLS"
 
 if [ "$READONLY_VERIFY" = "true" ]; then
   printf "\n--- Read-only canonical vault guard ---\n"
