@@ -4,7 +4,8 @@ import { execSync } from "node:child_process";
 import { platform } from "node:os";
 import { systemdPropertyFor } from "@skillwiki/shared";
 import { resolveVaultSyncPullHelper } from "../../utils/vault-sync-helper.js";
-import { listReviewRequiredOps } from "../../utils/operation-journal.js";
+import { listReviewRequiredOps, hasUnmergedPaths } from "../../utils/operation-journal.js";
+import { resolveConfiguredSnapshotWorktree } from "../../utils/snapshot-worktree.js";
 import type { CheckResult, DoctorContext, DoctorProbe, VaultSyncRuntimeConfig } from "../types.js";
 import { VAULT_SYNC_FILTER_REQUIRED_EXCLUDES } from "../../utils/vault-hygiene-ignores.js";
 import { check } from "./helpers.js";
@@ -696,24 +697,71 @@ function checkVaultSyncPullHelper(home: string, env: NodeJS.ProcessEnv): CheckRe
   );
 }
 
-function checkVaultSyncReviewRequiredJournals(vaultPath: string | undefined): CheckResult {
-  if (!vaultPath || !existsSync(join(vaultPath, ".git"))) {
+function isGitDir(path: string | undefined): path is string {
+  return Boolean(path && existsSync(join(path, ".git")));
+}
+
+function checkVaultSyncReviewRequiredJournals(ctx: DoctorContext): CheckResult {
+  const live = ctx.resolvedPath;
+  let checked = live;
+  if (!isGitDir(live) && ctx.vsConfig.role === "snapshotter") {
+    const worktree = resolveConfiguredSnapshotWorktree(ctx.input.home);
+    if (!worktree) {
+      return check(
+        "warn",
+        "vault_sync_review_required_journals",
+        "Review-required journals",
+        "snapshotter has no configured snapshot worktree — journals not inspected",
+      );
+    }
+    checked = worktree;
+  }
+  if (!isGitDir(checked)) {
     return check("pass", "vault_sync_review_required_journals", "Review-required journals", "No git vault — check skipped");
   }
   try {
-    const ops = listReviewRequiredOps(vaultPath);
+    const ops = listReviewRequiredOps(checked);
     if (ops.length === 0) {
-      return check("pass", "vault_sync_review_required_journals", "Review-required journals", "None");
+      return check("pass", "vault_sync_review_required_journals", "Review-required journals", `None at ${checked}`);
     }
     const sample = ops[0]?.opId ?? "?";
     return check(
       "warn",
       "vault_sync_review_required_journals",
       "Review-required journals",
-      `${ops.length} handoff(s); oldest/sample: ${sample} — if worktree clean: skillwiki sync journal clear-stale --dry-run`,
+      `${ops.length} handoff(s) at ${checked}; oldest/sample: ${sample} — if worktree clean: skillwiki sync journal clear-stale --dry-run`,
     );
   } catch {
     return check("pass", "vault_sync_review_required_journals", "Review-required journals", "Could not read journals — check skipped");
+  }
+}
+
+function checkSnapshotWorktreeUnmerged(ctx: DoctorContext): CheckResult {
+  const id = "vault_sync_snapshot_worktree_unmerged";
+  const label = "Vault sync snapshot worktree unmerged paths";
+  if (ctx.vsConfig.role !== "snapshotter") {
+    return check("pass", id, label, "Not a snapshotter host — check skipped");
+  }
+  const worktree = resolveConfiguredSnapshotWorktree(ctx.input.home);
+  if (!worktree) {
+    return check(
+      "warn",
+      id,
+      label,
+      "no configured snapshot worktree (vault_sync.snapshot_worktree or snapshot_profile required)",
+    );
+  }
+  if (!isGitDir(worktree)) {
+    return check("warn", id, label, `configured snapshot worktree is not a git repo: ${worktree}`);
+  }
+  try {
+    const paths = hasUnmergedPaths(worktree);
+    if (paths.length === 0) {
+      return check("pass", id, label, `none at ${worktree}`);
+    }
+    return check("error", id, label, `unmerged paths at ${worktree}: ${paths.join(", ")}`);
+  } catch {
+    return check("warn", id, label, `could not inspect unmerged paths at ${worktree}`);
   }
 }
 
@@ -730,7 +778,8 @@ export const vaultSyncProbe: DoctorProbe = {
       env: ctx.input.env ?? process.env,
     }));
     checks.push(checkVaultSyncPullHelper(ctx.input.home, ctx.input.env ?? process.env));
-    checks.push(checkVaultSyncReviewRequiredJournals(ctx.resolvedPath));
+    checks.push(checkVaultSyncReviewRequiredJournals(ctx));
+    checks.push(checkSnapshotWorktreeUnmerged(ctx));
     return checks;
   },
 };
