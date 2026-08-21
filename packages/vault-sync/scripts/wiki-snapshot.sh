@@ -87,6 +87,15 @@ SNAPSHOT_WORKTREE="${WIKI_GIT_WORKTREE:-${SNAPSHOT_WORKTREE:-/root/wiki-git}}"
 LOCK_FILE="${WIKI_SNAPSHOT_LOCK:-/var/lock/wiki-snapshot.lock}"
 DEFAULT_LOG_DIR="$(platform_log_dir)"
 LOG_FILE="${WIKI_SNAPSHOT_LOG:-$DEFAULT_LOG_DIR/wiki-snapshot.log}"
+INHIBIT_AFTER="${WIKI_SNAPSHOT_INHIBIT_AFTER:-3}"
+INHIBIT_RECHECK_RUNS="${WIKI_SNAPSHOT_INHIBIT_RECHECK_RUNS:-6}"
+INHIBIT_RECHECK_SECONDS="${WIKI_SNAPSHOT_INHIBIT_RECHECK_SECONDS:-21600}"
+INHIBIT_STATE_FILE="${WIKI_SNAPSHOT_INHIBIT_STATE:-$(platform_cache_dir)/wiki-snapshot-inhibit.state}"
+case "$INHIBIT_AFTER" in ''|*[!0-9]*) INHIBIT_AFTER=3 ;; esac
+case "$INHIBIT_RECHECK_RUNS" in ''|*[!0-9]*) INHIBIT_RECHECK_RUNS=6 ;; esac
+case "$INHIBIT_RECHECK_SECONDS" in ''|*[!0-9]*) INHIBIT_RECHECK_SECONDS=21600 ;; esac
+if [ "$INHIBIT_AFTER" -lt 1 ]; then INHIBIT_AFTER=3; fi
+if [ "$INHIBIT_RECHECK_RUNS" -lt 1 ]; then INHIBIT_RECHECK_RUNS=6; fi
 CLOUD_REMOTE="${CLOUD_REMOTE:-cloud:cloud/wiki}"
 REPAIR_SCRIPT="${WIKI_GIT_REPAIR_SCRIPT:-$SCRIPT_DIR/wiki-git-repair-v3.sh}"
 MAX_S3_ONLY_NOTES="${WIKI_SNAPSHOT_MAX_S3_ONLY_NOTES:-200}"
@@ -337,6 +346,89 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
 }
 
+snapshot_inhibit_clear() {
+    rm -f "$INHIBIT_STATE_FILE" 2>/dev/null || true
+}
+
+snapshot_inhibit_read_field() {
+    local key="$1"
+    [ -f "$INHIBIT_STATE_FILE" ] || return 0
+    sed -n "s/^${key}=//p" "$INHIBIT_STATE_FILE" 2>/dev/null | head -1
+}
+
+snapshot_inhibit_write() {
+    local opid="$1" count="$2" first_seen="$3" last_full="$4" skips="$5"
+    local dir
+    dir="$(dirname "$INHIBIT_STATE_FILE")"
+    mkdir -p "$dir" 2>/dev/null || return 0
+    {
+        printf 'opid=%s\n' "$opid"
+        printf 'count=%s\n' "$count"
+        printf 'first_seen=%s\n' "$first_seen"
+        printf 'last_full_epoch=%s\n' "$last_full"
+        printf 'skips_since_full=%s\n' "$skips"
+    } > "$INHIBIT_STATE_FILE" 2>/dev/null || true
+}
+
+snapshot_parse_operation_id() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+    sed -n 's/.*"operation_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" 2>/dev/null | head -1
+}
+
+snapshot_inhibit_should_skip() {
+    local count last_full skips now age
+    [ -f "$INHIBIT_STATE_FILE" ] || return 1
+    count="$(snapshot_inhibit_read_field count)"
+    last_full="$(snapshot_inhibit_read_field last_full_epoch)"
+    skips="$(snapshot_inhibit_read_field skips_since_full)"
+    case "$count" in ''|*[!0-9]*) count=0 ;; esac
+    case "$last_full" in ''|*[!0-9]*) last_full=0 ;; esac
+    case "$skips" in ''|*[!0-9]*) skips=0 ;; esac
+    if [ "$count" -lt "$INHIBIT_AFTER" ]; then
+        return 1
+    fi
+    now="$(date +%s)"
+    age=$((now - last_full))
+    if [ "$age" -ge "$INHIBIT_RECHECK_SECONDS" ]; then
+        return 1
+    fi
+    if [ "$skips" -ge "$INHIBIT_RECHECK_RUNS" ]; then
+        return 1
+    fi
+    return 0
+}
+
+snapshot_inhibit_mark_skip() {
+    local opid count first_seen last_full skips
+    opid="$(snapshot_inhibit_read_field opid)"
+    count="$(snapshot_inhibit_read_field count)"
+    first_seen="$(snapshot_inhibit_read_field first_seen)"
+    last_full="$(snapshot_inhibit_read_field last_full_epoch)"
+    skips="$(snapshot_inhibit_read_field skips_since_full)"
+    case "$skips" in ''|*[!0-9]*) skips=0 ;; esac
+    skips=$((skips + 1))
+    snapshot_inhibit_write "$opid" "$count" "$first_seen" "$last_full" "$skips"
+}
+
+snapshot_inhibit_record_failure() {
+    local opid="$1"
+    local now count first_seen
+    [ -n "$opid" ] || return 0
+    now="$(date +%s)"
+    if [ -f "$INHIBIT_STATE_FILE" ] && [ "$(snapshot_inhibit_read_field opid)" = "$opid" ]; then
+        count="$(snapshot_inhibit_read_field count)"
+        first_seen="$(snapshot_inhibit_read_field first_seen)"
+        case "$count" in ''|*[!0-9]*) count=0 ;; esac
+        count=$((count + 1))
+        [ -n "$first_seen" ] || first_seen="$now"
+    else
+        count=1
+        first_seen="$now"
+    fi
+    snapshot_inhibit_write "$opid" "$count" "$first_seen" "$now" 0
+}
+
 snapshot_projection_hash_file() {
     local path="${1:-}"
     [ -f "$path" ] || return 1
@@ -522,6 +614,7 @@ emit_snapshot_complete() {
         log "ERROR: final snapshot proof failed head=$head_oid origin=$origin_oid"
         return 1
     fi
+    snapshot_inhibit_clear
     log "SNAPSHOT_COMPLETE schema=v1 outcome=${outcome} result=success ts=$(date -u +%Y-%m-%dT%H:%M:%SZ) head=${head_oid} origin=${origin_oid}"
     return 0
 }
@@ -671,6 +764,12 @@ if ! snapshot_freeze_git_receipt; then
     exit 1
 fi
 
+if snapshot_inhibit_should_skip; then
+    snapshot_inhibit_mark_skip
+    log "SNAPSHOT_INHIBITED schema=v1 opid=$(snapshot_inhibit_read_field opid) count=$(snapshot_inhibit_read_field count) first_seen=$(snapshot_inhibit_read_field first_seen)"
+    exit 1
+fi
+
 # Single-authority root projections before FUSE/S3 pull promotion.
 # Mutation target is the live vault ($WIKI_DIR); Git pull/base-OID use
 # $SNAPSHOT_WORKTREE so FUSE/S3 hosts without a local Git HEAD still work.
@@ -691,11 +790,17 @@ if command -v "$SKILLWIKI_BIN" >/dev/null 2>&1; then
             exit 1
             ;;
     esac
+    proj_out="$(mktemp)"
     if ! "$SKILLWIKI_BIN" projections materialize "$WIKI_DIR" --write \
-        --converge-vault "$SNAPSHOT_WORKTREE" >>"$LOG_FILE" 2>&1; then
+        --converge-vault "$SNAPSHOT_WORKTREE" >"$proj_out" 2>&1; then
+        cat "$proj_out" >>"$LOG_FILE" 2>/dev/null || true
+        snapshot_inhibit_record_failure "$(snapshot_parse_operation_id "$proj_out")"
+        rm -f "$proj_out"
         log "FAIL root projection materialization; snapshot promotion refused"
         exit 1
     fi
+    cat "$proj_out" >>"$LOG_FILE" 2>/dev/null || true
+    rm -f "$proj_out"
     log "OK projections materialize before snapshot sync"
     if ! snapshot_freeze_projection_expectations; then
         log "FAIL projection expectation freeze; snapshot promotion refused"
