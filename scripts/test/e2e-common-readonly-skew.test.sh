@@ -22,57 +22,36 @@ assert_test_fail() {
   TEST_FAIL=$((TEST_FAIL + 1))
 }
 
-# 1. equal counts, READONLY_VERIFY unset → PASS+1 FAIL+0, checkmark output
-out=$(
-  unset READONLY_VERIFY
-  source "$COMMON_SH"
-  assert_eq_or_readonly_skew "20" "20" "skills match" "skills skew warning" "skills mismatch"
-  printf "PASS=%d FAIL=%d\n" "$PASS" "$FAIL"
-)
-if printf '%s' "$out" | grep -q "PASS=1 FAIL=0" && printf '%s' "$out" | grep -q "skills match"; then
-  assert_test_pass "equal counts with READONLY_VERIFY unset increments PASS"
-else
-  assert_test_fail "equal counts with READONLY_VERIFY unset increments PASS" "output was: $out"
-fi
+# ro_mode: UNSET | true | false
+run_skew_case() {
+  local ro_mode="$1" actual="$2" expected="$3" want_pf="$4" want_msg="$5" label="$6"
+  local out
+  out=$(
+    if [ "$ro_mode" = "UNSET" ]; then
+      unset READONLY_VERIFY
+    else
+      export READONLY_VERIFY="$ro_mode"
+    fi
+    # shellcheck source=../e2e-common.sh
+    source "$COMMON_SH"
+    assert_eq_or_readonly_skew "$actual" "$expected" "skills match" "skills skew warning" "skills mismatch"
+    printf "PASS=%d FAIL=%d\n" "$PASS" "$FAIL"
+  )
+  if printf '%s' "$out" | grep -q "$want_pf" && printf '%s' "$out" | grep -q "$want_msg"; then
+    assert_test_pass "$label"
+  else
+    assert_test_fail "$label" "output was: $out"
+  fi
+}
 
-# 2. unequal, READONLY_VERIFY=true → PASS+1 FAIL+0, output contains warning
-out=$(
-  export READONLY_VERIFY="true"
-  source "$COMMON_SH"
-  assert_eq_or_readonly_skew "19" "20" "skills match" "skills skew warning" "skills mismatch"
-  printf "PASS=%d FAIL=%d\n" "$PASS" "$FAIL"
-)
-if printf '%s' "$out" | grep -q "PASS=1 FAIL=0" && printf '%s' "$out" | grep -q "skills skew warning"; then
-  assert_test_pass "unequal counts with READONLY_VERIFY=true increments PASS with warning"
-else
-  assert_test_fail "unequal counts with READONLY_VERIFY=true increments PASS with warning" "output was: $out"
-fi
-
-# 3. unequal, READONLY_VERIFY=false → PASS+0 FAIL+1, output contains failure
-out=$(
-  export READONLY_VERIFY="false"
-  source "$COMMON_SH"
-  assert_eq_or_readonly_skew "19" "20" "skills match" "skills skew warning" "skills mismatch"
-  printf "PASS=%d FAIL=%d\n" "$PASS" "$FAIL"
-)
-if printf '%s' "$out" | grep -q "PASS=0 FAIL=1" && printf '%s' "$out" | grep -q "skills mismatch"; then
-  assert_test_pass "unequal counts with READONLY_VERIFY=false increments FAIL"
-else
-  assert_test_fail "unequal counts with READONLY_VERIFY=false increments FAIL" "output was: $out"
-fi
-
-# 4. unequal, READONLY_VERIFY unset → FAIL+1 (full-cycle default)
-out=$(
-  unset READONLY_VERIFY
-  source "$COMMON_SH"
-  assert_eq_or_readonly_skew "19" "20" "skills match" "skills skew warning" "skills mismatch"
-  printf "PASS=%d FAIL=%d\n" "$PASS" "$FAIL"
-)
-if printf '%s' "$out" | grep -q "PASS=0 FAIL=1" && printf '%s' "$out" | grep -q "skills mismatch"; then
-  assert_test_pass "unequal counts with READONLY_VERIFY unset increments FAIL"
-else
-  assert_test_fail "unequal counts with READONLY_VERIFY unset increments FAIL" "output was: $out"
-fi
+run_skew_case UNSET "20" "20" "PASS=1 FAIL=0" "skills match" \
+  "equal counts with READONLY_VERIFY unset increments PASS"
+run_skew_case true "19" "20" "PASS=1 FAIL=0" "skills skew warning" \
+  "unequal counts with READONLY_VERIFY=true increments PASS with warning"
+run_skew_case false "19" "20" "PASS=0 FAIL=1" "skills mismatch" \
+  "unequal counts with READONLY_VERIFY=false increments FAIL"
+run_skew_case UNSET "19" "20" "PASS=0 FAIL=1" "skills mismatch" \
+  "unequal counts with READONLY_VERIFY unset increments FAIL"
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$TEST_PASS" "$TEST_FAIL"
 [ "$TEST_FAIL" -eq 0 ] && exit 0 || exit 1
