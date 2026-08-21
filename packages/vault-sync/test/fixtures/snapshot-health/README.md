@@ -115,8 +115,10 @@ Loaders parse the most recent `SNAPSHOT_COMPLETE` line from `log_records`.
 
 The corpus must include at least the 18 scenarios enumerated in the v0.10.14
 spec, plus scenario 19 (successful oneshot with empty `active_enter_timestamp`
-and non-empty exit/inactive evidence). Scenario files are named
-`NN-short-name.json` (zero-padded index).
+and non-empty exit/inactive evidence), scenario 20 (sg01-style `FAIL` /
+`PREFLIGHT_FAILED` stall, consecutive-failure error), and scenario 21 (one
+failed run emitting both `FAIL` and JSON, consecutive-failure pass). Scenario
+files are named `NN-short-name.json` (zero-padded index).
 
 Live-adapter tests share `fake-systemctl.sh` in this directory (PATH stub for
 shell and TypeScript gates).

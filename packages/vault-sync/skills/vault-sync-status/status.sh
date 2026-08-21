@@ -126,6 +126,105 @@ for line in d.get('log_records', []):
 " 2>/dev/null
 }
 
+# Run-based consecutive-failure counter. Reads chronological log lines on stdin
+# (last 60 applied inside). Prints key=value: count, stamp, reason, operation_id.
+count_snapshot_consecutive_failures() {
+  python3 -c "$(cat <<'PY'
+import json, re, sys
+
+HEADER = re.compile(r"=== Wiki Snapshot:")
+SUCCESS = "SNAPSHOT_COMPLETE schema=v1"
+INHIBITED = "SNAPSHOT_INHIBITED schema=v1"
+TS_FAIL = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} FAIL\b")
+STAMP = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+
+def is_success(line):
+    return SUCCESS in line
+
+def is_failure(line):
+    if INHIBITED in line:
+        return True
+    if "PREFLIGHT_FAILED" in line:
+        return True
+    if TS_FAIL.search(line):
+        return True
+    if "ERROR" in line:
+        return True
+    return False
+
+def parse_meta(lines):
+    stamp = reason = opid = ""
+    for line in reversed(lines):
+        if not stamp:
+            m = STAMP.match(line)
+            if m:
+                stamp = m.group(1)
+        trimmed = line.strip()
+        if trimmed.startswith("{") and "PREFLIGHT_FAILED" in trimmed:
+            try:
+                parsed = json.loads(trimmed)
+                detail = parsed.get("detail") or {}
+                if isinstance(detail, dict):
+                    if not reason and isinstance(detail.get("reason"), str):
+                        reason = detail["reason"]
+                    if not opid and isinstance(detail.get("operation_id"), str):
+                        opid = detail["operation_id"]
+            except Exception:
+                pass
+        if not reason:
+            m = re.search(r"\breason=(\S+)", line) or re.search(r'"reason"\s*:\s*"([^"]+)"', line)
+            if m:
+                reason = m.group(1)
+        if not opid:
+            m = (re.search(r"\boperation_id=(\S+)", line)
+                 or re.search(r"\bopid=(\S+)", line)
+                 or re.search(r'"operation_id"\s*:\s*"([^"]+)"', line))
+            if m:
+                opid = m.group(1)
+    return stamp, reason, opid
+
+def split_runs(lines):
+    runs = []
+    current = None
+    for line in lines:
+        if HEADER.search(line):
+            if current:
+                runs.append(current)
+            current = {"lines": [line], "has_header": True}
+        elif current and current["has_header"]:
+            current["lines"].append(line)
+        elif is_failure(line) or is_success(line):
+            if current:
+                runs.append(current)
+                current = None
+            runs.append({"lines": [line], "has_header": False})
+    if current:
+        runs.append(current)
+    return runs
+
+lines = [ln for ln in sys.stdin.read().splitlines() if ln]
+if len(lines) > 60:
+    lines = lines[-60:]
+runs = split_runs(lines)
+count = 0
+stamp = reason = opid = ""
+for run in reversed(runs):
+    ls = run["lines"]
+    if any(is_success(x) for x in ls):
+        break
+    if not any(is_failure(x) for x in ls):
+        continue
+    count += 1
+    if count == 1:
+        stamp, reason, opid = parse_meta(ls)
+print("count=%s" % count)
+print("stamp=%s" % stamp)
+print("reason=%s" % reason)
+print("operation_id=%s" % opid)
+PY
+)"
+}
+
 snapshot_health_now() {
   printf '%s\n' "${VS_SNAPSHOT_HEALTH_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 }
@@ -1101,54 +1200,43 @@ except Exception:
     "$freshness_status" "$freshness_detail"
 
   # ── vault_sync_snapshot_consecutive_failures: bounded recent-run window ──
-  local fail_count most_recent_fail
+  local fail_count most_recent_fail fail_reason fail_opid cf_parsed
   fail_count=0
   most_recent_fail=""
+  fail_reason=""
+  fail_opid=""
   if [ -n "${VS_SNAPSHOT_HEALTH_FIXTURE:-}" ]; then
-    snapshot_fixture_log_tail | reverse_lines | while IFS= read -r line; do
-      if printf '%s' "$line" | command grep -qE 'ERROR|SNAPSHOT_COMPLETE schema=v1'; then
-        printf '%s\n' "$line"
-      fi
-    done > /tmp/.snap_recent.$$ 2>/dev/null
-    # Count leading ERROR lines (most-recent first) until a success record.
-    while IFS= read -r line; do
-      if printf '%s' "$line" | command grep -q 'SNAPSHOT_COMPLETE schema=v1'; then
-        break
-      fi
-      if printf '%s' "$line" | command grep -q 'ERROR'; then
-        fail_count=$((fail_count + 1))
-        if [ -z "$most_recent_fail" ]; then
-          most_recent_fail="$(printf '%s' "$line" | sed -n 's/^\([0-9-]* [0-9:]*\).*/\1/p')"
-        fi
-      fi
-    done < /tmp/.snap_recent.$$
-    rm -f /tmp/.snap_recent.$$
+    cf_parsed="$(snapshot_fixture_log_tail | count_snapshot_consecutive_failures)"
   else
     local snapshot_log
     snapshot_log="$LOG_DIR/wiki-snapshot.log"
     if [ -f "$snapshot_log" ]; then
-      local recent_lines
-      recent_lines="$(reverse_file "$snapshot_log" | head -n 60 || true)"
-      while IFS= read -r line; do
-        if printf '%s' "$line" | command grep -q 'SNAPSHOT_COMPLETE schema=v1'; then
-          break
-        fi
-        if printf '%s' "$line" | command grep -q 'ERROR'; then
-          fail_count=$((fail_count + 1))
-          if [ -z "$most_recent_fail" ]; then
-            most_recent_fail="$(printf '%s' "$line" | sed -n 's/^\([0-9-]* [0-9:]*\).*/\1/p')"
-          fi
-        fi
-      done <<EOF
-$recent_lines
-EOF
+      cf_parsed="$(tail -n 60 "$snapshot_log" | count_snapshot_consecutive_failures)"
+    else
+      cf_parsed="count=0
+stamp=
+reason=
+operation_id="
     fi
   fi
+  fail_count="$(printf '%s\n' "$cf_parsed" | sed -n 's/^count=//p' | head -1)"
+  most_recent_fail="$(printf '%s\n' "$cf_parsed" | sed -n 's/^stamp=//p' | head -1)"
+  fail_reason="$(printf '%s\n' "$cf_parsed" | sed -n 's/^reason=//p' | head -1)"
+  fail_opid="$(printf '%s\n' "$cf_parsed" | sed -n 's/^operation_id=//p' | head -1)"
+  case "$fail_count" in
+    ''|*[!0-9]*) fail_count=0 ;;
+  esac
 
   local cf_status cf_detail
   if [ "$fail_count" -ge 2 ]; then
     cf_status="error"
     cf_detail="${fail_count} consecutive snapshot failure(s); most recent: ${most_recent_fail:-unknown}"
+    if [ -n "$fail_reason" ]; then
+      cf_detail="${cf_detail}; reason=${fail_reason}"
+    fi
+    if [ -n "$fail_opid" ]; then
+      cf_detail="${cf_detail} operation_id=${fail_opid}"
+    fi
   else
     cf_status="pass"
     cf_detail="${fail_count} consecutive failure(s) in recent window (recurrence threshold: 2)"

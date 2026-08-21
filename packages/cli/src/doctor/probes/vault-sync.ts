@@ -214,6 +214,131 @@ function checkPushAgeFromLog(logDir: string, logFile: string): CheckResult {
   }
 }
 
+const SNAPSHOT_RUN_HEADER = /=== Wiki Snapshot:/;
+const SNAPSHOT_SUCCESS_RECORD = "SNAPSHOT_COMPLETE schema=v1";
+const SNAPSHOT_INHIBITED_RECORD = "SNAPSHOT_INHIBITED schema=v1";
+const SNAPSHOT_TIMESTAMPED_FAIL = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} FAIL\b/;
+const SNAPSHOT_LOG_STAMP = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/;
+
+function isSnapshotSuccessLine(line: string): boolean {
+  return line.includes(SNAPSHOT_SUCCESS_RECORD);
+}
+
+function isSnapshotFailureLine(line: string): boolean {
+  if (line.includes(SNAPSHOT_INHIBITED_RECORD)) return true;
+  if (line.includes("PREFLIGHT_FAILED")) return true;
+  if (SNAPSHOT_TIMESTAMPED_FAIL.test(line)) return true;
+  if (line.includes("ERROR")) return true;
+  return false;
+}
+
+function parseSnapshotFailureMeta(lines: string[]): { stamp: string; reason: string; operationId: string } {
+  let stamp = "";
+  let reason = "";
+  let operationId = "";
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (!stamp) {
+      const m = line.match(SNAPSHOT_LOG_STAMP);
+      if (m) stamp = m[1]!;
+    }
+    const trimmed = line.trim();
+    if (trimmed.startsWith("{") && trimmed.includes("PREFLIGHT_FAILED")) {
+      try {
+        const parsed = JSON.parse(trimmed) as {
+          detail?: { reason?: unknown; operation_id?: unknown };
+        };
+        const detail = parsed.detail;
+        if (detail && typeof detail === "object") {
+          if (!reason && typeof detail.reason === "string") reason = detail.reason;
+          if (!operationId && typeof detail.operation_id === "string") operationId = detail.operation_id;
+        }
+      } catch {
+        // Fall through to token scans on the same line.
+      }
+    }
+    if (!reason) {
+      const m = line.match(/\breason=(\S+)/) ?? line.match(/"reason"\s*:\s*"([^"]+)"/);
+      if (m) reason = m[1]!;
+    }
+    if (!operationId) {
+      const m = line.match(/\boperation_id=(\S+)/)
+        ?? line.match(/\bopid=(\S+)/)
+        ?? line.match(/"operation_id"\s*:\s*"([^"]+)"/);
+      if (m) operationId = m[1]!;
+    }
+  }
+  return { stamp, reason, operationId };
+}
+
+interface SnapshotFailureRun {
+  lines: string[];
+  hasHeader: boolean;
+}
+
+function splitSnapshotRuns(lines: string[]): SnapshotFailureRun[] {
+  const runs: SnapshotFailureRun[] = [];
+  let current: SnapshotFailureRun | null = null;
+  for (const line of lines) {
+    if (SNAPSHOT_RUN_HEADER.test(line)) {
+      if (current) runs.push(current);
+      current = { lines: [line], hasHeader: true };
+    } else if (current?.hasHeader) {
+      current.lines.push(line);
+    } else if (isSnapshotFailureLine(line) || isSnapshotSuccessLine(line)) {
+      if (current) {
+        runs.push(current);
+        current = null;
+      }
+      runs.push({ lines: [line], hasHeader: false });
+    }
+  }
+  if (current) runs.push(current);
+  return runs;
+}
+
+function countConsecutiveSnapshotFailures(logRecords: string[]): {
+  count: number;
+  mostRecentFail: string;
+  reason: string;
+  operationId: string;
+} {
+  const window = logRecords.length > 60 ? logRecords.slice(-60) : logRecords;
+  const runs = splitSnapshotRuns(window);
+  let count = 0;
+  let mostRecentFail = "";
+  let reason = "";
+  let operationId = "";
+  for (let i = runs.length - 1; i >= 0; i--) {
+    const lines = runs[i]!.lines;
+    if (lines.some(isSnapshotSuccessLine)) break;
+    if (!lines.some(isSnapshotFailureLine)) continue;
+    count++;
+    if (count === 1) {
+      const meta = parseSnapshotFailureMeta(lines);
+      mostRecentFail = meta.stamp;
+      reason = meta.reason;
+      operationId = meta.operationId;
+    }
+  }
+  return { count, mostRecentFail, reason, operationId };
+}
+
+function consecutiveSnapshotFailureDetail(result: {
+  count: number;
+  mostRecentFail: string;
+  reason: string;
+  operationId: string;
+}): string {
+  if (result.count >= 2) {
+    let detail = `${result.count} consecutive snapshot failure(s); most recent: ${result.mostRecentFail || "unknown"}`;
+    if (result.reason) detail += `; reason=${result.reason}`;
+    if (result.operationId) detail += ` operation_id=${result.operationId}`;
+    return detail;
+  }
+  return `${result.count} consecutive failure(s) in recent window (recurrence threshold: 2)`;
+}
+
 export function snapshotterHealthChecks(
   scope: string,
   logDir: string,
@@ -310,22 +435,10 @@ export function snapshotterHealthChecks(
     freshness = check("error", "vault_sync_last_push_age", "Vault sync last snapshot recency", `latest service result failed: ${serviceResult.detail}`);
   }
 
-  let failCount = 0;
-  let mostRecentFail = "";
-  for (let i = logRecords.length - 1; i >= 0 && i >= logRecords.length - 60; i--) {
-    const line = logRecords[i]!;
-    if (/SNAPSHOT_COMPLETE schema=v1/.test(line)) break;
-    if (/ERROR/.test(line)) {
-      failCount++;
-      if (!mostRecentFail) {
-        const m = line.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
-        mostRecentFail = m ? m[1]! : "unknown";
-      }
-    }
-  }
-  const consecutiveFailures: CheckResult = failCount >= 2
-    ? check("error", "vault_sync_snapshot_consecutive_failures", "Vault sync snapshot consecutive failures", `${failCount} consecutive snapshot failure(s); most recent: ${mostRecentFail || "unknown"}`)
-    : check("pass", "vault_sync_snapshot_consecutive_failures", "Vault sync snapshot consecutive failures", `${failCount} consecutive failure(s) in recent window (recurrence threshold: 2)`);
+  const failureStreak = countConsecutiveSnapshotFailures(logRecords);
+  const consecutiveFailures: CheckResult = failureStreak.count >= 2
+    ? check("error", "vault_sync_snapshot_consecutive_failures", "Vault sync snapshot consecutive failures", consecutiveSnapshotFailureDetail(failureStreak))
+    : check("pass", "vault_sync_snapshot_consecutive_failures", "Vault sync snapshot consecutive failures", consecutiveSnapshotFailureDetail(failureStreak));
 
   return [jobs, serviceResult, freshness, consecutiveFailures];
 }
