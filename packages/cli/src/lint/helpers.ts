@@ -11,7 +11,7 @@ import type {
   LintVaultOutput,
 } from "./types.js";
 import { appendLastOp } from "../utils/last-op.js";
-import { resolveReadOnlyVaultRoot, type VaultPage } from "../utils/vault.js";
+import { filterGitIgnoredRelativePaths, resolveReadOnlyVaultRoot, type VaultPage } from "../utils/vault.js";
 import { readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { stripFencedBlocks } from "../parsers/citations.js";
@@ -280,19 +280,26 @@ export function outputForOnlyBucket(
   };
 }
 
-export async function walkMarkdownFiles(absDir: string, vaultRoot: string): Promise<VaultPage[]> {
+async function walkMarkdownFilesInternal(absDir: string, vaultRoot: string): Promise<VaultPage[]> {
   const entries = await readdir(absDir, { withFileTypes: true });
   const pages: VaultPage[] = [];
   for (const entry of entries) {
     const absPath = join(absDir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === ".git" || entry.name === "node_modules") continue;
-      pages.push(...(await walkMarkdownFiles(absPath, vaultRoot)));
+      pages.push(...(await walkMarkdownFilesInternal(absPath, vaultRoot)));
     } else if (entry.isFile() && entry.name.endsWith(".md")) {
       pages.push({ absPath, relPath: relative(vaultRoot, absPath).split(sep).join("/") });
     }
   }
   return pages;
+}
+
+export async function walkMarkdownFiles(absDir: string, vaultRoot: string): Promise<VaultPage[]> {
+  const rawPages = await walkMarkdownFilesInternal(absDir, vaultRoot);
+  const ignored = filterGitIgnoredRelativePaths(vaultRoot, rawPages.map(p => p.relPath));
+  if (ignored.size === 0) return rawPages;
+  return rawPages.filter(p => !ignored.has(p.relPath));
 }
 
 export function scanConflictMarkerBlocks(
