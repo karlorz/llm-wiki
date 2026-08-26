@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
+import { execFileSync } from "node:child_process";
 import { ok, err, type Result } from "@skillwiki/shared";
 
 export interface VaultPage { absPath: string; relPath: string }
@@ -84,6 +85,28 @@ export async function mapWithConcurrency<T, R>(
   return out;
 }
 
+export function filterGitIgnoredRelativePaths(root: string, relPaths: string[]): Set<string> {
+  if (relPaths.length === 0 || !existsSync(join(root, ".git"))) {
+    return new Set();
+  }
+  try {
+    const input = relPaths.join("\0") + "\0";
+    const stdout = execFileSync("git", ["check-ignore", "-z", "--stdin"], {
+      cwd: root,
+      input,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const ignored = stdout.split("\0").filter(Boolean);
+    return new Set(ignored);
+  } catch (error: any) {
+    if (error && typeof error === "object" && error.status === 1) {
+      return new Set();
+    }
+    return new Set();
+  }
+}
+
 export async function scanVault(root: string): Promise<Result<VaultScan>> {
   try {
     await stat(join(root, "SCHEMA.md"));
@@ -91,7 +114,9 @@ export async function scanVault(root: string): Promise<Result<VaultScan>> {
     return err("VAULT_PATH_INVALID", { root, reason: "SCHEMA.md missing" });
   }
   const all = await walk(root);
-  const rels = all.map(p => ({ absPath: p, relPath: relative(root, p).split(sep).join("/") }));
+  const rawRels = all.map(p => ({ absPath: p, relPath: relative(root, p).split(sep).join("/") }));
+  const ignored = filterGitIgnoredRelativePaths(root, rawRels.map(p => p.relPath));
+  const rels = ignored.size > 0 ? rawRels.filter(p => !ignored.has(p.relPath)) : rawRels;
   return ok({
     root,
     allMarkdown: rels,

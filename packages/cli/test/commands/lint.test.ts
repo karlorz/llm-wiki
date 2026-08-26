@@ -2296,4 +2296,136 @@ describe("lint fingerprints and runSyncLintDelta", () => {
     }
     expect(exitCode).not.toBe(23); // not blocking
   }, 60000);
+
+  it("regression: gitignored scratch does not increase lint-delta new_errors (Test A)", async () => {
+    const dir = makeTempDir();
+    git(dir, ["init"]);
+    git(dir, ["config", "user.email", "t@t"]);
+    git(dir, ["config", "user.name", "t"]);
+    initVault(dir);
+    writeFileSync(join(dir, ".gitignore"), ".superpowers/\n");
+    writeFileSync(join(dir, "concepts/clean.md"), "# clean\n\n## Overview\n\nbody\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "base with gitignore"]);
+    git(dir, ["branch", "-M", "main"]);
+    const remote = makeTempDir();
+    git(remote, ["init", "--bare"]);
+    git(dir, ["remote", "add", "origin", remote]);
+    git(dir, ["push", "-u", "origin", "main"]);
+
+    // Outgoing: gitignored scratch with secret-like token, plus clean edit
+    mkdirSync(join(dir, ".superpowers", "sdd"), { recursive: true });
+    const secret = "hana_" + "dev_" + "A".repeat(43);
+    writeFileSync(join(dir, ".superpowers/sdd/scratch.md"), `Access key: ${secret}\n`);
+    writeFileSync(join(dir, "concepts/ok.md"), "# ok\n\n## Overview\n\nbody\n");
+    git(dir, ["add", "concepts/ok.md"]);
+    git(dir, ["commit", "-m", "outgoing clean edit"]);
+
+    const { exitCode, result } = await runSyncLintDelta({ vault: dir, baseRef: "origin/main" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.new_errors).toBe(0);
+      expect(JSON.stringify(result.data)).not.toContain(".superpowers");
+    }
+    expect(exitCode).not.toBe(23);
+  }, 60000);
+
+  it("tracked new secret still gates in lint-delta (Test B)", async () => {
+    const dir = makeTempDir();
+    git(dir, ["init"]);
+    git(dir, ["config", "user.email", "t@t"]);
+    git(dir, ["config", "user.name", "t"]);
+    initVault(dir);
+    writeFileSync(join(dir, "concepts/clean.md"), "# clean\n\n## Overview\n\nbody\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "clean base"]);
+    git(dir, ["branch", "-M", "main"]);
+    const remote = makeTempDir();
+    git(remote, ["init", "--bare"]);
+    git(dir, ["remote", "add", "origin", remote]);
+    git(dir, ["push", "-u", "origin", "main"]);
+
+    const secret = "hana_" + "dev_" + "A".repeat(43);
+    writeFileSync(join(dir, "concepts/secret.md"), `---
+title: Secret
+created: 2026-06-15
+updated: 2026-06-15
+type: concept
+---
+
+Access key: ${secret}
+`);
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "add tracked secret"]);
+
+    const { exitCode, result } = await runSyncLintDelta({ vault: dir, baseRef: "origin/main" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.new_errors).toBeGreaterThanOrEqual(1);
+      const sensitiveFp = result.data.new_fingerprints.find(fp => fp.startsWith("sensitive_content"));
+      expect(sensitiveFp).toBeDefined();
+    }
+    expect(exitCode).toBe(23);
+  }, 60000);
+
+  it("tracked broken wikilink still gates in lint-delta (Test C)", async () => {
+    const dir = makeTempDir();
+    git(dir, ["init"]);
+    git(dir, ["config", "user.email", "t@t"]);
+    git(dir, ["config", "user.name", "t"]);
+    initVault(dir);
+    writeFileSync(join(dir, "concepts/clean.md"), "# clean\n\n## Overview\n\nbody\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "clean base"]);
+    git(dir, ["branch", "-M", "main"]);
+    const remote = makeTempDir();
+    git(remote, ["init", "--bare"]);
+    git(dir, ["remote", "add", "origin", remote]);
+    git(dir, ["push", "-u", "origin", "main"]);
+
+    writeFileSync(join(dir, "concepts/broken.md"), `---
+title: Broken Link
+created: 2026-06-15
+updated: 2026-06-15
+type: concept
+---
+
+See [[missing-page-that-does-not-exist]] for details.
+`);
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "add broken wikilink"]);
+
+    const { exitCode, result } = await runSyncLintDelta({ vault: dir, baseRef: "origin/main" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.new_errors).toBeGreaterThanOrEqual(1);
+      const brokenFp = result.data.new_fingerprints.find(fp => fp.startsWith("broken_wikilinks"));
+      expect(brokenFp).toBeDefined();
+    }
+    expect(exitCode).toBe(23);
+  }, 60000);
+
+  it("runLint --only sensitive_content reports 0 errors on gitignored scratch (Test D)", async () => {
+    const dir = makeTempDir();
+    git(dir, ["init"]);
+    git(dir, ["config", "user.email", "t@t"]);
+    git(dir, ["config", "user.name", "t"]);
+    initVault(dir);
+    writeFileSync(join(dir, ".gitignore"), ".superpowers/\n");
+    writeFileSync(join(dir, "concepts/clean.md"), "# clean\n\n## Overview\n\nbody\n");
+    git(dir, ["add", "."]);
+    git(dir, ["commit", "-m", "init"]);
+
+    mkdirSync(join(dir, ".superpowers", "sdd"), { recursive: true });
+    const secret = "hana_" + "dev_" + "A".repeat(43);
+    writeFileSync(join(dir, ".superpowers/sdd/scratch.md"), `Access key: ${secret}\n`);
+
+    const r = await runLint({ vault: dir, days: 90, lines: 200, logThreshold: 500, only: "sensitive_content" });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) {
+      const bucket = r.result.data.by_severity.error.find(b => b.kind === "sensitive_content");
+      expect(bucket).toBeUndefined();
+      expect(JSON.stringify(r.result.data)).not.toContain(".superpowers");
+    }
+  }, 60000);
 });
