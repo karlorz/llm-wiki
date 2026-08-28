@@ -52,6 +52,17 @@ export const RawSourceSchema = z.object({
 
 export type RawSource = z.infer<typeof RawSourceSchema>;
 
+const PostReleaseVerificationSchema = z.object({
+  posture: z.literal("opt-in"),
+  triggers: z.array(z.enum([
+    "matching-regression-report",
+    "explicit-user-request",
+    "relevant-code-or-release-change"
+  ])).min(1),
+  last_proven: isoDate.optional(),
+  evidence: z.array(z.string().min(1)).optional()
+}).strict();
+
 export const WorkItemSchema = z.object({
   title: z.string().min(1),
   aliases: z.array(z.string()).optional(),
@@ -66,10 +77,18 @@ export const WorkItemSchema = z.object({
   owner: wikilink.optional(),
   parent: wikilink.optional(),
   related: z.array(wikilink).optional(),
-  sources: z.array(z.string()).optional()
+  sources: z.array(z.string()).optional(),
+  post_release_verification: PostReleaseVerificationSchema.optional()
 }).superRefine((v, ctx) => {
   if (v.status === "completed" && !v.completed) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["completed"], message: "required when status is completed" });
+  }
+  if (v.post_release_verification && v.status !== "completed") {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["post_release_verification"],
+      message: "post-release verification requires status completed"
+    });
   }
 });
 

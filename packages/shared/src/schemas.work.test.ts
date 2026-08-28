@@ -34,4 +34,45 @@ describe("WorkItemSchema", () => {
   it("accepts optional related/parent wikilinks", () => {
     expect(WorkItemSchema.parse({ ...v, parent: "[[2026-04-10-foo]]", related: ["[[2026-04-12-bar]]"] })).toBeTruthy();
   });
+
+  it("accepts event-triggered opt-in post-release verification", () => {
+    const completed = WorkItemSchema.parse({
+      ...v,
+      status: "completed",
+      completed: "2026-05-04",
+      post_release_verification: {
+        posture: "opt-in",
+        triggers: ["matching-regression-report", "explicit-user-request", "relevant-code-or-release-change"],
+        last_proven: "2026-05-04",
+        evidence: ["release tag v1.2.3", "production smoke passed"]
+      }
+    });
+
+    expect(completed.post_release_verification).toEqual({
+      posture: "opt-in",
+      triggers: ["matching-regression-report", "explicit-user-request", "relevant-code-or-release-change"],
+      last_proven: "2026-05-04",
+      evidence: ["release tag v1.2.3", "production smoke passed"]
+    });
+  });
+
+  it("rejects invalid post-release verification posture and triggers", () => {
+    expect(() => WorkItemSchema.parse({
+      ...v,
+      post_release_verification: {
+        posture: "always-ranked",
+        triggers: ["nightly"]
+      }
+    })).toThrow();
+  });
+
+  it("rejects post-release verification before delivery is completed", () => {
+    expect(() => WorkItemSchema.parse({
+      ...v,
+      post_release_verification: {
+        posture: "opt-in",
+        triggers: ["explicit-user-request"]
+      }
+    })).toThrow(/completed/);
+  });
 });

@@ -3,6 +3,7 @@
 ## Project Documentation
 
 - [Project overview](README.md)
+- [Domain glossary](CONTEXT.md)
 - [Codex plugin reference](docs/codex-compatible-reference.md)
 
 ## Package Documentation

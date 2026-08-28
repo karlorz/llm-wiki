@@ -49,6 +49,22 @@ When the user asks to "get work of X" or "run work item Y" for review, you are i
 5. Manage status transitions: `planned` → `in-progress` → `completed` (set `completed:` date) or `abandoned`.
 6. Append vault `log.md` entry on creation and on each status transition.
 
+### Completion and post-release verification
+
+- Work-item status represents delivery lifecycle. Mark delivery complete when
+  the approved code, required acceptance checks, release/deployment scope, and
+  completion evidence are finished.
+- Required acceptance verification remains part of the completion checklist and
+  must pass before `status: completed`.
+- Optional verification after delivery uses typed frontmatter:
+  `post_release_verification.posture: opt-in`, plus one or more approved
+  `triggers` (`matching-regression-report`, `explicit-user-request`, or
+  `relevant-code-or-release-change`).
+- Record opt-in post-release checks as prose evidence, not as unchecked completion tasks.
+  Completed opt-in work stays out of ordinary active rankings until a trigger
+  occurs; a trigger creates new evidence or a follow-up decision rather than
+  silently keeping delivered work `in-progress`.
+
 ## Redirect Output
 
 After step 3 (output path override), emit redirect paths for the active PRD skill:

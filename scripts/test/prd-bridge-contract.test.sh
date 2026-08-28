@@ -75,6 +75,12 @@ assert_contains "$PROJ" "Do not invoke \`writing-plans\`" \
   "proj-work forbids writing-plans"
 assert_absent "$PROJ" "superpowers:writing-plans" \
   "proj-work no longer names writing-plans as a PRD consumer"
+assert_contains "$PROJ" "Work-item status represents delivery lifecycle" \
+  "proj-work defines delivery lifecycle completion"
+assert_contains "$PROJ" "post_release_verification" \
+  "proj-work documents post-release verification frontmatter"
+assert_contains "$PROJ" "not as unchecked completion tasks" \
+  "proj-work keeps optional verification out of completion checklists"
 
 assert_contains "$ACTIVATION" "Do not invoke \`writing-plans\`" \
   "activation forbids writing-plans"
