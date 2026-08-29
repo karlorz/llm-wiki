@@ -1,6 +1,6 @@
 ---
 name: using-skillwiki
-description: Invoke when vault, wiki, knowledge-base, or SkillWiki setup work arises — maps skillwiki skills, dev-loop alignment, adaptive workflow profiles, and vault routing. Do not invoke for unrelated coding or creative tasks.
+description: Invoke for vault, wiki, or SkillWiki setup. Maps skills, workflow profiles, and vault routing. Skip unrelated coding.
 ---
 *Note: If executing as a background subagent, skip this skill section.*
 

@@ -1,6 +1,6 @@
 ---
 name: vault-fuse-freshness
-description: Audit and refresh rclone FUSE visibility freshness for cross-device wiki sync. Linux-focused; enforces <=15m dir-cache-time envelope, can forget stale VFS directory cache entries, and triggers bounded rclone rc vfs/refresh.
+description: Audit Linux rclone FUSE wiki freshness. Use when dir-cache-time drifts or a bounded vfs/refresh is needed.
 argument-hint: "[--check-only] [--max-dir-cache=<duration>] [--forget-dir=<path>] [--dry-run]"
 ---
 

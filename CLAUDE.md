@@ -9,6 +9,7 @@
 ## Package Documentation
 
 - [Skill package](packages/skills/README.md)
+- Skill descriptions: vault concept `concepts/codex-skill-catalog-budget.md` (180 target / 220 CI fail; unique-canonical total cap)
 - [Agent memory trends](packages/agent-memory-trends/README.md)
 - [SkillWiki maintenance](packages/skillwiki-maintenance/README.md)
 - [Vault-sync offline-host runbook](packages/vault-sync/docs/offline-host-runbook.md)

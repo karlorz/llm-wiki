@@ -1,6 +1,6 @@
 ---
 name: vault-presync
-description: Pre-sync lint-delta gate, collision dedup, and rebase for ~/wiki vault. Removes untracked local files that are byte-identical to remote-tracked files, detects rebase conflicts, then delegates pull to wiki-pull-with-auto-resolve. Run before wiki-sync or git push.
+description: Pre-sync lint, collision dedup, and rebase for ~/wiki. Use before wiki-sync or git push.
 argument-hint: "[--dry-run|--execute|--force]"
 ---
 

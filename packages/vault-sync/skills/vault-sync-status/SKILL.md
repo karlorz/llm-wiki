@@ -1,6 +1,6 @@
 ---
 name: vault-sync-status
-description: Health snapshot of vault-sync — scheduler health, push/fetch recency, filter integrity, snapshot guard, runtime manifest proof, and Linux fuse-refresh timer status. JSON + human output. Use after install, for CI read-only checks on protected hosts, when status hangs on S3/GitHub probes, or to prove runtime-manifest hashes match package sources.
+description: "Health snapshot of vault-sync: scheduler, push/fetch recency, snapshot guard, FUSE timer. Use after install or CI checks."
 argument-hint: "[--read-only] [--json] [--fail-on error|warn]"
 ---
 

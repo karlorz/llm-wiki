@@ -38,6 +38,12 @@ Each top-level skill subdirectory holds one canonical `SKILL.md`. The nested
 `skills/<skill>/SKILL.md` tree mirrors those files for Codex plugin discovery;
 keep it byte-for-byte in sync with the canonical top-level files.
 
+`description` is routing metadata for every skill, not a README. Author to
+180 characters (CI fails above 220). Unique-canonical totals are capped with
+agent-skills so the combined Codex catalog stays at 8,000 characters. See
+vault concept `concepts/codex-skill-catalog-budget.md`. Run
+`python3 scripts/lint-skill-descriptions.py --layout llm-wiki --max-total-chars 3200`.
+
 Codex installs through `packages/codex-skills`, a materialized plugin root that
 copies this package's `.codex-plugin/` manifest, `skills/` mirror, and
 Codex-specific hook files. That root exposes `hooks/hooks-codex.json` and

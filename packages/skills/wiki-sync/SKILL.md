@@ -1,6 +1,6 @@
 ---
 name: wiki-sync
-description: Safely sync the vault git repository — multi-session safe via advisory lockfile. Handles rebase conflict storms from archive-commit × snapshot-stream patterns. Runs skillwiki sync status, then guides push or pull with lint guards and conflict resolution.
+description: Safely sync vault git with a lockfile and lint guards. Use to push or pull wiki changes across sessions.
 ---
 # wiki-sync
 ## When This Skill Activates

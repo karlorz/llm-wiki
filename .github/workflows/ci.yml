@@ -16,6 +16,10 @@ jobs:
         run: npm run test:release-lockfile
       - name: Validate manifest consistency
         run: bash scripts/verify-manifests.sh
+      - name: Lint skill description catalog budget
+        run: |
+          python3 scripts/test-skill-description-budget.py
+          python3 scripts/lint-skill-descriptions.py --layout llm-wiki --max-total-chars 3200
       - name: Run plugin metadata regression fixtures
         run: npm run test:plugin-metadata
       - name: Run e2e-common readonly-skew helper tests

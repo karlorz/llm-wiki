@@ -1,6 +1,6 @@
 ---
 name: vault-sync-install
-description: Install vault-sync on the current host. Detects OS, deploys scripts, registers scheduler jobs, and supports a Linux FUSE-only mode for rclone-mounted wiki consumers. Use when asked to install vault-sync, reinstall after plugin update, rsync/staged deploy with runtime-manifest provenance (VS_PACKAGE_VERSION / VS_PACKAGE_COMMIT), or switch leaf vs snapshotter roles.
+description: "Install vault-sync: scripts, scheduler, optional Linux FUSE-only mode. Use for install, reinstall, or role switch."
 argument-hint: "[--mode=full|fuse-only] [--role=leaf|snapshotter] [--service-scope=user|system] [--vault-path=<path>] [--package-version=<ver>] [--package-commit=<sha>] [--dry-run] [--override-snapshotter]"
 ---
 

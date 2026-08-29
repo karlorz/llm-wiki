@@ -1,6 +1,6 @@
 ---
 name: wiki-freshness-repair
-description: Repair stale vault sources end to end. Consumes skillwiki drift --affected-pages, re-ingests changed sources through wiki-reingest, then republishes the affected typed pages through the page publish approval flow. Attended only; never auto-repairs.
+description: Repair stale vault sources via drift, reingest, and attended republish. Use when skillwiki drift lists affected pages.
 ---
 
 # wiki-freshness-repair
