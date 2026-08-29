@@ -46,15 +46,23 @@ npm run materialize:plugins
 npm run materialize:plugins:check
 ```
 
-### Option D — Cursor Team marketplace / Grok Bot catalog
+### Option D — Cursor / Grok Bot marketplace pin
 
-Cursor / Grok Bot use a **Team marketplace GitHub import** of this
-repo, not a public [Cursor Marketplace](https://cursor.com/marketplace)
-listing. A GitHub or npm release does not move that snapshot; Reinstall
-repeats the pinned `/add-plugin` commit. Until the Team row advances,
-use Option B or `grok plugin update skillwiki`.
+Cursor / Grok Bot do not list this repo on the public
+[Cursor Marketplace](https://cursor.com/marketplace). A GitHub or npm
+release does not move the pin; Reinstall repeats the last indexed
+snapshot. Check `cursor-agent plugin marketplace list --format json`.
 
-To update the Team snapshot:
+If `"scope": "user"` for `llm-wiki` (operator GitHub add), Dashboard
+Refresh / Auto Refresh does **not** apply. Follow
+`cursor-github-marketplace-repin` (`status.sh`, then remove +
+`add --git-ref`). After rempin, restore KEEP plugins (`skillwiki`,
+`vault-sync`) via `/plugins` or `install-keep-plugins.sh` — Cursor CLI
+`2026.08.25` has no `plugin install`. Grok Bot shares that Cursor
+account list. Until the pin advances, use Option B or
+`grok plugin update skillwiki`.
+
+To update a **Team** marketplace admin row (`scope` is not `user`):
 
 1. Push the release tag.
 2. [Dashboard → Plugins](https://cursor.com/dashboard) → `karlorz/llm-wiki`
