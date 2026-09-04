@@ -370,6 +370,87 @@ describe("runSyncPush", () => {
     }
   });
 
+  it("pushes when working tree is clean but HEAD is ahead of origin", async () => {
+    const remoteDir = makeTempDir();
+    git(remoteDir, "init --bare");
+    const dir = makeTempDir();
+    git(dir, `clone ${remoteDir} .`);
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    git(dir, "config core.longpaths true");
+    writeFileSync(join(dir, "SCHEMA.md"), "# Vault Schema\n");
+    writeFileSync(join(dir, "index.md"), "# Index\n");
+    writeFileSync(join(dir, "log.md"), "# Log\n");
+    git(dir, "add .");
+    git(dir, 'commit -m "init vault"');
+    git(dir, "branch -M main");
+    git(dir, "push -u origin main");
+    git(dir, "remote set-head origin main");
+
+    // Add extra clean local commit (ahead by 1)
+    writeFileSync(join(dir, "clean-note.md"), "---\ntitle: clean\ntype: concept\n---\n\nClean content\n");
+    git(dir, "add .");
+    git(dir, 'commit -m "extra local clean note"');
+
+    expect(execSync("git status --porcelain", { cwd: dir }).toString().trim()).toBe("");
+
+    const { exitCode, result } = await runSyncPush({ vault: dir });
+    expect(exitCode).toBe(ExitCode.OK);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.files_committed).toBe(0);
+      expect(result.data.pushed).toBe(true);
+    }
+
+    // Prove extra commit is on the remote
+    const remoteLog = execSync("git log -1 --format=%s", { cwd: remoteDir }).toString().trim();
+    expect(remoteLog).toBe("extra local clean note");
+
+    // Prove porcelain stayed empty (no stageVaultContentChanges / git add -A)
+    expect(execSync("git status --porcelain", { cwd: dir }).toString().trim()).toBe("");
+  }, 60000);
+
+  it("does not push when clean, ahead, but lint-delta reports new_errors > 0", async () => {
+    const remoteDir = makeTempDir();
+    git(remoteDir, "init --bare");
+    const dir = makeTempDir();
+    git(dir, `clone ${remoteDir} .`);
+    git(dir, 'config user.email "t@t"');
+    git(dir, 'config user.name "t"');
+    git(dir, "config core.longpaths true");
+    writeFileSync(join(dir, "SCHEMA.md"), "# Vault Schema\n");
+    writeFileSync(join(dir, "index.md"), "# Index\n");
+    writeFileSync(join(dir, "log.md"), "# Log\n");
+    git(dir, "add .");
+    git(dir, 'commit -m "init vault"');
+    git(dir, "branch -M main");
+    git(dir, "push -u origin main");
+    git(dir, "remote set-head origin main");
+
+    const remoteHeadBefore = execSync("git rev-parse HEAD", { cwd: remoteDir }).toString().trim();
+
+    // Extra local commit introducing conflict markers (lint error)
+    writeFileSync(
+      join(dir, "bad-note.md"),
+      "<<<<<<< HEAD\nremote\n=======\nlocal\n>>>>>>> branch\n",
+    );
+    git(dir, "add .");
+    git(dir, 'commit -m "introduce conflict markers"');
+
+    expect(execSync("git status --porcelain", { cwd: dir }).toString().trim()).toBe("");
+
+    const { exitCode, result } = await runSyncPush({ vault: dir });
+    expect(exitCode).toBe(ExitCode.LINT_HAS_ERRORS);
+    expect(result.ok).toBe(false);
+
+    // Remote HEAD remains unchanged
+    const remoteHeadAfter = execSync("git rev-parse HEAD", { cwd: remoteDir }).toString().trim();
+    expect(remoteHeadAfter).toBe(remoteHeadBefore);
+
+    // Tree remains clean
+    expect(execSync("git status --porcelain", { cwd: dir }).toString().trim()).toBe("");
+  }, 60000);
+
   it("returns NOT_A_GIT_REPO for non-git directory", async () => {
     const dir = makeTempDir();
     const { exitCode, result } = await runSyncPush({ vault: dir });

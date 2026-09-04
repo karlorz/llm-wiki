@@ -50,6 +50,18 @@ export interface SyncStatusOutput {
   degraded_reasons?: string[];
 }
 
+function countAheadBehind(vault: string): { ahead: number; behind: number } {
+  const revOutput = git(vault, ["rev-list", "--left-right", "--count", "origin/HEAD...HEAD"]);
+  let ahead = 0;
+  let behind = 0;
+  if (revOutput) {
+    const parts = revOutput.split(/\s+/);
+    behind = parseInt(parts[0]!, 10) || 0;
+    ahead = parseInt(parts[1]!, 10) || 0;
+  }
+  return { ahead, behind };
+}
+
 function parseDirtyPaths(porcelain: string): string[] {
   if (!porcelain) return [];
   return porcelain
@@ -120,14 +132,7 @@ export function runSyncStatus(input: SyncStatusInput): { exitCode: number; resul
   const untrackedPaths = splitNonEmptyLines(git(vault, ["ls-files", "--others", "--exclude-standard"]));
 
   // 3. git rev-list --left-right --count origin/HEAD...HEAD → ahead/behind
-  const revOutput = git(vault, ["rev-list", "--left-right", "--count", "origin/HEAD...HEAD"]);
-  let ahead = 0;
-  let behind = 0;
-  if (revOutput) {
-    const parts = revOutput.split(/\s+/);
-    behind = parseInt(parts[0]!, 10) || 0;
-    ahead = parseInt(parts[1]!, 10) || 0;
-  }
+  const { ahead, behind } = countAheadBehind(vault);
 
   // 4. git log -1 --format=%ct → last commit timestamp
   const tsRaw = git(vault, ["log", "-1", "--format=%ct"]);
@@ -278,14 +283,113 @@ export async function runSyncPush(input: SyncPushInput): Promise<{ exitCode: num
   const dirtyFiles = porcelain ? porcelain.split("\n").filter((l) => l.trim().length > 0) : [];
 
   if (dirtyFiles.length === 0) {
+    const { ahead } = countAheadBehind(vault);
+    if (ahead === 0) {
+      return {
+        exitCode: ExitCode.OK,
+        result: ok({
+          files_committed: 0,
+          commit_message: "",
+          pushed: false,
+          path_fixes: pathFixes,
+          humanHint: "nothing to commit, working tree clean",
+        }),
+      };
+    }
+
+    // Clean tree but ahead of origin: run lint-delta before push
+    let delta: {
+      full_errors: number;
+      base_errors: number;
+      new_errors: number;
+      resolved_errors: number;
+    } = { full_errors: 0, base_errors: 0, new_errors: 0, resolved_errors: 0 };
+
+    const preferredBase = git(vault, ["rev-parse", "--verify", "origin/main"])
+      ? "origin/main"
+      : git(vault, ["rev-parse", "--verify", "origin/HEAD"])
+        ? "origin/HEAD"
+        : "";
+
+    if (preferredBase) {
+      const deltaResult = await runSyncLintDelta({ vault, baseRef: preferredBase });
+      if (!deltaResult.result.ok) {
+        return {
+          exitCode: ExitCode.LINT_HAS_ERRORS,
+          result: err("LINT_DELTA_UNAVAILABLE", {
+            message: "lint-delta evidence missing or failed — fail closed",
+            detail: deltaResult.result,
+          }),
+        };
+      }
+      delta = deltaResult.result.data;
+      if (delta.new_errors > 0) {
+        return {
+          exitCode: ExitCode.LINT_HAS_ERRORS,
+          result: err("LINT_NEW_ERRORS_BLOCK_PUSH", {
+            full_errors: delta.full_errors,
+            base_errors: delta.base_errors,
+            new_errors: delta.new_errors,
+            resolved_errors: delta.resolved_errors,
+            new_fingerprints: deltaResult.result.data.new_fingerprints,
+          }),
+        };
+      }
+    } else {
+      const lintResult = await runLint({ vault, days: 90, lines: 200, logThreshold: 500 });
+      if (lintResult.result.ok) {
+        const fullErrors = lintResult.result.data.summary.errors;
+        delta = { full_errors: fullErrors, base_errors: 0, new_errors: fullErrors, resolved_errors: 0 };
+        if (fullErrors > 0) {
+          const buckets =
+            "by_severity" in lintResult.result.data
+              ? (lintResult.result.data as { by_severity: { error: unknown } }).by_severity.error
+              : [];
+          return {
+            exitCode: ExitCode.LINT_HAS_ERRORS,
+            result: err("LINT_ERRORS_BLOCK_PUSH", {
+              errors: fullErrors,
+              buckets,
+              message: "no origin base ref for delta; absolute lint errors block push",
+            }),
+          };
+        }
+      } else {
+        delta = { full_errors: 0, base_errors: 0, new_errors: 0, resolved_errors: 0 };
+      }
+    }
+
+    // Do NOT stage content changes on clean tree
+    let pushed = false;
+    try {
+      gitStrict(vault, ["push", "origin", "HEAD"]);
+      pushed = true;
+    } catch (e: unknown) {
+      return {
+        exitCode: ExitCode.SYNC_PUSH_FAILED,
+        result: err("SYNC_PUSH_FAILED", {
+          pushed: false,
+          message: `push failed: ${String(e)}`,
+        }),
+      };
+    }
+
+    const inheritedNote =
+      delta.full_errors > 0
+        ? `; lint full=${delta.full_errors} base=${delta.base_errors} new=${delta.new_errors} resolved=${delta.resolved_errors} (inherited debt only)`
+        : `; lint full=0 new=0`;
     return {
       exitCode: ExitCode.OK,
       result: ok({
         files_committed: 0,
         commit_message: "",
-        pushed: false,
+        pushed,
         path_fixes: pathFixes,
-        humanHint: "nothing to commit, working tree clean",
+        lint_full_errors: delta.full_errors,
+        lint_base_errors: delta.base_errors,
+        lint_new_errors: delta.new_errors,
+        lint_resolved_errors: delta.resolved_errors,
+        humanHint: `pushed ${ahead} commit(s) on clean working tree${pathFixes > 0 ? ` after ${pathFixes} long-path fix(es)` : ""}${inheritedNote}`,
       }),
     };
   }
