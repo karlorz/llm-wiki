@@ -402,8 +402,9 @@ describe("runSyncPush", () => {
       expect(result.data.pushed).toBe(true);
     }
 
-    // Prove extra commit is on the remote
-    const remoteLog = execSync("git log -1 --format=%s", { cwd: remoteDir }).toString().trim();
+    // Prove extra commit is on the remote. Use refs/heads/main — a bare
+    // `git init --bare` on CI still has HEAD → master with no commits.
+    const remoteLog = execSync("git log -1 --format=%s refs/heads/main", { cwd: remoteDir }).toString().trim();
     expect(remoteLog).toBe("extra local clean note");
 
     // Prove porcelain stayed empty (no stageVaultContentChanges / git add -A)
@@ -427,7 +428,7 @@ describe("runSyncPush", () => {
     git(dir, "push -u origin main");
     git(dir, "remote set-head origin main");
 
-    const remoteHeadBefore = execSync("git rev-parse HEAD", { cwd: remoteDir }).toString().trim();
+    const remoteHeadBefore = execSync("git rev-parse refs/heads/main", { cwd: remoteDir }).toString().trim();
 
     // Extra local commit introducing conflict markers (lint error)
     writeFileSync(
@@ -443,8 +444,8 @@ describe("runSyncPush", () => {
     expect(exitCode).toBe(ExitCode.LINT_HAS_ERRORS);
     expect(result.ok).toBe(false);
 
-    // Remote HEAD remains unchanged
-    const remoteHeadAfter = execSync("git rev-parse HEAD", { cwd: remoteDir }).toString().trim();
+    // Remote main remains unchanged
+    const remoteHeadAfter = execSync("git rev-parse refs/heads/main", { cwd: remoteDir }).toString().trim();
     expect(remoteHeadAfter).toBe(remoteHeadBefore);
 
     // Tree remains clean
