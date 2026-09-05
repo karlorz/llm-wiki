@@ -23,9 +23,15 @@ query), qualified `total_count` and result items, merged candidates,
 README/evidence processing, quality pass, raw eligible, selected,
 merge-dedup and actual duplicate-suppressed counts, and budget exhaustion.
 Each diagnostic search+count pair is reserved inside `github.api_call_budget`,
-so diagnose never exceeds the budget (README calls stay inside it too). The
-actual duplicate-suppression column reuses the same read-only duplicate
-inputs as `collect` (`collectDuplicateSignals` plus the pure
+so diagnose never exceeds the budget (README calls stay inside it too).
+Diagnostic mode needs two GitHub Search API calls per query, so a 23-query
+run outruns GitHub's 30-request Search window; in diagnostic mode only, the
+collector then paces the known quota boundary: it waits until the Search
+reset plus a short buffer (injectable sleep/clock seam), rechecks the rate
+limit once, and continues. The wait is capped and stays inside the API
+budget; ordinary `collect`/`daily`/`discover` never wait, recheck, or add
+calls. The actual duplicate-suppression column reuses the same read-only
+duplicate inputs as `collect` (`collectDuplicateSignals` plus the pure
 `buildAgentInput` gate over known task URLs, active work, repo names,
 near-titles, and TTL-bounded digests); `selected` reflects candidates before
 that gate, `dup suppressed` reflects candidates the gate would remove, and

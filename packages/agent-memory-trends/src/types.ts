@@ -6,7 +6,7 @@ import type {
   CommunityFetchClient,
 } from "./discovery-community.js";
 import type { DiscoveryCollectorOptions, DiscoveryCollectionOutput } from "./discovery-github.js";
-import type { GhRunner, GithubCollectionOutput } from "./github.js";
+import type { GhRunner, GithubCollectionOutput, GithubCollectorOptions } from "./github.js";
 import type { AgentInput, WriteAgentInputOutput } from "./input.js";
 import type { MaybeSendHeartbeatInput, HeartbeatResult } from "./heartbeat.js";
 import type { PublishGeneratedChangesInput, PublishGeneratedChangesOutput } from "./publish.js";
@@ -74,8 +74,12 @@ export interface AgentMemoryTrendsContext {
   runGh?: GhRunner;
   collectGithubCandidates?: (
     config: ResearchConfig,
-    options: { runGh: GhRunner; now: Date; knownCanonicalUrls?: string[]; existingTaskUrls?: string[]; diagnostic?: boolean }
+    options: GithubCollectorOptions
   ) => Promise<Result<GithubCollectionOutput>>;
+  /** Injectable sleep seam for the diagnostic-only Search quota reset wait. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Injectable unix-milliseconds clock for the same wait; defaults to Date.now. */
+  nowMs?: () => number;
   runDiscoveryCollector?: (
     config: ResearchConfig,
     options: DiscoveryCollectorOptions

@@ -3269,4 +3269,130 @@ watchlist:
     expect(readdirSync(vault)).toEqual([]);
     rmSync(root, { recursive: true, force: true });
   });
+
+  it("drives the shipped diagnose command across the Search quota reset without writing anything", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-memory-trends-diagnose-reset-"));
+    const vault = join(root, "vault");
+    const configPath = join(root, "config.yaml");
+    mkdirSync(vault, { recursive: true });
+    const configText = searchWindowConfig(23, 100);
+    writeFileSync(configPath, configText, "utf8");
+    const startMs = Date.parse("2026-06-13T00:00:00Z");
+
+    const ghCalls: string[][] = [];
+    const sleeps: number[] = [];
+    const touched: string[] = [];
+    let rateLimitCalls = 0;
+    const result = await runAgentMemoryTrendsCli(
+      ["diagnose", "--vault", vault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now: new Date(startMs),
+        nowMs: () => startMs,
+        readFile: (path: string) => {
+          if (path === configPath) return configText;
+          throw new Error(`unexpected readFile path: ${path}`);
+        },
+        runGh: async (args: string[]) => {
+          ghCalls.push(args);
+          if (args[0] === "auth" && args[1] === "status") {
+            return { exitCode: 0, stdout: "", stderr: "" };
+          }
+          if (args[0] === "api" && args[1] === "rate_limit") {
+            rateLimitCalls += 1;
+            const resetSec = startMs / 1000 + (rateLimitCalls === 1 ? 120 : 240);
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                resources: {
+                  core: { remaining: 4900, limit: 5000, reset: resetSec + 3600 },
+                  search: { remaining: 30, limit: 30, reset: resetSec },
+                },
+              }),
+              stderr: "",
+            };
+          }
+          if (args[0] === "api" && args[1] === "--method" && args[2] === "GET" && args[3] === "/search/repositories") {
+            return { exitCode: 0, stdout: JSON.stringify({ total_count: 0, items: [] }), stderr: "" };
+          }
+          throw new Error(`unexpected gh call: ${args.join(" ")}`);
+        },
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+        },
+        writeAgentInput: () => {
+          touched.push("write-input");
+          throw new Error("diagnose must not write agent input");
+        },
+        writeRunState: () => {
+          touched.push("run-state");
+          throw new Error("diagnose must not write run state");
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected diagnose success");
+    expect(result.result.data.command).toBe("diagnose");
+    expect(result.result.data.mutations).toEqual([]);
+    expect(touched).toEqual([]);
+    // 23 qualified + 23 unqualified Search calls cross the 30-request window
+    // once; the shipped CLI waits reset + 5s buffer and rechecks once.
+    expect(sleeps).toEqual([120_000 + 5_000]);
+    expect(rateLimitCalls).toBe(2);
+    expect(ghCalls.filter((args) => args[0] === "api" && args[1] === "--method" && args[3] === "/search/repositories")).toHaveLength(46);
+    expect(result.result.data.humanHint).toContain("diagnose: ok; 48 gh api call(s) used of 100 budget");
+    expect(result.result.data.humanHint).toContain(
+      "lane rate_limit_window: queries 23/23, unqualified 0, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: no"
+    );
+    // Diagnose is non-mutating: the vault stays empty.
+    expect(readdirSync(vault)).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
 });
+
+/** Single-lane v1 config with `queryCount` queries, each needing 2 diagnostic Search API calls. */
+function searchWindowConfig(queryCount: number, apiCallBudget: number): string {
+  const queries = Array.from({ length: queryCount }, (_, index) => {
+    const id = `q${String(index + 1).padStart(2, "0")}`;
+    return `        - { id: ${id}, label: ${id}, query: "memory ${id}" }`;
+  }).join("\n");
+  return `version: 1
+project: llm-wiki
+timezone: Asia/Hong_Kong
+scoring:
+  threshold: 65
+  weights:
+    relevance: 30
+    implementation_evidence: 25
+    authority_momentum: 25
+    freshness: 10
+    novelty_or_tracking: 10
+github:
+  api_call_budget: ${apiCallBudget}
+  max_queries: 24
+  max_raw_candidates: 50
+  max_selected_candidates: 10
+  lanes:
+    - id: rate_limit_window
+      label: Rate limit window
+      window_days: 7
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 0
+      queries:
+${queries}
+watchlist:
+  auto_append: { min_appearances: 3, window_days: 14, min_score: 65 }
+  accepted: []
+  rejected: []
+  archived: []
+`;
+}

@@ -738,7 +738,270 @@ it("runs unqualified count queries only in diagnostic mode and fills the pre-dat
       expect.objectContaining({ laneId: "emerging", configuredQueryCount: 1, executedQueryCount: 0, searchResultCount: 0, mergedCandidateCount: 0, readmeProcessedCount: 0, budgetExhausted: true }),
     ]);
   });
+
+  it("paces diagnostic search calls across the Search quota reset so a 46-call run completes inside a 30-request window", async () => {
+    const parsed = parseResearchConfig(searchWindowConfig(23, 100), "rate-window-test.yaml");
+    if (!parsed.ok) throw new Error("expected config to parse");
+
+    const startMs = Date.parse("2026-06-13T00:10:00Z");
+    const { calls, runner } = createSearchWindowRunner(
+      { remaining: 30, resetSec: startMs / 1000 + 120 },
+      { remaining: 30, resetSec: startMs / 1000 + 240 }
+    );
+    const sleeps: number[] = [];
+    const result = await collectGithubCandidates(parsed.data, {
+      runGh: runner,
+      now: new Date(startMs),
+      diagnostic: true,
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+      },
+      nowMs: () => startMs,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected diagnostic collector success");
+    // 23 qualified + 23 unqualified count queries need 46 Search API calls;
+    // the 30-request window cannot cover them, so the run waits for the
+    // reset exactly once (reset + 5s buffer) instead of failing with 403s.
+    expect(calls.filter((args) => args[0] === "api" && args[1] === "--method" && args[3] === "/search/repositories")).toHaveLength(46);
+    expect(calls.filter((args) => args.some((arg) => arg === "per_page=1"))).toHaveLength(23);
+    expect(calls.filter((args) => args[0] === "api" && args[1] === "rate_limit")).toHaveLength(2);
+    expect(sleeps).toEqual([120_000 + 5_000]);
+    const rateLimitIndexes = calls
+      .map((args, index) => (args[0] === "api" && args[1] === "rate_limit" ? index : -1))
+      .filter((index) => index >= 0);
+    // Exactly the 30-request window elapses before the single bounded recheck.
+    expect(rateLimitIndexes[1] - rateLimitIndexes[0] - 1).toBe(30);
+    expect(result.data.apiCallsUsed).toBe(48);
+    expect(result.data.runSummary.apiCallsUsed).toBe(48);
+    expect(result.data.laneDiagnostics[0]).toMatchObject({
+      configuredQueryCount: 23,
+      executedQueryCount: 23,
+      budgetExhausted: false,
+    });
+  });
+
+  it("still stops the diagnostic run before exceeding the api budget when the reset wait adds a recheck call", async () => {
+    const parsed = parseResearchConfig(searchWindowConfig(23, 47), "rate-window-budget-test.yaml");
+    if (!parsed.ok) throw new Error("expected config to parse");
+
+    const startMs = Date.parse("2026-06-13T00:10:00Z");
+    const { calls, runner } = createSearchWindowRunner(
+      { remaining: 30, resetSec: startMs / 1000 + 120 },
+      { remaining: 30, resetSec: startMs / 1000 + 240 }
+    );
+    const sleeps: number[] = [];
+    const result = await collectGithubCandidates(parsed.data, {
+      runGh: runner,
+      now: new Date(startMs),
+      diagnostic: true,
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+      },
+      nowMs: () => startMs,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected diagnostic collector success");
+    // The 31st search call needs the reset wait (one recheck call); with a
+    // 47 budget the last query pair no longer fits (46 + 2 > 47), so q23 is
+    // cut while the total stays inside the ceiling, recheck included.
+    expect(sleeps).toHaveLength(1);
+    expect(calls.filter((args) => args[0] === "api" && args[1] === "rate_limit")).toHaveLength(2);
+    expect(result.data.apiCallsUsed).toBe(46);
+    expect(result.data.apiCallsUsed).toBeLessThanOrEqual(47);
+    expect(result.data.laneDiagnostics[0]).toMatchObject({
+      configuredQueryCount: 23,
+      executedQueryCount: 22,
+      budgetExhausted: true,
+    });
+  });
+
+  it("fails the diagnostic run after one wait and one recheck instead of busy-looping when the Search quota never recovers", async () => {
+    const parsed = parseResearchConfig(searchWindowConfig(1, 100), "rate-window-loop-test.yaml");
+    if (!parsed.ok) throw new Error("expected config to parse");
+
+    const startMs = Date.parse("2026-06-13T00:10:00Z");
+    const { calls, runner } = createSearchWindowRunner(
+      { remaining: 0, resetSec: startMs / 1000 + 60 },
+      { remaining: 0, resetSec: startMs / 1000 + 120 }
+    );
+    const sleeps: number[] = [];
+    const result = await collectGithubCandidates(parsed.data, {
+      runGh: runner,
+      now: new Date(startMs),
+      diagnostic: true,
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+      },
+      nowMs: () => startMs,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected exhausted Search quota to fail the diagnostic run");
+    expect(result.error).toBe("GH_SEARCH_RATE_LIMIT");
+    expect(sleeps).toEqual([60_000 + 5_000]);
+    expect(calls.filter((args) => args[0] === "api" && args[1] === "rate_limit")).toHaveLength(2);
+    expect(calls.some((args) => args[0] === "api" && args[1] === "--method" && args[3] === "/search/repositories")).toBe(false);
+  });
+
+  it("refuses a quota recheck that cannot fit a tight api budget and completes at the exact ceiling when it can", async () => {
+    // Initial remaining 1: the unqualified count query hits the boundary
+    // mid-pair. With budget 3 the recheck plus the count call cannot fit,
+    // so the run fails honestly instead of exceeding the budget.
+    const tight = parseResearchConfig(searchWindowConfig(1, 3), "rate-window-tight-budget-test.yaml");
+    if (!tight.ok) throw new Error("expected config to parse");
+    const startMs = Date.parse("2026-06-13T00:10:00Z");
+    const tightRunner = createSearchWindowRunner(
+      { remaining: 1, resetSec: startMs / 1000 + 60 },
+      { remaining: 30, resetSec: startMs / 1000 + 120 }
+    );
+    const tightSleeps: number[] = [];
+    const tightResult = await collectGithubCandidates(tight.data, {
+      runGh: tightRunner.runner,
+      now: new Date(startMs),
+      diagnostic: true,
+      sleep: async (ms: number) => {
+        tightSleeps.push(ms);
+      },
+      nowMs: () => startMs,
+    });
+    expect(tightResult.ok).toBe(false);
+    if (tightResult.ok) throw new Error("expected tight budget to refuse the recheck");
+    expect(tightResult.error).toBe("GH_SEARCH_RATE_LIMIT");
+    expect(tightSleeps).toEqual([]);
+    expect(tightRunner.calls.filter((args) => args[0] === "api" && args[1] === "rate_limit")).toHaveLength(1);
+
+    // Budget 4 fits the recheck plus the count call: the same run waits
+    // once and lands exactly on the ceiling without exceeding it.
+    const exact = parseResearchConfig(searchWindowConfig(1, 4), "rate-window-exact-budget-test.yaml");
+    if (!exact.ok) throw new Error("expected config to parse");
+    const exactRunner = createSearchWindowRunner(
+      { remaining: 1, resetSec: startMs / 1000 + 60 },
+      { remaining: 30, resetSec: startMs / 1000 + 120 }
+    );
+    const exactSleeps: number[] = [];
+    const exactResult = await collectGithubCandidates(exact.data, {
+      runGh: exactRunner.runner,
+      now: new Date(startMs),
+      diagnostic: true,
+      sleep: async (ms: number) => {
+        exactSleeps.push(ms);
+      },
+      nowMs: () => startMs,
+    });
+    expect(exactResult.ok).toBe(true);
+    if (!exactResult.ok) throw new Error("expected exact-budget diagnostic success");
+    expect(exactSleeps).toEqual([60_000 + 5_000]);
+    expect(exactResult.data.apiCallsUsed).toBe(4);
+    expect(exactResult.data.laneDiagnostics[0]).toMatchObject({ executedQueryCount: 1, budgetExhausted: false });
+  });
+
+  it("keeps ordinary collection free of search-quota waits, rechecks, and added calls even when the Search window is exhausted", async () => {
+    const parsed = parseResearchConfig(searchWindowConfig(23, 100), "rate-window-ordinary-test.yaml");
+    if (!parsed.ok) throw new Error("expected config to parse");
+
+    const startMs = Date.parse("2026-06-13T00:10:00Z");
+    const { calls, runner } = createSearchWindowRunner(
+      { remaining: 0, resetSec: startMs / 1000 + 60 },
+      { remaining: 0, resetSec: startMs / 1000 + 120 }
+    );
+    const sleeps: number[] = [];
+    const result = await collectGithubCandidates(parsed.data, {
+      runGh: runner,
+      now: new Date(startMs),
+      sleep: async (ms: number) => {
+        sleeps.push(ms);
+      },
+      nowMs: () => startMs,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ordinary collector success");
+    expect(sleeps).toEqual([]);
+    expect(calls.filter((args) => args[0] === "api" && args[1] === "rate_limit")).toHaveLength(1);
+    expect(calls.filter((args) => args[0] === "api" && args[1] === "--method" && args[3] === "/search/repositories")).toHaveLength(23);
+    expect(calls.some((args) => args.some((arg) => arg === "per_page=1"))).toBe(false);
+    expect(result.data.apiCallsUsed).toBe(24);
+  });
 });
+
+/** Single-lane config with `queryCount` queries, each needing 2 diagnostic Search calls. */
+function searchWindowConfig(queryCount: number, apiCallBudget: number): string {
+  const queries = Array.from({ length: queryCount }, (_, index) => {
+    const id = `q${String(index + 1).padStart(2, "0")}`;
+    return `        - { id: ${id}, label: ${id}, query: "memory ${id}" }`;
+  }).join("\n");
+  return `version: 1
+project: llm-wiki
+timezone: Asia/Hong_Kong
+scoring:
+  threshold: 65
+  weights:
+    relevance: 30
+    implementation_evidence: 25
+    authority_momentum: 25
+    freshness: 10
+    novelty_or_tracking: 10
+github:
+  api_call_budget: ${apiCallBudget}
+  max_queries: 24
+  max_raw_candidates: 50
+  max_selected_candidates: 10
+  lanes:
+    - id: rate_limit_window
+      label: Rate limit window
+      window_days: 7
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 0
+      queries:
+${queries}
+watchlist:
+  auto_append: { min_appearances: 3, window_days: 14, min_score: 65 }
+  accepted: []
+  rejected: []
+  archived: []
+`;
+}
+
+function createSearchWindowRunner(
+  initial: { remaining: number; resetSec: number },
+  recheck: { remaining: number; resetSec: number }
+): { calls: string[][]; runner: GhRunner } {
+  const calls: string[][] = [];
+  const runner: GhRunner = async (args: string[]) => {
+    calls.push(args);
+    if (args[0] === "auth" && args[1] === "status") {
+      return { exitCode: 0, stdout: "", stderr: "" };
+    }
+    if (args[0] === "api" && args[1] === "rate_limit") {
+      const recheckCount = calls.filter((call) => call[0] === "api" && call[1] === "rate_limit").length - 1;
+      const state = recheckCount > 0 ? recheck : initial;
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          resources: {
+            core: { remaining: 4900, limit: 5000, reset: state.resetSec + 3600 },
+            search: { remaining: state.remaining, limit: 30, reset: state.resetSec },
+          },
+        }),
+        stderr: "",
+      };
+    }
+    if (args[0] === "api" && args[1] === "--method" && args[2] === "GET" && args[3] === "/search/repositories") {
+      return { exitCode: 0, stdout: JSON.stringify({ total_count: 0, items: [] }), stderr: "" };
+    }
+    throw new Error(`unexpected gh call: ${args.join(" ")}`);
+  };
+  return { calls, runner };
+}
 
 function repo(overrides: Record<string, unknown>): Record<string, unknown> {
   return {

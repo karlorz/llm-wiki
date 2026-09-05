@@ -1014,13 +1014,17 @@ async function runDiagnose(
 
   // Diagnostic mode only: the extra unqualified count queries are scoped to
   // this command and reserved inside the API budget; collect/daily/discover
-  // never run them.
+  // never run them. The search-quota pacing waits for the reset (injectable
+  // sleep/clock seam) when the 30-request Search window cannot cover the
+  // diagnostic search+count pairs.
   const runner = context.runGh ?? createGhRunner(context.cwd);
   const collector = context.collectGithubCandidates ?? collectGithubCandidates;
   const collection = await collector(config.data, {
     runGh: runner,
     now: context.now,
     diagnostic: true,
+    sleep: context.sleep,
+    nowMs: context.nowMs,
   });
   if (!collection.ok) return err("COLLECTOR_FAILED", collection.detail ?? collection.error);
 

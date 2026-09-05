@@ -13,6 +13,15 @@ export interface GhRunResult {
 
 export type GhRunner = (args: string[]) => Promise<GhRunResult>;
 
+/** Diagnostic-only buffer added to the Search quota reset timestamp. */
+const SEARCH_RATE_LIMIT_RESET_BUFFER_MS = 5_000;
+/** Diagnostic-only cap on Search quota waits; recovery is one wait + one recheck. */
+const MAX_SEARCH_RATE_LIMIT_WAITS = 2;
+
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export interface GithubCollectorOptions {
   runGh: GhRunner;
   now: Date;
@@ -26,6 +35,13 @@ export interface GithubCollectorOptions {
    * outside diagnostic mode.
    */
   diagnostic?: boolean;
+  /**
+   * Injectable sleep for the diagnostic-only Search quota reset wait;
+   * defaults to a real setTimeout sleep. Ordinary collection never sleeps.
+   */
+  sleep?: (ms: number) => Promise<void>;
+  /** Injectable unix-milliseconds clock for the same wait; defaults to Date.now. */
+  nowMs?: () => number;
 }
 
 export interface RateLimitState {
@@ -131,6 +147,53 @@ export async function collectGithubCandidates(
   if (!rateLimitResult.ok) return rateLimitResult;
   const rateLimit = parseRateLimit(rateLimitResult.data.stdout);
 
+  // Diagnostic-only Search quota pacing. A diagnostic run needs two Search
+  // API calls per query (qualified search + unqualified count query), so a
+  // 30-request Search window cannot cover a large portfolio (23 queries
+  // need 46 calls); the run paces the known remaining boundary across the
+  // reset instead of failing with 403s. Ordinary collection never enters
+  // this path: no waits, no rechecks, no extra calls.
+  const sleep = options.sleep ?? defaultSleep;
+  const nowMs = options.nowMs ?? Date.now;
+  let searchRemaining = 0;
+  let searchResetSec = 0;
+  let searchRateLimitWaits = 0;
+  if (options.diagnostic) {
+    const search = rateLimit.resources.search;
+    searchRemaining = Number.isFinite(search.remaining) ? search.remaining : 0;
+    searchResetSec = Number.isFinite(search.reset) ? search.reset : 0;
+  }
+
+  /**
+   * Diagnostic-only gate before each repository search request. When the
+   * Search window is exhausted, wait until the reset plus a small buffer,
+   * then recheck the rate limit exactly once before continuing. Bounded by
+   * MAX_SEARCH_RATE_LIMIT_WAITS and by the API call budget, so it never
+   * busy-loops and never exceeds github.api_call_budget.
+   */
+  const guardSearchQuota = async (): Promise<Result<void>> => {
+    if (!options.diagnostic || searchRemaining > 0) return ok(undefined);
+    if (searchRateLimitWaits >= MAX_SEARCH_RATE_LIMIT_WAITS) {
+      return err("GH_SEARCH_RATE_LIMIT", `search quota still exhausted after ${searchRateLimitWaits} wait cycle(s)`);
+    }
+    if (apiCallsUsed + 2 > config.github.apiCallBudget) {
+      return err("GH_SEARCH_RATE_LIMIT", "search quota exhausted and the api budget cannot fit a rate limit recheck plus the next search call");
+    }
+    searchRateLimitWaits += 1;
+    await sleep(Math.max(0, searchResetSec * 1000 + SEARCH_RATE_LIMIT_RESET_BUFFER_MS - nowMs()));
+    const refresh = await ghApi(options.runGh, ["rate_limit"]);
+    apiCallsUsed += 1;
+    if (!refresh.ok) return refresh;
+    const parsed = parseRateLimitResult(refresh.data.stdout);
+    if (!parsed.ok) return parsed;
+    searchRemaining = parsed.data.resources.search.remaining;
+    searchResetSec = parsed.data.resources.search.reset;
+    if (!Number.isFinite(searchRemaining) || searchRemaining <= 0) {
+      return err("GH_SEARCH_RATE_LIMIT", "search quota still exhausted after waiting past the reset");
+    }
+    return ok(undefined);
+  };
+
   const laneDiagnostics: GithubLaneDiagnostics[] = [];
   const laneDiagnosticByLaneId = new Map<string, GithubLaneDiagnostics>();
   for (const lane of config.github.lanes) {
@@ -148,18 +211,24 @@ export async function collectGithubCandidates(
       // query; reserve both calls so the run never exceeds the API budget.
       const requiredApiCalls = options.diagnostic ? 2 : 1;
       if (queriesUsed >= config.github.maxQueries || apiCallsUsed + requiredApiCalls > config.github.apiCallBudget) break;
+      const quota = await guardSearchQuota();
+      if (!quota.ok) return quota;
       const search = await searchRepositories(options.runGh, lane, query, options.now);
       apiCallsUsed += 1;
       queriesUsed += 1;
       if (!search.ok) return search;
+      if (options.diagnostic) searchRemaining = Math.max(0, searchRemaining - 1);
       laneDiagnostic.executedQueryCount += 1;
       laneDiagnostic.qualifiedTotalCount += search.data.totalCount;
       laneDiagnostic.searchResultCount += search.data.items.length;
 
       if (options.diagnostic) {
+        const countQuota = await guardSearchQuota();
+        if (!countQuota.ok) return countQuota;
         const unqualified = await fetchUnqualifiedTotalCount(options.runGh, query.query);
         apiCallsUsed += 1;
         if (!unqualified.ok) return unqualified;
+        searchRemaining = Math.max(0, searchRemaining - 1);
         laneDiagnostic.unqualifiedTotalCount = (laneDiagnostic.unqualifiedTotalCount ?? 0) + unqualified.data;
       }
 
@@ -629,6 +698,14 @@ function isMarkdownBadgeLine(line: string): boolean {
 function parseRateLimit(text: string): RateLimitState {
   const parsed = JSON.parse(text) as RateLimitState;
   return parsed;
+}
+
+function parseRateLimitResult(text: string): Result<RateLimitState> {
+  try {
+    return ok(parseRateLimit(text));
+  } catch (error) {
+    return err("GH_RATE_LIMIT_PARSE_FAILED", error instanceof Error ? error.message : String(error));
+  }
 }
 
 export function parseJsonObject(text: string): Result<Record<string, unknown>> {
