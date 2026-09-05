@@ -298,6 +298,15 @@ describe("agent-memory-trends GitHub collector", () => {
       selectedCandidateCount: 10,
       apiCallsUsed: result.data.apiCallsUsed,
     });
+    expect(result.data.laneDiagnostics).toHaveLength(1);
+    expect(result.data.laneDiagnostics[0]).toMatchObject({
+      laneId: "legacy",
+      configuredQueryCount: 10,
+      executedQueryCount: 10,
+      searchResultCount: 60,
+      qualityPassedCount: 50,
+      selectedCount: 10,
+    });
   });
 
   it("collects by lane, merges duplicate repositories, filters weak daily noise, and recalls MiMo-class evidence generically", async () => {
@@ -435,6 +444,299 @@ describe("agent-memory-trends GitHub collector", () => {
     );
     expect(mimo?.score.reasons.join("\n")).toContain("lane evidence");
     expect(mimo?.score.reasons.join("\n")).toContain("authority/momentum");
+
+    expect(result.data.laneDiagnostics).toEqual([
+      expect.objectContaining({ laneId: "daily_fresh", configuredQueryCount: 1, executedQueryCount: 1, searchResultCount: 2, mergedCandidateCount: 2, qualityPassedCount: 1, selectedCount: 1 }),
+      expect.objectContaining({ laneId: "weekly_momentum", configuredQueryCount: 1, executedQueryCount: 1, searchResultCount: 2, mergedCandidateCount: 2, qualityPassedCount: 1, selectedCount: 1 }),
+      expect.objectContaining({ laneId: "monthly_authority", configuredQueryCount: 1, executedQueryCount: 1, searchResultCount: 2, mergedCandidateCount: 2, qualityPassedCount: 1, selectedCount: 1 }),
+      expect.objectContaining({ laneId: "emerging", configuredQueryCount: 1, executedQueryCount: 1, searchResultCount: 1, mergedCandidateCount: 1, qualityPassedCount: 1, selectedCount: 1 }),
+    ]);
+  });
+it("runs unqualified count queries only in diagnostic mode and fills the pre-date-filter totals per lane", async () => {
+    const parsed = parseResearchConfig(LANE_CONFIG, "lane-github-test.yaml");
+    if (!parsed.ok) throw new Error("expected config to parse");
+
+    const calls: string[][] = [];
+    const runner: GhRunner = async (args: string[]): Promise<GhRunResult> => {
+      calls.push(args);
+      if (args[0] === "auth" && args[1] === "status") {
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "api" && args[1] === "rate_limit") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            resources: {
+              core: { remaining: 4900, limit: 5000, reset: 1781126400 },
+              search: { remaining: 29, limit: 30, reset: 1781126400 },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1] === "--method" && args[2] === "GET" && args[3] === "/search/repositories") {
+        const query = (args.find((arg) => arg.startsWith("q=")) ?? "").replace(/^q=/, "");
+        const items = [
+          repo({
+            name: "MiMo-Code",
+            full_name: "XiaomiMiMo/MiMo-Code",
+            html_url: "https://github.com/XiaomiMiMo/MiMo-Code",
+            description: null,
+            topics: [],
+            stargazers_count: 7316,
+            forks_count: 582,
+            pushed_at: "2026-06-11T14:29:00Z",
+          }),
+        ];
+        if (query.includes("checkpoint memory") || query.includes("workflow distillation")) {
+          items.push(
+            repo({
+              name: "awesome-go",
+              full_name: "avelino/awesome-go",
+              html_url: "https://github.com/avelino/awesome-go",
+              description: "A curated list of Go frameworks, libraries, workflow tools, databases, and search packages.",
+              topics: ["go", "awesome-list", "database", "search"],
+              stargazers_count: 150000,
+              forks_count: 12000,
+              pushed_at: "2026-06-12T10:00:00Z",
+            })
+          );
+        }
+        if (query.includes("coding agent memory")) {
+          items.push(
+            repo({
+              name: "fresh-demo",
+              full_name: "noise/fresh-demo",
+              html_url: "https://github.com/noise/fresh-demo",
+              description: "Fresh project with no implementation evidence.",
+              topics: [],
+              stargazers_count: 0,
+              forks_count: 0,
+              pushed_at: "2026-06-12T23:58:00Z",
+            })
+          );
+        }
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ total_count: items.length, items }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1]?.startsWith("/repos/") && args[1]?.endsWith("/readme")) {
+        const fullName = args[1].replace(/^\/repos\//, "").replace(/\/readme$/, "");
+        const readme =
+          fullName.toLowerCase() === "xiaomimimo/mimo-code"
+            ? [
+                "# MiMo Code",
+                "",
+                "An autonomous coding agent workflow with checkpoint memory, context consolidation, dream and distill loops, reusable skills, subagents, goal judge evaluation, and local search over agent trajectories.",
+              ].join("\n")
+            : fullName.toLowerCase() === "avelino/awesome-go"
+              ? [
+                  "# Awesome Go",
+                  "",
+                  "A curated list of workflow tools, database libraries, search packages, benchmarks, and local storage projects.",
+                  "",
+                  "## Contents",
+                  "",
+                  "- Database",
+                ].join("\n")
+            : "Small wrapper with a recent push.";
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            encoding: "base64",
+            content: Buffer.from(readme).toString("base64"),
+          }),
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected gh call: ${args.join(" ")}`);
+    };
+    const options = { runGh: runner, now: new Date("2026-06-13T00:00:00Z") };
+
+    const normal = await collectGithubCandidates(parsed.data, options);
+    expect(normal.ok).toBe(true);
+    if (!normal.ok) throw new Error("expected collector success");
+    // Ordinary collection runs no count queries, so API usage is unchanged
+    // (auth status is free; rate_limit + 4 searches + 3 readmes).
+    expect(calls.some((args) => args.some((arg) => arg === "per_page=1"))).toBe(false);
+    expect(normal.data.apiCallsUsed).toBe(8);
+    expect(normal.data.laneDiagnostics[0].unqualifiedTotalCount).toBeUndefined();
+
+    calls.length = 0;
+    const diagnosed = await collectGithubCandidates(parsed.data, { ...options, diagnostic: true });
+    expect(diagnosed.ok).toBe(true);
+    if (!diagnosed.ok) throw new Error("expected diagnostic collector success");
+    const countCalls = calls.filter((args) => args.some((arg) => arg === "per_page=1"));
+    expect(countCalls).toHaveLength(4);
+    // The unqualified count query carries the raw query without the lane's date window.
+    expect(countCalls[0]).toEqual(expect.arrayContaining(["q=coding agent memory in:name,description,readme"]));
+    expect(countCalls[0].some((arg) => arg.startsWith("q=") && arg.includes(":>="))).toBe(false);
+    expect(countCalls[0].some((arg) => arg.startsWith("sort="))).toBe(false);
+    const diagnosedByLane = new Map(diagnosed.data.laneDiagnostics.map((lane) => [lane.laneId, lane]));
+    expect(diagnosedByLane.get("daily_fresh")).toMatchObject({
+      configuredQueryCount: 1,
+      executedQueryCount: 1,
+      unqualifiedTotalCount: 2,
+      qualifiedTotalCount: 2,
+      searchResultCount: 2,
+      mergedCandidateCount: 2,
+      readmeProcessedCount: 2,
+      qualityPassedCount: 1,
+      rawEligibleCount: 1,
+      selectedCount: 1,
+      mergedDuplicateCount: 0,
+      budgetExhausted: false,
+    });
+    expect(diagnosedByLane.get("weekly_momentum")).toMatchObject({
+      unqualifiedTotalCount: 2,
+      qualifiedTotalCount: 2,
+      searchResultCount: 2,
+      mergedCandidateCount: 2,
+      readmeProcessedCount: 2,
+      qualityPassedCount: 1,
+      mergedDuplicateCount: 1,
+    });
+    expect(diagnosedByLane.get("monthly_authority")).toMatchObject({
+      unqualifiedTotalCount: 2,
+      searchResultCount: 2,
+      mergedCandidateCount: 2,
+      mergedDuplicateCount: 2,
+    });
+    expect(diagnosedByLane.get("emerging")).toMatchObject({
+      unqualifiedTotalCount: 1,
+      searchResultCount: 1,
+      mergedCandidateCount: 1,
+      mergedDuplicateCount: 1,
+    });
+    expect(diagnosed.data.apiCallsUsed).toBe(12);
+  });
+
+  it("exposes budget exhaustion per lane when the API call budget cuts queries and README processing short", async () => {
+    const parsed = parseResearchConfig(LANE_CONFIG.replace("api_call_budget: 100", "api_call_budget: 4"), "lane-github-test.yaml");
+    if (!parsed.ok) throw new Error("expected config to parse");
+
+    const calls: string[][] = [];
+    const runner: GhRunner = async (args: string[]): Promise<GhRunResult> => {
+      calls.push(args);
+      if (args[0] === "auth" && args[1] === "status") {
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "api" && args[1] === "rate_limit") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            resources: {
+              core: { remaining: 4900, limit: 5000, reset: 1781126400 },
+              search: { remaining: 29, limit: 30, reset: 1781126400 },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1] === "--method" && args[2] === "GET" && args[3] === "/search/repositories") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            total_count: 2,
+            items: [
+              repo({}),
+              repo({ name: "other", full_name: "acme/other", html_url: "https://github.com/acme/other" }),
+            ],
+          }),
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected gh call: ${args.join(" ")}`);
+    };
+
+    const result = await collectGithubCandidates(parsed.data, {
+      runGh: runner,
+      now: new Date("2026-06-13T00:00:00Z"),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected collector success");
+    // rate_limit + daily + weekly + monthly search = 4 api calls; emerging is
+    // cut by the budget and the readme loop is cut at the same ceiling.
+    expect(result.data.apiCallsUsed).toBe(4);
+    expect(result.data.laneDiagnostics).toEqual([
+      expect.objectContaining({ laneId: "daily_fresh", configuredQueryCount: 1, executedQueryCount: 1, searchResultCount: 2, mergedCandidateCount: 2, readmeProcessedCount: 0, qualityPassedCount: 0, selectedCount: 0, mergedDuplicateCount: 0, budgetExhausted: true }),
+      expect.objectContaining({ laneId: "weekly_momentum", configuredQueryCount: 1, executedQueryCount: 1, searchResultCount: 2, mergedCandidateCount: 2, readmeProcessedCount: 0, mergedDuplicateCount: 2, budgetExhausted: true }),
+      expect.objectContaining({ laneId: "monthly_authority", configuredQueryCount: 1, executedQueryCount: 1, searchResultCount: 2, mergedCandidateCount: 2, readmeProcessedCount: 0, mergedDuplicateCount: 2, budgetExhausted: true }),
+      expect.objectContaining({ laneId: "emerging", configuredQueryCount: 1, executedQueryCount: 0, searchResultCount: 0, mergedCandidateCount: 0, mergedDuplicateCount: 0, budgetExhausted: true }),
+    ]);
+  });
+
+  it("reserves the diagnostic count-query pair inside the api call budget so it never exceeds the ceiling", async () => {
+    const parsed = parseResearchConfig(LANE_CONFIG.replace("api_call_budget: 100", "api_call_budget: 4"), "lane-github-test.yaml");
+    if (!parsed.ok) throw new Error("expected config to parse");
+
+    const calls: string[][] = [];
+    const runner: GhRunner = async (args: string[]): Promise<GhRunResult> => {
+      calls.push(args);
+      if (args[0] === "auth" && args[1] === "status") {
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "api" && args[1] === "rate_limit") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            resources: {
+              core: { remaining: 4900, limit: 5000, reset: 1781126400 },
+              search: { remaining: 29, limit: 30, reset: 1781126400 },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1] === "--method" && args[2] === "GET" && args[3] === "/search/repositories") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            total_count: 2,
+            items: [
+              repo({}),
+              repo({ name: "other", full_name: "acme/other", html_url: "https://github.com/acme/other" }),
+            ],
+          }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1]?.startsWith("/repos/") && args[1]?.endsWith("/readme")) {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            encoding: "base64",
+            content: Buffer.from("Small wrapper with a recent push.").toString("base64"),
+          }),
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected gh call: ${args.join(" ")}`);
+    };
+
+    const result = await collectGithubCandidates(parsed.data, {
+      runGh: runner,
+      now: new Date("2026-06-13T00:00:00Z"),
+      diagnostic: true,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected collector success");
+    // rate_limit = 1; the daily search+count pair fits (3), the weekly pair
+    // would need 5 > 4 so it never starts; one README call stays inside the
+    // ceiling: total 4 and never more.
+    expect(result.data.apiCallsUsed).toBe(4);
+    expect(result.data.apiCallsUsed).toBeLessThanOrEqual(4);
+    expect(calls.filter((args) => args.some((arg) => arg === "per_page=1"))).toHaveLength(1);
+    expect(result.data.laneDiagnostics).toEqual([
+      expect.objectContaining({ laneId: "daily_fresh", configuredQueryCount: 1, executedQueryCount: 1, searchResultCount: 2, mergedCandidateCount: 2, readmeProcessedCount: 1, budgetExhausted: true }),
+      expect.objectContaining({ laneId: "weekly_momentum", configuredQueryCount: 1, executedQueryCount: 0, searchResultCount: 0, mergedCandidateCount: 0, readmeProcessedCount: 0, budgetExhausted: true }),
+      expect.objectContaining({ laneId: "monthly_authority", configuredQueryCount: 1, executedQueryCount: 0, searchResultCount: 0, mergedCandidateCount: 0, readmeProcessedCount: 0, budgetExhausted: true }),
+      expect.objectContaining({ laneId: "emerging", configuredQueryCount: 1, executedQueryCount: 0, searchResultCount: 0, mergedCandidateCount: 0, readmeProcessedCount: 0, budgetExhausted: true }),
+    ]);
   });
 });
 

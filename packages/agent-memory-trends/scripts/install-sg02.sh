@@ -150,7 +150,7 @@ cat > "$BIN_DIR/agent-memory-trends" <<'EOF'
 set -Eeuo pipefail
 
 if [ "$#" -lt 1 ]; then
-  echo "Usage: agent-memory-trends <doctor|collect|daily|discover|publish|version> [args...]" >&2
+  echo "Usage: agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|version> [args...]" >&2
   exit 46
 fi
 

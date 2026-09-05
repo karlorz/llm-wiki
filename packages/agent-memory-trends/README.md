@@ -7,7 +7,7 @@ The package stages high-signal agent-memory research into the vault. It collects
 ## CLI surface
 
 ```text
-agent-memory-trends <doctor|collect|daily|discover|publish|version>
+agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|version>
   [--dry-run] [--generate-only] [--preview-only]
   [--dedupe-digest-ttl-days <n>]
   [--synthesis-retries <n>]
@@ -15,6 +15,23 @@ agent-memory-trends <doctor|collect|daily|discover|publish|version>
   [--synthesis-timeout-ms <ms>]
   [--help] [--version]
 ```
+
+`diagnose` runs the real GitHub collector in diagnostic mode and prints a
+per-lane funnel report: configured/executed query counts, pre-date-filter
+volume (unqualified `total_count` via one extra count query per executed
+query), qualified `total_count` and result items, merged candidates,
+README/evidence processing, quality pass, raw eligible, selected,
+merge-dedup and actual duplicate-suppressed counts, and budget exhaustion.
+Each diagnostic search+count pair is reserved inside `github.api_call_budget`,
+so diagnose never exceeds the budget (README calls stay inside it too). The
+actual duplicate-suppression column reuses the same read-only duplicate
+inputs as `collect` (`collectDuplicateSignals` plus the pure
+`buildAgentInput` gate over known task URLs, active work, repo names,
+near-titles, and TTL-bounded digests); `selected` reflects candidates before
+that gate, `dup suppressed` reflects candidates the gate would remove, and
+nothing is written: no input JSON, run-state, or vault/repo file. The extra
+unqualified count queries run only in diagnostic mode; ordinary
+`collect`/`daily`/`discover` API usage is unchanged.
 
 Package scripts: `build`, `doctor`, `collect`, `daily`, `discover`, `publish`,
 `test`, `typecheck`. Build first when using the dist entrypoint:

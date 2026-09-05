@@ -35,7 +35,7 @@ export function err(error: string, detail?: unknown): ErrResult {
   return detail === undefined ? { ok: false, error } : { ok: false, error, detail };
 }
 
-export type AgentMemoryTrendsCommand = "doctor" | "collect" | "daily" | "discover" | "publish" | "help" | "version";
+export type AgentMemoryTrendsCommand = "doctor" | "diagnose" | "collect" | "daily" | "discover" | "publish" | "help" | "version";
 
 export interface RefreshSessionBriefInput {
   vault: string;
@@ -74,7 +74,7 @@ export interface AgentMemoryTrendsContext {
   runGh?: GhRunner;
   collectGithubCandidates?: (
     config: ResearchConfig,
-    options: { runGh: GhRunner; now: Date; knownCanonicalUrls?: string[]; existingTaskUrls?: string[] }
+    options: { runGh: GhRunner; now: Date; knownCanonicalUrls?: string[]; existingTaskUrls?: string[]; diagnostic?: boolean }
   ) => Promise<Result<GithubCollectionOutput>>;
   runDiscoveryCollector?: (
     config: ResearchConfig,

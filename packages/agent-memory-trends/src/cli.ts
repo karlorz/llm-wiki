@@ -9,7 +9,7 @@ import { mergeCommunityReferences } from "./discovery-community-normalize.js";
 import { collectDiscoveryCandidates } from "./discovery-github.js";
 import { buildDiscoveryQueue } from "./discovery-score.js";
 import { applyDiscoveryDeltas, dateKey, loadDiscoveryHistory, pruneDiscoverySnapshots, writeDiscoveryQueue, writeDiscoverySnapshot } from "./discovery-snapshots.js";
-import { collectGithubCandidates } from "./github.js";
+import { collectGithubCandidates, diagnosticLaneId, type GithubCollectionOutput } from "./github.js";
 import { readResearchConfig, parseResearchConfig, type ResearchConfig } from "./config.js";
 import { collectDuplicateSignals } from "./dedupe.js";
 import { renderProposalCaptures } from "./captures.js";
@@ -40,8 +40,8 @@ import {
   type Result,
 } from "./types.js";
 
-const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "collect", "daily", "discover", "publish", "version"]);
-const USAGE_TEXT = "Usage: agent-memory-trends <doctor|collect|daily|discover|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
+const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "diagnose", "collect", "daily", "discover", "publish", "version"]);
+const USAGE_TEXT = "Usage: agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
 const SESSION_BRIEF_FILES = [
@@ -100,6 +100,12 @@ export async function runAgentMemoryTrendsCli(
         `${command}: ok${dryRun ? " (dry-run)" : ""}; ${checked.data.filter((check) => check.status === "pass").length}/${checked.data.length} checks passed`,
         checked.data
       );
+    }
+
+    if (command === "diagnose") {
+      const diagnosed = await runDiagnose(options, context);
+      if (!diagnosed.ok) return errorRun(diagnosed);
+      return okRun(command, dryRun, generatedAt, [], diagnosed.data.humanHint);
     }
 
     if (command === "collect") {
@@ -993,6 +999,86 @@ function parseCliOptions(argv: string[]): ParsedCliOptions {
     }
   }
   return { values, flags };
+}
+
+async function runDiagnose(
+  options: ParsedCliOptions,
+  context: AgentMemoryTrendsContext
+): Promise<Result<{ humanHint: string }>> {
+  const resolved = resolveRunOptions(options, context);
+  const config = loadResearchConfig(resolved.configPath, context);
+  if (!config.ok) return config;
+
+  const digestTtlDays = resolveDedupeDigestTtlDays(options.values, config.data.dedupe.digestTtlDays);
+  if (!digestTtlDays.ok) return digestTtlDays;
+
+  // Diagnostic mode only: the extra unqualified count queries are scoped to
+  // this command and reserved inside the API budget; collect/daily/discover
+  // never run them.
+  const runner = context.runGh ?? createGhRunner(context.cwd);
+  const collector = context.collectGithubCandidates ?? collectGithubCandidates;
+  const collection = await collector(config.data, {
+    runGh: runner,
+    now: context.now,
+    diagnostic: true,
+  });
+  if (!collection.ok) return err("COLLECTOR_FAILED", collection.detail ?? collection.error);
+
+  // Same read-only duplicate inputs as the shipped collect path
+  // (collectDuplicateSignals + the pure buildAgentInput evaluation); only
+  // writeAgentInput is skipped, so diagnose never writes the input JSON or
+  // any vault/repo file.
+  const signalCollector = context.collectDuplicateSignals ?? collectDuplicateSignals;
+  const signals = signalCollector(resolved.vault, resolved.project);
+  if (!signals.ok) return signals;
+
+  const input = buildAgentInput({
+    vault: resolved.vault,
+    repo: resolved.repo,
+    project: resolved.project,
+    runDate: resolved.runDate,
+    runId: resolved.runId,
+    selectedCandidates: collection.data.selectedCandidates,
+    duplicateEvaluation: {
+      now: runDateToInstant(resolved.runDate),
+      digestTtlDays: digestTtlDays.data,
+    },
+    allowedOutputs: buildAllowedOutputs(resolved.runDate, resolved.runId),
+    duplicateSignals: signals.data,
+  });
+  if (!input.ok) return input;
+
+  return ok({
+    humanHint: formatDiagnoseReport(config.data, collection.data, duplicateSuppressionCounts(config.data, input.data)),
+  });
+}
+
+function duplicateSuppressionCounts(config: ResearchConfig, input: AgentInput): Map<string, number> {
+  const displayLaneIdByLaneId = new Map(config.github.lanes.map((lane) => [lane.id, diagnosticLaneId(lane)]));
+  const counts = new Map<string, number>();
+  for (const suppression of input.duplicateSuppressions) {
+    for (const laneId of suppression.candidate.laneIds) {
+      const displayLaneId = displayLaneIdByLaneId.get(laneId) ?? laneId;
+      counts.set(displayLaneId, (counts.get(displayLaneId) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+function formatDiagnoseReport(
+  config: ResearchConfig,
+  output: GithubCollectionOutput,
+  suppressedCountsByLane: Map<string, number>
+): string {
+  const lines = [`diagnose: ok; ${output.apiCallsUsed} gh api call(s) used of ${config.github.apiCallBudget} budget`];
+  for (const lane of output.laneDiagnostics) {
+    const unqualified = lane.unqualifiedTotalCount === undefined ? "n/a" : String(lane.unqualifiedTotalCount);
+    const duplicateSuppressed = suppressedCountsByLane.get(lane.laneId) ?? 0;
+    lines.push(
+      `  lane ${lane.laneId}: queries ${lane.executedQueryCount}/${lane.configuredQueryCount}, unqualified ${unqualified}, qualified ${lane.qualifiedTotalCount}, results ${lane.searchResultCount}, merged ${lane.mergedCandidateCount}, readme processed ${lane.readmeProcessedCount}, quality passed ${lane.qualityPassedCount}, raw eligible ${lane.rawEligibleCount}, selected ${lane.selectedCount}, merge dedup ${lane.mergedDuplicateCount}, dup suppressed ${duplicateSuppressed}, budget exhausted: ${lane.budgetExhausted ? "yes" : "no"}`
+    );
+  }
+  return lines.join("\n");
 }
 
 async function collectInput(options: ParsedCliOptions, context: AgentMemoryTrendsContext): Promise<Result<CollectedInput>> {

@@ -18,6 +18,14 @@ export interface GithubCollectorOptions {
   now: Date;
   knownCanonicalUrls?: string[];
   existingTaskUrls?: string[];
+  /**
+   * Diagnostic mode runs an extra unqualified count query per executed
+   * search query so the lane report can separate pre-date-filter volume
+   * (unqualified `total_count`) from the qualified result set. Ordinary
+   * collection never runs these extra queries, so API usage is unchanged
+   * outside diagnostic mode.
+   */
+  diagnostic?: boolean;
 }
 
 export interface RateLimitState {
@@ -44,11 +52,46 @@ export interface SelectedGithubCandidate extends CandidateForScoring {
   score: CandidateScore;
 }
 
+export interface GithubLaneDiagnostics {
+  /** Diagnostic lane label; the normalized flat portfolio lane reads "legacy". */
+  laneId: string;
+  configuredQueryCount: number;
+  executedQueryCount: number;
+  /**
+   * Sum of unqualified (pre-date-filter) `total_count` values. Present only
+   * in diagnostic mode, which runs one extra count query per executed query.
+   */
+  unqualifiedTotalCount?: number;
+  /** Sum of qualified `total_count` values from the real search queries. */
+  qualifiedTotalCount: number;
+  /** Sum of qualified result item counts (the per_page-bounded items). */
+  searchResultCount: number;
+  /** Unique merged candidates attributed to the lane. */
+  mergedCandidateCount: number;
+  /** Merged candidates in the lane that went through README/evidence processing. */
+  readmeProcessedCount: number;
+  /** Raw (quality-passed, capped) candidates in the lane with gate "passed". */
+  qualityPassedCount: number;
+  /** Raw (quality-passed or multi-query-exception, capped) candidates in the lane. */
+  rawEligibleCount: number;
+  /** Selected candidates attributed to the lane (before actual duplicate suppression). */
+  selectedCount: number;
+  /** Lane search items merged into an already-known candidate (intra-run merge dedup). */
+  mergedDuplicateCount: number;
+  /**
+   * True when the query/API budget stopped the run before the lane's
+   * configured queries all executed or before all of the lane's merged
+   * candidates were README/evidence-processed.
+   */
+  budgetExhausted: boolean;
+}
+
 export interface GithubCollectionOutput {
   rateLimit: RateLimitState;
   apiCallsUsed: number;
   rawCandidateCount: number;
   selectedCandidates: SelectedGithubCandidate[];
+  laneDiagnostics: GithubLaneDiagnostics[];
   runSummary: {
     rawCandidateCount: number;
     selectedCandidateCount: number;
@@ -88,22 +131,48 @@ export async function collectGithubCandidates(
   if (!rateLimitResult.ok) return rateLimitResult;
   const rateLimit = parseRateLimit(rateLimitResult.data.stdout);
 
+  const laneDiagnostics: GithubLaneDiagnostics[] = [];
+  const laneDiagnosticByLaneId = new Map<string, GithubLaneDiagnostics>();
+  for (const lane of config.github.lanes) {
+    const diagnostics = createLaneDiagnostics(lane);
+    laneDiagnostics.push(diagnostics);
+    laneDiagnosticByLaneId.set(lane.id, diagnostics);
+  }
+
   const byUrl = new Map<string, RawCandidate>();
   let queriesUsed = 0;
   for (const lane of config.github.lanes) {
+    const laneDiagnostic = laneDiagnosticByLaneId.get(lane.id)!;
     for (const query of lane.queries) {
-      if (queriesUsed >= config.github.maxQueries || apiCallsUsed >= config.github.apiCallBudget) break;
+      // A diagnostic query is a qualified search plus its unqualified count
+      // query; reserve both calls so the run never exceeds the API budget.
+      const requiredApiCalls = options.diagnostic ? 2 : 1;
+      if (queriesUsed >= config.github.maxQueries || apiCallsUsed + requiredApiCalls > config.github.apiCallBudget) break;
       const search = await searchRepositories(options.runGh, lane, query, options.now);
       apiCallsUsed += 1;
       queriesUsed += 1;
       if (!search.ok) return search;
+      laneDiagnostic.executedQueryCount += 1;
+      laneDiagnostic.qualifiedTotalCount += search.data.totalCount;
+      laneDiagnostic.searchResultCount += search.data.items.length;
 
-      for (const item of search.data) {
+      if (options.diagnostic) {
+        const unqualified = await fetchUnqualifiedTotalCount(options.runGh, query.query);
+        apiCallsUsed += 1;
+        if (!unqualified.ok) return unqualified;
+        laneDiagnostic.unqualifiedTotalCount = (laneDiagnostic.unqualifiedTotalCount ?? 0) + unqualified.data;
+      }
+
+      for (const item of search.data.items) {
         const candidate = parseSearchItem(item, lane.id, query.id);
         if (!candidate) continue;
         const existing = byUrl.get(candidate.canonicalUrl);
-        if (existing) mergeCandidate(existing, candidate);
-        else byUrl.set(candidate.canonicalUrl, candidate);
+        if (existing) {
+          mergeCandidate(existing, candidate);
+          laneDiagnostic.mergedDuplicateCount += 1;
+        } else {
+          byUrl.set(candidate.canonicalUrl, candidate);
+        }
       }
     }
   }
@@ -120,6 +189,9 @@ export async function collectGithubCandidates(
     candidate.evidenceFamilies = extractEvidenceFamilies(candidate);
     candidate.evidenceQuality = classifyEvidenceQuality(candidate);
     candidate.qualityGate = evaluateCandidateQualityGate(candidate, config.github.lanes);
+    for (const laneId of candidate.laneIds) {
+      laneDiagnosticByLaneId.get(laneId)!.readmeProcessedCount += 1;
+    }
   }
 
   const rawCandidates = unfilteredCandidates
@@ -139,11 +211,36 @@ export async function collectGithubCandidates(
     .sort((left, right) => right.score.score - left.score.score || left.fullName.localeCompare(right.fullName))
     .slice(0, config.github.maxSelectedCandidates);
 
+  for (const candidate of byUrl.values()) {
+    for (const laneId of candidate.laneIds) {
+      laneDiagnosticByLaneId.get(laneId)!.mergedCandidateCount += 1;
+    }
+  }
+  for (const candidate of rawCandidates) {
+    for (const laneId of candidate.laneIds) {
+      const diagnostics = laneDiagnosticByLaneId.get(laneId)!;
+      diagnostics.rawEligibleCount += 1;
+      if (candidate.qualityGate === "passed") diagnostics.qualityPassedCount += 1;
+    }
+  }
+  for (const candidate of selectedCandidates) {
+    for (const laneId of candidate.laneIds) {
+      laneDiagnosticByLaneId.get(laneId)!.selectedCount += 1;
+    }
+  }
+
+  for (const diagnostics of laneDiagnostics) {
+    diagnostics.budgetExhausted =
+      diagnostics.executedQueryCount < diagnostics.configuredQueryCount ||
+      diagnostics.readmeProcessedCount < diagnostics.mergedCandidateCount;
+  }
+
   return ok({
     rateLimit,
     apiCallsUsed,
     rawCandidateCount: rawCandidates.length,
     selectedCandidates,
+    laneDiagnostics,
     runSummary: {
       rawCandidateCount: rawCandidates.length,
       selectedCandidateCount: selectedCandidates.length,
@@ -287,12 +384,17 @@ function clampExcerpt(value: string): string {
   return `${normalized.slice(0, 597).trimEnd()}...`;
 }
 
+interface SearchRepositoriesOutput {
+  items: SearchRepositoryItem[];
+  totalCount: number;
+}
+
 async function searchRepositories(
   runGh: GhRunner,
   lane: GithubLane,
   query: ResearchQuery,
   now: Date
-): Promise<Result<SearchRepositoryItem[]>> {
+): Promise<Result<SearchRepositoriesOutput>> {
   const result = await ghApi(runGh, [
     "--method",
     "GET",
@@ -311,7 +413,55 @@ async function searchRepositories(
   const parsed = parseJsonObject(result.data.stdout);
   if (!parsed.ok) return parsed;
   const items = parsed.data.items;
-  return ok(Array.isArray(items) ? (items as SearchRepositoryItem[]) : []);
+  return ok({
+    items: Array.isArray(items) ? (items as SearchRepositoryItem[]) : [],
+    totalCount: typeof parsed.data.total_count === "number" ? parsed.data.total_count : 0,
+  });
+}
+
+/**
+ * Diagnostic-mode-only unqualified count query: the raw query without the
+ * lane's date window, sized to one item since only `total_count` is read.
+ */
+async function fetchUnqualifiedTotalCount(runGh: GhRunner, query: string): Promise<Result<number>> {
+  const result = await ghApi(runGh, [
+    "--method",
+    "GET",
+    "/search/repositories",
+    "-f",
+    `q=${query}`,
+    "-f",
+    "per_page=1",
+  ]);
+  if (!result.ok) return result;
+
+  const parsed = parseJsonObject(result.data.stdout);
+  if (!parsed.ok) return parsed;
+  const total = parsed.data.total_count;
+  return ok(typeof total === "number" && Number.isFinite(total) ? total : 0);
+}
+
+function createLaneDiagnostics(lane: GithubLane): GithubLaneDiagnostics {
+  return {
+    laneId: diagnosticLaneId(lane),
+    configuredQueryCount: lane.queries.length,
+    executedQueryCount: 0,
+    qualifiedTotalCount: 0,
+    searchResultCount: 0,
+    mergedCandidateCount: 0,
+    readmeProcessedCount: 0,
+    qualityPassedCount: 0,
+    rawEligibleCount: 0,
+    selectedCount: 0,
+    mergedDuplicateCount: 0,
+    budgetExhausted: false,
+  };
+}
+
+export function diagnosticLaneId(lane: GithubLane): string {
+  // The flat legacy portfolio parses into a synthetic "legacy_flat" lane;
+  // diagnostics label it by its public "legacy" name.
+  return lane.id === "legacy_flat" ? "legacy" : lane.id;
 }
 
 async function fetchReadme(runGh: GhRunner, fullName: string): Promise<Result<string>> {

@@ -315,6 +315,7 @@ describe("agent-memory-trends CLI", () => {
           rawCandidateCount: 1,
           selectedCandidates: [selectedCandidate()],
           runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+          laneDiagnostics: [],
         } };
       },
       collectDuplicateSignals: () => {
@@ -412,7 +413,7 @@ describe("agent-memory-trends CLI", () => {
     if (result.result.ok) throw new Error("expected usage error");
     expect(result.result.error).toBe("USAGE");
     expect(result.result.detail).toEqual({
-      message: "Usage: agent-memory-trends <doctor|collect|daily|discover|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]",
+      message: "Usage: agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]",
     });
   });
 
@@ -877,6 +878,7 @@ describe("agent-memory-trends CLI", () => {
         rawCandidateCount: 1,
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        laneDiagnostics: [],
       } }),
       collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: (input) => {
@@ -914,6 +916,7 @@ describe("agent-memory-trends CLI", () => {
         rawCandidateCount: 1,
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        laneDiagnostics: [],
       } }),
       collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
@@ -994,6 +997,7 @@ describe("agent-memory-trends CLI", () => {
         rawCandidateCount: 1,
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        laneDiagnostics: [],
       } }),
       collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
@@ -1082,6 +1086,7 @@ describe("agent-memory-trends CLI", () => {
           rawCandidateCount: 1,
           selectedCandidates: [selectedCandidate()],
           runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+          laneDiagnostics: [],
         } };
       },
       collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
@@ -1219,6 +1224,7 @@ describe("agent-memory-trends CLI", () => {
         rawCandidateCount: 1,
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        laneDiagnostics: [],
       } }),
       collectDuplicateSignals: () => ({
         ok: true,
@@ -1331,6 +1337,7 @@ describe("agent-memory-trends CLI", () => {
         rawCandidateCount: 1,
         selectedCandidates: [oldCandidate],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        laneDiagnostics: [],
       } }),
       collectDuplicateSignals: () => ({
         ok: true,
@@ -1421,6 +1428,7 @@ describe("agent-memory-trends CLI", () => {
           rawCandidateCount: 1,
           selectedCandidates: [selectedCandidate()],
           runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+          laneDiagnostics: [],
         } }),
         collectDuplicateSignals: () => ({
           ok: true,
@@ -1502,6 +1510,7 @@ describe("agent-memory-trends CLI", () => {
         rawCandidateCount: 1,
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        laneDiagnostics: [],
       } }),
       collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: "/vault/.skillwiki/agent-memory-trends/2026-06-11-input.json" } }),
@@ -1561,6 +1570,7 @@ describe("agent-memory-trends CLI", () => {
           rawCandidateCount: 1,
           selectedCandidates: [selectedCandidate()],
           runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+          laneDiagnostics: [],
         } };
       },
       writeRunState: () => {
@@ -1616,6 +1626,7 @@ describe("agent-memory-trends CLI", () => {
           rawCandidateCount: 1,
           selectedCandidates: [selectedCandidate()],
           runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+          laneDiagnostics: [],
         } };
       },
       writeRunState: () => {
@@ -1669,6 +1680,7 @@ describe("agent-memory-trends CLI", () => {
           rawCandidateCount: 1,
           selectedCandidates: [selectedCandidate()],
           runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+          laneDiagnostics: [],
         } };
       },
       writeRunState: () => {
@@ -1723,6 +1735,7 @@ describe("agent-memory-trends CLI", () => {
         rawCandidateCount: 1,
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        laneDiagnostics: [],
       } }),
       collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: inputPath } }),
@@ -1854,6 +1867,7 @@ describe("agent-memory-trends CLI", () => {
           rawCandidateCount: 1,
           selectedCandidates: [selectedCandidate()],
           runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+          laneDiagnostics: [],
         } }),
         collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
         runSynthesis: async () => {
@@ -1929,6 +1943,7 @@ describe("agent-memory-trends CLI", () => {
         rawCandidateCount: 1,
         selectedCandidates: [selectedCandidate()],
         runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+        laneDiagnostics: [],
       } }),
       collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
       writeAgentInput: () => ({ ok: true, data: { path: join(vault, ".skillwiki/agent-memory-trends/2026-06-11-input.json") } }),
@@ -2871,6 +2886,387 @@ describe("agent-memory-trends discover command", () => {
     expect(String(result.result.detail)).toContain(flag);
     expect(collectorTouched).toBe(false);
     expect(existsSync(join(vault, ".skillwiki"))).toBe(false);
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("agent-memory-trends diagnose command", () => {
+  const LANE_CONFIG = `version: 1
+project: llm-wiki
+timezone: Asia/Hong_Kong
+scoring:
+  threshold: 65
+  weights:
+    relevance: 30
+    implementation_evidence: 25
+    authority_momentum: 25
+    freshness: 10
+    novelty_or_tracking: 10
+github:
+  api_call_budget: 100
+  max_queries: 4
+  max_raw_candidates: 50
+  max_selected_candidates: 10
+  lanes:
+    - id: daily_fresh
+      label: Daily fresh
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 10
+        min_forks: 0
+        min_evidence_families: 2
+        allow_multi_query_exception: true
+      queries:
+        - id: daily-memory
+          label: Daily coding-agent memory
+          query: coding agent memory in:name,description,readme
+    - id: weekly_momentum
+      label: Weekly momentum
+      window_days: 7
+      date_field: pushed
+      sort: stars
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 50
+        min_forks: 5
+        min_evidence_families: 2
+      queries:
+        - id: weekly-checkpoints
+          label: Weekly checkpoint memory
+          query: checkpoint memory coding agent in:name,description,readme
+    - id: monthly_authority
+      label: Monthly authority
+      window_days: 30
+      date_field: pushed
+      sort: stars
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 100
+        min_forks: 10
+        min_evidence_families: 2
+      queries:
+        - id: monthly-workflow
+          label: Monthly workflow distillation
+          query: workflow distillation agent memory in:name,description,readme
+    - id: emerging
+      label: Emerging evidence
+      window_days: 30
+      date_field: created
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 3
+        allow_strong_evidence_exception: true
+      queries:
+        - id: emerging-local-search
+          label: Emerging local search memory
+          query: local search database agent trajectory memory in:name,description,readme
+watchlist:
+  auto_append: { min_appearances: 3, window_days: 14, min_score: 65 }
+  accepted: []
+  rejected: []
+  archived: []
+`;
+
+  const LANE_RUNNER = {
+    async runGh(args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+      if (args[0] === "auth" && args[1] === "status") {
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "api" && args[1] === "rate_limit") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            resources: {
+              core: { remaining: 4900, limit: 5000, reset: 1781126400 },
+              search: { remaining: 29, limit: 30, reset: 1781126400 },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1] === "--method" && args[2] === "GET" && args[3] === "/search/repositories") {
+        const query = (args.find((arg) => arg.startsWith("q=")) ?? "").replace(/^q=/, "");
+        const items: Array<{
+          name: string;
+          full_name: string;
+          html_url: string;
+          description: string | null;
+          topics: string[];
+          stargazers_count: number;
+          forks_count: number;
+          pushed_at: string;
+          archived: boolean;
+        }> = [
+          {
+            name: "MiMo-Code",
+            full_name: "XiaomiMiMo/MiMo-Code",
+            html_url: "https://github.com/XiaomiMiMo/MiMo-Code",
+            description: null,
+            topics: [],
+            stargazers_count: 7316,
+            forks_count: 582,
+            pushed_at: "2026-06-11T14:29:00Z",
+            archived: false,
+          },
+        ];
+        if (query.includes("checkpoint memory") || query.includes("workflow distillation")) {
+          items.push({
+            name: "awesome-go",
+            full_name: "avelino/awesome-go",
+            html_url: "https://github.com/avelino/awesome-go",
+            description: "A curated list of Go frameworks, libraries, workflow tools, databases, and search packages.",
+            topics: ["go", "awesome-list", "database", "search"],
+            stargazers_count: 150000,
+            forks_count: 12000,
+            pushed_at: "2026-06-12T10:00:00Z",
+            archived: false,
+          });
+        }
+        if (query.includes("coding agent memory")) {
+          items.push({
+            name: "fresh-demo",
+            full_name: "noise/fresh-demo",
+            html_url: "https://github.com/noise/fresh-demo",
+            description: "Fresh project with no implementation evidence.",
+            topics: [],
+            stargazers_count: 0,
+            forks_count: 0,
+            pushed_at: "2026-06-12T23:58:00Z",
+            archived: false,
+          });
+        }
+        return { exitCode: 0, stdout: JSON.stringify({ total_count: items.length, items }), stderr: "" };
+      }
+      if (args[0] === "api" && args[1]?.startsWith("/repos/") && args[1]?.endsWith("/readme")) {
+        const fullName = args[1].replace(/^\/repos\//, "").replace(/\/readme$/, "");
+        const readme =
+          fullName.toLowerCase() === "xiaomimimo/mimo-code"
+            ? [
+                "# MiMo Code",
+                "",
+                "An autonomous coding agent workflow with checkpoint memory, context consolidation, dream and distill loops, reusable skills, subagents, goal judge evaluation, and local search over agent trajectories.",
+              ].join("\n")
+            : fullName.toLowerCase() === "avelino/awesome-go"
+              ? [
+                  "# Awesome Go",
+                  "",
+                  "A curated list of workflow tools, database libraries, search packages, benchmarks, and local storage projects.",
+                  "",
+                  "## Contents",
+                  "",
+                  "- Database",
+                ].join("\n")
+            : "Small wrapper with a recent push.";
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ encoding: "base64", content: Buffer.from(readme).toString("base64") }),
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected gh call: ${args.join(" ")}`);
+    },
+  };
+
+  it("drives the real collector in diagnostic mode and reports the per-lane funnel without writing anything", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-memory-trends-diagnose-"));
+    const vault = join(root, "vault");
+    const configPath = join(root, "config.yaml");
+    mkdirSync(vault, { recursive: true });
+    writeFileSync(configPath, LANE_CONFIG, "utf8");
+
+    const ghCalls: string[][] = [];
+    const touched: string[] = [];
+    const result = await runAgentMemoryTrendsCli(
+      ["diagnose", "--vault", vault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now: new Date("2026-06-13T00:00:00Z"),
+        readFile: (path: string) => {
+          if (path === configPath) return LANE_CONFIG;
+          throw new Error(`unexpected readFile path: ${path}`);
+        },
+        runGh: async (args: string[]) => {
+          ghCalls.push(args);
+          return LANE_RUNNER.runGh(args);
+        },
+        // The real duplicate-signals scan runs read-only against the empty
+        // vault (no task/work/digest files) and yields no suppressions.
+        writeAgentInput: () => {
+          touched.push("write-input");
+          throw new Error("diagnose must not write agent input");
+        },
+        writeRunState: () => {
+          touched.push("run-state");
+          throw new Error("diagnose must not write run state");
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected diagnose success");
+    expect(result.result.data.command).toBe("diagnose");
+    expect(result.result.data.mutations).toEqual([]);
+    expect(touched).toEqual([]);
+    expect(result.result.data.humanHint).toBe(
+      [
+        "diagnose: ok; 12 gh api call(s) used of 100 budget",
+        "  lane daily_fresh: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 0, budget exhausted: no",
+        "  lane weekly_momentum: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 0, budget exhausted: no",
+        "  lane monthly_authority: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 2, dup suppressed 0, budget exhausted: no",
+        "  lane emerging: queries 1/1, unqualified 1, qualified 1, results 1, merged 1, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 0, budget exhausted: no",
+      ].join("\n")
+    );
+
+    // The unqualified count queries ran only because diagnose forced
+    // diagnostic mode: raw query, no date window, per_page=1.
+    const countCalls = ghCalls.filter((args) => args.some((arg) => arg === "per_page=1"));
+    expect(countCalls).toHaveLength(4);
+    expect(countCalls[0]).toEqual(expect.arrayContaining(["q=coding agent memory in:name,description,readme"]));
+    expect(countCalls[0].some((arg) => arg.startsWith("q=") && arg.includes(":>="))).toBe(false);
+    expect(countCalls[0].some((arg) => arg.startsWith("sort="))).toBe(false);
+
+    // Qualified searches keep the ordinary shape: date window, sort, per_page=10.
+    const searchCalls = ghCalls.filter((args) => args.some((arg) => arg === "per_page=10"));
+    expect(searchCalls).toHaveLength(4);
+    expect(searchCalls[0]).toEqual(
+      expect.arrayContaining(["q=coding agent memory in:name,description,readme pushed:>=2026-06-12", "sort=updated", "order=desc", "per_page=10"])
+    );
+
+    // Diagnose is non-mutating: the vault stays empty and the root only
+    // holds the fixture config.
+    expect(readdirSync(vault)).toEqual([]);
+    expect(readdirSync(root).sort()).toEqual(["config.yaml", "vault"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("surfaces budget exhaustion through the diagnose report when the api budget cuts lanes short", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-memory-trends-diagnose-budget-"));
+    const vault = join(root, "vault");
+    const configPath = join(root, "config.yaml");
+    mkdirSync(vault, { recursive: true });
+    const budgetConfig = LANE_CONFIG.replace("api_call_budget: 100", "api_call_budget: 4");
+    writeFileSync(configPath, budgetConfig, "utf8");
+
+    const ghCalls: string[][] = [];
+    const result = await runAgentMemoryTrendsCli(
+      ["diagnose", "--vault", vault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now: new Date("2026-06-13T00:00:00Z"),
+        readFile: (path: string) => {
+          if (path === configPath) return budgetConfig;
+          throw new Error(`unexpected readFile path: ${path}`);
+        },
+        runGh: async (args: string[]) => {
+          ghCalls.push(args);
+          return LANE_RUNNER.runGh(args);
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected diagnose success");
+    // rate_limit = 1; the daily search+count pair fits (3), the weekly pair
+    // would need 5 > 4 so it never starts; one README call (MiMo) stays
+    // inside the ceiling: 4 api calls, never more.
+    expect(result.result.data.humanHint).toContain("diagnose: ok; 4 gh api call(s) used of 4 budget");
+    expect(result.result.data.humanHint).toContain(
+      "lane daily_fresh: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 0, budget exhausted: yes"
+    );
+    expect(result.result.data.humanHint).toContain(
+      "lane weekly_momentum: queries 0/1, unqualified n/a, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: yes"
+    );
+    expect(result.result.data.humanHint).toContain(
+      "lane monthly_authority: queries 0/1, unqualified n/a, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: yes"
+    );
+    expect(result.result.data.humanHint).toContain(
+      "lane emerging: queries 0/1, unqualified n/a, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: yes"
+    );
+    expect(result.result.data.mutations).toEqual([]);
+    expect(readdirSync(vault)).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("reports actual duplicate suppression from the same known-URL/task signals as collect without writing anything", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-memory-trends-diagnose-suppression-"));
+    const vault = join(root, "vault");
+    const configPath = join(root, "config.yaml");
+    mkdirSync(vault, { recursive: true });
+    writeFileSync(configPath, LANE_CONFIG, "utf8");
+
+    const touched: string[] = [];
+    const result = await runAgentMemoryTrendsCli(
+      ["diagnose", "--vault", vault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now: new Date("2026-06-13T00:00:00Z"),
+        readFile: (path: string) => {
+          if (path === configPath) return LANE_CONFIG;
+          throw new Error(`unexpected readFile path: ${path}`);
+        },
+        runGh: async (args: string[]) => LANE_RUNNER.runGh(args),
+        collectDuplicateSignals: (_vault: string, _project: string) => ({
+          ok: true,
+          data: {
+            existingTasks: [
+              {
+                path: "raw/transcripts/2026-06-10-mimo-task.md",
+                title: "Evaluate XiaomiMiMo/MiMo-Code",
+                sourceUrl: "https://github.com/XiaomiMiMo/MiMo-Code",
+                repoName: "XiaomiMiMo/MiMo-Code",
+              },
+            ],
+            activeWork: [],
+            recentDigests: [],
+            parseErrors: [],
+          },
+        }),
+        writeAgentInput: () => {
+          touched.push("write-input");
+          throw new Error("diagnose must not write agent input");
+        },
+        writeRunState: () => {
+          touched.push("run-state");
+          throw new Error("diagnose must not write run state");
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected diagnose success");
+    expect(touched).toEqual([]);
+    expect(result.result.data.mutations).toEqual([]);
+    // selected stays at its pre-suppression value while the gate suppresses
+    // the already-captured MiMo candidate in every lane it appears in.
+    expect(result.result.data.humanHint).toContain(
+      "lane daily_fresh: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 1, budget exhausted: no"
+    );
+    expect(result.result.data.humanHint).toContain(
+      "lane weekly_momentum: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 1, budget exhausted: no"
+    );
+    expect(result.result.data.humanHint).toContain(
+      "lane monthly_authority: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 2, dup suppressed 1, budget exhausted: no"
+    );
+    expect(result.result.data.humanHint).toContain(
+      "lane emerging: queries 1/1, unqualified 1, qualified 1, results 1, merged 1, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 1, budget exhausted: no"
+    );
+    expect(readdirSync(vault)).toEqual([]);
     rmSync(root, { recursive: true, force: true });
   });
 });
