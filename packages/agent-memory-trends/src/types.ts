@@ -90,7 +90,7 @@ export interface AgentMemoryTrendsContext {
   ) => Promise<Result<CommunityCollectionOutput>>;
   /** Fetch seam for the bounded community adapters; defaults to platform fetch. */
   fetchJson?: CommunityFetchClient;
-  collectDuplicateSignals?: (vault: string, project: string) => Result<DuplicateSignals>;
+  collectDuplicateSignals?: (vault: string, project: string, runDate?: string) => Result<DuplicateSignals>;
   writeAgentInput?: (input: AgentInput) => Result<WriteAgentInputOutput>;
   runSynthesis?: SynthesisRunner;
   renderProposalCaptures?: (input: RenderProposalCapturesInput) => Result<RenderProposalCapturesOutput>;

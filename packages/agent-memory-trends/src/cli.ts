@@ -1033,7 +1033,7 @@ async function runDiagnose(
   // writeAgentInput is skipped, so diagnose never writes the input JSON or
   // any vault/repo file.
   const signalCollector = context.collectDuplicateSignals ?? collectDuplicateSignals;
-  const signals = signalCollector(resolved.vault, resolved.project);
+  const signals = signalCollector(resolved.vault, resolved.project, resolved.runDate);
   if (!signals.ok) return signals;
 
   const input = buildAgentInput({
@@ -1101,7 +1101,7 @@ async function collectInput(options: ParsedCliOptions, context: AgentMemoryTrend
   if (!collection.ok) return err("COLLECTOR_FAILED", collection.detail ?? collection.error);
 
   const signalCollector = context.collectDuplicateSignals ?? collectDuplicateSignals;
-  const signals = signalCollector(resolved.vault, resolved.project);
+  const signals = signalCollector(resolved.vault, resolved.project, resolved.runDate);
   if (!signals.ok) return signals;
 
   const input = buildAgentInput({

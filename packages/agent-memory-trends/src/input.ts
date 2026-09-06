@@ -56,7 +56,7 @@ export interface WriteAgentInputOutput {
 }
 
 export function buildAgentInput(args: BuildAgentInputArgs): Result<AgentInput> {
-  const signals = args.duplicateSignals ?? collectDuplicateSignals(args.vault, args.project);
+  const signals = args.duplicateSignals ?? collectDuplicateSignals(args.vault, args.project, args.runDate);
   if ("ok" in signals) {
     if (!signals.ok) return signals;
     return buildAgentInput({ ...args, duplicateSignals: signals.data });

@@ -344,4 +344,440 @@ describe("agent-memory-trends duplicate suppression and input generation", () =>
     expect(json.duplicate_suppressions[0].candidate.full_name).toBe("acme/local-agent-memory");
     expect(json.allowed_outputs.manifest_path).toBe(".skillwiki/agent-memory-trends/2026-06-11-run.json");
   });
+
+  it("suppresses a candidate when historical fingerprint is unchanged", () => {
+    const historicalSignal = {
+      path: ".skillwiki/agent-memory-trends/2026-06-10-input.json",
+      canonicalUrl: "https://github.com/acme/new-memory",
+      fullName: "acme/new-memory",
+      evidenceQuality: {
+        depth: "implementation_surface" as const,
+        sourceInspectionRecommended: true,
+        signals: ["markdown", "sync", "memory"],
+        summary: "README evidence exposes implementation surfaces: markdown, sync, memory.",
+      },
+      readmeEvidence: [
+        {
+          sourceUrl: "https://github.com/acme/new-memory#readme",
+          excerpt: "Markdown memory.",
+          supportsClaim: "supports",
+          confidence: "high",
+        },
+      ],
+      stargazersCount: 100,
+      pushedAt: "2026-06-10T00:00:00Z",
+    };
+
+    const signals = {
+      existingTasks: [],
+      activeWork: [],
+      recentDigests: [],
+      historicalCandidates: [historicalSignal],
+      parseErrors: [],
+    };
+
+    const cand = candidate({
+      canonicalUrl: "https://github.com/acme/new-memory",
+      evidenceQuality: {
+        depth: "implementation_surface",
+        sourceInspectionRecommended: true,
+        signals: ["markdown", "sync", "memory"],
+        summary: "README evidence exposes implementation surfaces.",
+      },
+      readmeEvidence: [
+        {
+          sourceUrl: "https://github.com/acme/new-memory#readme",
+          excerpt: "Markdown memory.",
+          supportsClaim: "supports",
+          confidence: "high",
+        },
+      ],
+      stargazersCount: 150, // stars-only change suppresses
+      pushedAt: "2026-06-11T00:00:00Z", // pushedAt-only change suppresses
+    });
+
+    const decision = evaluateDuplicateCandidate(cand, signals as any);
+    expect(decision.duplicate).toBe(true);
+    expect(decision.reasons.join("\n")).toContain("historical candidate");
+  });
+
+  it("suppresses a candidate on depth downgrade", () => {
+    const signals = {
+      existingTasks: [],
+      activeWork: [],
+      recentDigests: [],
+      historicalCandidates: [
+        {
+          path: ".skillwiki/agent-memory-trends/2026-06-10-input.json",
+          canonicalUrl: "https://github.com/acme/new-memory",
+          fullName: "acme/new-memory",
+          evidenceQuality: {
+            depth: "integration_surface" as const,
+            sourceInspectionRecommended: true,
+            signals: ["markdown", "sync"],
+            summary: "integration",
+          },
+          readmeEvidence: [
+            {
+              sourceUrl: "https://github.com/acme/new-memory#readme",
+              excerpt: "Markdown memory.",
+              supportsClaim: "supports",
+              confidence: "high",
+            },
+          ],
+        },
+      ],
+      parseErrors: [],
+    };
+
+    const cand = candidate({
+      canonicalUrl: "https://github.com/acme/new-memory",
+      evidenceQuality: {
+        depth: "implementation_surface",
+        sourceInspectionRecommended: true,
+        signals: ["markdown", "sync"],
+        summary: "implementation",
+      },
+      readmeEvidence: [
+        {
+          sourceUrl: "https://github.com/acme/new-memory#readme",
+          excerpt: "Markdown memory.",
+          supportsClaim: "supports",
+          confidence: "high",
+        },
+      ],
+    });
+
+    const decision = evaluateDuplicateCandidate(cand, signals as any);
+    expect(decision.duplicate).toBe(true);
+  });
+
+  it("suppresses a candidate on signal-removal-only", () => {
+    const signals = {
+      existingTasks: [],
+      activeWork: [],
+      recentDigests: [],
+      historicalCandidates: [
+        {
+          path: ".skillwiki/agent-memory-trends/2026-06-10-input.json",
+          canonicalUrl: "https://github.com/acme/new-memory",
+          fullName: "acme/new-memory",
+          evidenceQuality: {
+            depth: "implementation_surface" as const,
+            sourceInspectionRecommended: true,
+            signals: ["markdown", "sync", "memory", "mcp"],
+            summary: "summary",
+          },
+          readmeEvidence: [
+            {
+              sourceUrl: "https://github.com/acme/new-memory#readme",
+              excerpt: "Markdown memory.",
+              supportsClaim: "supports",
+              confidence: "high",
+            },
+          ],
+        },
+      ],
+      parseErrors: [],
+    };
+
+    const cand = candidate({
+      canonicalUrl: "https://github.com/acme/new-memory",
+      evidenceQuality: {
+        depth: "implementation_surface",
+        sourceInspectionRecommended: true,
+        signals: ["markdown", "sync"],
+        summary: "summary",
+      },
+      readmeEvidence: [
+        {
+          sourceUrl: "https://github.com/acme/new-memory#readme",
+          excerpt: "Markdown memory.",
+          supportsClaim: "supports",
+          confidence: "high",
+        },
+      ],
+    });
+
+    const decision = evaluateDuplicateCandidate(cand, signals as any);
+    expect(decision.duplicate).toBe(true);
+  });
+
+  it("suppresses a candidate when README excerpt changes only in case or whitespace", () => {
+    const signals = {
+      existingTasks: [],
+      activeWork: [],
+      recentDigests: [],
+      historicalCandidates: [
+        {
+          path: ".skillwiki/agent-memory-trends/2026-06-10-input.json",
+          canonicalUrl: "https://github.com/acme/new-memory",
+          fullName: "acme/new-memory",
+          evidenceQuality: {
+            depth: "implementation_surface" as const,
+            sourceInspectionRecommended: true,
+            signals: ["markdown", "sync", "memory"],
+            summary: "summary",
+          },
+          readmeEvidence: [
+            {
+              sourceUrl: "https://github.com/acme/new-memory#readme",
+              excerpt: "Markdown Memory\nLayer for Agents.",
+              supportsClaim: "supports",
+              confidence: "high",
+            },
+          ],
+        },
+      ],
+      parseErrors: [],
+    };
+
+    const cand = candidate({
+      canonicalUrl: "https://github.com/acme/new-memory",
+      evidenceQuality: {
+        depth: "implementation_surface",
+        sourceInspectionRecommended: true,
+        signals: ["markdown", "sync", "memory"],
+        summary: "summary",
+      },
+      readmeEvidence: [
+        {
+          sourceUrl: "https://github.com/acme/new-memory#readme",
+          excerpt: "  markdown   memory layer for agents.  ",
+          supportsClaim: "supports",
+          confidence: "high",
+        },
+      ],
+    });
+
+    const decision = evaluateDuplicateCandidate(cand, signals as any);
+    expect(decision.duplicate).toBe(true);
+  });
+
+  it("reopens candidate on depth upgrade", () => {
+    const signals = {
+      existingTasks: [],
+      activeWork: [],
+      recentDigests: [],
+      historicalCandidates: [
+        {
+          path: ".skillwiki/agent-memory-trends/2026-06-10-input.json",
+          canonicalUrl: "https://github.com/acme/new-memory",
+          fullName: "acme/new-memory",
+          evidenceQuality: {
+            depth: "feature_surface" as const,
+            sourceInspectionRecommended: true,
+            signals: ["markdown"],
+            summary: "feature",
+          },
+          readmeEvidence: [
+            {
+              sourceUrl: "https://github.com/acme/new-memory#readme",
+              excerpt: "Markdown memory.",
+              supportsClaim: "supports",
+              confidence: "high",
+            },
+          ],
+        },
+      ],
+      parseErrors: [],
+    };
+
+    const cand = candidate({
+      canonicalUrl: "https://github.com/acme/new-memory",
+      evidenceQuality: {
+        depth: "implementation_surface",
+        sourceInspectionRecommended: true,
+        signals: ["markdown"],
+        summary: "implementation",
+      },
+      readmeEvidence: [
+        {
+          sourceUrl: "https://github.com/acme/new-memory#readme",
+          excerpt: "Markdown memory.",
+          supportsClaim: "supports",
+          confidence: "high",
+        },
+      ],
+    });
+
+    const decision = evaluateDuplicateCandidate(cand, signals as any);
+    expect(decision.duplicate).toBe(false);
+    expect(decision.reopenReason).toBe("depth");
+    expect(decision.reasons.join(" ")).toContain("depth");
+  });
+
+  it("reopens candidate on added signal", () => {
+    const signals = {
+      existingTasks: [],
+      activeWork: [],
+      recentDigests: [],
+      historicalCandidates: [
+        {
+          path: ".skillwiki/agent-memory-trends/2026-06-10-input.json",
+          canonicalUrl: "https://github.com/acme/new-memory",
+          fullName: "acme/new-memory",
+          evidenceQuality: {
+            depth: "implementation_surface" as const,
+            sourceInspectionRecommended: true,
+            signals: ["markdown", "sync"],
+            summary: "summary",
+          },
+          readmeEvidence: [
+            {
+              sourceUrl: "https://github.com/acme/new-memory#readme",
+              excerpt: "Markdown memory.",
+              supportsClaim: "supports",
+              confidence: "high",
+            },
+          ],
+        },
+      ],
+      parseErrors: [],
+    };
+
+    const cand = candidate({
+      canonicalUrl: "https://github.com/acme/new-memory",
+      evidenceQuality: {
+        depth: "implementation_surface",
+        sourceInspectionRecommended: true,
+        signals: ["markdown", "sync", "adapter"],
+        summary: "summary",
+      },
+      readmeEvidence: [
+        {
+          sourceUrl: "https://github.com/acme/new-memory#readme",
+          excerpt: "Markdown memory.",
+          supportsClaim: "supports",
+          confidence: "high",
+        },
+      ],
+    });
+
+    const decision = evaluateDuplicateCandidate(cand, signals as any);
+    expect(decision.duplicate).toBe(false);
+    expect(decision.reopenReason).toBe("signal");
+    expect(decision.reasons.join(" ")).toContain("signal");
+  });
+
+  it("reopens candidate on materially new README excerpt", () => {
+    const signals = {
+      existingTasks: [],
+      activeWork: [],
+      recentDigests: [],
+      historicalCandidates: [
+        {
+          path: ".skillwiki/agent-memory-trends/2026-06-10-input.json",
+          canonicalUrl: "https://github.com/acme/new-memory",
+          fullName: "acme/new-memory",
+          evidenceQuality: {
+            depth: "implementation_surface" as const,
+            sourceInspectionRecommended: true,
+            signals: ["markdown", "sync", "memory"],
+            summary: "summary",
+          },
+          readmeEvidence: [
+            {
+              sourceUrl: "https://github.com/acme/new-memory#readme",
+              excerpt: "Old README excerpt about memory.",
+              supportsClaim: "supports",
+              confidence: "high",
+            },
+          ],
+        },
+      ],
+      parseErrors: [],
+    };
+
+    const cand = candidate({
+      canonicalUrl: "https://github.com/acme/new-memory",
+      evidenceQuality: {
+        depth: "implementation_surface",
+        sourceInspectionRecommended: true,
+        signals: ["markdown", "sync", "memory"],
+        summary: "summary",
+      },
+      readmeEvidence: [
+        {
+          sourceUrl: "https://github.com/acme/new-memory#readme",
+          excerpt: "Brand new v2 architecture with persistent graph memory.",
+          supportsClaim: "supports",
+          confidence: "high",
+        },
+      ],
+    });
+
+    const decision = evaluateDuplicateCandidate(cand, signals as any);
+    expect(decision.duplicate).toBe(false);
+    expect(decision.reopenReason).toBe("excerpt");
+    expect(decision.reasons.join(" ")).toContain("excerpt");
+  });
+
+  it("ignores current run file when reading historical candidates", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-hist-curr-"));
+    const dir = join(vault, ".skillwiki", "agent-memory-trends");
+    mkdirSync(dir, { recursive: true });
+
+    writeFileSync(
+      join(dir, "2026-06-11-input.json"),
+      JSON.stringify({
+        selected_candidates: [
+          {
+            full_name: "acme/current-run-only",
+            canonical_url: "https://github.com/acme/current-run-only",
+            evidence_quality: { depth: "implementation_surface", signals: ["markdown"] },
+          },
+        ],
+      }),
+      "utf8"
+    );
+
+    const signals = collectDuplicateSignals(vault, "llm-wiki", "2026-06-11");
+    expect(signals.ok).toBe(true);
+    if (!signals.ok) throw new Error("expected signals");
+    const found = ((signals.data as any).historicalCandidates ?? []).find(
+      (c: any) => c.canonicalUrl === "https://github.com/acme/current-run-only"
+    );
+    expect(found).toBeUndefined();
+  });
+
+  it("fails open into parseErrors on malformed and old-schema historical JSON without suppressing", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-hist-err-"));
+    const dir = join(vault, ".skillwiki", "agent-memory-trends");
+    mkdirSync(dir, { recursive: true });
+
+    // Malformed JSON (syntax error)
+    writeFileSync(join(dir, "2026-06-09-input.json"), "NOT VALID JSON\n", "utf8");
+
+    // Old-schema JSON (missing evidence_quality)
+    writeFileSync(
+      join(dir, "2026-06-10-input.json"),
+      JSON.stringify({
+        selected_candidates: [
+          {
+            full_name: "acme/old-schema-repo",
+            canonical_url: "https://github.com/acme/old-schema-repo",
+            score: { score: 80 },
+          },
+        ],
+      }),
+      "utf8"
+    );
+
+    const signals = collectDuplicateSignals(vault, "llm-wiki", "2026-06-11");
+    expect(signals.ok).toBe(true);
+    if (!signals.ok) throw new Error("expected signals");
+
+    expect(signals.data.parseErrors.length).toBeGreaterThanOrEqual(2);
+    expect(signals.data.parseErrors.some((e) => e.path.includes("2026-06-09-input.json"))).toBe(true);
+    expect(signals.data.parseErrors.some((e) => e.path.includes("2026-06-10-input.json"))).toBe(true);
+
+    // Candidate from old-schema repo is NOT suppressed (fails open)
+    const cand = candidate({
+      fullName: "acme/old-schema-repo",
+      canonicalUrl: "https://github.com/acme/old-schema-repo",
+    });
+    const decision = evaluateDuplicateCandidate(cand, signals.data);
+    expect(decision.duplicate).toBe(false);
+  });
 });

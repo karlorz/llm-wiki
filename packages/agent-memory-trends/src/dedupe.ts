@@ -3,6 +3,8 @@ import { basename, join, relative } from "node:path";
 import yaml from "js-yaml";
 import { normalizeCanonicalUrl } from "./config.js";
 import type { SelectedGithubCandidate } from "./github.js";
+import type { EvidenceQuality, EvidenceQualityDepth } from "./score.js";
+import type { ProposalEvidence } from "./synthesis.js";
 import { err, ok, type Result } from "./types.js";
 
 export interface ExistingTaskSignal {
@@ -28,6 +30,16 @@ export interface RecentDigestSignal {
   digestDate?: string;
 }
 
+export interface HistoricalCandidateSignal {
+  path: string;
+  canonicalUrl: string;
+  fullName: string;
+  evidenceQuality: EvidenceQuality;
+  readmeEvidence?: ProposalEvidence[];
+  stargazersCount?: number;
+  pushedAt?: string;
+}
+
 export interface DedupeParseError {
   path: string;
   error: string;
@@ -37,12 +49,16 @@ export interface DuplicateSignals {
   existingTasks: ExistingTaskSignal[];
   activeWork: ActiveWorkSignal[];
   recentDigests: RecentDigestSignal[];
+  historicalCandidates?: HistoricalCandidateSignal[];
   parseErrors: DedupeParseError[];
 }
+
+export type ReopenReason = "depth" | "signal" | "excerpt";
 
 export interface DuplicateDecision {
   duplicate: boolean;
   reasons: string[];
+  reopenReason?: ReopenReason;
 }
 
 export interface DuplicateEvaluationOptions {
@@ -52,13 +68,22 @@ export interface DuplicateEvaluationOptions {
 
 const ACTIVE_WORK_STATUSES = new Set(["planned", "in-progress"]);
 
-export function collectDuplicateSignals(vault: string, project: string): Result<DuplicateSignals> {
+const EVIDENCE_DEPTH_RANKS: Record<EvidenceQualityDepth, number> = {
+  metadata_only: 0,
+  readme_summary: 1,
+  feature_surface: 2,
+  implementation_surface: 3,
+  integration_surface: 4,
+};
+
+export function collectDuplicateSignals(vault: string, project: string, runDate?: string): Result<DuplicateSignals> {
   const parseErrors: DedupeParseError[] = [];
   try {
     return ok({
       existingTasks: collectExistingTasks(vault, project, parseErrors),
       activeWork: collectActiveWork(vault, project, parseErrors),
       recentDigests: collectRecentDigests(vault, parseErrors),
+      historicalCandidates: collectHistoricalCandidates(vault, runDate, parseErrors),
       parseErrors,
     });
   } catch (error) {
@@ -105,7 +130,104 @@ export function evaluateDuplicateCandidate(
   const titleMatch = titles.find((entry) => candidateTitles.some((title) => titlesAreNear(title, normalizeTitle(entry.title))));
   if (titleMatch) reasons.push(`near-title match with "${titleMatch.title}" in ${titleMatch.path}`);
 
+  // Historical input candidate evaluation
+  const historicalMatch = (signals.historicalCandidates ?? []).find(
+    (hist) => hist.canonicalUrl === candidateUrl
+  );
+  if (historicalMatch) {
+    const historicalComparison = evaluateHistoricalEvidenceChange(candidate, historicalMatch);
+    if (historicalComparison.reopen) {
+      return {
+        duplicate: false,
+        reasons: [`reopened from historical candidate in ${historicalMatch.path}: ${historicalComparison.reason}`],
+        reopenReason: historicalComparison.reason,
+      };
+    }
+    reasons.push(
+      `duplicate historical candidate in ${historicalMatch.path} with unchanged or downgraded evidence (${historicalComparison.detail})`
+    );
+  }
+
   return { duplicate: reasons.length > 0, reasons };
+}
+
+interface HistoricalComparisonResult {
+  reopen: boolean;
+  reason?: ReopenReason;
+  detail: string;
+}
+
+function evaluateHistoricalEvidenceChange(
+  current: SelectedGithubCandidate,
+  historical: HistoricalCandidateSignal
+): HistoricalComparisonResult {
+  const currentDepth = current.evidenceQuality.depth;
+  const histDepth = historical.evidenceQuality.depth;
+  const currentRank = EVIDENCE_DEPTH_RANKS[currentDepth] ?? 0;
+  const histRank = EVIDENCE_DEPTH_RANKS[histDepth] ?? 0;
+
+  // 1. Depth upgrade reopens
+  if (currentRank > histRank) {
+    return {
+      reopen: true,
+      reason: "depth",
+      detail: `depth upgraded from ${histDepth} to ${currentDepth}`,
+    };
+  }
+
+  // 2. Added signal reopens
+  const histSignals = new Set(historical.evidenceQuality.signals);
+  const addedSignals = current.evidenceQuality.signals.filter((s) => !histSignals.has(s));
+  if (addedSignals.length > 0) {
+    return {
+      reopen: true,
+      reason: "signal",
+      detail: `added signal(s): ${addedSignals.join(", ")}`,
+    };
+  }
+
+  // 3. Materially new README excerpt reopens (after case & whitespace normalization)
+  const currentExcerpts = (current.readmeEvidence ?? [])
+    .map((e) => normalizeExcerpt(e.excerpt))
+    .filter(Boolean);
+  const histExcerpts = new Set(
+    (historical.readmeEvidence ?? [])
+      .map((e) => normalizeExcerpt(e.excerpt))
+      .filter(Boolean)
+  );
+
+  const hasMateriallyNewExcerpt = currentExcerpts.some((curr) => !histExcerpts.has(curr));
+  if (currentExcerpts.length > 0 && hasMateriallyNewExcerpt && histExcerpts.size > 0) {
+    return {
+      reopen: true,
+      reason: "excerpt",
+      detail: "materially new README excerpt observed",
+    };
+  }
+  if (currentExcerpts.length > 0 && histExcerpts.size === 0) {
+    return {
+      reopen: true,
+      reason: "excerpt",
+      detail: "new README excerpt observed where historical candidate had none",
+    };
+  }
+
+  // Otherwise: suppressed (depth downgrade, signal removal only, stars only, pushedAt only, case/ws only)
+  let detail = "unchanged fingerprint";
+  if (currentRank < histRank) {
+    detail = `depth downgraded from ${histDepth} to ${currentDepth}`;
+  } else if (current.evidenceQuality.signals.length < historical.evidenceQuality.signals.length) {
+    detail = "signal-removal-only";
+  }
+
+  return { reopen: false, detail };
+}
+
+function normalizeExcerpt(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 function collectExistingTasks(vault: string, project: string, parseErrors: DedupeParseError[]): ExistingTaskSignal[] {
@@ -167,6 +289,132 @@ function collectRecentDigests(vault: string, parseErrors: DedupeParseError[]): R
     });
   }
   return results;
+}
+
+function collectHistoricalCandidates(
+  vault: string,
+  runDate: string | undefined,
+  parseErrors: DedupeParseError[]
+): HistoricalCandidateSignal[] {
+  const dir = join(vault, ".skillwiki", "agent-memory-trends");
+  if (!existsSync(dir)) return [];
+
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return [];
+  }
+
+  // Files ending with "-input.json", sorted newest first
+  const inputFiles = entries
+    .filter((name) => /^\d{4}-\d{2}-\d{2}-input\.json$/.test(name))
+    .filter((name) => {
+      if (!runDate) return true;
+      const fileDate = name.slice(0, 10);
+      return fileDate < runDate;
+    })
+    .sort((left, right) => right.localeCompare(left))
+    .slice(0, 30);
+
+  const seen = new Map<string, HistoricalCandidateSignal>();
+
+  for (const fileName of inputFiles) {
+    const filePath = join(dir, fileName);
+    const relPath = vaultRelative(relative(vault, filePath));
+    let rawText: string;
+    try {
+      rawText = readFileSync(filePath, "utf8");
+    } catch (error) {
+      parseErrors.push({
+        path: relPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch (error) {
+      parseErrors.push({
+        path: relPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+
+    if (!parsed || typeof parsed !== "object") {
+      parseErrors.push({
+        path: relPath,
+        error: "expected JSON object at top level",
+      });
+      continue;
+    }
+
+    // Both selected_candidates and duplicate_suppressions
+    const candidatesList: any[] = [];
+    if (Array.isArray(parsed.selected_candidates)) {
+      candidatesList.push(...parsed.selected_candidates);
+    }
+    if (Array.isArray(parsed.duplicate_suppressions)) {
+      for (const item of parsed.duplicate_suppressions) {
+        if (item && typeof item === "object" && item.candidate) {
+          candidatesList.push(item.candidate);
+        }
+      }
+    }
+
+    for (const cand of candidatesList) {
+      if (!cand || typeof cand !== "object") continue;
+      const canonicalUrlRaw = cand.canonical_url ?? cand.canonicalUrl;
+      const fullName = cand.full_name ?? cand.fullName;
+      if (typeof canonicalUrlRaw !== "string" || !canonicalUrlRaw) continue;
+
+      const canonicalUrl = normalizeCanonicalUrl(canonicalUrlRaw);
+      // If already recorded from a newer file in the 30-file window, keep the newer
+      if (seen.has(canonicalUrl)) continue;
+
+      const evidenceQualityRaw = cand.evidence_quality ?? cand.evidenceQuality;
+      if (!evidenceQualityRaw || typeof evidenceQualityRaw !== "object" || typeof evidenceQualityRaw.depth !== "string") {
+        // Missing or malformed evidence_quality → old schema, fail-open
+        parseErrors.push({
+          path: relPath,
+          error: `missing or invalid evidence_quality for candidate ${fullName ?? canonicalUrl}`,
+        });
+        continue;
+      }
+
+      const readmeEvidenceRaw = cand.readme_evidence ?? cand.readmeEvidence;
+      const readmeEvidence: ProposalEvidence[] = Array.isArray(readmeEvidenceRaw)
+        ? readmeEvidenceRaw
+            .filter((e) => e && typeof e === "object" && typeof e.excerpt === "string")
+            .map((e) => ({
+              sourceUrl: String(e.source_url ?? e.sourceUrl ?? ""),
+              excerpt: String(e.excerpt ?? ""),
+              supportsClaim: String(e.supports_claim ?? e.supportsClaim ?? ""),
+              confidence: (e.confidence ?? "medium") as "high" | "medium" | "low",
+            }))
+        : [];
+
+      seen.set(canonicalUrl, {
+        path: relPath,
+        canonicalUrl,
+        fullName: typeof fullName === "string" ? fullName : "",
+        evidenceQuality: {
+          depth: evidenceQualityRaw.depth as EvidenceQualityDepth,
+          sourceInspectionRecommended: Boolean(evidenceQualityRaw.source_inspection_recommended ?? evidenceQualityRaw.sourceInspectionRecommended),
+          signals: Array.isArray(evidenceQualityRaw.signals) ? evidenceQualityRaw.signals.map(String) : [],
+          summary: String(evidenceQualityRaw.summary ?? ""),
+        },
+        readmeEvidence,
+        stargazersCount: typeof cand.stargazers_count === "number" ? cand.stargazers_count : typeof cand.stargazersCount === "number" ? cand.stargazersCount : undefined,
+        pushedAt: typeof cand.pushed_at === "string" ? cand.pushed_at : typeof cand.pushedAt === "string" ? cand.pushedAt : undefined,
+      });
+    }
+  }
+
+  return [...seen.values()];
 }
 
 function digestWithinTtl(digest: RecentDigestSignal, options?: DuplicateEvaluationOptions): boolean {

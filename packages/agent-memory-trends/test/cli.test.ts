@@ -3270,6 +3270,90 @@ watchlist:
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("diagnose includes historical duplicate suppression in dup suppressed count and writes nothing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-memory-trends-diagnose-hist-suppression-"));
+    const vault = join(root, "vault");
+    const configPath = join(root, "config.yaml");
+    mkdirSync(vault, { recursive: true });
+    writeFileSync(configPath, LANE_CONFIG, "utf8");
+
+    const touched: string[] = [];
+    const result = await runAgentMemoryTrendsCli(
+      ["diagnose", "--vault", vault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now: new Date("2026-06-13T00:00:00Z"),
+        readFile: (path: string) => {
+          if (path === configPath) return LANE_CONFIG;
+          throw new Error(`unexpected readFile path: ${path}`);
+        },
+        runGh: async (args: string[]) => LANE_RUNNER.runGh(args),
+        collectDuplicateSignals: (_vault: string, _project: string, _runDate?: string) => {
+          return {
+            ok: true,
+            data: {
+              existingTasks: [],
+              activeWork: [],
+              recentDigests: [],
+              historicalCandidates: [
+                {
+                  path: ".skillwiki/agent-memory-trends/2026-06-12-input.json",
+                  canonicalUrl: "https://github.com/xiaomimimo/mimo-code",
+                  fullName: "XiaomiMiMo/MiMo-Code",
+                  evidenceQuality: {
+                    depth: "integration_surface",
+                    sourceInspectionRecommended: true,
+                    signals: [
+                      "agent-memory",
+                      "workflow",
+                      "tests",
+                      "markdown",
+                      "sync",
+                      "mcp",
+                      "plugin",
+                      "source-capture",
+                    ],
+                    summary: "implementation",
+                  },
+                  readmeEvidence: [
+                    {
+                      sourceUrl: "https://github.com/XiaomiMiMo/MiMo-Code#readme",
+                      excerpt:
+                        "an autonomous coding agent workflow with checkpoint memory, context consolidation, dream and distill loops, reusable skills, subagents, goal judge evaluation, and local search over agent trajectories.",
+                      supportsClaim: "supports",
+                      confidence: "high",
+                    },
+                  ],
+                },
+              ],
+              parseErrors: [],
+            },
+          };
+        },
+        writeAgentInput: () => {
+          touched.push("write-input");
+          throw new Error("diagnose must not write agent input");
+        },
+        writeRunState: () => {
+          touched.push("run-state");
+          throw new Error("diagnose must not write run state");
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected diagnose success");
+    expect(touched).toEqual([]);
+    expect(result.result.data.mutations).toEqual([]);
+    expect(result.result.data.humanHint).toContain(
+      "lane daily_fresh: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 1, budget exhausted: no, readme budget exhausted: no"
+    );
+    expect(readdirSync(vault)).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("drives the shipped diagnose command across the Search quota reset without writing anything", async () => {
     const root = mkdtempSync(join(tmpdir(), "agent-memory-trends-diagnose-reset-"));
     const vault = join(root, "vault");
