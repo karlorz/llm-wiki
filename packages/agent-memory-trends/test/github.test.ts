@@ -782,6 +782,681 @@ it("runs unqualified count queries only in diagnostic mode and fills the pre-dat
     });
   });
 
+  it("interleaves README fetches round-robin across lanes so later lanes with merged candidates are not starved", async () => {
+    // 3 lanes, each with 2 distinct merged candidates (6 total unique candidates).
+    // API call budget is set so:
+    // rate_limit = 1
+    // 3 search queries = 3 calls
+    // apiCallsUsed after search = 4
+    // api_call_budget = 7 -> exactly 3 README calls remaining.
+    // With 3 lanes and 3 remaining README calls, round-robin gives 1 README fetch to each lane!
+    // Under old insertion-order monopoly, lane 1 got 2 READMEs, lane 2 got 1, lane 3 got 0.
+    const configYaml = `version: 1
+project: llm-wiki
+timezone: Asia/Hong_Kong
+scoring:
+  threshold: 65
+  weights:
+    relevance: 30
+    implementation_evidence: 25
+    authority_momentum: 25
+    freshness: 10
+    novelty_or_tracking: 10
+github:
+  api_call_budget: 7
+  max_queries: 3
+  max_raw_candidates: 50
+  max_selected_candidates: 10
+  lanes:
+    - id: lane_a
+      label: Lane A
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q-a
+          label: Query A
+          query: agent memory a in:name,description,readme
+    - id: lane_b
+      label: Lane B
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q-b
+          label: Query B
+          query: agent memory b in:name,description,readme
+    - id: lane_c
+      label: Lane C
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q-c
+          label: Query C
+          query: agent memory c in:name,description,readme
+watchlist:
+  auto_append: { min_appearances: 3, window_days: 14, min_score: 65 }
+  accepted: []
+  rejected: []
+  archived: []
+`;
+    const parsed = parseResearchConfig(configYaml, "fair-lane-test.yaml");
+    if (!parsed.ok) throw new Error("expected config to parse");
+
+    const readmeCalls: string[] = [];
+    const runner: GhRunner = async (args: string[]): Promise<GhRunResult> => {
+      if (args[0] === "auth" && args[1] === "status") {
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "api" && args[1] === "rate_limit") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            resources: {
+              core: { remaining: 4900, limit: 5000, reset: 1781126400 },
+              search: { remaining: 29, limit: 30, reset: 1781126400 },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1] === "--method" && args[2] === "GET" && args[3] === "/search/repositories") {
+        const query = (args.find((arg) => arg.startsWith("q=")) ?? "").replace(/^q=/, "");
+        if (query.includes("agent memory a")) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              total_count: 2,
+              items: [
+                repo({ name: "cand-a1", full_name: "test/cand-a1", html_url: "https://github.com/test/cand-a1" }),
+                repo({ name: "cand-a2", full_name: "test/cand-a2", html_url: "https://github.com/test/cand-a2" }),
+              ],
+            }),
+            stderr: "",
+          };
+        }
+        if (query.includes("agent memory b")) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              total_count: 2,
+              items: [
+                repo({ name: "cand-b1", full_name: "test/cand-b1", html_url: "https://github.com/test/cand-b1" }),
+                repo({ name: "cand-b2", full_name: "test/cand-b2", html_url: "https://github.com/test/cand-b2" }),
+              ],
+            }),
+            stderr: "",
+          };
+        }
+        if (query.includes("agent memory c")) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              total_count: 2,
+              items: [
+                repo({ name: "cand-c1", full_name: "test/cand-c1", html_url: "https://github.com/test/cand-c1" }),
+                repo({ name: "cand-c2", full_name: "test/cand-c2", html_url: "https://github.com/test/cand-c2" }),
+              ],
+            }),
+            stderr: "",
+          };
+        }
+      }
+      if (args[0] === "api" && args[1]?.startsWith("/repos/") && args[1]?.endsWith("/readme")) {
+        readmeCalls.push(args[1]);
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            encoding: "base64",
+            content: Buffer.from("README content with tests and api.").toString("base64"),
+          }),
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected gh call: ${args.join(" ")}`);
+    };
+
+    const result = await collectGithubCandidates(parsed.data, {
+      runGh: runner,
+      now: new Date("2026-06-13T00:00:00Z"),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected collector success");
+
+    expect(readmeCalls).toEqual([
+      "/repos/test/cand-a1/readme",
+      "/repos/test/cand-b1/readme",
+      "/repos/test/cand-c1/readme",
+    ]);
+
+    const laneDiagnostics = result.data.laneDiagnostics;
+    const laneA = laneDiagnostics.find((l) => l.laneId === "lane_a")!;
+    const laneB = laneDiagnostics.find((l) => l.laneId === "lane_b")!;
+    const laneC = laneDiagnostics.find((l) => l.laneId === "lane_c")!;
+
+    expect(laneA.readmeProcessedCount).toBe(1);
+    expect(laneB.readmeProcessedCount).toBe(1);
+    expect(laneC.readmeProcessedCount).toBe(1);
+
+    // All 3 lanes have merged 2 candidates and processed 1 README: all hit README budget exhaustion
+    expect(laneA.budgetExhausted).toBe(true);
+    expect(laneA.readmeBudgetExhausted).toBe(true);
+    expect(laneB.budgetExhausted).toBe(true);
+    expect(laneB.readmeBudgetExhausted).toBe(true);
+    expect(laneC.budgetExhausted).toBe(true);
+    expect(laneC.readmeBudgetExhausted).toBe(true);
+  });
+
+  it("skips cleanly when a lane has zero merged candidates without infinite looping", async () => {
+    // 3 lanes: lane_a has 2 candidates, lane_b has 0 candidates, lane_c has 2 candidates.
+    // budget = 6 calls: rate_limit(1) + 3 queries(3) = 4, leaving 2 README calls.
+    // Round-robin should process 1 from lane_a, skip lane_b, and 1 from lane_c.
+    const configYaml = `version: 1
+project: llm-wiki
+timezone: Asia/Hong_Kong
+scoring:
+  threshold: 65
+  weights:
+    relevance: 30
+    implementation_evidence: 25
+    authority_momentum: 25
+    freshness: 10
+    novelty_or_tracking: 10
+github:
+  api_call_budget: 6
+  max_queries: 3
+  max_raw_candidates: 50
+  max_selected_candidates: 10
+  lanes:
+    - id: lane_a
+      label: Lane A
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q-a
+          label: Query A
+          query: agent memory a in:name,description,readme
+    - id: lane_b
+      label: Lane B
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q-b
+          label: Query B
+          query: agent memory b in:name,description,readme
+    - id: lane_c
+      label: Lane C
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q-c
+          label: Query C
+          query: agent memory c in:name,description,readme
+watchlist:
+  auto_append: { min_appearances: 3, window_days: 14, min_score: 65 }
+  accepted: []
+  rejected: []
+  archived: []
+`;
+    const parsed = parseResearchConfig(configYaml, "zero-lane-test.yaml");
+    if (!parsed.ok) throw new Error("expected config to parse");
+
+    const readmeCalls: string[] = [];
+    const runner: GhRunner = async (args: string[]): Promise<GhRunResult> => {
+      if (args[0] === "auth" && args[1] === "status") {
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "api" && args[1] === "rate_limit") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            resources: {
+              core: { remaining: 4900, limit: 5000, reset: 1781126400 },
+              search: { remaining: 29, limit: 30, reset: 1781126400 },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1] === "--method" && args[2] === "GET" && args[3] === "/search/repositories") {
+        const query = (args.find((arg) => arg.startsWith("q=")) ?? "").replace(/^q=/, "");
+        if (query.includes("agent memory a")) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              total_count: 2,
+              items: [
+                repo({ name: "cand-a1", full_name: "test/cand-a1", html_url: "https://github.com/test/cand-a1" }),
+                repo({ name: "cand-a2", full_name: "test/cand-a2", html_url: "https://github.com/test/cand-a2" }),
+              ],
+            }),
+            stderr: "",
+          };
+        }
+        if (query.includes("agent memory b")) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ total_count: 0, items: [] }),
+            stderr: "",
+          };
+        }
+        if (query.includes("agent memory c")) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              total_count: 2,
+              items: [
+                repo({ name: "cand-c1", full_name: "test/cand-c1", html_url: "https://github.com/test/cand-c1" }),
+                repo({ name: "cand-c2", full_name: "test/cand-c2", html_url: "https://github.com/test/cand-c2" }),
+              ],
+            }),
+            stderr: "",
+          };
+        }
+      }
+      if (args[0] === "api" && args[1]?.startsWith("/repos/") && args[1]?.endsWith("/readme")) {
+        readmeCalls.push(args[1]);
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            encoding: "base64",
+            content: Buffer.from("README content with tests and api.").toString("base64"),
+          }),
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected gh call: ${args.join(" ")}`);
+    };
+
+    const result = await collectGithubCandidates(parsed.data, {
+      runGh: runner,
+      now: new Date("2026-06-13T00:00:00Z"),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected collector success");
+
+    expect(readmeCalls).toEqual([
+      "/repos/test/cand-a1/readme",
+      "/repos/test/cand-c1/readme",
+    ]);
+
+    const laneDiagnostics = result.data.laneDiagnostics;
+    const laneA = laneDiagnostics.find((l) => l.laneId === "lane_a")!;
+    const laneB = laneDiagnostics.find((l) => l.laneId === "lane_b")!;
+    const laneC = laneDiagnostics.find((l) => l.laneId === "lane_c")!;
+
+    expect(laneA.readmeProcessedCount).toBe(1);
+    expect(laneB.readmeProcessedCount).toBe(0);
+    expect(laneC.readmeProcessedCount).toBe(1);
+
+    expect(laneB.budgetExhausted).toBe(false);
+    expect(laneB.readmeBudgetExhausted).toBe(false);
+  });
+
+  it("falls back to lane YAML order deterministically when remaining README budget is smaller than lane count", async () => {
+    // 3 lanes (lane_a, lane_b, lane_c), each with 1 candidate.
+    // budget = 5 calls: rate_limit(1) + 3 queries(3) = 4.
+    // Remaining README budget = 5 - 4 = 1.
+    // 1 slot < 3 lanes. Fallback to lane YAML order deterministically gives 1 slot to lane_a.
+    const configYaml = `version: 1
+project: llm-wiki
+timezone: Asia/Hong_Kong
+scoring:
+  threshold: 65
+  weights:
+    relevance: 30
+    implementation_evidence: 25
+    authority_momentum: 25
+    freshness: 10
+    novelty_or_tracking: 10
+github:
+  api_call_budget: 5
+  max_queries: 3
+  max_raw_candidates: 50
+  max_selected_candidates: 10
+  lanes:
+    - id: lane_a
+      label: Lane A
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q-a
+          label: Query A
+          query: agent memory a in:name,description,readme
+    - id: lane_b
+      label: Lane B
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q-b
+          label: Query B
+          query: agent memory b in:name,description,readme
+    - id: lane_c
+      label: Lane C
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q-c
+          label: Query C
+          query: agent memory c in:name,description,readme
+watchlist:
+  auto_append: { min_appearances: 3, window_days: 14, min_score: 65 }
+  accepted: []
+  rejected: []
+  archived: []
+`;
+    const parsed = parseResearchConfig(configYaml, "yaml-order-test.yaml");
+    if (!parsed.ok) throw new Error("expected config to parse");
+
+    const readmeCalls: string[] = [];
+    const runner: GhRunner = async (args: string[]): Promise<GhRunResult> => {
+      if (args[0] === "auth" && args[1] === "status") {
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "api" && args[1] === "rate_limit") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            resources: {
+              core: { remaining: 4900, limit: 5000, reset: 1781126400 },
+              search: { remaining: 29, limit: 30, reset: 1781126400 },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1] === "--method" && args[2] === "GET" && args[3] === "/search/repositories") {
+        const query = (args.find((arg) => arg.startsWith("q=")) ?? "").replace(/^q=/, "");
+        if (query.includes("agent memory a")) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              total_count: 1,
+              items: [
+                repo({ name: "cand-a1", full_name: "test/cand-a1", html_url: "https://github.com/test/cand-a1" }),
+              ],
+            }),
+            stderr: "",
+          };
+        }
+        if (query.includes("agent memory b")) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              total_count: 1,
+              items: [
+                repo({ name: "cand-b1", full_name: "test/cand-b1", html_url: "https://github.com/test/cand-b1" }),
+              ],
+            }),
+            stderr: "",
+          };
+        }
+        if (query.includes("agent memory c")) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              total_count: 1,
+              items: [
+                repo({ name: "cand-c1", full_name: "test/cand-c1", html_url: "https://github.com/test/cand-c1" }),
+              ],
+            }),
+            stderr: "",
+          };
+        }
+      }
+      if (args[0] === "api" && args[1]?.startsWith("/repos/") && args[1]?.endsWith("/readme")) {
+        readmeCalls.push(args[1]);
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            encoding: "base64",
+            content: Buffer.from("README content with tests and api.").toString("base64"),
+          }),
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected gh call: ${args.join(" ")}`);
+    };
+
+    const result = await collectGithubCandidates(parsed.data, {
+      runGh: runner,
+      now: new Date("2026-06-13T00:00:00Z"),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected collector success");
+
+    expect(readmeCalls).toEqual(["/repos/test/cand-a1/readme"]);
+    expect(result.data.apiCallsUsed).toBe(5);
+
+    const laneDiagnostics = result.data.laneDiagnostics;
+    const laneA = laneDiagnostics.find((l) => l.laneId === "lane_a")!;
+    const laneB = laneDiagnostics.find((l) => l.laneId === "lane_b")!;
+    const laneC = laneDiagnostics.find((l) => l.laneId === "lane_c")!;
+
+    expect(laneA.readmeProcessedCount).toBe(1);
+    expect(laneA.budgetExhausted).toBe(false);
+    expect(laneA.readmeBudgetExhausted).toBe(false);
+
+    expect(laneB.readmeProcessedCount).toBe(0);
+    expect(laneB.budgetExhausted).toBe(true);
+    expect(laneB.readmeBudgetExhausted).toBe(true);
+
+    expect(laneC.readmeProcessedCount).toBe(0);
+    expect(laneC.budgetExhausted).toBe(true);
+    expect(laneC.readmeBudgetExhausted).toBe(true);
+  });
+
+  it("fetches multi-lane URL exactly once while attributing readmeProcessedCount to all its lanes", async () => {
+    // 2 lanes (lane_a, lane_b).
+    // Shared candidate "cand-shared" appears in both lane_a and lane_b.
+    // Also candidate "cand-a" only in lane_a, "cand-b" only in lane_b.
+    // budget = 5 calls: rate_limit(1) + 2 queries(2) = 3 calls used.
+    // 2 README calls remaining: 5 - 3 = 2.
+    // When cand-shared is fetched, it should fetch README once, and increment readmeProcessedCount
+    // for both lane_a and lane_b!
+    const configYaml = `version: 1
+project: llm-wiki
+timezone: Asia/Hong_Kong
+scoring:
+  threshold: 65
+  weights:
+    relevance: 30
+    implementation_evidence: 25
+    authority_momentum: 25
+    freshness: 10
+    novelty_or_tracking: 10
+github:
+  api_call_budget: 5
+  max_queries: 2
+  max_raw_candidates: 50
+  max_selected_candidates: 10
+  lanes:
+    - id: lane_a
+      label: Lane A
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q-a
+          label: Query A
+          query: agent memory a in:name,description,readme
+    - id: lane_b
+      label: Lane B
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q-b
+          label: Query B
+          query: agent memory b in:name,description,readme
+watchlist:
+  auto_append: { min_appearances: 3, window_days: 14, min_score: 65 }
+  accepted: []
+  rejected: []
+  archived: []
+`;
+    const parsed = parseResearchConfig(configYaml, "multilane-test.yaml");
+    if (!parsed.ok) throw new Error("expected config to parse");
+
+    const readmeCalls: string[] = [];
+    const runner: GhRunner = async (args: string[]): Promise<GhRunResult> => {
+      if (args[0] === "auth" && args[1] === "status") {
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "api" && args[1] === "rate_limit") {
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            resources: {
+              core: { remaining: 4900, limit: 5000, reset: 1781126400 },
+              search: { remaining: 29, limit: 30, reset: 1781126400 },
+            },
+          }),
+          stderr: "",
+        };
+      }
+      if (args[0] === "api" && args[1] === "--method" && args[2] === "GET" && args[3] === "/search/repositories") {
+        const query = (args.find((arg) => arg.startsWith("q=")) ?? "").replace(/^q=/, "");
+        if (query.includes("agent memory a")) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              total_count: 2,
+              items: [
+                repo({ name: "cand-shared", full_name: "test/cand-shared", html_url: "https://github.com/test/cand-shared" }),
+                repo({ name: "cand-a", full_name: "test/cand-a", html_url: "https://github.com/test/cand-a" }),
+              ],
+            }),
+            stderr: "",
+          };
+        }
+        if (query.includes("agent memory b")) {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              total_count: 2,
+              items: [
+                repo({ name: "cand-shared", full_name: "test/cand-shared", html_url: "https://github.com/test/cand-shared" }),
+                repo({ name: "cand-b", full_name: "test/cand-b", html_url: "https://github.com/test/cand-b" }),
+              ],
+            }),
+            stderr: "",
+          };
+        }
+      }
+      if (args[0] === "api" && args[1]?.startsWith("/repos/") && args[1]?.endsWith("/readme")) {
+        readmeCalls.push(args[1]);
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({
+            encoding: "base64",
+            content: Buffer.from("README content with tests and api.").toString("base64"),
+          }),
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected gh call: ${args.join(" ")}`);
+    };
+
+    const result = await collectGithubCandidates(parsed.data, {
+      runGh: runner,
+      now: new Date("2026-06-13T00:00:00Z"),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected collector success");
+
+    // Exactly 2 readme calls allowed by budget (3 used before, budget 5 -> 2)
+    // cand-shared is first round (lane_a has cand-shared, cand-a; lane_b has cand-shared, cand-b)
+    // Round 0: lane_a picks cand-shared. Next lane_b: cand-shared already scheduled/fetched, picks cand-b.
+    // Total unique README calls = 2.
+    expect(readmeCalls).toHaveLength(2);
+    expect(readmeCalls).toContain("/repos/test/cand-shared/readme");
+
+    const laneA = result.data.laneDiagnostics.find((l) => l.laneId === "lane_a")!;
+    const laneB = result.data.laneDiagnostics.find((l) => l.laneId === "lane_b")!;
+
+    // Both lanes should have cand-shared attributed to readmeProcessedCount!
+    expect(laneA.readmeProcessedCount).toBeGreaterThanOrEqual(1);
+    expect(laneB.readmeProcessedCount).toBeGreaterThanOrEqual(1);
+  });
+
   it("still stops the diagnostic run before exceeding the api budget when the reset wait adds a recheck call", async () => {
     const parsed = parseResearchConfig(searchWindowConfig(23, 47), "rate-window-budget-test.yaml");
     if (!parsed.ok) throw new Error("expected config to parse");

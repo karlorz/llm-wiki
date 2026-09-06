@@ -1079,7 +1079,7 @@ function formatDiagnoseReport(
     const unqualified = lane.unqualifiedTotalCount === undefined ? "n/a" : String(lane.unqualifiedTotalCount);
     const duplicateSuppressed = suppressedCountsByLane.get(lane.laneId) ?? 0;
     lines.push(
-      `  lane ${lane.laneId}: queries ${lane.executedQueryCount}/${lane.configuredQueryCount}, unqualified ${unqualified}, qualified ${lane.qualifiedTotalCount}, results ${lane.searchResultCount}, merged ${lane.mergedCandidateCount}, readme processed ${lane.readmeProcessedCount}, quality passed ${lane.qualityPassedCount}, raw eligible ${lane.rawEligibleCount}, selected ${lane.selectedCount}, merge dedup ${lane.mergedDuplicateCount}, dup suppressed ${duplicateSuppressed}, budget exhausted: ${lane.budgetExhausted ? "yes" : "no"}`
+      `  lane ${lane.laneId}: queries ${lane.executedQueryCount}/${lane.configuredQueryCount}, unqualified ${unqualified}, qualified ${lane.qualifiedTotalCount}, results ${lane.searchResultCount}, merged ${lane.mergedCandidateCount}, readme processed ${lane.readmeProcessedCount}, quality passed ${lane.qualityPassedCount}, raw eligible ${lane.rawEligibleCount}, selected ${lane.selectedCount}, merge dedup ${lane.mergedDuplicateCount}, dup suppressed ${duplicateSuppressed}, budget exhausted: ${lane.budgetExhausted ? "yes" : "no"}, readme budget exhausted: ${lane.readmeBudgetExhausted ? "yes" : "no"}`
     );
   }
   return lines.join("\n");

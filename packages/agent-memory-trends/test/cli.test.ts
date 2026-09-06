@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { runAgentMemoryTrendsCli } from "../src/cli.js";
 import { makeDiscoveryCandidate, type CommunityReference, type DiscoveryCandidate } from "../src/discovery-contracts.js";
 import { writeDiscoverySnapshot } from "../src/discovery-snapshots.js";
-import type { SelectedGithubCandidate } from "../src/github.js";
+import type { GithubCollectionOutput, SelectedGithubCandidate } from "../src/github.js";
 
 const CONFIG = `version: 1
 project: llm-wiki
@@ -3122,10 +3122,10 @@ watchlist:
     expect(result.result.data.humanHint).toBe(
       [
         "diagnose: ok; 12 gh api call(s) used of 100 budget",
-        "  lane daily_fresh: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 0, budget exhausted: no",
-        "  lane weekly_momentum: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 0, budget exhausted: no",
-        "  lane monthly_authority: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 2, dup suppressed 0, budget exhausted: no",
-        "  lane emerging: queries 1/1, unqualified 1, qualified 1, results 1, merged 1, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 0, budget exhausted: no",
+        "  lane daily_fresh: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 0, budget exhausted: no, readme budget exhausted: no",
+        "  lane weekly_momentum: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 0, budget exhausted: no, readme budget exhausted: no",
+        "  lane monthly_authority: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 2, dup suppressed 0, budget exhausted: no, readme budget exhausted: no",
+        "  lane emerging: queries 1/1, unqualified 1, qualified 1, results 1, merged 1, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 0, budget exhausted: no, readme budget exhausted: no",
       ].join("\n")
     );
 
@@ -3185,16 +3185,16 @@ watchlist:
     // inside the ceiling: 4 api calls, never more.
     expect(result.result.data.humanHint).toContain("diagnose: ok; 4 gh api call(s) used of 4 budget");
     expect(result.result.data.humanHint).toContain(
-      "lane daily_fresh: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 0, budget exhausted: yes"
+      "lane daily_fresh: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 0, budget exhausted: yes, readme budget exhausted: yes"
     );
     expect(result.result.data.humanHint).toContain(
-      "lane weekly_momentum: queries 0/1, unqualified n/a, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: yes"
+      "lane weekly_momentum: queries 0/1, unqualified n/a, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: yes, readme budget exhausted: no"
     );
     expect(result.result.data.humanHint).toContain(
-      "lane monthly_authority: queries 0/1, unqualified n/a, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: yes"
+      "lane monthly_authority: queries 0/1, unqualified n/a, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: yes, readme budget exhausted: no"
     );
     expect(result.result.data.humanHint).toContain(
-      "lane emerging: queries 0/1, unqualified n/a, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: yes"
+      "lane emerging: queries 0/1, unqualified n/a, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: yes, readme budget exhausted: no"
     );
     expect(result.result.data.mutations).toEqual([]);
     expect(readdirSync(vault)).toEqual([]);
@@ -3255,16 +3255,16 @@ watchlist:
     // selected stays at its pre-suppression value while the gate suppresses
     // the already-captured MiMo candidate in every lane it appears in.
     expect(result.result.data.humanHint).toContain(
-      "lane daily_fresh: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 1, budget exhausted: no"
+      "lane daily_fresh: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 1, budget exhausted: no, readme budget exhausted: no"
     );
     expect(result.result.data.humanHint).toContain(
-      "lane weekly_momentum: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 1, budget exhausted: no"
+      "lane weekly_momentum: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 1, budget exhausted: no, readme budget exhausted: no"
     );
     expect(result.result.data.humanHint).toContain(
-      "lane monthly_authority: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 2, dup suppressed 1, budget exhausted: no"
+      "lane monthly_authority: queries 1/1, unqualified 2, qualified 2, results 2, merged 2, readme processed 2, quality passed 1, raw eligible 1, selected 1, merge dedup 2, dup suppressed 1, budget exhausted: no, readme budget exhausted: no"
     );
     expect(result.result.data.humanHint).toContain(
-      "lane emerging: queries 1/1, unqualified 1, qualified 1, results 1, merged 1, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 1, budget exhausted: no"
+      "lane emerging: queries 1/1, unqualified 1, qualified 1, results 1, merged 1, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 1, dup suppressed 1, budget exhausted: no, readme budget exhausted: no"
     );
     expect(readdirSync(vault)).toEqual([]);
     rmSync(root, { recursive: true, force: true });
@@ -3345,10 +3345,170 @@ watchlist:
     expect(ghCalls.filter((args) => args[0] === "api" && args[1] === "--method" && args[3] === "/search/repositories")).toHaveLength(46);
     expect(result.result.data.humanHint).toContain("diagnose: ok; 48 gh api call(s) used of 100 budget");
     expect(result.result.data.humanHint).toContain(
-      "lane rate_limit_window: queries 23/23, unqualified 0, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: no"
+      "lane rate_limit_window: queries 23/23, unqualified 0, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: no, readme budget exhausted: no"
     );
     // Diagnose is non-mutating: the vault stays empty.
     expect(readdirSync(vault)).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("distinguishes query-cut-only, readme-starvation-only, and both in diagnose report", async () => {
+    // We create a test with 3 lanes:
+    // lane_qc (query cut only): 2 queries configured, 1 executed, 0 merged candidates -> budget exhausted: yes, readme budget exhausted: no
+    // lane_rs (readme starvation only): 1 query configured, 1 executed, 2 merged candidates, 1 readme processed -> budget exhausted: yes, readme budget exhausted: yes
+    // lane_both (both): 2 queries configured, 1 executed, 2 merged candidates, 1 readme processed -> budget exhausted: yes, readme budget exhausted: yes
+    // lane_clean (neither): 1 query configured, 1 executed, 1 merged candidate, 1 readme processed -> budget exhausted: no, readme budget exhausted: no
+    const configYaml = `version: 1
+project: llm-wiki
+timezone: Asia/Hong_Kong
+scoring:
+  threshold: 65
+  weights:
+    relevance: 30
+    implementation_evidence: 25
+    authority_momentum: 25
+    freshness: 10
+    novelty_or_tracking: 10
+github:
+  api_call_budget: 100
+  max_queries: 10
+  max_raw_candidates: 50
+  max_selected_candidates: 10
+  lanes:
+    - id: test_lane
+      label: Test Lane
+      window_days: 1
+      date_field: pushed
+      sort: updated
+      order: desc
+      per_page: 10
+      quality_gate:
+        min_stars: 0
+        min_forks: 0
+        min_evidence_families: 1
+      queries:
+        - id: q1
+          label: Q1
+          query: test query in:name,description,readme
+watchlist:
+  auto_append: { min_appearances: 3, window_days: 14, min_score: 65 }
+  accepted: []
+  rejected: []
+  archived: []
+`;
+    const root = mkdtempSync(join(tmpdir(), "agent-memory-trends-diagnose-distinguish-"));
+    const vault = join(root, "vault");
+    const configPath = join(root, "config.yaml");
+    mkdirSync(vault, { recursive: true });
+    writeFileSync(configPath, configYaml, "utf8");
+
+    const mockOutput: GithubCollectionOutput = {
+      rateLimit: {
+        resources: {
+          core: { remaining: 5000, limit: 5000, reset: 0 },
+          search: { remaining: 30, limit: 30, reset: 0 },
+        },
+      },
+      apiCallsUsed: 10,
+      rawCandidateCount: 3,
+      selectedCandidates: [],
+      laneDiagnostics: [
+        {
+          laneId: "query_cut_only",
+          configuredQueryCount: 2,
+          executedQueryCount: 1,
+          qualifiedTotalCount: 0,
+          searchResultCount: 0,
+          mergedCandidateCount: 0,
+          readmeProcessedCount: 0,
+          qualityPassedCount: 0,
+          rawEligibleCount: 0,
+          selectedCount: 0,
+          mergedDuplicateCount: 0,
+          budgetExhausted: true,
+          readmeBudgetExhausted: false,
+        },
+        {
+          laneId: "readme_starvation_only",
+          configuredQueryCount: 1,
+          executedQueryCount: 1,
+          qualifiedTotalCount: 2,
+          searchResultCount: 2,
+          mergedCandidateCount: 2,
+          readmeProcessedCount: 1,
+          qualityPassedCount: 1,
+          rawEligibleCount: 1,
+          selectedCount: 1,
+          mergedDuplicateCount: 0,
+          budgetExhausted: true,
+          readmeBudgetExhausted: true,
+        },
+        {
+          laneId: "both",
+          configuredQueryCount: 2,
+          executedQueryCount: 1,
+          qualifiedTotalCount: 2,
+          searchResultCount: 2,
+          mergedCandidateCount: 2,
+          readmeProcessedCount: 1,
+          qualityPassedCount: 1,
+          rawEligibleCount: 1,
+          selectedCount: 1,
+          mergedDuplicateCount: 0,
+          budgetExhausted: true,
+          readmeBudgetExhausted: true,
+        },
+        {
+          laneId: "clean",
+          configuredQueryCount: 1,
+          executedQueryCount: 1,
+          qualifiedTotalCount: 1,
+          searchResultCount: 1,
+          mergedCandidateCount: 1,
+          readmeProcessedCount: 1,
+          qualityPassedCount: 1,
+          rawEligibleCount: 1,
+          selectedCount: 1,
+          mergedDuplicateCount: 0,
+          budgetExhausted: false,
+          readmeBudgetExhausted: false,
+        },
+      ],
+      runSummary: {
+        rawCandidateCount: 3,
+        selectedCandidateCount: 0,
+        apiCallsUsed: 10,
+      },
+    };
+
+    const result = await runAgentMemoryTrendsCli(
+      ["diagnose", "--vault", vault, "--repo", root, "--config", configPath],
+      {
+        cwd: root,
+        env: {},
+        now: new Date("2026-06-13T00:00:00Z"),
+        readFile: (path: string) => {
+          if (path === configPath) return configYaml;
+          throw new Error(`unexpected readFile path: ${path}`);
+        },
+        runGh: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+        collectGithubCandidates: async () => ({ ok: true, data: mockOutput }),
+        collectDuplicateSignals: () => ({
+          ok: true,
+          data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] },
+        }),
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected diagnose success");
+    const hint = result.result.data.humanHint;
+    expect(hint).toContain("lane query_cut_only: queries 1/2, unqualified n/a, qualified 0, results 0, merged 0, readme processed 0, quality passed 0, raw eligible 0, selected 0, merge dedup 0, dup suppressed 0, budget exhausted: yes, readme budget exhausted: no");
+    expect(hint).toContain("lane readme_starvation_only: queries 1/1, unqualified n/a, qualified 2, results 2, merged 2, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 0, budget exhausted: yes, readme budget exhausted: yes");
+    expect(hint).toContain("lane both: queries 1/2, unqualified n/a, qualified 2, results 2, merged 2, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 0, budget exhausted: yes, readme budget exhausted: yes");
+    expect(hint).toContain("lane clean: queries 1/1, unqualified n/a, qualified 1, results 1, merged 1, readme processed 1, quality passed 1, raw eligible 1, selected 1, merge dedup 0, dup suppressed 0, budget exhausted: no, readme budget exhausted: no");
+
     rmSync(root, { recursive: true, force: true });
   });
 });

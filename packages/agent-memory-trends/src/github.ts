@@ -100,6 +100,12 @@ export interface GithubLaneDiagnostics {
    * candidates were README/evidence-processed.
    */
   budgetExhausted: boolean;
+  /**
+   * True when this lane's merged candidates were not all README-processed
+   * because the README loop hit apiCallBudget (README starvation),
+   * distinguishable from query truncation.
+   */
+  readmeBudgetExhausted: boolean;
 }
 
 export interface GithubCollectionOutput {
@@ -246,9 +252,55 @@ export async function collectGithubCandidates(
     }
   }
 
-  const unfilteredCandidates = [...byUrl.values()];
-  for (const candidate of unfilteredCandidates) {
-    if (apiCallsUsed >= config.github.apiCallBudget) break;
+  // Interleave unique candidates round-robin across config.github.lanes
+  // before the README loop. If remaining README slots < lane count, fall back
+  // to lane YAML order deterministically.
+  const candidatesByLaneId = new Map<string, RawCandidate[]>();
+  for (const lane of config.github.lanes) {
+    candidatesByLaneId.set(lane.id, []);
+  }
+  for (const candidate of byUrl.values()) {
+    for (const laneId of candidate.laneIds) {
+      const list = candidatesByLaneId.get(laneId);
+      if (list) list.push(candidate);
+    }
+  }
+
+  const interleavedCandidates: RawCandidate[] = [];
+  const seenCanonicalUrls = new Set<string>();
+
+  let hasMore = true;
+  let round = 0;
+  while (hasMore) {
+    hasMore = false;
+    for (const lane of config.github.lanes) {
+      const laneCandidates = candidatesByLaneId.get(lane.id) ?? [];
+      if (round < laneCandidates.length) {
+        hasMore = true;
+        const candidate = laneCandidates[round];
+        if (!seenCanonicalUrls.has(candidate.canonicalUrl)) {
+          seenCanonicalUrls.add(candidate.canonicalUrl);
+          interleavedCandidates.push(candidate);
+        }
+      }
+    }
+    round += 1;
+  }
+
+  // Any merged candidate not captured above (e.g. if synthetic lane)
+  for (const candidate of byUrl.values()) {
+    if (!seenCanonicalUrls.has(candidate.canonicalUrl)) {
+      seenCanonicalUrls.add(candidate.canonicalUrl);
+      interleavedCandidates.push(candidate);
+    }
+  }
+
+  let readmeBudgetHit = false;
+  for (const candidate of interleavedCandidates) {
+    if (apiCallsUsed >= config.github.apiCallBudget) {
+      readmeBudgetHit = true;
+      break;
+    }
     const readme = await fetchReadme(options.runGh, candidate.fullName);
     apiCallsUsed += 1;
     if (readme.ok) {
@@ -262,6 +314,8 @@ export async function collectGithubCandidates(
       laneDiagnosticByLaneId.get(laneId)!.readmeProcessedCount += 1;
     }
   }
+
+  const unfilteredCandidates = interleavedCandidates;
 
   const rawCandidates = unfilteredCandidates
     .filter((candidate) => candidate.qualityGate !== "failed")
@@ -302,6 +356,8 @@ export async function collectGithubCandidates(
     diagnostics.budgetExhausted =
       diagnostics.executedQueryCount < diagnostics.configuredQueryCount ||
       diagnostics.readmeProcessedCount < diagnostics.mergedCandidateCount;
+    diagnostics.readmeBudgetExhausted =
+      readmeBudgetHit && diagnostics.readmeProcessedCount < diagnostics.mergedCandidateCount;
   }
 
   return ok({
@@ -524,6 +580,7 @@ function createLaneDiagnostics(lane: GithubLane): GithubLaneDiagnostics {
     selectedCount: 0,
     mergedDuplicateCount: 0,
     budgetExhausted: false,
+    readmeBudgetExhausted: false,
   };
 }
 
