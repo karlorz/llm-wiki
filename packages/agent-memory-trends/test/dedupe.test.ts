@@ -607,6 +607,50 @@ describe("agent-memory-trends duplicate suppression and input generation", () =>
     expect(decision.reasons.join(" ")).toContain("depth");
   });
 
+  it("keeps existing-task suppression when historical evidence would reopen", () => {
+    const signals = {
+      existingTasks: [
+        {
+          path: "raw/transcripts/2026-06-01-task-new-memory.md",
+          title: "New memory",
+          sourceUrl: "https://github.com/acme/new-memory",
+          repoName: "acme/new-memory",
+        },
+      ],
+      activeWork: [],
+      recentDigests: [],
+      historicalCandidates: [
+        {
+          path: ".skillwiki/agent-memory-trends/2026-06-10-input.json",
+          canonicalUrl: "https://github.com/acme/new-memory",
+          fullName: "acme/new-memory",
+          evidenceQuality: {
+            depth: "feature_surface" as const,
+            sourceInspectionRecommended: true,
+            signals: ["markdown"],
+            summary: "feature",
+          },
+        },
+      ],
+      parseErrors: [],
+    };
+
+    const cand = candidate({
+      canonicalUrl: "https://github.com/acme/new-memory",
+      evidenceQuality: {
+        depth: "implementation_surface",
+        sourceInspectionRecommended: true,
+        signals: ["markdown"],
+        summary: "implementation",
+      },
+    });
+
+    const decision = evaluateDuplicateCandidate(cand, signals as any);
+    expect(decision.duplicate).toBe(true);
+    expect(decision.reopenReason).toBe("depth");
+    expect(decision.reasons.join(" ")).toContain("already captured");
+  });
+
   it("reopens candidate on added signal", () => {
     const signals = {
       existingTasks: [],

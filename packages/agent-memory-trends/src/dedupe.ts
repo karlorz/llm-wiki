@@ -137,9 +137,10 @@ export function evaluateDuplicateCandidate(
   if (historicalMatch) {
     const historicalComparison = evaluateHistoricalEvidenceChange(candidate, historicalMatch);
     if (historicalComparison.reopen) {
+      reasons.push(`reopened from historical candidate in ${historicalMatch.path}: ${historicalComparison.reason}`);
       return {
-        duplicate: false,
-        reasons: [`reopened from historical candidate in ${historicalMatch.path}: ${historicalComparison.reason}`],
+        duplicate: reasons.length > 1,
+        reasons,
         reopenReason: historicalComparison.reason,
       };
     }
