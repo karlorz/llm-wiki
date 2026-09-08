@@ -117,6 +117,7 @@ project:          # optional: "[[slug]]" for cross-reference
 - **Stable asset pool:** binary assets may use any flat or URL-friendly nested path under `raw/assets/`; no fixed internal taxonomy such as papers/transcripts is required.
 - Use explicit vault-root embeds such as `![[raw/assets/example/diagram.png]]` so Obsidian preview and GitHub browsing remain unambiguous.
 - Resolve and preview a new local embed before finalizing its raw capture. Once referenced, the asset path freezes; source archive/dedup does not move it. Remote HTTP(S) images remain external dependencies unless separately captured.
+- **Asset notes:** When storing binaries under `raw/assets/`, also write a sibling Markdown note (`listings.md`, `note.md`, or a dated `.md`) that embeds each file with `![[filename.png]]` or vault-root `![[raw/assets/<dir>/<file>]]`. A `.txt` sidecar is never the only index; Obsidian opens Markdown notes, not `.txt`.
 - **Dataview queries** (read-only; do not replace index.md):
 
 ```dataview

@@ -76,7 +76,7 @@ raw/
 ├── archived/{articles,papers,transcripts}/
 └── duplicates/{articles,papers,transcripts}/
 ```
-Use explicit vault-root asset embeds such as `![[raw/assets/example/diagram.png]]`. Agents may choose flat or URL-friendly nested paths. Once an immutable capture references an asset, that path freezes; routine source archive/dedup never moves the asset. Remote images remain external dependencies unless separately captured.
+Use explicit vault-root asset embeds such as `![[raw/assets/example/diagram.png]]`. Agents may choose flat or URL-friendly nested paths. Once an immutable capture references an asset, that path freezes; routine source archive/dedup never moves the asset. Remote images remain external dependencies unless separately captured. When storing binaries under `raw/assets/`, also write a sibling Markdown note (`listings.md`, `note.md`, or a dated `.md`) that embeds each file. Never use `.txt` as the only index; Obsidian opens Markdown notes.
 Raw frontmatter:
 ```yaml
 ---

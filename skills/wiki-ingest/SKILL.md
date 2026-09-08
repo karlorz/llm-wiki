@@ -65,6 +65,7 @@ Raw ephemeral data (market feeds, logs, transient JSON) must be written to the *
 - Writing raw ephemeral data directly to cloud-mounted wiki paths (`~/wiki/`).
 - Writing host-local absolute paths as canonical durable source references (see `using-skillwiki` → Portable Source References).
 - Writing `[[wikilinks]]` to pages that don't exist in the vault. Before linking, verify the target exists: check `index.md` or `ls` the target directory. If the target doesn't exist yet, use plain text instead of a wikilink.
+- Indexing `raw/assets/` binaries with only a `.txt` sidecar. Write a sibling Markdown note that embeds each file with `![[ ]]`.
 ## Batch Mode
 When the user provides multiple sources (a directory of files, a list of URLs, or a multi-document input):
 1. **Loop per source.** Execute steps 1–8 for each source individually, using one `skillwiki ingest` command per source.

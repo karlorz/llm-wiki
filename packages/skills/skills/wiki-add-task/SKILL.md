@@ -10,7 +10,7 @@ Capture ad-hoc ideas, bugs, tasks, and notes into the vault. Three entry points 
 | Filesystem drop | Hermes Agent compact mode (no slash commands available) | Same as above — create `.md` in `raw/transcripts/`, dev-loop discovers it |
 | Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create a new `.md` file in `raw/transcripts/` using the vault template — dev-loop discovers it on next cycle |
 | Dev-loop discovery | Automatic, next cycle | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |
-**Path Rule:** Captures ALWAYS go to `$(skillwiki path)/raw/transcripts/` (Layer 1). Never under `projects/{slug}/raw/` — that violates SCHEMA.md Layer 1 immutability.
+**Path Rule:** Captures ALWAYS go to `$(skillwiki path)/raw/transcripts/` (Layer 1). Never under `projects/{slug}/raw/` — that violates SCHEMA.md Layer 1 immutability. Text captures stay in `raw/transcripts/`. If the capture includes images or other binaries, store those files under `raw/assets/` with a sibling Markdown note that embeds them; never use a .txt sidecar (such as `README.txt`) as the only index; Obsidian opens Markdown notes.
 ### Exception: Explicit project task requests
 When the user explicitly says "raise task to project X", "add a task for X", "create a feature request for X", or uses a directive structure like "raise task to {project} {description}", the intent is a **work item**, not a capture:
 | User wording | Action | Target |
@@ -92,6 +92,7 @@ Ad-hoc captures may omit `sha256`; omission does not grant mutation authority. O
 - Creating a work item — this is capture-only. Use `proj-work` for full work items.
 - Writing to any Layer 2 or Layer 3 location. Captures are Layer 1 (raw).
 - Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault.
+- Indexing `raw/assets/` binaries with only a `.txt` sidecar.
 ## Filesystem drop (offline capture)
 When you're not in a Claude session, drop files directly into `raw/transcripts/`:
 1. Create a `.md` file in `raw/transcripts/` — name it descriptively (e.g., `2026-05-08-idea-fix-template.md`)

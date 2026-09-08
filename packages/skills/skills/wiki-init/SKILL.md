@@ -37,7 +37,9 @@ None for the first run.
    images remain external dependencies. An attended local-asset capture may
    choose any URL-friendly path under `raw/assets/`, but it must write the asset,
    emit an explicit vault-qualified `![[raw/assets/...]]` embed, verify
-   resolution/preview, and only then finalize the immutable raw note.
+   resolution/preview, and only then finalize the immutable raw note. Also write
+   a sibling Markdown note (`listings.md`, `note.md`, or a dated `.md`) that
+   embeds each file. Never use `.txt` as the only index.
 8. **Suggest first sources.** Propose 3–5 initial sources (URLs, papers, articles) appropriate to the domain. Prompt the user to provide the first one to ingest, then hand off to wiki-ingest.
 
 ## Stop conditions
