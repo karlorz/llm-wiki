@@ -3,7 +3,7 @@
 Prompt-only Markdown skills for Claude Code. Installed via `skillwiki install`
 or the Claude/Codex/Antigravity plugin packaging paths.
 
-Current package inventory: **20 skills**.
+Current package inventory: **21 skills**.
 
 Publication policy: new or updated typed-knowledge and meta pages must use
 `skillwiki page publish` from a temporary draft, inspect its dry-run, and add
@@ -26,6 +26,7 @@ fixed papers/transcripts taxonomy.
 | `wiki-*` | `wiki-init`, `wiki-ingest`, `wiki-query`, `wiki-lint`, `wiki-crystallize`, `wiki-audit`, `wiki-archive`, `wiki-reingest`, `wiki-adapter-prd`, `wiki-add-task`, `wiki-sync`, `wiki-canvas`, `wiki-gate-plan-mode` |
 | `proj-*` | `proj-init`, `proj-work`, `proj-distill`, `proj-decide` |
 | onboarding | `using-skillwiki` |
+| mcp | `skillwiki-mcp` |
 
 Verify the live inventory from source:
 

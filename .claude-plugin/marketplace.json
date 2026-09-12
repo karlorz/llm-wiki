@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "skillwiki",
-      "description": "20 prompt-only skills (wiki-*, proj-*, using-skillwiki) backed by the deterministic skillwiki CLI.",
+      "description": "21 prompt-only skills (wiki-*, proj-*, using-skillwiki, skillwiki-mcp) backed by the deterministic skillwiki CLI.",
       "version": "0.10.68",
       "source": "./packages/skills",
       "strict": true,
