@@ -1,0 +1,75 @@
+# Fresh-install / CI template: MCP + hardened single-host SeaweedFS.
+# Not the fleet production shape (that is docker-compose.coolify.yml).
+# No host binds, no unauthenticated WebDAV, no compose profiles.
+services:
+  seaweed:
+    image: chrislusf/seaweedfs:3.80
+    restart: unless-stopped
+    command:
+      - server
+      - -dir=/data
+      - -s3
+      - -s3.port=8333
+      - -volumeSizeLimitMB=1024
+      - -master.volumeSizeLimitMB=1024
+      - -s3.externalUrl=${SEAWEED_S3_EXTERNAL_URL:-http://seaweed:8333}
+    volumes:
+      - seaweed-data:/data
+    expose:
+      - "8333"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8333/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  mcp:
+    image: ${MCP_IMAGE:-ghcr.io/karlorz/llm-wiki/mcp-server:latest}
+    restart: unless-stopped
+    depends_on:
+      seaweed:
+        condition: service_started
+    expose:
+      - "8801"
+    environment:
+      SKILLWIKI_MCP_BIND: "0.0.0.0"
+      SKILLWIKI_MCP_PORT: "8801"
+      SKILLWIKI_MCP_VAULT: /opt/skillwiki-mcp/vault
+      SKILLWIKI_MCP_TOKEN_MAP: /etc/skillwiki-mcp/tokens.yaml
+      SKILLWIKI_MCP_AUDIT_FILE: /var/log/skillwiki-mcp/audit.jsonl
+      SKILLWIKI_MCP_RCLONE_REMOTE: ${SKILLWIKI_MCP_RCLONE_REMOTE:-seaweed}
+      SKILLWIKI_MCP_RCLONE_BUCKET: ${SKILLWIKI_MCP_RCLONE_BUCKET:-wiki}
+      SKILLWIKI_MCP_S3_ENDPOINT: http://seaweed:8333
+      SKILLWIKI_MCP_S3_BUCKET: ${SKILLWIKI_MCP_S3_BUCKET:-wiki}
+      SKILLWIKI_MCP_S3_REGION: ${SKILLWIKI_MCP_S3_REGION:-us-east-1}
+      SKILLWIKI_MCP_S3_ACCESS_KEY: ${SKILLWIKI_MCP_S3_ACCESS_KEY:-any}
+      SKILLWIKI_MCP_S3_SECRET_KEY: ${SKILLWIKI_MCP_S3_SECRET_KEY:-any}
+    volumes:
+      - mcp-vault:/opt/skillwiki-mcp/vault
+      - mcp-tokens:/etc/skillwiki-mcp
+      - mcp-audit:/var/log/skillwiki-mcp
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.skillwiki-mcp.rule=Host(`${SERVICE_FQDN:-wiki.karldigi.dev}`) && PathPrefix(`/mcp`)
+      - traefik.http.routers.skillwiki-mcp.entrypoints=https
+      - traefik.http.routers.skillwiki-mcp.tls=true
+      - traefik.http.services.skillwiki-mcp.loadbalancer.server.port=8801
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8801/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  seaweed-data:
+  mcp-vault:
+  mcp-tokens:
+  mcp-audit:

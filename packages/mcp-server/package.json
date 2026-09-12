@@ -1,0 +1,31 @@
+{
+  "name": "@skillwiki/mcp-server",
+  "version": "0.10.68",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "skillwiki-mcp-http": "dist/server.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1045.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@skillwiki/shared": "*",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.12.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
