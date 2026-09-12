@@ -247,7 +247,12 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
   const cfg = loadConfig(env, fileText);
   const tokenMap = loadTokenMap(cfg.tokenMapPath);
   const gate = new ReconcileGate(() =>
-    rcloneCopyUpdate({ remote: cfg.rcloneRemote, bucket: cfg.rcloneBucket, vaultDir: cfg.vaultDir }),
+    rcloneCopyUpdate({
+      remote: cfg.rcloneRemote,
+      bucket: cfg.rcloneBucket,
+      vaultDir: cfg.vaultDir,
+      timeoutMs: cfg.rcloneTimeoutMs,
+    }),
   );
   const hub = new ChangedEventHub({ pingMs: cfg.ssePingMs });
   const putObject = createPutObject(cfg);

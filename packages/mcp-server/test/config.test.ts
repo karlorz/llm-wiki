@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
+import { DEFAULT_RCLONE_COPY_TIMEOUT_MS } from "../src/reconcile.js";
 
 describe("loadConfig", () => {
   it("reads working dir, rclone remote, token map, and port from env", () => {
@@ -52,5 +53,44 @@ s3:
     expect(cfg.bind).toBe("0.0.0.0");
     expect(cfg.rcloneBucket).toBe("cloud/wiki-dev");
     expect(cfg.s3Endpoint).toBe("http://seaweed:8333");
+  });
+
+  it("defaults rclone inbound copy timeout longer than 120s", () => {
+    const cfg = loadConfig({
+      SKILLWIKI_MCP_VAULT: "/vault",
+      SKILLWIKI_MCP_TOKEN_MAP: "/tokens.yaml",
+      SKILLWIKI_MCP_RCLONE_REMOTE: "seaweed-wiki",
+      SKILLWIKI_MCP_RCLONE_BUCKET: "cloud/wiki-dev",
+    });
+    expect(cfg.rcloneTimeoutMs).toBe(DEFAULT_RCLONE_COPY_TIMEOUT_MS);
+    expect(cfg.rcloneTimeoutMs).toBeGreaterThan(120_000);
+  });
+
+  it("loads rclone timeout from env and file", () => {
+    const fromEnv = loadConfig({
+      SKILLWIKI_MCP_VAULT: "/vault",
+      SKILLWIKI_MCP_TOKEN_MAP: "/tokens.yaml",
+      SKILLWIKI_MCP_RCLONE_REMOTE: "seaweed-wiki",
+      SKILLWIKI_MCP_RCLONE_BUCKET: "cloud/wiki-dev",
+      SKILLWIKI_MCP_RCLONE_TIMEOUT_MS: "480000",
+    });
+    expect(fromEnv.rcloneTimeoutMs).toBe(480_000);
+    const fromFile = loadConfig(
+      {
+        SKILLWIKI_MCP_VAULT: "/vault",
+        SKILLWIKI_MCP_TOKEN_MAP: "/tokens.yaml",
+        SKILLWIKI_MCP_RCLONE_REMOTE: "seaweed-wiki",
+        SKILLWIKI_MCP_RCLONE_BUCKET: "cloud/wiki-dev",
+      },
+      `
+vault_dir: /vault
+token_map: /tokens.yaml
+rclone:
+  remote: seaweed-wiki
+  bucket: cloud/wiki-dev
+  timeout_ms: 900000
+`,
+    );
+    expect(fromFile.rcloneTimeoutMs).toBe(900_000);
   });
 });
