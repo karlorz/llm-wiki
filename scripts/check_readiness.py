@@ -60,8 +60,6 @@ def apply(environ: dict[str, str] | None = None) -> dict:
     if result["status"] != "in_sync" or not result.get("migrated"):
         return result
     url = result["url"]
-    if not url:
-        return result
     target[URL_ENV] = url
     env_file = _strip(target.get("CLAUDE_ENV_FILE"))
     if env_file:
