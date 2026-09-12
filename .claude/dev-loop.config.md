@@ -303,7 +303,7 @@ e2e_scripts:
 bump_script: ./scripts/bump-version.sh
 release_script: ./scripts/release.sh
 publish_via: ci-tag-trigger
-manifests_count: 14       # bump-version.sh updates 14 manifests across CLI, plugin, package, marketplace, vault-sync, agent-memory-trends, skillwiki-maintenance, and root agy channels
+manifests_count: 15       # bump-version.sh updates 15 manifests across CLI, plugin, package, marketplace, vault-sync, agent-memory-trends, skillwiki-maintenance, mcp-server, and root agy channels
 deploy_script: ""         # generic plugin/CLI DEPLOY is a no-op; vault-sync installed-script redeploy is an attended host operation, see notes.vault_sync_deploy_workflow
 remote_hosts: [sg01]      # verification/protected snapshotter context only; never an unattended DEPLOY target
 

@@ -19,7 +19,8 @@
 #   12. .claude-plugin/plugin.json         (root agy GitHub URL marker)
 #   13. packages/agent-memory-trends/package.json (private workspace package)
 #   14. packages/skillwiki-maintenance/package.json (private workspace package)
-#   15. package-lock.json                 (npm-generated root/workspace metadata)
+#   15. packages/mcp-server/package.json  (private HTTP MCP daemon)
+#   16. package-lock.json                 (npm-generated root/workspace metadata)
 #
 # After editing, regenerates package-lock.json and verifies all release metadata.
 
@@ -64,6 +65,7 @@ bump_file "plugin.json (root agy local plugin)"    "${REPO_ROOT}/plugin.json"
 bump_file ".claude-plugin/plugin.json (root agy URL marker)" "${REPO_ROOT}/.claude-plugin/plugin.json"
 bump_file "packages/agent-memory-trends/package.json" "${REPO_ROOT}/packages/agent-memory-trends/package.json"
 bump_file "packages/skillwiki-maintenance/package.json" "${REPO_ROOT}/packages/skillwiki-maintenance/package.json"
+bump_file "packages/mcp-server/package.json"           "${REPO_ROOT}/packages/mcp-server/package.json"
 
 echo "  … Regenerating package-lock.json"
 (
@@ -89,6 +91,7 @@ EXPECTED_FILES=(
   "${REPO_ROOT}/.claude-plugin/plugin.json"
   "${REPO_ROOT}/packages/agent-memory-trends/package.json"
   "${REPO_ROOT}/packages/skillwiki-maintenance/package.json"
+  "${REPO_ROOT}/packages/mcp-server/package.json"
 )
 
 MISSING=0
@@ -105,9 +108,9 @@ if ! grep -q "\"version\": \"${VERSION}\"" "${REPO_ROOT}/.claude-plugin/marketpl
 fi
 
 if [ "$MISSING" -eq 0 ]; then
-  echo "  ✓ All 14 manifest version fields updated to ${VERSION}"
+  echo "  ✓ All 15 manifest version fields updated to ${VERSION}"
 else
-  echo "  ⚠ Expected 14 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
+  echo "  ⚠ Expected 15 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
   exit 1
 fi
 
