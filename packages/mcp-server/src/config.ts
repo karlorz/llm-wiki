@@ -1,4 +1,5 @@
 import yaml from "js-yaml";
+import { DEFAULT_RCLONE_COPY_TIMEOUT_MS } from "./reconcile.js";
 
 export interface McpDaemonConfig {
   vaultDir: string;
@@ -15,6 +16,7 @@ export interface McpDaemonConfig {
   s3AccessKeyId?: string;
   s3SecretAccessKey?: string;
   reconcileIntervalMs: number;
+  rcloneTimeoutMs: number;
   ssePingMs: number;
   configPath?: string;
 }
@@ -25,7 +27,7 @@ interface FileConfig {
   port?: number;
   token_map?: string;
   audit_log?: string;
-  rclone?: { remote?: string; bucket?: string };
+  rclone?: { remote?: string; bucket?: string; timeout_ms?: number };
   s3?: {
     endpoint?: string;
     bucket?: string;
@@ -80,6 +82,10 @@ export function loadConfig(env: NodeJS.Dict<string>, fileText?: string): McpDaem
     s3AccessKeyId: env.SKILLWIKI_MCP_S3_ACCESS_KEY ?? env.AWS_ACCESS_KEY_ID ?? file.s3?.access_key_id,
     s3SecretAccessKey: env.SKILLWIKI_MCP_S3_SECRET_KEY ?? env.AWS_SECRET_ACCESS_KEY ?? file.s3?.secret_access_key,
     reconcileIntervalMs: asPort(env.SKILLWIKI_MCP_RECONCILE_INTERVAL_MS, asPort(file.reconcile_interval_ms, 3_600_000)),
+    rcloneTimeoutMs: asPort(
+      env.SKILLWIKI_MCP_RCLONE_TIMEOUT_MS,
+      asPort(file.rclone?.timeout_ms, DEFAULT_RCLONE_COPY_TIMEOUT_MS),
+    ),
     ssePingMs: asPort(env.SKILLWIKI_MCP_SSE_PING_MS, asPort(file.sse_ping_ms, 30_000)),
     configPath: env.SKILLWIKI_MCP_CONFIG,
   };
