@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "skillwiki": {
+      "type": "http",
+      "url": "${SKILLWIKI_MCP_URL:-https://wiki.karldigi.dev/mcp}",
+      "headers": {
+        "Authorization": "Bearer ${SKILLWIKI_MCP_TOKEN}"
+      }
+    }
+  }
+}

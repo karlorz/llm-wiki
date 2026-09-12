@@ -25,6 +25,8 @@ jobs:
           python3 scripts/lint-skill-descriptions.py --layout llm-wiki --max-total-chars 3200
       - name: Run plugin metadata regression fixtures
         run: npm run test:plugin-metadata
+      - name: HTTP MCP readiness probe (missing token fail-closed)
+        run: npm run test:check-readiness
       - name: Run e2e-common readonly-skew helper tests
         run: npm run test:e2e-common-readonly-skew
       - name: Verify plugin.json version bumped on main

@@ -198,6 +198,17 @@ sync_file "$SKILLS_DIR/hooks/session-start" "$REPO_ROOT/hooks/session-start" "ro
 sync_file "$SKILLS_DIR/hooks/hooks.json" "$REPO_ROOT/hooks.json" "root hooks.json compatibility copy"
 sync_file "$REPO_ROOT/plugin.json" "$REPO_ROOT/.claude-plugin/plugin.json" "root .claude-plugin/plugin.json"
 
+# HTTP MCP client assets (Grok plugin .mcp.json plus agy/root copies).
+sync_file "$SKILLS_DIR/mcp.json" "$REPO_ROOT/mcp.json" "root mcp.json"
+sync_file "$SKILLS_DIR/.mcp.json" "$REPO_ROOT/.mcp.json" "root .mcp.json"
+sync_file "$SKILLS_DIR/cursor-cli-mcp.example.json" \
+  "$REPO_ROOT/cursor-cli-mcp.example.json" \
+  "root cursor-cli-mcp.example.json"
+ensure_real_dir "$SKILLS_DIR/scripts" "packages/skills/scripts"
+sync_file "$SKILLS_DIR/scripts/check_readiness.py" \
+  "$REPO_ROOT/scripts/check_readiness.py" \
+  "root scripts/check_readiness.py"
+
 if [ "$MODE" = "apply" ]; then
   rm -f "$REPO_ROOT/hooks/hooks-codex.json" "$REPO_ROOT/hooks/session-start-codex"
 else

@@ -11,7 +11,7 @@ Project-aware Karpathy-style knowledge base for Claude Code skills.
 /plugin install skillwiki@llm-wiki
 ```
 
-The plugin ships 20 skills (`wiki-*`, `proj-*`, `wiki-add-task`, `wiki-adapter-prd`, `wiki-reingest`, `using-skillwiki`). They are namespaced by Claude Code as `llm-wiki:<skill>` (e.g. `llm-wiki:wiki-init`).
+The plugin ships 21 skills (`wiki-*`, `proj-*`, `wiki-add-task`, `wiki-adapter-prd`, `wiki-reingest`, `using-skillwiki`, `skillwiki-mcp`). They are namespaced by Claude Code as `llm-wiki:<skill>` (e.g. `llm-wiki:wiki-init`).
 
 ### Option B — npm CLI installer
 
@@ -19,7 +19,7 @@ The plugin ships 20 skills (`wiki-*`, `proj-*`, `wiki-add-task`, `wiki-adapter-p
 npx skillwiki@latest install
 ```
 
-This copies 20 SKILL.md files into `~/.claude/skills/` and writes `.claude/skills/wiki-manifest.json`. Use this when you want the skills available outside a Claude Code plugin context, or to seed `~/.claude/skills/` for tools that scan it directly.
+This copies 21 SKILL.md files into `~/.claude/skills/` and writes `.claude/skills/wiki-manifest.json`. Use this when you want the skills available outside a Claude Code plugin context, or to seed `~/.claude/skills/` for tools that scan it directly.
 
 ### Option C — Antigravity CLI (`agy`)
 
@@ -84,6 +84,7 @@ in Team marketplace and Refresh again.
 | `wiki-*` | `wiki-init`, `wiki-ingest`, `wiki-query`, `wiki-lint`, `wiki-crystallize`, `wiki-audit`, `wiki-archive`, `wiki-reingest`, `wiki-adapter-prd`, `wiki-add-task`, `wiki-sync`, `wiki-canvas`, `wiki-gate-plan-mode`, `wiki-remove`, `wiki-freshness-repair` |
 | `proj-*` | `proj-init`, `proj-work`, `proj-distill`, `proj-decide` |
 | onboarding | `using-skillwiki` |
+| mcp | `skillwiki-mcp` |
 
 A sibling `vault-sync` plugin ships six operational skills (install, status, presync, snapshot, FUSE freshness, uninstall). It is packaged separately from the skillwiki skill set.
 
@@ -234,6 +235,25 @@ Clients use `type: http` with `Authorization: Bearer ${SKILLWIKI_MCP_TOKEN}`.
 The server stores `sha256(token) → host_id` in a token map (hashes only). Token
 mint is a host operation at first deploy, not this repo — see
 `projects/llm-wiki/work/2026-09-12-centralized-wiki-http-mcp/plan.md` §5.
+
+### Grok plugin (HTTP MCP captures)
+
+The SkillWiki Grok plugin ships `mcp.json` / `.mcp.json` pointing at
+`https://wiki.karldigi.dev/mcp`. Captures use MCP `wiki_capture` /
+`wiki_log_append` (skill `skillwiki-mcp`); do not write local
+`raw/transcripts/` for those captures.
+
+1. Mint a bearer on sg01 (`token_hash → host_id` in the daemon token map). Never
+   commit the raw token.
+2. `export SKILLWIKI_MCP_TOKEN="<token>"` in the Grok process environment.
+   Optional: `SKILLWIKI_MCP_URL` to override the production URL.
+3. `grok plugin update skillwiki`
+4. Start a **new** session (SessionStart cannot inject the parent MCP env).
+5. `grok mcp doctor skillwiki`
+
+Cursor headless wrappers may copy `cursor-cli-mcp.example.json`; it is not a
+marketplace pin and is not auto-installed. Fail closed if the token is missing.
+Never put the bearer in plugin files or the wiki.
 
 ## Spec
 
