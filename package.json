@@ -7,7 +7,8 @@
     "packages/cli",
     "packages/skills",
     "packages/agent-memory-trends",
-    "packages/skillwiki-maintenance"
+    "packages/skillwiki-maintenance",
+    "packages/mcp-server"
   ],
   "scripts": {
     "build": "npm run --workspaces --if-present build",

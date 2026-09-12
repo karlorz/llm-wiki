@@ -215,6 +215,26 @@ npm run pack:cli -- --json       # machine-readable path + sha256
 
 Requires Node ≥ 20.
 
+## HTTP MCP daemon
+
+`packages/mcp-server` is a Streamable HTTP MCP daemon: the only agent writer
+to the SkillWiki vault. It holds a local plain working directory, serializes
+Tier-1 writes (`wiki_capture`, `wiki_log_append`), and fail-closes on S3 put
+errors. GitHub backup stays a sibling `wiki-snapshot` unit — never inside this
+process.
+
+Phase 1 ships the package, Coolify compose files, and image workflow only.
+Dev/test deploy is native systemd on sg01 (`wiki.karldigi.dev/mcp`) in a later
+phase; fleet Coolify consumes `docker-compose.coolify.yml` (MCP only, S3
+endpoint env → existing SeaweedFS). `docker-compose.coolify-bundled.yml` is the
+fresh-install template (MCP + hardened SeaweedFS) and is smoke-booted on every
+release tag.
+
+Clients use `type: http` with `Authorization: Bearer ${SKILLWIKI_MCP_TOKEN}`.
+The server stores `sha256(token) → host_id` in a token map (hashes only). Token
+mint is a host operation at first deploy, not this repo — see
+`projects/llm-wiki/work/2026-09-12-centralized-wiki-http-mcp/plan.md` §5.
+
 ## Spec
 
 The archive-only canonical specification lives under the active SkillWiki vault at
