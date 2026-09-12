@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   isAllowedWritePath,
@@ -7,18 +7,19 @@ import {
 } from "../src/allowlist.js";
 
 describe("boundary-aware vault paths", () => {
-  const vault = join("/opt", "skillwiki-mcp", "vault");
+  const vault = resolve("/opt/skillwiki-mcp/vault");
 
   it("accepts a path under the vault root", () => {
     expect(resolveWithinVault(vault, "raw/transcripts/note.md")).toBe(
-      join(vault, "raw", "transcripts", "note.md"),
+      resolve(vault, "raw", "transcripts", "note.md"),
     );
   });
 
   it("rejects a sibling directory that shares a prefix (not naive startsWith)", () => {
     expect(resolveWithinVault(vault, "../vault-evil/secret.md")).toBeNull();
-    expect(resolveWithinVault("/opt/skillwiki-mcp/vault-evil", join("/opt/skillwiki-mcp/vault-evil", "x.md"))).not.toBeNull();
-    expect(resolveWithinVault(vault, join("/opt/skillwiki-mcp", "vault-evil", "x.md"))).toBeNull();
+    const evil = resolve("/opt/skillwiki-mcp/vault-evil");
+    expect(resolveWithinVault(evil, join(evil, "x.md"))).not.toBeNull();
+    expect(resolveWithinVault(vault, join(resolve("/opt/skillwiki-mcp"), "vault-evil", "x.md"))).toBeNull();
   });
 
   it("rejects NUL bytes and backslash-normalized escapes", () => {

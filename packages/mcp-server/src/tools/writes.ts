@@ -6,7 +6,7 @@ import { extractFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
 import { scanSensitiveContent } from "../../../cli/src/utils/sensitive-content.js";
 import { isAllowedWritePath } from "../allowlist.js";
 import { appendAudit } from "../audit.js";
-import { ReconcileGate, ToolsNotReadyError } from "../reconcile.js";
+import { ReconcileGate } from "../reconcile.js";
 import { commitWrite, S3PutError, type PutObject } from "../txn.js";
 
 export type CaptureKind = "task" | "idea" | "bug" | "note";
@@ -93,14 +93,46 @@ function uniqueCapturePath(vaultDir: string, date: string, kind: CaptureKind, sl
   return candidate;
 }
 
+async function commitOrFail(
+  ctx: WriteContext,
+  started: number,
+  tool: string,
+  relPath: string,
+  content: string,
+): Promise<ToolFailure | null> {
+  try {
+    await commitWrite(
+      { vaultDir: ctx.vaultDir, putObject: ctx.putObject, onCommit: ctx.onCommit },
+      [{ relPath, content }],
+    );
+    return null;
+  } catch (error: unknown) {
+    const code =
+      error instanceof S3PutError || (error as { code?: string }).code === "S3_PUT_FAILED"
+        ? "S3_PUT_FAILED"
+        : "WRITE_FAILED";
+    const message = error instanceof Error ? error.message : String(error);
+    appendAudit(ctx.auditFile, {
+      host_id: ctx.hostId,
+      tool,
+      path: relPath,
+      ok: false,
+      error: code,
+      ms: Date.now() - started,
+    });
+    return fail(code, message);
+  }
+}
+
+function notReady(ctx: WriteContext): ToolFailure | null {
+  if (ctx.gate.ready) return null;
+  return fail("TOOLS_NOT_READY", "tools blocked until first S3 reconcile completes");
+}
+
 export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promise<CaptureSuccess | ToolFailure> {
   const started = Date.now();
-  try {
-    ctx.gate.assertReady();
-  } catch (error: unknown) {
-    if (error instanceof ToolsNotReadyError) return fail(error.code, error.message);
-    throw error;
-  }
+  const blocked = notReady(ctx);
+  if (blocked) return blocked;
 
   const kinds: CaptureKind[] = ["task", "idea", "bug", "note"];
   if (!kinds.includes(input.kind)) return fail("USAGE", "kind must be task|idea|bug|note");
@@ -138,26 +170,8 @@ export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promi
   const schema = RawSourceSchema.safeParse(fm.data);
   if (!schema.success) return fail("SCHEMA", schema.error.issues[0]?.message);
 
-  try {
-    await commitWrite(
-      { vaultDir: ctx.vaultDir, putObject: ctx.putObject, onCommit: ctx.onCommit },
-      [{ relPath, content }],
-    );
-  } catch (error: unknown) {
-    const code = error instanceof S3PutError || (error as { code?: string }).code === "S3_PUT_FAILED"
-      ? "S3_PUT_FAILED"
-      : "WRITE_FAILED";
-    const message = error instanceof Error ? error.message : String(error);
-    appendAudit(ctx.auditFile, {
-      host_id: ctx.hostId,
-      tool: "wiki_capture",
-      path: relPath,
-      ok: false,
-      error: code,
-      ms: Date.now() - started,
-    });
-    return fail(code, message);
-  }
+  const writeFail = await commitOrFail(ctx, started, "wiki_capture", relPath, content);
+  if (writeFail) return writeFail;
 
   appendAudit(ctx.auditFile, {
     host_id: ctx.hostId,
@@ -174,12 +188,8 @@ export async function wikiLogAppend(
   input: { content: string },
 ): Promise<LogSuccess | ToolFailure> {
   const started = Date.now();
-  try {
-    ctx.gate.assertReady();
-  } catch (error: unknown) {
-    if (error instanceof ToolsNotReadyError) return fail(error.code, error.message);
-    throw error;
-  }
+  const blocked = notReady(ctx);
+  if (blocked) return blocked;
 
   const body = (input.content ?? "").trim();
   if (!body) return fail("USAGE", "content is required");
@@ -209,26 +219,8 @@ export async function wikiLogAppend(
   const entry = body.startsWith("## [") ? body : `## [${date}] ${body}`;
   const next = `${existing.replace(/\s+$/, "")}\n\n${entry}\n`;
 
-  try {
-    await commitWrite(
-      { vaultDir: ctx.vaultDir, putObject: ctx.putObject, onCommit: ctx.onCommit },
-      [{ relPath: "log.md", content: next }],
-    );
-  } catch (error: unknown) {
-    const code = error instanceof S3PutError || (error as { code?: string }).code === "S3_PUT_FAILED"
-      ? "S3_PUT_FAILED"
-      : "WRITE_FAILED";
-    const message = error instanceof Error ? error.message : String(error);
-    appendAudit(ctx.auditFile, {
-      host_id: ctx.hostId,
-      tool: "wiki_log_append",
-      path: "log.md",
-      ok: false,
-      error: code,
-      ms: Date.now() - started,
-    });
-    return fail(code, message);
-  }
+  const writeFail = await commitOrFail(ctx, started, "wiki_log_append", "log.md", next);
+  if (writeFail) return writeFail;
 
   appendAudit(ctx.auditFile, {
     host_id: ctx.hostId,

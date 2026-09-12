@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { runMemoryRecall } from "../../../cli/src/commands/memory.js";
 import { runQuery } from "../../../cli/src/commands/query.js";
 import { runStatus } from "../../../cli/src/commands/status.js";
 import { extractFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
 import { resolveWithinVault } from "../allowlist.js";
-import { ReconcileGate, ToolsNotReadyError } from "../reconcile.js";
+import { ReconcileGate } from "../reconcile.js";
 
 export interface ReadContext {
   vaultDir: string;
@@ -19,13 +18,7 @@ function notReady(): { ok: false; error: "TOOLS_NOT_READY"; message: string } {
 }
 
 function ensureReady(gate: ReconcileGate): { ok: false; error: "TOOLS_NOT_READY"; message: string } | null {
-  try {
-    gate.assertReady();
-    return null;
-  } catch (error: unknown) {
-    if (error instanceof ToolsNotReadyError) return notReady();
-    throw error;
-  }
+  return gate.ready ? null : notReady();
 }
 
 export async function handleWikiQuery(
@@ -102,8 +95,4 @@ export async function handleWikiStatus(ctx: ReadContext & { s3Ok?: boolean }) {
     s3_ok: ctx.s3Ok ?? true,
     ...(typeof base === "object" ? base : {}),
   };
-}
-
-export function vaultFile(vaultDir: string, rel: string): string {
-  return join(vaultDir, ...rel.split("/"));
 }

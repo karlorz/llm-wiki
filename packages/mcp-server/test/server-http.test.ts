@@ -1,11 +1,25 @@
 import { createHash } from "node:crypto";
 import { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
-import { startMcpHttpServer } from "../src/server.js";
+import { loadConfig } from "../src/config.js";
+import { createPutObject, startMcpHttpServer } from "../src/server.js";
 import { makeTempVault } from "./helpers.js";
 import { ReconcileGate } from "../src/reconcile.js";
 
 describe("HTTP surface", () => {
+  it("createPutObject fails closed without S3 credentials", () => {
+    expect(() =>
+      createPutObject(
+        loadConfig({
+          SKILLWIKI_MCP_VAULT: "/vault",
+          SKILLWIKI_MCP_TOKEN_MAP: "/tokens.yaml",
+          SKILLWIKI_MCP_RCLONE_REMOTE: "seaweed-wiki",
+          SKILLWIKI_MCP_RCLONE_BUCKET: "cloud/wiki",
+        }),
+      ),
+    ).toThrow(/fail closed/);
+  });
+
   it("returns 401 WWW-Authenticate Bearer without a token", async () => {
     const vault = await makeTempVault();
     const token = "test-token";

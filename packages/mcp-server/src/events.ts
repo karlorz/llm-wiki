@@ -22,6 +22,7 @@ export class ChangedEventHub {
     this.clients.add(res);
     res.on("close", () => {
       this.clients.delete(res);
+      if (this.clients.size === 0) this.stopTimer();
     });
     this.ensurePings();
   }
@@ -34,10 +35,7 @@ export class ChangedEventHub {
   }
 
   stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = undefined;
-    }
+    this.stopTimer();
     for (const client of this.clients) {
       try {
         client.end();
@@ -46,6 +44,12 @@ export class ChangedEventHub {
       }
     }
     this.clients.clear();
+  }
+
+  private stopTimer(): void {
+    if (!this.timer) return;
+    clearInterval(this.timer);
+    this.timer = undefined;
   }
 
   private ensurePings(): void {

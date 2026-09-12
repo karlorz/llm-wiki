@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, open, rename, unlink } from "node:fs/promises";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, basename } from "node:path";
 
 export type PutObject = (relPath: string, body: Buffer) => Promise<void>;
@@ -58,12 +58,7 @@ async function writeTemp(target: string, content: string): Promise<string> {
     `.${basename(target)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`,
   );
   await mkdir(dirname(target), { recursive: true });
-  const handle = await open(tmp, "wx");
-  try {
-    await handle.writeFile(content, "utf8");
-  } finally {
-    await handle.close();
-  }
+  await writeFile(tmp, content, { encoding: "utf8", flag: "wx" });
   return tmp;
 }
 

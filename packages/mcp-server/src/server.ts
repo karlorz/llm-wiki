@@ -156,44 +156,27 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
 }
 
 export function createPutObject(cfg: McpDaemonConfig): PutObject {
-  if (cfg.s3Endpoint && cfg.s3Bucket && cfg.s3AccessKeyId && cfg.s3SecretAccessKey) {
-    const client = new S3Client({
-      endpoint: cfg.s3Endpoint,
-      region: cfg.s3Region,
-      credentials: {
-        accessKeyId: cfg.s3AccessKeyId,
-        secretAccessKey: cfg.s3SecretAccessKey,
-      },
-      forcePathStyle: true,
-    });
-    return async (relPath, body) => {
-      const key = [cfg.s3Prefix, relPath].filter((p) => p && p.length > 0).join("/");
-      await client.send(
-        new PutObjectCommand({
-          Bucket: cfg.s3Bucket,
-          Key: key,
-          Body: body,
-        }),
-      );
-    };
+  if (!(cfg.s3Endpoint && cfg.s3Bucket && cfg.s3AccessKeyId && cfg.s3SecretAccessKey)) {
+    throw new Error("S3 endpoint, bucket, and credentials are required; writes fail closed");
   }
+  const client = new S3Client({
+    endpoint: cfg.s3Endpoint,
+    region: cfg.s3Region,
+    credentials: {
+      accessKeyId: cfg.s3AccessKeyId,
+      secretAccessKey: cfg.s3SecretAccessKey,
+    },
+    forcePathStyle: true,
+  });
   return async (relPath, body) => {
-    const { writeFile, unlink, mkdtemp } = await import("node:fs/promises");
-    const { tmpdir } = await import("node:os");
-    const { join } = await import("node:path");
-    const { execFile } = await import("node:child_process");
-    const { promisify } = await import("node:util");
-    const execFileAsync = promisify(execFile);
-    const dir = await mkdtemp(join(tmpdir(), "skillwiki-mcp-put-"));
-    const tmp = join(dir, "blob");
-    await writeFile(tmp, body);
-    try {
-      await execFileAsync("rclone", ["copyto", tmp, `${cfg.rcloneRemote}:${cfg.rcloneBucket}/${relPath}`], {
-        timeout: 60_000,
-      });
-    } finally {
-      await unlink(tmp).catch(() => undefined);
-    }
+    const key = [cfg.s3Prefix, relPath].filter((p) => p && p.length > 0).join("/");
+    await client.send(
+      new PutObjectCommand({
+        Bucket: cfg.s3Bucket,
+        Key: key,
+        Body: body,
+      }),
+    );
   };
 }
 

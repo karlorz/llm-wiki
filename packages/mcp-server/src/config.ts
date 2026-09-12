@@ -38,10 +38,6 @@ interface FileConfig {
   sse_ping_ms?: number;
 }
 
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 function asPort(value: unknown, fallback: number): number {
   if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
   if (typeof value === "string" && /^\d+$/.test(value)) {

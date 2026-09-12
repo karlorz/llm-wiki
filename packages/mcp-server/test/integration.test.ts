@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadTokenMapFromText, resolveHostId } from "../src/auth.js";
+import { parseTokenMap, resolveHostId } from "../src/auth.js";
 import { handleWikiReadPage, handleWikiStatus } from "../src/tools/reads.js";
 import { wikiCapture } from "../src/tools/writes.js";
 import { ReconcileGate } from "../src/reconcile.js";
@@ -99,7 +99,7 @@ describe("integration vs temp vault + mock S3", () => {
     const hash = createHash("sha256").update(token, "utf8").digest("hex");
     const yaml = `${hash}: cursor-box\n`;
     await writeFile(join(vault, "tokens.yaml"), yaml, "utf8");
-    const map = loadTokenMapFromText(yaml);
+    const map = parseTokenMap(yaml);
     expect(resolveHostId(token, map)).toBe("cursor-box");
   });
 });
