@@ -316,6 +316,7 @@ release_policy:
     - "packages/cli/**"
     - "packages/shared/**"
     - "packages/vault-sync/**"
+    - "packages/mcp-server/**"
     - ".claude-plugin/marketplace.json"
     - "scripts/bump-version.sh"
     - "scripts/release.sh"
