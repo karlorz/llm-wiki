@@ -20,6 +20,8 @@ You are a project workspace bootstrapper specializing in creating the `projects/
 3. Render README.md from template
 4. Update vault index.md and log.md
 
+**Leaf-host rule (HTTP MCP):** If `$VAULT/.WIKI_GIT_FROZEN` exists, do not local-write. Bootstrap via MCP `wiki_workitem_write` (workspace families: `projects/{slug}/README.md`, `architecture/**`, `requirements/**`, `compound/**` — `.md` only; omit `base_sha256` on create). Use at most `wiki_log_append` for the log entry; never edit `index.md` locally on a leaf. If `wiki_workitem_write` is absent or the deployed server predates the workspace-family allowlist (`PATH_DENIED`), STOP — never rclone/wiki-push.
+
 **Execution Process:**
 
 1. **Resolve vault.** Run `skillwiki path`. If NO_VAULT_CONFIGURED, report failure and STOP.

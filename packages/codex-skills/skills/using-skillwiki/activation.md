@@ -55,7 +55,7 @@ separate concerns.
 
 ## Fail-Closed Boundary
 
-Never write typed pages, `index.md`, or `log.md` directly. On leaf hosts, captures use HTTP MCP (`wiki_capture`), never local `raw/transcripts` or `log.md` writes. Never bare `rm` or `git rm` as a fleet delete (snapshot resurrects from S3). Never auto `npm install -g skillwiki` in headless/goal/satellite sessions. If `skillwiki page publish --help` is unavailable, fail closed.
+Never write typed pages, `index.md`, or `log.md` directly. On leaf hosts, captures use HTTP MCP (`wiki_capture`), never local `raw/transcripts` or `log.md` writes. Project workspace saves (`projects/<slug>/README.md`, `architecture/`, `requirements/`, `compound/` — `.md` only) go through MCP `wiki_workitem_write` CAS; feature-detect and STOP if the tool is absent or the deployed server predates the workspace-family allowlist (`PATH_DENIED`). wiki-push / rclone is never an agent writer — an S3-only copy is invisible to `wiki_read_page` until the sg01 snapshot; never report it as "saved to wiki". Never bare `rm` or `git rm` as a fleet delete (snapshot resurrects from S3). Never auto `npm install -g skillwiki` in headless/goal/satellite sessions. If `skillwiki page publish --help` is unavailable, fail closed.
 
 ## Sensitive Content
 

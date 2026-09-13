@@ -164,7 +164,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     "wiki_workitem_write",
     {
       description:
-        "Create or overwrite an allowlisted work-item file (projects/*/work/** or projects/*/knowledge.md). Overwrites require base_sha256 of the last read bytes.",
+        "Create or overwrite an allowlisted work-item or Layer-3 workspace file (projects/*/work/**, projects/*/knowledge.md, projects/*/README.md, projects/*/architecture/**, projects/*/requirements/**, projects/*/compound/** — .md only). Overwrites require base_sha256 of the last read bytes.",
       inputSchema: z.object({
         path: z.string().min(1),
         content: z.string().min(1),

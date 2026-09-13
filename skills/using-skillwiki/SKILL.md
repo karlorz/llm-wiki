@@ -171,6 +171,7 @@ If the vault has `.WIKI_GIT_FROZEN`:
 |---|---|---|
 | Capture note/idea/bug/task | Yes | HTTP MCP `wiki_capture` / `wiki_log_append` |
 | Close or mutate a work item (`projects/*/work/**`, `knowledge.md`) | Conditional | If live MCP tools include `wiki_workitem_write`, mutate/close via MCP CAS; if absent, capture a close note via MCP `wiki_capture` or STOP. Never local-write. |
+| Save project workspace file (`architecture/`, `README.md`, `requirements/`, `compound/` — `.md` only) | Conditional | Via `wiki_workitem_write` CAS. Feature-detect: if the tool is absent or the deployed server predates the workspace-family allowlist (`PATH_DENIED`), STOP. Never rclone/wiki-push as a fallback writer. |
 | Publish typed Layer-2 page (`concepts/`, `queries/`, etc.) | Conditional | If live MCP tools include `wiki_page_publish`, publish via MCP CAS; if absent, STOP. Do not run local `skillwiki page publish`. |
 | `wiki-sync` push/commit | **No** | Git fail-closed. GitHub is sg01 `wiki-snapshot`. |
 | Read local `~/wiki` | Yes | Mirror reads only |

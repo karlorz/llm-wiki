@@ -8,6 +8,12 @@ export type WriteKind = "capture" | "log_append" | "workitem" | "page_publish";
 const WORKITEM_FILE_RE =
   /^projects\/[a-z0-9][a-z0-9-]*\/work\/\d{4}-\d{2}-\d{2}-[a-z0-9-]+\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.md$/;
 const WORKITEM_KNOWLEDGE_RE = /^projects\/[a-z0-9][a-z0-9-]*\/knowledge\.md$/;
+// Layer-3 workspace families (2026-09-14 plan): README plus architecture/,
+// requirements/, compound/ markdown. history/ (archive lifecycle) and non-.md
+// (fleet.yaml, .canvas) stay denied.
+const WORKSPACE_README_RE = /^projects\/[a-z0-9][a-z0-9-]*\/README\.md$/;
+const WORKSPACE_DIR_RE =
+  /^projects\/[a-z0-9][a-z0-9-]*\/(?:architecture|requirements|compound)\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.md$/;
 const PAGE_PUBLISH_RE =
   /^(entities|concepts|comparisons|queries|meta)\/[a-z0-9][a-z0-9._/-]*\.md$/;
 
@@ -50,7 +56,14 @@ export function isAllowedWritePath(relPosix: string, kind: WriteKind): boolean {
   }
   if (kind === "capture") return CAPTURE_RE.test(posix);
   if (kind === "log_append") return posix === "log.md";
-  if (kind === "workitem") return WORKITEM_FILE_RE.test(posix) || WORKITEM_KNOWLEDGE_RE.test(posix);
+  if (kind === "workitem") {
+    return (
+      WORKITEM_FILE_RE.test(posix) ||
+      WORKITEM_KNOWLEDGE_RE.test(posix) ||
+      WORKSPACE_README_RE.test(posix) ||
+      WORKSPACE_DIR_RE.test(posix)
+    );
+  }
   if (kind === "page_publish") return PAGE_PUBLISH_RE.test(posix);
   return false;
 }

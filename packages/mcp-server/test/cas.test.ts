@@ -99,6 +99,62 @@ describe("wiki_workitem_write CAS", () => {
   });
 });
 
+describe("wiki_workitem_write CAS on Layer-3 workspace paths", () => {
+  const rel = "projects/llm-wiki/architecture/2026-09-14-topology.md";
+
+  it("creates an architecture page when the path is absent and base_sha256 is omitted", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const body = "---\ntitle: topology\n---\nExtract body.\n";
+    const result = await wikiWorkitemWrite(
+      { vaultDir: vault, hostId: "macos-dev", gate, putObject: async () => undefined },
+      { path: rel, content: body },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.path).toBe(rel);
+    expect(await readFile(join(vault, rel), "utf8")).toBe(body);
+  });
+
+  it("rejects overwrite of an existing architecture page without base_sha256", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    await mkdir(join(vault, "projects/llm-wiki/architecture"), { recursive: true });
+    await writeFile(join(vault, rel), "keep\n", "utf8");
+    const result = await wikiWorkitemWrite(
+      { vaultDir: vault, hostId: "macos-dev", gate, putObject: async () => undefined },
+      { path: rel, content: "nope\n" },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toBe("USAGE");
+    expect(await readFile(join(vault, rel), "utf8")).toBe("keep\n");
+  });
+
+  it("returns FILE_CHANGED with currentVersion on stale architecture hash", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    await mkdir(join(vault, "projects/llm-wiki/architecture"), { recursive: true });
+    const original = "current\n";
+    await writeFile(join(vault, rel), original, "utf8");
+    const result = await wikiWorkitemWrite(
+      { vaultDir: vault, hostId: "macos-dev", gate, putObject: async () => undefined },
+      { path: rel, content: "other\n", base_sha256: "00".repeat(32) },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toBe("FILE_CHANGED");
+    expect(result).toMatchObject({
+      currentVersion: `sha256:${sha256Utf8(original)}`,
+      path: rel,
+    });
+    expect(await readFile(join(vault, rel), "utf8")).toBe(original);
+  });
+});
+
 describe("wiki_page_publish CAS", () => {
   it("overwrites a typed page when the hash matches", async () => {
     const vault = await makeTempVault();
