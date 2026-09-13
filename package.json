@@ -1,7 +1,7 @@
 {
   "name": "skillwiki-monorepo",
   "private": true,
-  "version": "0.10.72",
+  "version": "0.10.73",
   "workspaces": [
     "packages/shared",
     "packages/cli",
@@ -17,6 +17,7 @@
     "test:release-lockfile": "bash scripts/test/release-lockfile.test.sh",
     "test:plugin-metadata": "bash scripts/test/plugin-metadata.test.sh",
     "test:check-readiness": "bash scripts/test/check-readiness.test.sh",
+    "test:frozen-leaf-skill-contract": "bash scripts/test/frozen-leaf-skill-contract.test.sh",
     "test:e2e-common-readonly-skew": "bash scripts/test/e2e-common-readonly-skew.test.sh",
     "test:vault-sync": "bash -c 'for t in packages/vault-sync/test/*.test.sh; do echo \"=== $t ===\"; env -u WIKI_REMOTE -u VS_SNAPSHOT_PROFILE -u SNAPSHOT_PROFILE -u VS_CHECK_SNAPSHOTTER bash \"$t\" || exit 1; done'",
     "test:vault-sync-live-adapter": "bash packages/vault-sync/test/snapshot-health-live-adapter.test.sh && npm run -w skillwiki test -- test/commands/snapshot-health-parity.test.ts",

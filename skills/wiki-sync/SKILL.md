@@ -14,6 +14,16 @@ Standard four reads.
 ## Steps
 0. Resolve vault: `skillwiki path` (record source for context).
 
+## Frozen-leaf git freeze (Phase 5)
+
+If `$VAULT/.WIKI_GIT_FROZEN` exists, **fail closed** before any stash, commit, pull, or push:
+
+- Do **not** `git add`, `git commit`, `git pull`, `git push`, or `skillwiki sync push`.
+- Captures go through HTTP MCP `wiki_capture` / `wiki_log_append`.
+- Closing or mutating work items is unpublished until Tier 2 (`wiki_workitem_write` / `wiki_page_publish`). Capture a close note via MCP or STOP.
+- GitHub promotion is sg01 `wiki-snapshot`, not this leaf.
+- Report the freeze marker and stop. Do not treat dirty `~/wiki` as a sync job.
+
 ## Pre-flight peer check (multi-session safe)
 
 **Before any git stash or pull/push operation**, check for peer sessions:
@@ -210,6 +220,7 @@ High-signal safety rule:
 Some older deployments separated a cloud-backed live vault from a Git snapshot worktree. That architecture still exists on protected snapshotters, but the snapshot worktree is **pipeline-internal**. Historical recipes that rsync into the worktree, reset it hard to origin/main, or run snapshot shell scripts by hand are obsolete and must not be copied.
 
 ## Stop conditions
+- `$VAULT/.WIKI_GIT_FROZEN` exists — frozen leaf; refuse git close/sync. Captures via HTTP MCP; work-item close waits Tier 2.
 - `skillwiki sync status` reports `not_a_repo` — the vault is not a git repository. On protected snapshotters this is expected for the FUSE live path; do not switch to `/root/wiki-git` to force a push.
 - Lint errors are found before a push — do not push until resolved.
 - `git push` or `git pull` fails with a network error — report and stop.
@@ -218,6 +229,7 @@ Some older deployments separated a cloud-backed live vault from a Git snapshot w
 - Host is a protected snapshotter and the requested operation would author or push via `/root/wiki-git` — refuse and use managed live-vault publication + timer promotion instead.
 
 ## Forbidden
+- `git add` / `git commit` / `git push` on a vault that has `.WIKI_GIT_FROZEN`.
 - Pushing when lint errors exist.
 - Auto-resolving body conflicts without user review.
 - Force-pushing (`git push --force`).

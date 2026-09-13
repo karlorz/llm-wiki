@@ -28,7 +28,7 @@ On leaf hosts, wiki captures go through MCP. Do **not** write `raw/transcripts/`
 
 1. Call MCP `wiki_capture` with `kind` (`task` | `idea` | `bug` | `note`), `project`, `title`, and `content`. Optional `agent_note`.
 2. Call MCP `wiki_log_append` when a structural `log.md` line is needed. Pass append-only `content`. Do not rewrite log history.
-3. Write surface is captures-only. Do not call unpublished Tier 2 tools. Do not `git commit` / `wiki-push` against `~/wiki` for these captures.
+3. Write surface is captures-only. Do not call unpublished Tier 2 tools (`wiki_workitem_write`, `wiki_page_publish`). Those tools are not on the live daemon. Work-item close is not available from this MCP. Do not `git commit` / `wiki-push` against `~/wiki` for these captures. If `$VAULT/.WIKI_GIT_FROZEN` exists, that freeze is the reason nearby agents cannot close wiki work until Tier 2 ships.
 
 ## Reads
 

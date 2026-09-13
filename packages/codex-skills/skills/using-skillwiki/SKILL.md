@@ -162,6 +162,17 @@ The vault is shared across hosts, so host-local absolute paths are not durable s
 | Entry | When | What happens |
 |-------|------|-------------|
 | `wiki_capture` | You're on a frozen-leaf host with HTTP MCP | Calls MCP `wiki_capture(kind, project, title, content)`; server writes `raw/transcripts/` remotely |
+
+### Frozen-leaf write authority (Phase 5)
+
+If the vault has `.WIKI_GIT_FROZEN`:
+
+| Intent | Allowed? | How |
+|---|---|---|
+| Capture note/idea/bug/task | Yes | HTTP MCP `wiki_capture` / `wiki_log_append` |
+| Close or mutate a work item (`projects/*/work/**`, `knowledge.md`) | **No** until Tier 2 | Do not `page publish` or git commit. Capture a close note via MCP or STOP. |
+| `wiki-sync` push/commit | **No** | GitHub is sg01 `wiki-snapshot`. |
+| Read local `~/wiki` | Yes | Mirror reads only |
 | `/wiki-add-task <text>` | You're in an interactive session on an authoring host | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with ad-hoc capture frontmatter |
 | Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) on an authoring host | Create a new `.md` file in `raw/transcripts/` — dev-loop discovers it on next cycle; do not edit it after capture |
 | Dev-loop discovery | Automatic, next cycle | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |

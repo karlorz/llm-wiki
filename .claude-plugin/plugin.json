@@ -1,6 +1,6 @@
 {
   "name": "skillwiki",
-  "version": "0.10.72",
+  "version": "0.10.73",
   "description": "Project-aware Karpathy-style knowledge base for agentic coding tools: 21 prompt-only skills (wiki-*, proj-*, using-skillwiki, skillwiki-mcp) backed by the deterministic skillwiki CLI.",
   "author": {
     "name": "karlorz",

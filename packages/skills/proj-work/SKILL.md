@@ -28,6 +28,15 @@ install with `grok plugin update skillwiki`, not `skillwiki install`.
 ## Pre-orientation reads
 Standard four + project context (project README, last ~5 work logs).
 
+## Frozen-leaf write freeze (Phase 5)
+
+After `skillwiki path`, if `$VAULT/.WIKI_GIT_FROZEN` exists:
+
+- **Reads** of existing work folders are allowed.
+- **Do not** create or mutate `projects/*/work/**`, `knowledge.md`, or run `skillwiki page publish` on this leaf.
+- **Do not** `git commit` / `wiki-sync` push to “close” the item.
+- Work-item close is unpublished until Tier 2 (`wiki_workitem_write` / `wiki_page_publish`). If the user asked to close or complete work, capture a note via HTTP MCP `wiki_capture` (`kind: note` or `task`) and STOP. Do not local-write the work folder.
+
 ## Executing an Existing Work Item
 
 When the user asks to "get work of X" or "run work item Y" for review, you are in EXECUTION mode — not creation mode. Steps:
@@ -90,10 +99,12 @@ Rules:
 - **Re-marking without doing**: do not simply re-write tasks.md to say DONE without applying the corresponding fix. The next session will find the same gap.
 
 ## Stop conditions
+- `$VAULT/.WIKI_GIT_FROZEN` exists and the user asked to create, mutate, or close a work item — capture via `wiki_capture` or STOP; do not local-write.
 - `validate` non-zero.
 - Conflicting work folder name.
 
 ## Forbidden
+- Creating or mutating work items on a vault that has `.WIKI_GIT_FROZEN`.
 - Writing spec/plan files outside the work folder.
 - Marking `status: completed` without a `completed:` date.
 - Accepting tasks.md status labels without independent disk verification.
