@@ -9,6 +9,7 @@ import { isAllowedWritePath } from "../allowlist.js";
 import { appendAudit } from "../audit.js";
 import { ReconcileGate } from "../reconcile.js";
 import { commitCasWrite, commitWrite, S3PutError, type PutObject } from "../txn.js";
+import { type GetObject } from "../versions.js";
 
 export type CaptureKind = "task" | "idea" | "bug" | "note";
 
@@ -17,6 +18,7 @@ export interface WriteContext {
   hostId: string;
   gate: ReconcileGate;
   putObject: PutObject;
+  getObject?: GetObject;
   now?: () => Date;
   onCommit?: (paths: string[]) => void;
   auditFile?: string;
@@ -277,7 +279,7 @@ async function wikiOverwrite(
 
   try {
     const cas = await commitCasWrite(
-      { vaultDir: ctx.vaultDir, putObject: ctx.putObject, onCommit: ctx.onCommit },
+      { vaultDir: ctx.vaultDir, putObject: ctx.putObject, getObject: ctx.getObject, onCommit: ctx.onCommit },
       { relPath, content },
       input.base_sha256,
     );

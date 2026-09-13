@@ -1,4 +1,4 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client, S3ServiceException } from "@aws-sdk/client-s3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -12,7 +12,8 @@ import { ChangedEventHub } from "./events.js";
 import { rcloneCopyUpdate, ReconcileGate } from "./reconcile.js";
 import { handleWikiMemoryRecall, handleWikiQuery, handleWikiReadPage, handleWikiStatus } from "./tools/reads.js";
 import { wikiCapture, wikiLogAppend, wikiPagePublish, wikiWorkitemWrite } from "./tools/writes.js";
-import { type PutObject } from "./txn.js";
+import { S3PutError, type PutObject } from "./txn.js";
+import { type GetObject, type S3Adapter } from "./versions.js";
 
 export interface HttpServerOptions {
   bind: string;
@@ -21,6 +22,7 @@ export interface HttpServerOptions {
   tokenMap: TokenMap;
   gate: ReconcileGate;
   putObject: PutObject;
+  getObject?: GetObject;
   hub?: ChangedEventHub;
   s3Ok?: boolean;
   auditFile?: string;
@@ -90,10 +92,11 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     hostId: opts.hostId,
     gate: opts.gate,
     putObject: opts.putObject,
+    getObject: opts.getObject,
     auditFile: opts.auditFile,
     onCommit: (paths: string[]) => opts.hub?.emitChanged(paths),
   };
-  const reads = { vaultDir: opts.vaultDir, gate: opts.gate, s3Ok: opts.s3Ok };
+  const reads = { vaultDir: opts.vaultDir, gate: opts.gate, getObject: opts.getObject, s3Ok: opts.s3Ok };
 
   const failureShape = {
     ok: z.boolean(),
@@ -134,6 +137,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         markdown: z.string().optional(),
         frontmatter: z.record(z.unknown()).optional(),
         sha256: z.string().optional(),
+        s3_verified: z.boolean().optional(),
       }).passthrough(),
       annotations: { readOnlyHint: true },
     },
@@ -287,7 +291,28 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
   return server;
 }
 
-export function createPutObject(cfg: McpDaemonConfig): PutObject {
+async function streamToBuffer(stream: unknown): Promise<Buffer> {
+  if (stream && typeof stream === "object" && "transformToByteArray" in stream) {
+    const fn = (stream as { transformToByteArray: () => Promise<Uint8Array> }).transformToByteArray;
+    if (typeof fn === "function") {
+      const arr = await fn.call(stream);
+      return Buffer.from(arr);
+    }
+  }
+  if (stream && typeof stream === "object" && Symbol.asyncIterator in stream) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream as AsyncIterable<Uint8Array | string>) {
+      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+  if (Buffer.isBuffer(stream)) {
+    return stream;
+  }
+  throw new Error("unsupported S3 stream body");
+}
+
+export function createS3Adapter(cfg: McpDaemonConfig): S3Adapter {
   if (!(cfg.s3Endpoint && cfg.s3Bucket && cfg.s3AccessKeyId && cfg.s3SecretAccessKey)) {
     throw new Error("S3 endpoint, bucket, and credentials are required; writes fail closed");
   }
@@ -300,16 +325,52 @@ export function createPutObject(cfg: McpDaemonConfig): PutObject {
     },
     forcePathStyle: true,
   });
-  return async (relPath, body) => {
-    const key = [cfg.s3Prefix, relPath].filter((p) => p && p.length > 0).join("/");
-    await client.send(
-      new PutObjectCommand({
-        Bucket: cfg.s3Bucket,
-        Key: key,
-        Body: body,
-      }),
-    );
+
+  const resolveKey = (relPath: string) => [cfg.s3Prefix, relPath].filter((p) => p && p.length > 0).join("/");
+
+  const putObject: PutObject = async (relPath, body) => {
+    try {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: cfg.s3Bucket,
+          Key: resolveKey(relPath),
+          Body: body,
+        }),
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new S3PutError(message, error);
+    }
   };
+
+  const getObject: GetObject = async (relPath) => {
+    try {
+      const res = await client.send(
+        new GetObjectCommand({
+          Bucket: cfg.s3Bucket,
+          Key: resolveKey(relPath),
+        }),
+      );
+      if (!res.Body) return null;
+      const body = await streamToBuffer(res.Body);
+      return { body };
+    } catch (error: unknown) {
+      if (error instanceof S3ServiceException || (error && typeof error === "object" && "name" in error)) {
+        const name = (error as { name?: string }).name;
+        if (name === "NoSuchKey" || name === "NotFound") {
+          return null;
+        }
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      throw new S3PutError(message, error);
+    }
+  };
+
+  return { putObject, getObject };
+}
+
+export function createPutObject(cfg: McpDaemonConfig): PutObject {
+  return createS3Adapter(cfg).putObject;
 }
 
 export async function startMcpHttpServer(opts: HttpServerOptions): Promise<ReturnType<typeof createServer>> {
@@ -396,7 +457,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     }),
   );
   const hub = new ChangedEventHub({ pingMs: cfg.ssePingMs });
-  const putObject = createPutObject(cfg);
+  const s3Adapter = createS3Adapter(cfg);
 
   const server = await startMcpHttpServer({
     bind: cfg.bind,
@@ -404,7 +465,8 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     vaultDir: cfg.vaultDir,
     tokenMap,
     gate,
-    putObject,
+    putObject: s3Adapter.putObject,
+    getObject: s3Adapter.getObject,
     hub,
     auditFile: cfg.auditLogPath,
   });

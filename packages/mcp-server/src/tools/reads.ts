@@ -6,10 +6,12 @@ import { runStatus } from "../../../cli/src/commands/status.js";
 import { extractFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
 import { resolveWithinVault } from "../allowlist.js";
 import { ReconcileGate } from "../reconcile.js";
+import { currentVersion, type GetObject } from "../versions.js";
 
 export interface ReadContext {
   vaultDir: string;
   gate: ReconcileGate;
+  getObject?: GetObject;
   s3Ok?: boolean;
 }
 
@@ -44,12 +46,35 @@ export async function handleWikiReadPage(ctx: ReadContext, input: { path: string
   if (blocked) return blocked;
   const abs = resolveWithinVault(ctx.vaultDir, input.path);
   if (!abs) return { ok: false as const, error: "PATH_DENIED", path: input.path };
+
+  let s3Verified = false;
   let bytes: Buffer;
-  try {
-    bytes = await readFile(abs);
-  } catch {
-    return { ok: false as const, error: "FILE_NOT_FOUND", path: input.path };
+
+  if (ctx.getObject) {
+    try {
+      const ver = await currentVersion({ vaultDir: ctx.vaultDir, getObject: ctx.getObject }, input.path);
+      if (ver.absent) {
+        return { ok: false as const, error: "FILE_NOT_FOUND", path: input.path };
+      }
+      bytes = ver.bytes ?? (await readFile(abs));
+      s3Verified = true;
+    } catch {
+      // S3 unreachable: serve working copy bytes and set s3_verified: false
+      try {
+        bytes = await readFile(abs);
+      } catch {
+        return { ok: false as const, error: "FILE_NOT_FOUND", path: input.path };
+      }
+      s3Verified = false;
+    }
+  } else {
+    try {
+      bytes = await readFile(abs);
+    } catch {
+      return { ok: false as const, error: "FILE_NOT_FOUND", path: input.path };
+    }
   }
+
   const markdown = bytes.toString("utf8");
   const fm = extractFrontmatter(markdown);
   return {
@@ -58,6 +83,7 @@ export async function handleWikiReadPage(ctx: ReadContext, input: { path: string
     markdown,
     frontmatter: fm.ok ? fm.data : {},
     sha256: createHash("sha256").update(bytes).digest("hex"),
+    s3_verified: s3Verified,
   };
 }
 
