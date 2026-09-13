@@ -90,7 +90,7 @@ export async function resolveWriter(
 
   // 2. Try OAuth access token if store is provided
   if (deps.oauthStore) {
-    const tokenHash = createHash("sha256").update(token, "utf8").digest("hex");
+    const tokenHash = sha256Token(token).toString("hex");
     const tokenEntry = await deps.oauthStore.getAccessToken(tokenHash);
     if (tokenEntry && tokenEntry.writerId) {
       return { writerId: tokenEntry.writerId };

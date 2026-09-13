@@ -84,6 +84,74 @@ function jsonResponse(res: ServerResponse, status: number, body: unknown, extra?
   res.end(payload);
 }
 
+function parseBodyParams(
+  method: string | undefined,
+  contentType: string,
+  rawBody: string,
+  searchParams: URLSearchParams,
+): Record<string, string> {
+  if (method === "GET") {
+    const params: Record<string, string> = {};
+    for (const [key, value] of searchParams.entries()) {
+      params[key] = value;
+    }
+    return params;
+  }
+  if (contentType.includes("application/x-www-form-urlencoded")) {
+    const params: Record<string, string> = {};
+    for (const [key, value] of new URLSearchParams(rawBody).entries()) {
+      params[key] = value;
+    }
+    return params;
+  }
+  if (contentType.includes("application/json") && rawBody.trim().length > 0) {
+    try {
+      return JSON.parse(rawBody) as Record<string, string>;
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+async function issueTokenPair(
+  store: OAuthStore,
+  clientId: string,
+  writerId: string,
+  scope?: string,
+): Promise<{
+  access_token: string;
+  token_type: "Bearer";
+  expires_in: number;
+  refresh_token: string;
+  scope?: string;
+}> {
+  const accessToken = randomBytes(32).toString("base64url");
+  const refreshTokenValue = randomBytes(32).toString("base64url");
+  const expiresIn = 3600;
+  await store.saveAccessToken({
+    tokenHash: sha256Hex(accessToken),
+    clientId,
+    writerId,
+    expiresAt: Date.now() + expiresIn * 1000,
+    scope,
+  });
+  await store.saveRefreshToken({
+    tokenHash: sha256Hex(refreshTokenValue),
+    clientId,
+    writerId,
+    expiresAt: Date.now() + 30 * 86400 * 1000,
+    scope,
+  });
+  return {
+    access_token: accessToken,
+    token_type: "Bearer",
+    expires_in: expiresIn,
+    refresh_token: refreshTokenValue,
+    scope,
+  };
+}
+
 export async function handleOAuthRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -156,27 +224,7 @@ export async function handleOAuthRequest(
 
   // 4. GET | POST /authorize
   if ((req.method === "GET" || req.method === "POST") && path === "/authorize") {
-    let params: Record<string, string> = {};
-    if (req.method === "GET") {
-      for (const [key, value] of url.searchParams.entries()) {
-        params[key] = value;
-      }
-    } else {
-      const contentType = req.headers["content-type"] ?? "";
-      if (contentType.includes("application/x-www-form-urlencoded")) {
-        const parsed = new URLSearchParams(rawBody);
-        for (const [key, value] of parsed.entries()) {
-          params[key] = value;
-        }
-      } else if (contentType.includes("application/json") && rawBody.trim().length > 0) {
-        try {
-          params = JSON.parse(rawBody) as Record<string, string>;
-        } catch {
-          // ignore
-        }
-      }
-    }
-
+    const params = parseBodyParams(req.method, req.headers["content-type"] ?? "", rawBody, url.searchParams);
     const {
       password,
       client_id,
@@ -196,6 +244,16 @@ export async function handleOAuthRequest(
       return true;
     }
 
+    let redirectUrl: URL | undefined;
+    if (redirect_uri) {
+      try {
+        redirectUrl = new URL(redirect_uri);
+      } catch {
+        jsonResponse(res, 400, { error: "invalid_request", error_description: "Invalid redirect_uri" });
+        return true;
+      }
+    }
+
     const writerId = resolveWriterId(client_id, oauthCfg.writers);
     const code = randomBytes(24).toString("base64url");
     const codeHash = sha256Hex(code);
@@ -210,14 +268,7 @@ export async function handleOAuthRequest(
       expiresAt: Date.now() + 5 * 60_000, // 5 minutes
     });
 
-    if (redirect_uri) {
-      let redirectUrl: URL;
-      try {
-        redirectUrl = new URL(redirect_uri);
-      } catch {
-        jsonResponse(res, 400, { error: "invalid_request", error_description: "Invalid redirect_uri" });
-        return true;
-      }
+    if (redirectUrl) {
       redirectUrl.searchParams.set("code", code);
       if (params.state) {
         redirectUrl.searchParams.set("state", params.state);
@@ -233,22 +284,8 @@ export async function handleOAuthRequest(
 
   // 5. POST /token
   if (req.method === "POST" && path === "/token") {
-    let params: Record<string, string> = {};
-    const contentType = req.headers["content-type"] ?? "";
-    if (contentType.includes("application/x-www-form-urlencoded")) {
-      const parsed = new URLSearchParams(rawBody);
-      for (const [key, value] of parsed.entries()) {
-        params[key] = value;
-      }
-    } else if (contentType.includes("application/json") && rawBody.trim().length > 0) {
-      try {
-        params = JSON.parse(rawBody) as Record<string, string>;
-      } catch {
-        // ignore
-      }
-    }
-
-    const { grant_type, client_id, code, code_verifier, refresh_token } = params;
+    const params = parseBodyParams(req.method, req.headers["content-type"] ?? "", rawBody, url.searchParams);
+    const { grant_type, code, code_verifier, refresh_token } = params;
 
     if (grant_type === "authorization_code") {
       if (!code || !code_verifier) {
@@ -268,35 +305,7 @@ export async function handleOAuthRequest(
         return true;
       }
 
-      const accessToken = randomBytes(32).toString("base64url");
-      const refreshTokenValue = randomBytes(32).toString("base64url");
-      const accessHash = sha256Hex(accessToken);
-      const refreshHash = sha256Hex(refreshTokenValue);
-
-      const expiresIn = 3600; // 1 hour
-      await store.saveAccessToken({
-        tokenHash: accessHash,
-        clientId: authCode.clientId,
-        writerId: authCode.writerId,
-        expiresAt: Date.now() + expiresIn * 1000,
-        scope: "offline_access",
-      });
-
-      await store.saveRefreshToken({
-        tokenHash: refreshHash,
-        clientId: authCode.clientId,
-        writerId: authCode.writerId,
-        expiresAt: Date.now() + 30 * 86400 * 1000, // 30 days
-        scope: "offline_access",
-      });
-
-      jsonResponse(res, 200, {
-        access_token: accessToken,
-        token_type: "Bearer",
-        expires_in: expiresIn,
-        refresh_token: refreshTokenValue,
-        scope: "offline_access",
-      });
+      jsonResponse(res, 200, await issueTokenPair(store, authCode.clientId, authCode.writerId, "offline_access"));
       return true;
     }
 
@@ -313,36 +322,7 @@ export async function handleOAuthRequest(
         return true;
       }
 
-      // Rotate refresh token
-      const newAccessToken = randomBytes(32).toString("base64url");
-      const newRefreshToken = randomBytes(32).toString("base64url");
-      const accessHash = sha256Hex(newAccessToken);
-      const newRefreshHash = sha256Hex(newRefreshToken);
-
-      const expiresIn = 3600;
-      await store.saveAccessToken({
-        tokenHash: accessHash,
-        clientId: existing.clientId,
-        writerId: existing.writerId,
-        expiresAt: Date.now() + expiresIn * 1000,
-        scope: existing.scope,
-      });
-
-      await store.saveRefreshToken({
-        tokenHash: newRefreshHash,
-        clientId: existing.clientId,
-        writerId: existing.writerId,
-        expiresAt: Date.now() + 30 * 86400 * 1000,
-        scope: existing.scope,
-      });
-
-      jsonResponse(res, 200, {
-        access_token: newAccessToken,
-        token_type: "Bearer",
-        expires_in: expiresIn,
-        refresh_token: newRefreshToken,
-        scope: existing.scope,
-      });
+      jsonResponse(res, 200, await issueTokenPair(store, existing.clientId, existing.writerId, existing.scope));
       return true;
     }
 

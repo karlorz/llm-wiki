@@ -1,6 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, basename } from "node:path";
 import { currentVersion, type GetObject } from "./versions.js";
 
@@ -55,24 +54,32 @@ export class S3PutError extends Error {
   }
 }
 
-export async function writeAtomicPath(target: string, content: Buffer | string): Promise<void> {
+async function writeTemp(target: string, content: Buffer | string): Promise<string> {
   const tmp = join(
     dirname(target),
     `.${basename(target)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`,
   );
   await mkdir(dirname(target), { recursive: true });
-  await writeFile(tmp, content, { flag: "wx" });
-  await rename(tmp, target);
+  if (typeof content === "string") {
+    await writeFile(tmp, content, { encoding: "utf8", flag: "wx" });
+  } else {
+    await writeFile(tmp, content, { flag: "wx" });
+  }
+  return tmp;
 }
 
-async function writeTemp(target: string, content: string): Promise<string> {
-  const tmp = join(
-    dirname(target),
-    `.${basename(target)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`,
-  );
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(tmp, content, { encoding: "utf8", flag: "wx" });
-  return tmp;
+export async function writeAtomicPath(target: string, content: Buffer | string): Promise<void> {
+  const tmp = await writeTemp(target, content);
+  try {
+    await rename(tmp, target);
+  } catch (error: unknown) {
+    try {
+      await unlink(tmp);
+    } catch {
+      /* already gone */
+    }
+    throw error;
+  }
 }
 
 export function sha256Bytes(bytes: Buffer): string {

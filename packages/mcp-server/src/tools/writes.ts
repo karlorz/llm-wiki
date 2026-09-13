@@ -11,7 +11,8 @@ import { ReconcileGate } from "../reconcile.js";
 import { commitCasWrite, commitWrite, S3PutError, type PutObject } from "../txn.js";
 import { type GetObject } from "../versions.js";
 
-export type CaptureKind = "task" | "idea" | "bug" | "note";
+export const CAPTURE_KINDS = ["task", "idea", "bug", "note"] as const;
+export type CaptureKind = (typeof CAPTURE_KINDS)[number];
 
 export interface WriteContext {
   vaultDir: string;

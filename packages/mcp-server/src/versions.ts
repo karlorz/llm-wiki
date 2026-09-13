@@ -1,10 +1,6 @@
-import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { isS3Failure, S3PutError, writeAtomicPath } from "./txn.js";
-
-export type HeadObject = (relPath: string) => Promise<{ etag?: string; sha256?: string; body?: Buffer } | null>;
+import { isS3Failure, S3PutError, sha256Bytes, writeAtomicPath } from "./txn.js";
 
 export type GetObject = (relPath: string) => Promise<{ sha256?: string; body?: Buffer } | null>;
 
@@ -34,15 +30,15 @@ export async function currentVersion(deps: VersionDeps, relPath: string): Promis
 
   if (!deps.getObject) {
     // Fallback when no getter is provided (e.g. unit tests without S3)
-    if (!existsSync(target)) {
-      return { sha256: "absent", absent: true };
+    try {
+      const localBytes = await readFile(target);
+      return { sha256: sha256Bytes(localBytes), absent: false, bytes: localBytes };
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return { sha256: "absent", absent: true };
+      }
+      throw error;
     }
-    const localBytes = await readFile(target);
-    return {
-      sha256: createHash("sha256").update(localBytes).digest("hex"),
-      absent: false,
-      bytes: localBytes,
-    };
   }
 
   let s3Res: { sha256?: string; body?: Buffer } | null;
@@ -58,21 +54,16 @@ export async function currentVersion(deps: VersionDeps, relPath: string): Promis
   }
 
   const s3Bytes = s3Res.body;
-  const s3Sha256 = s3Res.sha256 ?? createHash("sha256").update(s3Bytes).digest("hex");
+  const s3Sha256 = s3Res.sha256 ?? sha256Bytes(s3Bytes);
 
-  // Compare to working copy bytes
-  let localSha256: string | null = null;
-  if (existsSync(target)) {
-    try {
-      const localBytes = await readFile(target);
-      localSha256 = createHash("sha256").update(localBytes).digest("hex");
-    } catch {
-      localSha256 = null;
-    }
+  let localBytes: Buffer | null = null;
+  try {
+    localBytes = await readFile(target);
+  } catch {
+    localBytes = null;
   }
 
-  if (localSha256 !== s3Sha256) {
-    // Refresh this one path in working copy using atomic temp + rename
+  if (!localBytes || !localBytes.equals(s3Bytes)) {
     await writeAtomicPath(target, s3Bytes);
   }
 

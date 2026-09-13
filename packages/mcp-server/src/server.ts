@@ -20,7 +20,7 @@ import {
   handleWikiReadPage,
   handleWikiStatus,
 } from "./tools/reads.js";
-import { wikiCapture, wikiLogAppend, wikiPagePublish, wikiWorkitemWrite } from "./tools/writes.js";
+import { CAPTURE_KINDS, wikiCapture, wikiLogAppend, wikiPagePublish, wikiWorkitemWrite } from "./tools/writes.js";
 import { S3PutError, type PutObject } from "./txn.js";
 import { type GetObject, type S3Adapter } from "./versions.js";
 
@@ -39,6 +39,18 @@ export interface HttpServerOptions {
 }
 
 const MAX_MCP_BODY_BYTES = 1048576; // 1 MiB
+
+const MCP_TOOL_NAMES = [
+  "wiki_query",
+  "wiki_read_page",
+  "wiki_memory_recall",
+  "wiki_status",
+  "wiki_context",
+  "wiki_capture",
+  "wiki_log_append",
+  "wiki_workitem_write",
+  "wiki_page_publish",
+] as const;
 
 function json(res: ServerResponse, status: number, body: unknown, extra?: Record<string, string>): void {
   const payload = JSON.stringify(body);
@@ -230,8 +242,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       annotations: { readOnlyHint: true },
     },
     async () => {
-      const toolNames = Object.keys((server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools);
-      const out = await handleWikiContext(reads, { tools: toolNames });
+      const out = await handleWikiContext(reads, { tools: [...MCP_TOOL_NAMES] });
       return toolResult(out, !out.ok);
     },
   );
@@ -241,7 +252,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     {
       description: "Create a new ad-hoc capture under raw/transcripts/. Cannot overwrite existing pages.",
       inputSchema: z.object({
-        kind: z.enum(["task", "idea", "bug", "note"]),
+        kind: z.enum(CAPTURE_KINDS),
         project: z.string().min(1),
         title: z.string().min(1),
         content: z.string().min(1),
@@ -351,7 +362,7 @@ async function streamToBuffer(stream: unknown): Promise<Buffer> {
   if (stream && typeof stream === "object" && Symbol.asyncIterator in stream) {
     const chunks: Buffer[] = [];
     for await (const chunk of stream as AsyncIterable<Uint8Array | string>) {
-      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : Buffer.from(chunk));
+      chunks.push(Buffer.from(chunk));
     }
     return Buffer.concat(chunks);
   }

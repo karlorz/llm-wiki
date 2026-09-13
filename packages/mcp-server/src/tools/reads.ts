@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runMemoryRecall } from "../../../cli/src/commands/memory.js";
@@ -7,7 +6,9 @@ import { runStatus } from "../../../cli/src/commands/status.js";
 import { extractFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
 import { resolveWithinVault } from "../allowlist.js";
 import { ReconcileGate } from "../reconcile.js";
+import { sha256Bytes } from "../txn.js";
 import { currentVersion, type GetObject } from "../versions.js";
+import { CAPTURE_KINDS } from "./writes.js";
 
 export interface ReadContext {
   vaultDir: string;
@@ -43,6 +44,14 @@ export async function handleWikiQuery(
   return { ok: true as const, ...result.result.data };
 }
 
+async function readLocalBytes(abs: string): Promise<Buffer | null> {
+  try {
+    return await readFile(abs);
+  } catch {
+    return null;
+  }
+}
+
 export async function handleWikiReadPage(ctx: ReadContext, input: { path: string }) {
   const blocked = ensureReady(ctx.gate);
   if (blocked) return blocked;
@@ -50,7 +59,8 @@ export async function handleWikiReadPage(ctx: ReadContext, input: { path: string
   if (!abs) return { ok: false as const, error: "PATH_DENIED", path: input.path };
 
   let s3Verified = false;
-  let bytes: Buffer;
+  let bytes: Buffer | null = null;
+  let sha256: string | undefined;
 
   if (ctx.getObject) {
     try {
@@ -58,23 +68,20 @@ export async function handleWikiReadPage(ctx: ReadContext, input: { path: string
       if (ver.absent) {
         return { ok: false as const, error: "FILE_NOT_FOUND", path: input.path };
       }
-      bytes = ver.bytes ?? (await readFile(abs));
+      bytes = ver.bytes ?? (await readLocalBytes(abs));
+      sha256 = ver.sha256;
       s3Verified = true;
     } catch {
       // S3 unreachable: serve working copy bytes and set s3_verified: false
-      try {
-        bytes = await readFile(abs);
-      } catch {
-        return { ok: false as const, error: "FILE_NOT_FOUND", path: input.path };
-      }
+      bytes = await readLocalBytes(abs);
       s3Verified = false;
     }
   } else {
-    try {
-      bytes = await readFile(abs);
-    } catch {
-      return { ok: false as const, error: "FILE_NOT_FOUND", path: input.path };
-    }
+    bytes = await readLocalBytes(abs);
+  }
+
+  if (!bytes) {
+    return { ok: false as const, error: "FILE_NOT_FOUND", path: input.path };
   }
 
   const markdown = bytes.toString("utf8");
@@ -84,7 +91,7 @@ export async function handleWikiReadPage(ctx: ReadContext, input: { path: string
     path: input.path,
     markdown,
     frontmatter: fm.ok ? fm.data : {},
-    sha256: createHash("sha256").update(bytes).digest("hex"),
+    sha256: sha256 ?? sha256Bytes(bytes),
     s3_verified: s3Verified,
   };
 }
@@ -130,7 +137,6 @@ export async function handleWikiContext(ctx: ReadContext, extra?: { tools?: stri
   if (blocked) return blocked;
 
   const projectsDir = join(ctx.vaultDir, "projects");
-  const projects: Array<{ slug: string; active_work: string[] }> = [];
 
   let dirEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
   try {
@@ -145,26 +151,23 @@ export async function handleWikiContext(ctx: ReadContext, extra?: { tools?: stri
     .map((e) => e.name)
     .sort();
 
-  for (const slug of projectSlugs) {
-    const workDir = join(projectsDir, slug, "work");
-    let workEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
-    try {
-      workEntries = await readdir(workDir, { withFileTypes: true });
-    } catch {
-      // no work directory for this project
-    }
-
-    const activeWork = workEntries
-      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
-      .map((e) => e.name)
-      .sort((a, b) => b.localeCompare(a))
-      .slice(0, 5);
-
-    projects.push({
-      slug,
-      active_work: activeWork,
-    });
-  }
+  const projects = await Promise.all(
+    projectSlugs.map(async (slug) => {
+      const workDir = join(projectsDir, slug, "work");
+      let workEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
+      try {
+        workEntries = await readdir(workDir, { withFileTypes: true });
+      } catch {
+        // no work directory for this project
+      }
+      const activeWork = workEntries
+        .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+        .map((e) => e.name)
+        .sort((a, b) => b.localeCompare(a))
+        .slice(0, 5);
+      return { slug, active_work: activeWork };
+    }),
+  );
 
   return {
     ok: true as const,
@@ -173,6 +176,6 @@ export async function handleWikiContext(ctx: ReadContext, extra?: { tools?: stri
     reconcile_ready: ctx.gate.ready,
     tools: extra?.tools ?? [],
     cas_protocol: "Read canonical sha256 via wiki_read_page, pass base_sha256 in write; on FILE_CHANGED re-read and retry.",
-    capture_kinds: ["task", "idea", "bug", "note"] as const,
+    capture_kinds: CAPTURE_KINDS,
   };
 }
