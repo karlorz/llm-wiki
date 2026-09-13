@@ -16,6 +16,8 @@ SkillWiki captures are HTTP MCP only (`type: http`). Claude/Grok use `SKILLWIKI_
 - Resolve the installed plugin root from `GROK_PLUGIN_ROOT`, falling back to `CLAUDE_PLUGIN_ROOT`, and run `python3 "$PLUGIN_ROOT/scripts/check_readiness.py" --apply --json` before the first SkillWiki MCP call.
 - **Cursor / Grok Bot:** the Cursor-native plugin requires `SKILLWIKI_MCP_TOKEN` under **Plugins → Configure**. It pins `https://wiki.karldigi.dev/mcp`. Grok Bot does not inherit Mac process env or `~/.cursor/mcp.json`. `failed_to_load` with no token box means this package is missing; after this package is installed, Configure is the token field (same pattern as grok-search).
 - `missing_prereq` means `SKILLWIKI_MCP_TOKEN` is absent from process environment; stop and ask for a bearer. Do not invent a stdio MCP.
+- A new host (a machine that should write the wiki for the first time) needs an issued host-id bearer before handshake can pass. The operator runs `skillwiki mcp-auth issue-host --host-id <id> --write` on metal (TTY required). The client pastes the printed value into process env or host Configure. Do not auto-write `mcp.env`, `mcp.json`, or Grok `config.toml`. Do not invent a second admin skill. A local vault/FUSE mirror is optional.
+- First-run order: install plugin/CLI → operator issues on metal → paste into process env or Configure → **new session** → `skillwiki doctor --check-mcp` → one write (`wiki_capture`, work-item write, or page publish).
 - `in_sync` means the probe has a usable URL/token decision.
 - A 401 is an MCP handshake failure, not a readiness-probe status. Report that the token is missing or rejected and stop.
 - Grok SessionStart cannot inject the parent MCP environment. A restart cannot supply a missing token.
