@@ -176,6 +176,77 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
     }
   });
 
+  it("rejects when oauth is enabled but neither store nor stateDir is provided", async () => {
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    await expect(
+      startMcpHttpServer({
+        bind: "127.0.0.1",
+        port: 0,
+        vaultDir,
+        tokenMap: new Map(),
+        gate,
+        putObject: async () => undefined,
+        oauth: {
+          enabled: true,
+          passwordHash: hashPassword("x"),
+        },
+      }),
+    ).rejects.toThrow("oauth.enabled requires oauth.state_dir or an injected store");
+  });
+
+  it("authorize POST with valid password + PKCE but malformed redirect_uri returns 400 invalid_request without crashing server", async () => {
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const store = new InMemoryOAuthStore();
+    const server = await startMcpHttpServer({
+      bind: "127.0.0.1",
+      port: 0,
+      vaultDir,
+      tokenMap: new Map(),
+      gate,
+      putObject: async () => undefined,
+      oauth: {
+        enabled: true,
+        passwordHash: hashPassword("mypassword"),
+        store,
+      },
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const baseUrl = `http://127.0.0.1:${port}`;
+
+      const codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk_long_verifier_string_at_least_43_chars";
+      const codeChallenge = createHash("sha256").update(codeVerifier, "ascii").digest("base64url");
+
+      const res = await fetch(`${baseUrl}/authorize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          password: "mypassword",
+          client_id: "client-1",
+          redirect_uri: "not a url",
+          code_challenge: codeChallenge,
+          code_challenge_method: "S256",
+          response_type: "code",
+        }).toString(),
+      });
+
+      expect(res.status).toBe(400);
+      const json = await res.json();
+      expect(json).toEqual({
+        error: "invalid_request",
+        error_description: "Invalid redirect_uri",
+      });
+
+      // Server still serves /health 200 after
+      const healthRes = await fetch(`${baseUrl}/health`);
+      expect(healthRes.status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
   it("full OAuth flow: metadata, DCR, authorize with password + PKCE, token exchange, tools/call, and audit", async () => {
     const gate = new ReconcileGate(async () => undefined);
     await gate.runFirst();

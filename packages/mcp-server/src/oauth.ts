@@ -211,7 +211,13 @@ export async function handleOAuthRequest(
     });
 
     if (redirect_uri) {
-      const redirectUrl = new URL(redirect_uri);
+      let redirectUrl: URL;
+      try {
+        redirectUrl = new URL(redirect_uri);
+      } catch {
+        jsonResponse(res, 400, { error: "invalid_request", error_description: "Invalid redirect_uri" });
+        return true;
+      }
       redirectUrl.searchParams.set("code", code);
       if (params.state) {
         redirectUrl.searchParams.set("state", params.state);

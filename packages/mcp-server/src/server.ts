@@ -425,6 +425,9 @@ export function createPutObject(cfg: McpDaemonConfig): PutObject {
 export async function startMcpHttpServer(opts: HttpServerOptions): Promise<ReturnType<typeof createServer>> {
   const hub = opts.hub ?? new ChangedEventHub({ pingMs: 30_000 });
   const oauthEnabled = Boolean(opts.oauth?.enabled);
+  if (oauthEnabled && !opts.oauth?.store && !opts.oauth?.stateDir) {
+    throw new Error("oauth.enabled requires oauth.state_dir or an injected store");
+  }
   const oauthStore: OAuthStore | undefined = oauthEnabled
     ? opts.oauth?.store ?? (opts.oauth?.stateDir ? new FileOAuthStore(opts.oauth.stateDir) : undefined)
     : undefined;
