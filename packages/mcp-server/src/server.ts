@@ -52,8 +52,16 @@ function toolText(data: unknown, isError = false) {
   };
 }
 
+function mcpServerPackageVersion(): string {
+  return (
+    JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+      version: string;
+    }
+  ).version;
+}
+
 export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }): McpServer {
-  const server = new McpServer({ name: "skillwiki-mcp", version: "0.10.68" });
+  const server = new McpServer({ name: "skillwiki-mcp", version: mcpServerPackageVersion() });
   const ctx = {
     vaultDir: opts.vaultDir,
     hostId: opts.hostId,
