@@ -6,10 +6,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import { bearerToken, loadTokenMap, resolveHostId, unauthorizedHeaders, type TokenMap } from "./auth.js";
+import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from "./auth.js";
 import { loadConfig, type McpDaemonConfig } from "./config.js";
 import { ChangedEventHub } from "./events.js";
 import { MCP_INSTRUCTIONS } from "./mcp-instructions.js";
+import { getIssuer, handleOAuthRequest, type OAuthConfig } from "./oauth.js";
+import { FileOAuthStore, type OAuthStore } from "./oauth-store.js";
 import { rcloneCopyUpdate, ReconcileGate } from "./reconcile.js";
 import {
   handleWikiContext,
@@ -33,6 +35,7 @@ export interface HttpServerOptions {
   hub?: ChangedEventHub;
   s3Ok?: boolean;
   auditFile?: string;
+  oauth?: OAuthConfig;
 }
 
 const MAX_MCP_BODY_BYTES = 1048576; // 1 MiB
@@ -421,9 +424,15 @@ export function createPutObject(cfg: McpDaemonConfig): PutObject {
 
 export async function startMcpHttpServer(opts: HttpServerOptions): Promise<ReturnType<typeof createServer>> {
   const hub = opts.hub ?? new ChangedEventHub({ pingMs: 30_000 });
+  const oauthEnabled = Boolean(opts.oauth?.enabled);
+  const oauthStore: OAuthStore | undefined = oauthEnabled
+    ? opts.oauth?.store ?? (opts.oauth?.stateDir ? new FileOAuthStore(opts.oauth.stateDir) : undefined)
+    : undefined;
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
+    const host = req.headers.host ?? "127.0.0.1";
+    const issuer = getIssuer(req, opts.oauth?.issuer);
+    const url = new URL(req.url ?? "/", `http://${host}`);
     const path = url.pathname;
 
     if (req.method === "GET" && (path === "/health" || path === "/mcp/health")) {
@@ -431,14 +440,56 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
       return;
     }
 
-    const token = bearerToken(
-      typeof req.headers.authorization === "string" ? req.headers.authorization : undefined,
-    );
-    const hostId = token ? resolveHostId(token, opts.tokenMap) : undefined;
-    if (!hostId) {
-      json(res, 401, { error: "unauthorized" }, unauthorizedHeaders());
+    if (oauthEnabled && oauthStore && opts.oauth) {
+      const isOauthPath =
+        path === "/.well-known/oauth-protected-resource" ||
+        path === "/.well-known/oauth-authorization-server" ||
+        path === "/register" ||
+        path === "/authorize" ||
+        path === "/token";
+
+      if (isOauthPath) {
+        let rawBody = "";
+        if (req.method === "POST") {
+          try {
+            rawBody = await readBody(req);
+          } catch (err) {
+            if (err instanceof PayloadTooLargeError) {
+              json(res, 413, { error: "payload_too_large", message: err.message });
+              return;
+            }
+            throw err;
+          }
+        }
+        const handled = await handleOAuthRequest(req, res, rawBody, opts.oauth, oauthStore);
+        if (handled) return;
+      }
+    }
+
+    const isMcpOrEvent =
+      path === "/mcp" ||
+      path === "/mcp/" ||
+      path === "/events" ||
+      path === "/mcp/events";
+
+    if (!isMcpOrEvent) {
+      json(res, 404, { error: "not_found" });
       return;
     }
+
+    const authHeader = typeof req.headers.authorization === "string" ? req.headers.authorization : undefined;
+    const resolved = await resolveWriter(authHeader, {
+      tokenMap: opts.tokenMap,
+      oauthStore,
+    });
+
+    if (!resolved) {
+      const prmUrl = oauthEnabled ? `${issuer}/.well-known/oauth-protected-resource` : undefined;
+      json(res, 401, { error: "unauthorized" }, unauthorizedHeaders(prmUrl));
+      return;
+    }
+
+    const hostId = resolved.writerId;
 
     if (req.method === "GET" && (path === "/events" || path === "/mcp/events")) {
       hub.subscribe(res);
@@ -515,6 +566,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     getObject: s3Adapter.getObject,
     hub,
     auditFile: cfg.auditLogPath,
+    oauth: cfg.oauth,
   });
 
   void gate.runFirst().catch((error: unknown) => {
