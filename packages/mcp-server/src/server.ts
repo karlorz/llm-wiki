@@ -9,8 +9,15 @@ import { z } from "zod";
 import { bearerToken, loadTokenMap, resolveHostId, unauthorizedHeaders, type TokenMap } from "./auth.js";
 import { loadConfig, type McpDaemonConfig } from "./config.js";
 import { ChangedEventHub } from "./events.js";
+import { MCP_INSTRUCTIONS } from "./mcp-instructions.js";
 import { rcloneCopyUpdate, ReconcileGate } from "./reconcile.js";
-import { handleWikiMemoryRecall, handleWikiQuery, handleWikiReadPage, handleWikiStatus } from "./tools/reads.js";
+import {
+  handleWikiContext,
+  handleWikiMemoryRecall,
+  handleWikiQuery,
+  handleWikiReadPage,
+  handleWikiStatus,
+} from "./tools/reads.js";
 import { wikiCapture, wikiLogAppend, wikiPagePublish, wikiWorkitemWrite } from "./tools/writes.js";
 import { S3PutError, type PutObject } from "./txn.js";
 import { type GetObject, type S3Adapter } from "./versions.js";
@@ -86,7 +93,10 @@ function mcpServerPackageVersion(): string {
 }
 
 export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }): McpServer {
-  const server = new McpServer({ name: "skillwiki-mcp", version: mcpServerPackageVersion() });
+  const server = new McpServer(
+    { name: "skillwiki-mcp", version: mcpServerPackageVersion() },
+    { instructions: MCP_INSTRUCTIONS },
+  );
   const ctx = {
     vaultDir: opts.vaultDir,
     hostId: opts.hostId,
@@ -96,7 +106,13 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     auditFile: opts.auditFile,
     onCommit: (paths: string[]) => opts.hub?.emitChanged(paths),
   };
-  const reads = { vaultDir: opts.vaultDir, gate: opts.gate, getObject: opts.getObject, s3Ok: opts.s3Ok };
+  const reads = {
+    vaultDir: opts.vaultDir,
+    hostId: opts.hostId,
+    gate: opts.gate,
+    getObject: opts.getObject,
+    s3Ok: opts.s3Ok,
+  };
 
   const failureShape = {
     ok: z.boolean(),
@@ -183,6 +199,36 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     },
     async () => {
       const out = await handleWikiStatus(reads);
+      return toolResult(out, !out.ok);
+    },
+  );
+
+  server.registerTool(
+    "wiki_context",
+    {
+      description: "Compact activation context, active project work-item directories, and writer metadata.",
+      inputSchema: z.object({}),
+      outputSchema: z.object({
+        ...failureShape,
+        projects: z
+          .array(
+            z.object({
+              slug: z.string(),
+              active_work: z.array(z.string()),
+            }),
+          )
+          .optional(),
+        writer_id: z.string().optional(),
+        reconcile_ready: z.boolean().optional(),
+        tools: z.array(z.string()).optional(),
+        cas_protocol: z.string().optional(),
+        capture_kinds: z.array(z.string()).optional(),
+      }).passthrough(),
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const toolNames = Object.keys((server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools);
+      const out = await handleWikiContext(reads, { tools: toolNames });
       return toolResult(out, !out.ok);
     },
   );

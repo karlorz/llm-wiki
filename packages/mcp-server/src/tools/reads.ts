@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { runMemoryRecall } from "../../../cli/src/commands/memory.js";
 import { runQuery } from "../../../cli/src/commands/query.js";
 import { runStatus } from "../../../cli/src/commands/status.js";
@@ -10,6 +11,7 @@ import { currentVersion, type GetObject } from "../versions.js";
 
 export interface ReadContext {
   vaultDir: string;
+  hostId?: string;
   gate: ReconcileGate;
   getObject?: GetObject;
   s3Ok?: boolean;
@@ -120,5 +122,57 @@ export async function handleWikiStatus(ctx: ReadContext & { s3Ok?: boolean }) {
     reconcile_ready: ctx.gate.ready,
     s3_ok: ctx.s3Ok ?? true,
     ...(typeof base === "object" ? base : {}),
+  };
+}
+
+export async function handleWikiContext(ctx: ReadContext, extra?: { tools?: string[] }) {
+  const blocked = ensureReady(ctx.gate);
+  if (blocked) return blocked;
+
+  const projectsDir = join(ctx.vaultDir, "projects");
+  const projects: Array<{ slug: string; active_work: string[] }> = [];
+
+  let dirEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
+  try {
+    dirEntries = await readdir(projectsDir, { withFileTypes: true });
+  } catch {
+    // missing projects dir or unreadable
+  }
+
+  // Filter project directories and sort alphabetically
+  const projectSlugs = dirEntries
+    .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+    .map((e) => e.name)
+    .sort();
+
+  for (const slug of projectSlugs) {
+    const workDir = join(projectsDir, slug, "work");
+    let workEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
+    try {
+      workEntries = await readdir(workDir, { withFileTypes: true });
+    } catch {
+      // no work directory for this project
+    }
+
+    const activeWork = workEntries
+      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+      .map((e) => e.name)
+      .sort((a, b) => b.localeCompare(a))
+      .slice(0, 5);
+
+    projects.push({
+      slug,
+      active_work: activeWork,
+    });
+  }
+
+  return {
+    ok: true as const,
+    projects,
+    writer_id: ctx.hostId ?? "unknown",
+    reconcile_ready: ctx.gate.ready,
+    tools: extra?.tools ?? [],
+    cas_protocol: "Read canonical sha256 via wiki_read_page, pass base_sha256 in write; on FILE_CHANGED re-read and retry.",
+    capture_kinds: ["task", "idea", "bug", "note"] as const,
   };
 }
