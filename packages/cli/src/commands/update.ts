@@ -12,33 +12,54 @@ function parseCoreSemver(version: string): { major: number; minor: number; patch
   return { major: parseInt(m[1], 10), minor: parseInt(m[2], 10), patch: parseInt(m[3], 10) };
 }
 
+function isAtLeast(parsed: { major: number; minor: number; patch: number }, major: number, minor: number, patch: number): boolean {
+  return parsed.major > major
+    || (parsed.major === major && parsed.minor > minor)
+    || (parsed.major === major && parsed.minor === minor && parsed.patch >= patch);
+}
+
+function isBelow(parsed: { major: number; minor: number; patch: number }, major: number, minor: number, patch: number): boolean {
+  return !isAtLeast(parsed, major, minor, patch);
+}
+
 /** True when previous < 0.10.1 and new >= 0.10.1. */
 export function needs0101Migration(previousVersion: string, newVersion: string): boolean {
   const p = parseCoreSemver(previousVersion);
   const n = parseCoreSemver(newVersion);
   if (!p || !n) return false;
-  const prevLt =
-    p.major < 0 ||
-    (p.major === 0 && p.minor < 10) ||
-    (p.major === 0 && p.minor === 10 && p.patch < 1);
-  const newGe =
-    n.major > 0 ||
-    (n.major === 0 && n.minor > 10) ||
-    (n.major === 0 && n.minor === 10 && n.patch >= 1);
-  return prevLt && newGe;
+  return isBelow(p, 0, 10, 1) && isAtLeast(n, 0, 10, 1);
 }
 
-/** Migration notes when upgrading across the 0.10.1 managed-write helper fix. */
+/** True when previous < 0.10.70 (first HTTP MCP production family) and new >= 0.10.70. */
+export function needsHttpMcpMigration(previousVersion: string, newVersion: string): boolean {
+  const p = parseCoreSemver(previousVersion);
+  const n = parseCoreSemver(newVersion);
+  if (!p || !n) return false;
+  return isBelow(p, 0, 10, 70) && isAtLeast(n, 0, 10, 70);
+}
+
+/** Migration notes when upgrading across known floors (0.10.1 helper + HTTP MCP cutover). */
 export function migrationNotesForUpgrade(previousVersion: string, newVersion: string): string[] {
-  if (!needs0101Migration(previousVersion, newVersion)) return [];
-  return [
-    "Migration 0.10.1:",
-    "- pull helper resolves from dist/ + host vault-sync install",
-    "- run: skillwiki doctor",
-    "- if managed writes blocked: skillwiki sync journal list",
-    "- then: skillwiki sync journal clear-stale --dry-run",
-    "- legacy override: SKILLWIKI_VAULT_SYNC_PULL_HELPER=<path-to-wiki-pull-with-auto-resolve.sh>",
-  ];
+  const notes: string[] = [];
+  if (needs0101Migration(previousVersion, newVersion)) {
+    notes.push(
+      "Migration 0.10.1:",
+      "- pull helper resolves from dist/ + host vault-sync install",
+      "- run: skillwiki doctor",
+      "- if managed writes blocked: skillwiki sync journal list",
+      "- then: skillwiki sync journal clear-stale --dry-run",
+      "- legacy override: SKILLWIKI_VAULT_SYNC_PULL_HELPER=<path-to-wiki-pull-with-auto-resolve.sh>",
+    );
+  }
+  if (needsHttpMcpMigration(previousVersion, newVersion)) {
+    notes.push(
+      "Migration HTTP MCP:",
+      "- upgrade the plugin channel, then start a new session (plugin instructions do not hot-swap)",
+      "- run: skillwiki doctor --check-mcp",
+      "- frozen-leaf hosts write via HTTP MCP only; do not local-write raw/transcripts/ or vault git",
+    );
+  }
+  return notes;
 }
 
 export interface UpdateInput {

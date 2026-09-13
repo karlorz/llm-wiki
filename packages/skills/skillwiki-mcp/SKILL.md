@@ -22,6 +22,10 @@ SkillWiki captures are HTTP MCP only (`type: http`). Claude/Grok use `SKILLWIKI_
 - Never auto-source `mcp.env` or auto-write `~/.cursor/mcp.json`, Grok `config.toml`, or `mcp.env`.
 - Never print the bearer token.
 
+## Upgrade / migration
+
+Remotes still on a pre-HTTP-MCP plugin or CLI must upgrade the plugin channel (and the CLI where that host has one), then start a **new session** — plugin instructions do not hot-swap. The operator check is the same `skillwiki doctor` as metal: default rows cover URL/auth presence and frozen-leaf write-path; `skillwiki doctor --check-mcp` does the live initialize handshake. Do not invent a second admin skill or HTTP MCP admin tool. `wiki_status` remains daemon health only.
+
 ## Writes
 
 On leaf hosts, wiki captures go through MCP. Do **not** write `raw/transcripts/` or `log.md` as local files.

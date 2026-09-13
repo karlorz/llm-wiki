@@ -53,10 +53,10 @@ function createFullVault(): string {
 
 describe("Hardening Probes (T5)", () => {
   describe("Registry order and probe structure", () => {
-    it("registers 12 standard probes in deterministic order with new probes appended", () => {
+    it("registers 13 standard probes in deterministic order with new probes appended", () => {
       const runner = new DoctorRunner();
       const probes = runner.getRegisteredProbes();
-      expect(probes.length).toBe(12);
+      expect(probes.length).toBe(13);
 
       const probeIds = probes.map(p => p.id);
       expect(probeIds).toEqual([
@@ -72,6 +72,7 @@ describe("Hardening Probes (T5)", () => {
         "fuse_staleness",
         "activation_marker",
         "ds_store_noise",
+        "mcp",
       ]);
     });
   });
@@ -290,7 +291,7 @@ describe("Hardening Probes (T5)", () => {
   });
 
   describe("End-to-end DoctorRunner execution with hardening probes", () => {
-    it("executes all 12 probes and includes new check IDs in output", async () => {
+    it("executes all 13 probes and includes new check IDs in output", async () => {
       const h = createHome();
       const v = createFullVault();
       writeFileSync(join(h, ".skillwiki", ".env"), `WIKI_PATH=${v}\n`);
@@ -309,10 +310,16 @@ describe("Hardening Probes (T5)", () => {
       expect(ids).toContain("fuse_staleness");
       expect(ids).toContain("activation_marker");
       expect(ids).toContain("ds_store_noise");
+      expect(ids).toContain("mcp_url_configured");
+      expect(ids).toContain("mcp_handshake");
 
-      // Verify they are at the end of the check list
-      const last3 = ids.slice(-3);
-      expect(last3).toEqual(["fuse_staleness", "activation_marker", "ds_store_noise"]);
+      const last4 = ids.slice(-4);
+      expect(last4).toEqual([
+        "mcp_url_configured",
+        "mcp_credential_present",
+        "mcp_frozen_leaf_write_path",
+        "mcp_handshake",
+      ]);
     });
   });
 });

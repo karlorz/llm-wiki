@@ -124,10 +124,15 @@ describe("doctor golden parity tests", () => {
       "fuse_staleness",
       "activation_marker",
       "ds_store_noise",
+      // 11. HTTP MCP (default offline)
+      "mcp_url_configured",
+      "mcp_credential_present",
+      "mcp_frozen_leaf_write_path",
+      "mcp_handshake",
     ];
 
     expect(checkIds).toEqual(expectedCheckIds);
-    expect(res.result.data.checks.length).toBe(56);
+    expect(res.result.data.checks.length).toBe(60);
     expect(res.result.data.summary).toEqual({
       pass: expect.any(Number),
       info: 5, // 5 vault metrics
@@ -138,7 +143,7 @@ describe("doctor golden parity tests", () => {
     expect(res.result.data.humanHint).toContain("Vault log size");
   });
 
-  it("captures golden check ID sequence for unconfigured home (58 checks)", async () => {
+  it("captures golden check ID sequence for unconfigured home (62 checks)", async () => {
     const h = createHome();
 
     const res = await runDoctor({
@@ -151,7 +156,7 @@ describe("doctor golden parity tests", () => {
     expect(res.result.ok).toBe(true);
     if (!res.result.ok) return;
 
-    expect(res.result.data.checks.length).toBe(58);
+    expect(res.result.data.checks.length).toBe(62);
 
     // Verify unconfigured checks fail or skip as expected
     const wp = res.result.data.checks.find(c => c.id === "wiki_path_set");
@@ -173,7 +178,7 @@ describe("doctor golden parity tests", () => {
     expect(res.exitCode).toBe(29); // ExitCode.DOCTOR_HAS_ERRORS
   });
 
-  it("captures snapshotter role check ID sequence (57 checks)", async () => {
+  it("captures snapshotter role check ID sequence (61 checks)", async () => {
     const h = createHome();
     const v = createFullVault();
     const fixturePath = join(FIXTURE_DIR, "01-enabled-timer-successful-service-fresh-pushed.json");
@@ -206,7 +211,7 @@ describe("doctor golden parity tests", () => {
     expect(res.result.ok).toBe(true);
     if (!res.result.ok) return;
 
-    expect(res.result.data.checks.length).toBe(57);
+    expect(res.result.data.checks.length).toBe(61);
     const snapIds = [
       "vault_sync_installed",
       "vault_sync_jobs_enabled",

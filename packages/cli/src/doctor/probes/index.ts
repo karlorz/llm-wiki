@@ -11,6 +11,7 @@ import { metricsProbe } from "./metrics.js";
 import { fuseStalenessProbe } from "./fuse-staleness.js";
 import { activationMarkerProbe } from "./activation-marker.js";
 import { dsStoreNoiseProbe } from "./ds-store-noise.js";
+import { mcpHandshakeProbe } from "./mcp-handshake.js";
 
 export const DOCTOR_PROBES: readonly DoctorProbe[] = [
   environmentProbe,
@@ -25,4 +26,5 @@ export const DOCTOR_PROBES: readonly DoctorProbe[] = [
   fuseStalenessProbe,
   activationMarkerProbe,
   dsStoreNoiseProbe,
+  mcpHandshakeProbe,
 ];

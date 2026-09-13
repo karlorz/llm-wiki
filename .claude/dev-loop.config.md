@@ -55,8 +55,8 @@ vault_sync:
 # Adaptive never selects Superpowers full. Explicit full remains available
 # only via a later user/work-item override, not this project default.
 workflow_selection: adaptive
-workflow_capability: self-directed
-workflow_risk: routine
+workflow_capability: needs-guidance
+workflow_risk: elevated
 ```
 
 ## PRD layer
@@ -305,7 +305,11 @@ release_script: ./scripts/release.sh
 publish_via: ci-tag-trigger
 manifests_count: 15       # bump-version.sh updates 15 manifests across CLI, plugin, package, marketplace, vault-sync, agent-memory-trends, skillwiki-maintenance, mcp-server, and root agy channels
 deploy_script: ""         # generic plugin/CLI DEPLOY is a no-op; vault-sync installed-script redeploy is an attended host operation, see notes.vault_sync_deploy_workflow
-remote_hosts: [sg01]      # verification/protected snapshotter context only; never an unattended DEPLOY target
+# Verification hosts for HTTP MCP fleet migration E2E. Not unattended DEPLOY
+# targets. sg01 is metal + snapshotter. sg02 / pvelxc / cursor-box are leaf
+# upgrade+write smokes after a production pin. Work item:
+# projects/llm-wiki/work/2026-09-13-http-mcp-fleet-migration-e2e/
+remote_hosts: [sg01, sg02, pvelxc, cursor-box]
 
 # Release-trigger policy (consumed by step 10 PUSH)
 release_policy:
@@ -446,4 +450,20 @@ notes:
   cli_fallback: |
     When the installed `skillwiki` binary returns a placeholder, use
     `npx tsx packages/cli/src/cli.ts <command>` (set in cli_entry_override).
+  fleet_mcp_migration: |
+    Next claimable work after HTTP MCP live-cutover closeout:
+    projects/llm-wiki/work/2026-09-13-http-mcp-fleet-migration-e2e/
+    Parent remains 2026-09-12-centralized-wiki-http-mcp (in-progress, Phase 5
+    observation). Coolify/cloud01 stays deferred
+    (2026-09-13-coolify-prod-mcp) until sg01 well-run.
+
+    There is no skillwiki migrate command. Doctor now includes default offline
+    MCP rows plus `--check-mcp` live handshake. skillwiki update emits HTTP
+    MCP cutover notes from floor 0.10.70. Remote E2E is attended: upgrade
+    plugin+CLI, new session, one write. Do not unattended-restart sg01. Do
+    not treat remote_hosts as DEPLOY.
+
+    Isolation: macos-dev APFS Data often >=90% full — skip extra git
+    worktrees even when worktree_policy.enabled is true. No Docker on
+    macos-dev/sg01. Frozen leaf writes via HTTP MCP only.
 ```

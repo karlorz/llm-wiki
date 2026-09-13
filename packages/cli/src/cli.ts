@@ -1196,6 +1196,7 @@ program
   .command("doctor")
   .description("diagnose skillwiki setup issues")
   .option("--check-snapshotter", "SSH-probe fleet snapshotter (short timeout)", false)
+  .option("--check-mcp", "live-handshake HTTP MCP initialize + tools/list (network)", false)
   .action(async (opts) => emit(await runDoctor({
     home: process.env.HOME ?? "",
     envValue: process.env.WIKI_PATH,
@@ -1203,6 +1204,7 @@ program
     currentVersion: pkg.version,
     cwd: process.cwd(),
     checkSnapshotter: !!opts.checkSnapshotter,
+    checkMcp: !!opts.checkMcp,
   })));
 
 // status

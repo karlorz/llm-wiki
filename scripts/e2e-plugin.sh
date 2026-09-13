@@ -213,7 +213,7 @@ run_cli ssh "$SSH_TARGET" "HOME='$TEMP_HOME' WIKI_PATH='$VAULT' $REMOTE_CLI doct
 # TEMP_HOME has no ~/.claude/skills/ so skills_installed warns → exit 28
 assert_exit 28 "$RUN_RC" "doctor exits 28 (skills_installed warn)"
 assert_json_contains "$RUN_OUTPUT" "data.summary.error" "0" "doctor 0 errors"
-assert_json_contains "$RUN_OUTPUT" "data.summary.warn" "2" "doctor 2 warns (skills_installed + temp vault)"
+assert_json_contains "$RUN_OUTPUT" "data.summary.warn" "3" "doctor 3 warns (skills_installed + temp vault + MCP auth presence)"
 
 # ---- 6. CI guard: canonical typed-knowledge CLI refs ----
 printf "\n--- cli_refs guard (canonical vault) ---\n"

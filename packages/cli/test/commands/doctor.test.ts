@@ -302,12 +302,12 @@ describe("runDoctor", () => {
     }
   });
 
-  it("always returns exactly 58 checks", async () => {
+  it("always returns exactly 62 checks", async () => {
     const h = home();
     const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
-      expect(r.result.data.checks).toHaveLength(58);
+      expect(r.result.data.checks).toHaveLength(62);
       const freshness = r.result.data.checks.find(c => c.id === "s3_mount_freshness");
       expect(freshness).toBeDefined();
       expect(freshness?.status).toBe("pass");
@@ -1743,6 +1743,221 @@ hosts:
       } finally {
         if (prior === undefined) delete process.env.SKILLWIKI_VAULT_READ_MIRROR;
         else process.env.SKILLWIKI_VAULT_READ_MIRROR = prior;
+      }
+    });
+  });
+
+  describe("HTTP MCP default offline rows", () => {
+    const PLANTED_AUTH = "planted-mcp-auth-9f3a7c2b1e8d4f60";
+
+    it("emits URL, auth-presence, frozen-leaf, and handshake-skip rows without fetching", async () => {
+      const h = home();
+      const v = fullVault();
+      writeFileSync(join(v, ".WIKI_GIT_FROZEN"), "frozen\n");
+      let fetchCalls = 0;
+      const r = await runDoctor({
+        home: h,
+        envValue: v,
+        argv: ["node", "skillwiki", "doctor"],
+        currentVersion: "0.10.74",
+        env: { ...process.env, SKILLWIKI_MCP_TOKEN: PLANTED_AUTH },
+        mcpFetch: async () => {
+          fetchCalls += 1;
+          throw new Error("default doctor must not handshake");
+        },
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+
+      const byId = Object.fromEntries(r.result.data.checks.map(c => [c.id, c]));
+      expect(byId.mcp_url_configured).toBeDefined();
+      expect(byId.mcp_url_configured.status).toBe("pass");
+      expect(byId.mcp_credential_present).toBeDefined();
+      expect(byId.mcp_credential_present.status).toBe("pass");
+      expect(byId.mcp_credential_present.detail.toLowerCase()).toContain("present");
+      expect(byId.mcp_frozen_leaf_write_path).toBeDefined();
+      expect(byId.mcp_frozen_leaf_write_path.detail.toLowerCase()).toMatch(/http mcp/);
+      expect(byId.mcp_frozen_leaf_write_path.detail.toLowerCase()).not.toMatch(/local raw\/transcripts/);
+      expect(byId.mcp_handshake).toBeDefined();
+      expect(byId.mcp_handshake.status).toBe("pass");
+      expect(byId.mcp_handshake.detail.toLowerCase()).toMatch(/not requested/);
+      expect(fetchCalls).toBe(0);
+      for (const c of r.result.data.checks) {
+        expect(c.detail, c.id).not.toContain(PLANTED_AUTH);
+      }
+    });
+
+    it("frozen-leaf write-path requires HTTP MCP and not local git or raw transcripts", async () => {
+      const h = home();
+      const v = fullVault();
+      writeFileSync(join(v, ".WIKI_GIT_FROZEN"), "frozen\n");
+      const r = await runDoctor({
+        home: h,
+        envValue: v,
+        argv: ["node", "skillwiki", "doctor"],
+        currentVersion: "0.10.74",
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const row = r.result.data.checks.find(c => c.id === "mcp_frozen_leaf_write_path");
+      expect(row).toBeDefined();
+      expect(row!.status).toBe("pass");
+      const detail = row!.detail.toLowerCase();
+      expect(detail).toMatch(/http mcp/);
+      expect(detail).toMatch(/frozen/);
+      expect(detail).toMatch(/raw\/transcripts|vault git/);
+    });
+  });
+
+  describe("HTTP MCP --check-mcp handshake", () => {
+    const PLANTED_AUTH = "planted-mcp-auth-9f3a7c2b1e8d4f60";
+    const WRITE_TOOLS = [
+      "wiki_query",
+      "wiki_memory_recall",
+      "wiki_read_page",
+      "wiki_status",
+      "wiki_capture",
+      "wiki_log_append",
+      "wiki_page_publish",
+      "wiki_workitem_write",
+    ];
+    const CAPTURES_ONLY = WRITE_TOOLS.slice(0, 6);
+
+    function jsonRpcResult(id: unknown, result: unknown): Response {
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id, result }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    function fakeMcpFetch(opts: {
+      version: string;
+      tools: string[];
+      fail?: boolean;
+      calls?: { n: number };
+    }): typeof fetch {
+      const calls = opts.calls ?? { n: 0 };
+      return (async (_input, init) => {
+        calls.n += 1;
+        if (opts.fail) throw new Error("ECONNREFUSED test-handshake");
+        const raw = typeof init?.body === "string" ? init.body : "{}";
+        const parsed = JSON.parse(raw) as { id?: unknown; method?: string };
+        if (parsed.method === "initialize") {
+          return jsonRpcResult(parsed.id, {
+            protocolVersion: "2025-11-25",
+            capabilities: { tools: {} },
+            serverInfo: { name: "skillwiki-mcp", version: opts.version },
+          });
+        }
+        if (parsed.method === "tools/list") {
+          return jsonRpcResult(parsed.id, {
+            tools: opts.tools.map((name) => ({ name })),
+          });
+        }
+        return new Response("{}", { status: 400 });
+      }) as typeof fetch;
+    }
+
+    async function handshakeDoctor(opts: {
+      checkMcp?: boolean;
+      mcpFetch?: typeof fetch;
+      token?: string;
+      frozen?: boolean;
+      currentVersion?: string;
+    }) {
+      const h = home();
+      const v = fullVault();
+      if (opts.frozen !== false) writeFileSync(join(v, ".WIKI_GIT_FROZEN"), "frozen\n");
+      const env: NodeJS.ProcessEnv = { ...process.env };
+      if (opts.token === undefined) env.SKILLWIKI_MCP_TOKEN = PLANTED_AUTH;
+      else if (opts.token) env.SKILLWIKI_MCP_TOKEN = opts.token;
+      else delete env.SKILLWIKI_MCP_TOKEN;
+      return runDoctor({
+        home: h,
+        envValue: v,
+        argv: ["node", "skillwiki", "doctor", "--check-mcp"],
+        currentVersion: opts.currentVersion ?? "0.10.74",
+        checkMcp: opts.checkMcp ?? true,
+        env,
+        mcpFetch: opts.mcpFetch,
+      });
+    }
+
+    it("warns when initialize version lags shipped CLI and write tools are present", async () => {
+      const calls = { n: 0 };
+      const r = await handshakeDoctor({
+        mcpFetch: fakeMcpFetch({ version: "0.10.68", tools: WRITE_TOOLS, calls }),
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const row = r.result.data.checks.find(c => c.id === "mcp_handshake");
+      expect(row).toBeDefined();
+      expect(row!.status).toBe("warn");
+      expect(row!.detail).toContain("0.10.68");
+      expect(row!.detail).toMatch(/8/);
+      expect(row!.detail.toLowerCase()).toMatch(/lag/);
+      expect(calls.n).toBeGreaterThan(0);
+      for (const c of r.result.data.checks) {
+        expect(c.detail, c.id).not.toContain(PLANTED_AUTH);
+      }
+    });
+
+    it("errors when handshake fetch fails", async () => {
+      const r = await handshakeDoctor({
+        mcpFetch: fakeMcpFetch({ version: "0.10.74", tools: WRITE_TOOLS, fail: true }),
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const row = r.result.data.checks.find(c => c.id === "mcp_handshake");
+      expect(row).toBeDefined();
+      expect(row!.status).toBe("error");
+      expect(row!.detail.toLowerCase()).toMatch(/handshake|fail|refus/);
+      expect(row!.detail).not.toContain(PLANTED_AUTH);
+    });
+
+    it("errors when frozen leaf tool list is captures-only", async () => {
+      const r = await handshakeDoctor({
+        mcpFetch: fakeMcpFetch({ version: "0.10.74", tools: CAPTURES_ONLY }),
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const row = r.result.data.checks.find(c => c.id === "mcp_handshake");
+      expect(row).toBeDefined();
+      expect(row!.status).toBe("error");
+      expect(row!.detail.toLowerCase()).toMatch(/captures-only|wiki_workitem_write/);
+      expect(row!.detail).toContain("6");
+      expect(row!.detail).not.toContain(PLANTED_AUTH);
+    });
+
+    it("passes when initialize version matches and write tools are present", async () => {
+      const r = await handshakeDoctor({
+        mcpFetch: fakeMcpFetch({ version: "0.10.74", tools: WRITE_TOOLS }),
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const row = r.result.data.checks.find(c => c.id === "mcp_handshake");
+      expect(row).toBeDefined();
+      expect(row!.status).toBe("pass");
+      expect(row!.detail).toContain("0.10.74");
+      expect(row!.detail).toMatch(/8/);
+      expect(row!.detail).not.toContain(PLANTED_AUTH);
+    });
+
+    it("errors without fetching when --check-mcp and auth is missing", async () => {
+      const calls = { n: 0 };
+      const r = await handshakeDoctor({
+        token: "",
+        mcpFetch: fakeMcpFetch({ version: "0.10.74", tools: WRITE_TOOLS, calls }),
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const row = r.result.data.checks.find(c => c.id === "mcp_handshake");
+      expect(row).toBeDefined();
+      expect(row!.status).toBe("error");
+      expect(row!.detail.toLowerCase()).toMatch(/not set|auth/);
+      expect(calls.n).toBe(0);
+      for (const c of r.result.data.checks) {
+        expect(c.detail, c.id).not.toContain(PLANTED_AUTH);
       }
     });
   });

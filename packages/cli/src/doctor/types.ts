@@ -25,6 +25,10 @@ export interface DoctorInput {
   cwd?: string;
   /** When true, SSH-probe fleet snapshotter (short timeout). Default false. */
   checkSnapshotter?: boolean;
+  /** When true, live-handshake HTTP MCP (Task 2). Default false — skip, no network. */
+  checkMcp?: boolean;
+  /** Injectable fetch for MCP handshake tests. Default path must not call it. */
+  mcpFetch?: typeof fetch;
   /** Injectable exec for reachability probes (tests). */
   execProbe?: ExecProbe;
   /** Injectable process env for remote resolution (tests). Defaults to process.env. */

@@ -55,7 +55,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("lint").option("--days <n>").option("--lines <n>").option("--log-threshold <n>").option("--fix").option("--only <bucket>").option("--summary").option("--examples <n>").option("--wiki <name>");
   program.command("config"); // has subcommands
   program.command("health").option("--wiki <name>").option("--sync <mode>").option("--no-fail").option("--out <path>").option("--examples <n>");
-  program.command("doctor").option("--check-snapshotter");
+  program.command("doctor").option("--check-snapshotter").option("--check-mcp");
   program.command("status").option("--wiki <name>");
   program.command("archive")
     .option("--wiki <name>")

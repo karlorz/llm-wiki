@@ -98,3 +98,25 @@ describe("0.10.1 migration notes", () => {
     expect(migrationNotesForUpgrade("0.10.1", "0.10.2")).toEqual([]);
   });
 });
+
+describe("HTTP MCP migration notes", () => {
+  it("emits HTTP MCP cutover notes from 0.10.61 to 0.10.74", () => {
+    const notes = migrationNotesForUpgrade("0.10.61", "0.10.74");
+    expect(notes.some((l) => l.includes("Migration HTTP MCP"))).toBe(true);
+    expect(notes.some((l) => l.includes("skillwiki doctor --check-mcp"))).toBe(true);
+    expect(notes.join("\n").toLowerCase()).toMatch(/new session|plugin/);
+    expect(notes.join("\n").toLowerCase()).toMatch(/frozen/);
+  });
+
+  it("does not repeat HTTP MCP notes from 0.10.74 to 0.10.75", () => {
+    const notes = migrationNotesForUpgrade("0.10.74", "0.10.75");
+    expect(notes.some((l) => l.includes("Migration HTTP MCP"))).toBe(false);
+    expect(notes).toEqual([]);
+  });
+
+  it("keeps 0.10.1 notes when crossing both floors", () => {
+    const notes = migrationNotesForUpgrade("0.10.0", "0.10.74");
+    expect(notes.some((l) => l.includes("Migration 0.10.1"))).toBe(true);
+    expect(notes.some((l) => l.includes("Migration HTTP MCP"))).toBe(true);
+  });
+});

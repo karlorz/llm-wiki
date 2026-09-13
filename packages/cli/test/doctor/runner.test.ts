@@ -23,6 +23,7 @@ describe("DoctorRunner probe registry and execution", () => {
       "fuse_staleness",
       "activation_marker",
       "ds_store_noise",
+      "mcp",
     ]);
   });
 
