@@ -22,13 +22,16 @@ SkillWiki captures are HTTP MCP only (`type: http`). Claude/Grok use `SKILLWIKI_
 - Never auto-source `mcp.env` or auto-write `~/.cursor/mcp.json`, Grok `config.toml`, or `mcp.env`.
 - Never print the bearer token.
 
-## Writes (captures-only)
+## Writes
 
 On leaf hosts, wiki captures go through MCP. Do **not** write `raw/transcripts/` or `log.md` as local files.
 
 1. Call MCP `wiki_capture` with `kind` (`task` | `idea` | `bug` | `note`), `project`, `title`, and `content`. Optional `agent_note`.
 2. Call MCP `wiki_log_append` when a structural `log.md` line is needed. Pass append-only `content`. Do not rewrite log history.
-3. Write surface is captures-only. Do not call unpublished Tier 2 tools (`wiki_workitem_write`, `wiki_page_publish`). Those tools are not on the live daemon. Work-item close is not available from this MCP. Do not `git commit` / `wiki-push` against `~/wiki` for these captures. If `$VAULT/.WIKI_GIT_FROZEN` exists, that freeze is the reason nearby agents cannot close wiki work until Tier 2 ships.
+3. **Feature-detect work-item and page-publish tools**:
+   - When the server advertises `wiki_workitem_write`: use it to create, mutate, or close work items under `projects/<slug>/work/**` or update `projects/<slug>/knowledge.md`. Pass `path`, `content`, and `base_sha256` of existing bytes (from `wiki_read_page` or local mirror). On `FILE_CHANGED`, re-read and retry once.
+   - When the server advertises `wiki_page_publish`: use it to publish typed Layer-2 pages (`entities/`, `concepts/`, `comparisons/`, `queries/`, `meta/`) using the same CAS protocol.
+   - When those tools are **absent** from the live tool list (e.g. server is captures-only): do not call them or claim they exist. If `$VAULT/.WIKI_GIT_FROZEN` exists, fall back to capturing a close note via `wiki_capture` or STOP. Work-item close remains unavailable on the frozen leaf without `wiki_workitem_write`. Do not `git commit` / `wiki-push` against `~/wiki`.
 
 ## Reads
 

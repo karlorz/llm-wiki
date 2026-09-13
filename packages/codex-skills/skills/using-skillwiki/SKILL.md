@@ -170,8 +170,9 @@ If the vault has `.WIKI_GIT_FROZEN`:
 | Intent | Allowed? | How |
 |---|---|---|
 | Capture note/idea/bug/task | Yes | HTTP MCP `wiki_capture` / `wiki_log_append` |
-| Close or mutate a work item (`projects/*/work/**`, `knowledge.md`) | **No** until Tier 2 | Do not `page publish` or git commit. Capture a close note via MCP or STOP. |
-| `wiki-sync` push/commit | **No** | GitHub is sg01 `wiki-snapshot`. |
+| Close or mutate a work item (`projects/*/work/**`, `knowledge.md`) | Conditional | If live MCP tools include `wiki_workitem_write`, mutate/close via MCP CAS; if absent, capture a close note via MCP `wiki_capture` or STOP. Never local-write. |
+| Publish typed Layer-2 page (`concepts/`, `queries/`, etc.) | Conditional | If live MCP tools include `wiki_page_publish`, publish via MCP CAS; if absent, STOP. Do not run local `skillwiki page publish`. |
+| `wiki-sync` push/commit | **No** | Git fail-closed. GitHub is sg01 `wiki-snapshot`. |
 | Read local `~/wiki` | Yes | Mirror reads only |
 | `/wiki-add-task <text>` | You're in an interactive session on an authoring host | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with ad-hoc capture frontmatter |
 | Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) on an authoring host | Create a new `.md` file in `raw/transcripts/` — dev-loop discovers it on next cycle; do not edit it after capture |

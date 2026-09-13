@@ -1,6 +1,6 @@
 {
   "name": "skillwiki",
-  "version": "0.10.73",
+  "version": "0.10.74",
   "description": "Project-aware Karpathy-style knowledge base: 21 prompt-only skills (wiki-*, proj-*, using-skillwiki, skillwiki-mcp) backed by HTTP MCP wiki_capture.",
   "author": {
     "name": "karlorz"

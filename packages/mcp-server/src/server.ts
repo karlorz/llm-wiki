@@ -11,7 +11,7 @@ import { loadConfig, type McpDaemonConfig } from "./config.js";
 import { ChangedEventHub } from "./events.js";
 import { rcloneCopyUpdate, ReconcileGate } from "./reconcile.js";
 import { handleWikiMemoryRecall, handleWikiQuery, handleWikiReadPage, handleWikiStatus } from "./tools/reads.js";
-import { wikiCapture, wikiLogAppend } from "./tools/writes.js";
+import { wikiCapture, wikiLogAppend, wikiPagePublish, wikiWorkitemWrite } from "./tools/writes.js";
 import { type PutObject } from "./txn.js";
 
 export interface HttpServerOptions {
@@ -148,6 +148,40 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     },
     async (args) => {
       const out = await wikiLogAppend(ctx, args);
+      return toolText(out, !out.ok);
+    },
+  );
+
+  server.registerTool(
+    "wiki_workitem_write",
+    {
+      description:
+        "Create or overwrite an allowlisted work-item file (projects/*/work/** or projects/*/knowledge.md). Overwrites require base_sha256 of the last read bytes.",
+      inputSchema: z.object({
+        path: z.string().min(1),
+        content: z.string().min(1),
+        base_sha256: z.string().optional(),
+      }),
+    },
+    async (args) => {
+      const out = await wikiWorkitemWrite(ctx, args);
+      return toolText(out, !out.ok);
+    },
+  );
+
+  server.registerTool(
+    "wiki_page_publish",
+    {
+      description:
+        "Create or overwrite an allowlisted typed page (concepts|entities|comparisons|queries|meta). Overwrites require base_sha256 of the last read bytes.",
+      inputSchema: z.object({
+        path: z.string().min(1),
+        content: z.string().min(1),
+        base_sha256: z.string().optional(),
+      }),
+    },
+    async (args) => {
+      const out = await wikiPagePublish(ctx, args);
       return toolText(out, !out.ok);
     },
   );

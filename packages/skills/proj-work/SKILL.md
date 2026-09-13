@@ -33,9 +33,10 @@ Standard four + project context (project README, last ~5 work logs).
 After `skillwiki path`, if `$VAULT/.WIKI_GIT_FROZEN` exists:
 
 - **Reads** of existing work folders are allowed.
-- **Do not** create or mutate `projects/*/work/**`, `knowledge.md`, or run `skillwiki page publish` on this leaf.
-- **Do not** `git commit` / `wiki-sync` push to “close” the item.
-- Work-item close is unpublished until Tier 2 (`wiki_workitem_write` / `wiki_page_publish`). If the user asked to close or complete work, capture a note via HTTP MCP `wiki_capture` (`kind: note` or `task`) and STOP. Do not local-write the work folder.
+- **Git fail-closed:** Git add/commit/push / `wiki-sync`: still **fail closed**. GitHub is sg01 `wiki-snapshot`.
+- **If the live MCP tool list includes `wiki_workitem_write`**: create, mutate, or close work items via MCP `wiki_workitem_write`. Read current bytes (`wiki_read_page` sha256 or local file hash), pass `path`, `content`, `base_sha256`. On `FILE_CHANGED`, re-read and retry once. Never local-write `~/wiki`.
+- **If the live MCP tool list includes `wiki_page_publish`**: publish typed Layer-2 pages via MCP `wiki_page_publish` with the same CAS. Do not run local `skillwiki page publish` on the frozen leaf.
+- **If those tools are absent** (daemon still captures-only): capture a close note via HTTP MCP `wiki_capture` (`kind: note` or `task`) or STOP. Do not local-write. Do not claim the tools exist.
 
 ## Executing an Existing Work Item
 
@@ -99,12 +100,13 @@ Rules:
 - **Re-marking without doing**: do not simply re-write tasks.md to say DONE without applying the corresponding fix. The next session will find the same gap.
 
 ## Stop conditions
-- `$VAULT/.WIKI_GIT_FROZEN` exists and the user asked to create, mutate, or close a work item — capture via `wiki_capture` or STOP; do not local-write.
+- `$VAULT/.WIKI_GIT_FROZEN` exists and the user asked to create, mutate, or close a work item when `wiki_workitem_write` is absent from the live MCP tool list — capture via `wiki_capture` or STOP; do not local-write.
 - `validate` non-zero.
 - Conflicting work folder name.
 
 ## Forbidden
-- Creating or mutating work items on a vault that has `.WIKI_GIT_FROZEN`.
+- Creating or mutating local work items on a vault that has `.WIKI_GIT_FROZEN` (use MCP `wiki_workitem_write` when advertised).
+- `git add` / `git commit` / `git push` on a vault that has `.WIKI_GIT_FROZEN`.
 - Writing spec/plan files outside the work folder.
 - Marking `status: completed` without a `completed:` date.
 - Accepting tasks.md status labels without independent disk verification.

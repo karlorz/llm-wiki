@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { RawSourceSchema } from "@skillwiki/shared";
 import { extractFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
 import { scanSensitiveContent } from "../../../cli/src/utils/sensitive-content.js";
+import { validateTypedTarget } from "../../../cli/src/utils/typed-page.js";
 import { isAllowedWritePath } from "../allowlist.js";
 import { appendAudit } from "../audit.js";
 import { ReconcileGate } from "../reconcile.js";
-import { commitWrite, S3PutError, type PutObject } from "../txn.js";
+import { commitCasWrite, commitWrite, S3PutError, type PutObject } from "../txn.js";
 
 export type CaptureKind = "task" | "idea" | "bug" | "note";
 
@@ -33,7 +34,11 @@ export type ToolFailure = {
   ok: false;
   error: string;
   message?: string;
+  path?: string;
+  currentVersion?: string;
 };
+
+export type OverwriteSuccess = { ok: true; path: string };
 
 export type CaptureSuccess = { ok: true; path: string };
 export type LogSuccess = { ok: true; path: "log.md"; appended: true };
@@ -230,4 +235,103 @@ export async function wikiLogAppend(
     ms: Date.now() - started,
   });
   return { ok: true, path: "log.md", appended: true };
+}
+
+export interface OverwriteInput {
+  path: string;
+  content: string;
+  base_sha256?: string;
+}
+
+async function wikiOverwrite(
+  ctx: WriteContext,
+  tool: "wiki_workitem_write" | "wiki_page_publish",
+  kind: "workitem" | "page_publish",
+  input: OverwriteInput,
+): Promise<OverwriteSuccess | ToolFailure> {
+  const started = Date.now();
+  const blocked = notReady(ctx);
+  if (blocked) return blocked;
+
+  const relPath = (input.path ?? "").trim().replace(/^\/+/, "");
+  const content = input.content ?? "";
+  if (!relPath || !content) return fail("USAGE", "path and content are required");
+  if (!isAllowedWritePath(relPath, kind)) return fail("PATH_DENIED", relPath);
+  if (kind === "page_publish") {
+    const validated = validateTypedTarget(relPath);
+    if (!validated.ok) return fail("PATH_DENIED", relPath);
+  }
+
+  const sensitive = scanSensitiveContent(content, { file: relPath });
+  if (sensitive.length > 0) {
+    appendAudit(ctx.auditFile, {
+      host_id: ctx.hostId,
+      tool,
+      path: relPath,
+      ok: false,
+      error: "SENSITIVE_CONTENT_DETECTED",
+      ms: Date.now() - started,
+    });
+    return fail("SENSITIVE_CONTENT_DETECTED");
+  }
+
+  try {
+    const cas = await commitCasWrite(
+      { vaultDir: ctx.vaultDir, putObject: ctx.putObject, onCommit: ctx.onCommit },
+      { relPath, content },
+      input.base_sha256,
+    );
+    if (!cas.ok) {
+      appendAudit(ctx.auditFile, {
+        host_id: ctx.hostId,
+        tool,
+        path: relPath,
+        ok: false,
+        error: cas.error,
+        ms: Date.now() - started,
+      });
+      if (cas.error === "FILE_CHANGED") {
+        return { ok: false, error: cas.error, currentVersion: cas.currentVersion, path: cas.path };
+      }
+      return fail(cas.error, cas.message);
+    }
+  } catch (error: unknown) {
+    const code =
+      error instanceof S3PutError || (error as { code?: string }).code === "S3_PUT_FAILED"
+        ? "S3_PUT_FAILED"
+        : "WRITE_FAILED";
+    const message = error instanceof Error ? error.message : String(error);
+    appendAudit(ctx.auditFile, {
+      host_id: ctx.hostId,
+      tool,
+      path: relPath,
+      ok: false,
+      error: code,
+      ms: Date.now() - started,
+    });
+    return fail(code, message);
+  }
+
+  appendAudit(ctx.auditFile, {
+    host_id: ctx.hostId,
+    tool,
+    path: relPath,
+    ok: true,
+    ms: Date.now() - started,
+  });
+  return { ok: true, path: relPath };
+}
+
+export function wikiWorkitemWrite(
+  ctx: WriteContext,
+  input: OverwriteInput,
+): Promise<OverwriteSuccess | ToolFailure> {
+  return wikiOverwrite(ctx, "wiki_workitem_write", "workitem", input);
+}
+
+export function wikiPagePublish(
+  ctx: WriteContext,
+  input: OverwriteInput,
+): Promise<OverwriteSuccess | ToolFailure> {
+  return wikiOverwrite(ctx, "wiki_page_publish", "page_publish", input);
 }

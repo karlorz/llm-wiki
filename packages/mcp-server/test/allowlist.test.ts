@@ -47,5 +47,39 @@ describe("write allowlist", () => {
     expect(isForbiddenWriteName("AGENTS.md")).toBe(true);
     expect(isForbiddenWriteName("CLAUDE.md")).toBe(true);
     expect(isForbiddenWriteName("projects/x/AGENTS.md")).toBe(true);
+    expect(isForbiddenWriteName("projects/x/work/2026-09-13-t/notes/AGENTS.md")).toBe(true);
+  });
+
+  it("allows work-item markdown including nested paths and project knowledge.md", () => {
+    expect(
+      isAllowedWritePath("projects/llm-wiki/work/2026-09-13-tier2/spec.md", "workitem"),
+    ).toBe(true);
+    expect(
+      isAllowedWritePath("projects/llm-wiki/work/2026-09-13-tier2/notes/close.md", "workitem"),
+    ).toBe(true);
+    expect(isAllowedWritePath("projects/llm-wiki/knowledge.md", "workitem")).toBe(true);
+  });
+
+  it("rejects workitem paths outside allowlist, traversal, and raw/", () => {
+    expect(isAllowedWritePath("projects/llm-wiki/README.md", "workitem")).toBe(false);
+    expect(isAllowedWritePath("raw/transcripts/2026-09-13-note-hello.md", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/../etc/passwd", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/work/2026-09-13-x/AGENTS.md", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/work/2026-09-13-x/notes/AGENTS.md", "workitem")).toBe(false);
+  });
+
+  it("allows typed Layer-2 pages for page_publish including nested paths", () => {
+    expect(isAllowedWritePath("concepts/alpha.md", "page_publish")).toBe(true);
+    expect(isAllowedWritePath("queries/2026-09-13-example.md", "page_publish")).toBe(true);
+    expect(isAllowedWritePath("concepts/foo/bar.md", "page_publish")).toBe(true);
+  });
+
+  it("rejects page_publish of uppercase paths, raw/, and work items", () => {
+    expect(isAllowedWritePath("Concepts/Alpha.md", "page_publish")).toBe(false);
+    expect(isAllowedWritePath("concepts/Alpha.md", "page_publish")).toBe(false);
+    expect(isAllowedWritePath("concepts/foo/Bar.md", "page_publish")).toBe(false);
+    expect(isAllowedWritePath("raw/transcripts/2026-09-13-note-hello.md", "page_publish")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/knowledge.md", "page_publish")).toBe(false);
+    expect(isAllowedWritePath("log.md", "page_publish")).toBe(false);
   });
 });

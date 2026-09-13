@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Cursor-native plugins from karlorz/llm-wiki: skillwiki HTTP MCP captures and vault-sync.",
-    "version": "0.10.73"
+    "version": "0.10.74"
   },
   "plugins": [
     {
