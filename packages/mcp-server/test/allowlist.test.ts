@@ -61,11 +61,35 @@ describe("write allowlist", () => {
   });
 
   it("rejects workitem paths outside allowlist, traversal, and raw/", () => {
-    expect(isAllowedWritePath("projects/llm-wiki/README.md", "workitem")).toBe(false);
     expect(isAllowedWritePath("raw/transcripts/2026-09-13-note-hello.md", "workitem")).toBe(false);
     expect(isAllowedWritePath("projects/../etc/passwd", "workitem")).toBe(false);
     expect(isAllowedWritePath("projects/llm-wiki/work/2026-09-13-x/AGENTS.md", "workitem")).toBe(false);
     expect(isAllowedWritePath("projects/llm-wiki/work/2026-09-13-x/notes/AGENTS.md", "workitem")).toBe(false);
+  });
+
+  it("allows Layer-3 workspace markdown families for workitem writes", () => {
+    expect(isAllowedWritePath("projects/llm-wiki/README.md", "workitem")).toBe(true);
+    expect(
+      isAllowedWritePath("projects/llm-wiki/architecture/2026-09-14-topology.md", "workitem"),
+    ).toBe(true);
+    expect(isAllowedWritePath("projects/llm-wiki/architecture/sub/x.md", "workitem")).toBe(true);
+    expect(isAllowedWritePath("projects/agentdock/requirements/functional.md", "workitem")).toBe(true);
+    expect(isAllowedWritePath("projects/agentdock/requirements/sub/nested.md", "workitem")).toBe(true);
+    expect(isAllowedWritePath("projects/llm-wiki/compound/lessons.md", "workitem")).toBe(true);
+    expect(isAllowedWritePath("projects/llm-wiki/compound/sub/pattern.md", "workitem")).toBe(true);
+  });
+
+  it("keeps non-family workspace paths denied for workitem writes", () => {
+    expect(isAllowedWritePath("projects/llm-wiki/history/x.md", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/history/specs/old-spec.md", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/fleet.yaml", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/architecture/x.canvas", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/AGENTS.md", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/CLAUDE.md", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/architecture/AGENTS.md", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/architecture/../../../log.md", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/notes.md", "workitem")).toBe(false);
+    expect(isAllowedWritePath("projects/llm-wiki/readme.md", "workitem")).toBe(false);
   });
 
   it("allows typed Layer-2 pages for page_publish including nested paths", () => {

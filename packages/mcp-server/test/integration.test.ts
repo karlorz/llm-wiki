@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
 import { parseTokenMap, resolveHostId } from "../src/auth.js";
 import { handleWikiReadPage, handleWikiStatus } from "../src/tools/reads.js";
-import { wikiCapture } from "../src/tools/writes.js";
+import { wikiCapture, wikiWorkitemWrite } from "../src/tools/writes.js";
 import { ReconcileGate } from "../src/reconcile.js";
 import { makeTempVault } from "./helpers.js";
 
@@ -91,6 +92,56 @@ describe("integration vs temp vault + mock S3", () => {
     if (result.ok) throw new Error("expected failure");
     expect(result.error).toBe("S3_PUT_FAILED");
     expect(result.message).toMatch(/connection refused/);
+  });
+
+  it("workspace architecture write is immediately visible to read_page without reconcile", async () => {
+    const vault = await makeTempVault();
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const s3 = new Map<string, Buffer>();
+    const rel = "projects/x/architecture/01-foo.md";
+    const body = "---\ntitle: foo\n---\nArchitecture extract body.\n";
+    const write = await wikiWorkitemWrite(
+      {
+        vaultDir: vault,
+        hostId: "macos-dev",
+        gate,
+        putObject: async (path, buf) => {
+          s3.set(path, buf);
+        },
+      },
+      { path: rel, content: body },
+    );
+    expect(write.ok).toBe(true);
+    expect(s3.has(rel)).toBe(true);
+
+    const page = await handleWikiReadPage({ vaultDir: vault, gate }, { path: rel });
+    expect(page.ok).toBe(true);
+    if (!page.ok) throw new Error("expected ok");
+    expect(page.markdown).toBe(body);
+    expect(page.sha256).toBe(createHash("sha256").update(Buffer.from(body, "utf8")).digest("hex"));
+  });
+
+  it("S3 failure on a workspace write leaves no working-copy file", async () => {
+    const vault = await makeTempVault();
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const rel = "projects/x/architecture/01-foo.md";
+    const result = await wikiWorkitemWrite(
+      {
+        vaultDir: vault,
+        hostId: "macos-dev",
+        gate,
+        putObject: async () => {
+          throw Object.assign(new Error("connection refused"), { code: "S3_PUT_FAILED" });
+        },
+      },
+      { path: rel, content: "must not land\n" },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toBe("S3_PUT_FAILED");
+    expect(existsSync(join(vault, rel))).toBe(false);
   });
 
   it("loads a token map file and resolves host_id", async () => {
