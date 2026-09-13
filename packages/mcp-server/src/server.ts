@@ -26,6 +26,8 @@ export interface HttpServerOptions {
   auditFile?: string;
 }
 
+const MAX_MCP_BODY_BYTES = 1048576; // 1 MiB
+
 function json(res: ServerResponse, status: number, body: unknown, extra?: Record<string, string>): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
@@ -36,19 +38,40 @@ function json(res: ServerResponse, status: number, body: unknown, extra?: Record
   res.end(payload);
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+class PayloadTooLargeError extends Error {
+  code = "PAYLOAD_TOO_LARGE";
+}
+
+function readBody(req: IncomingMessage, limit = MAX_MCP_BODY_BYTES): Promise<string> {
   return new Promise((resolveBody, reject) => {
+    let size = 0;
+    let exceeded = false;
     const chunks: Buffer[] = [];
-    req.on("data", (c) => chunks.push(c as Buffer));
-    req.on("end", () => resolveBody(Buffer.concat(chunks).toString("utf8")));
+    req.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size > limit) {
+        exceeded = true;
+        // drain remaining bytes so socket completes cleanly
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (exceeded) {
+        reject(new PayloadTooLargeError("request body exceeds 1 MiB limit"));
+      } else {
+        resolveBody(Buffer.concat(chunks).toString("utf8"));
+      }
+    });
     req.on("error", reject);
   });
 }
 
-function toolText(data: unknown, isError = false) {
+export function toolResult(data: unknown, isError = false) {
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    ...(isError ? { isError: true } : {}),
+    structuredContent: data as Record<string, unknown>,
+    content: [{ type: "text" as const, text: JSON.stringify(data) }],
+    ...(isError ? { isError: true as const } : {}),
   };
 }
 
@@ -72,6 +95,14 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
   };
   const reads = { vaultDir: opts.vaultDir, gate: opts.gate, s3Ok: opts.s3Ok };
 
+  const failureShape = {
+    ok: z.boolean(),
+    error: z.string().optional(),
+    message: z.string().optional(),
+    path: z.string().optional(),
+    currentVersion: z.string().optional(),
+  };
+
   server.registerTool(
     "wiki_query",
     {
@@ -81,10 +112,15 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         limit: z.number().int().positive().optional(),
         include_pending: z.boolean().optional(),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+        results: z.array(z.unknown()).optional(),
+      }).passthrough(),
+      annotations: { readOnlyHint: true },
     },
     async (args) => {
       const out = await handleWikiQuery(reads, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -93,10 +129,17 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     {
       description: "Read a vault page as markdown + frontmatter + sha256 of file bytes.",
       inputSchema: z.object({ path: z.string().min(1) }),
+      outputSchema: z.object({
+        ...failureShape,
+        markdown: z.string().optional(),
+        frontmatter: z.record(z.unknown()).optional(),
+        sha256: z.string().optional(),
+      }).passthrough(),
+      annotations: { readOnlyHint: true },
     },
     async (args) => {
       const out = await handleWikiReadPage(reads, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -109,10 +152,15 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         topic: z.string().min(1),
         scope: z.enum(["project", "global", "all"]).optional(),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+        memories: z.array(z.unknown()).optional(),
+      }).passthrough(),
+      annotations: { readOnlyHint: true },
     },
     async (args) => {
       const out = await handleWikiMemoryRecall(reads, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -121,10 +169,17 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     {
       description: "Vault health snapshot plus daemon reconcile and S3 connectivity.",
       inputSchema: z.object({}),
+      outputSchema: z.object({
+        ...failureShape,
+        vault_path: z.string().optional(),
+        reconcile_ready: z.boolean().optional(),
+        s3_ok: z.boolean().optional(),
+      }).passthrough(),
+      annotations: { readOnlyHint: true },
     },
     async () => {
       const out = await handleWikiStatus(reads);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -139,10 +194,18 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         content: z.string().min(1),
         agent_note: z.string().optional(),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+      }).passthrough(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     },
     async (args) => {
       const out = await wikiCapture(ctx, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -153,10 +216,19 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       inputSchema: z.object({
         content: z.string().min(1),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+        appended: z.boolean().optional(),
+      }).passthrough(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     },
     async (args) => {
       const out = await wikiLogAppend(ctx, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -170,10 +242,19 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         content: z.string().min(1),
         base_sha256: z.string().optional(),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+      }).passthrough(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: true,
+      },
     },
     async (args) => {
       const out = await wikiWorkitemWrite(ctx, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -187,10 +268,19 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         content: z.string().min(1),
         base_sha256: z.string().optional(),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+      }).passthrough(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: true,
+      },
     },
     async (args) => {
       const out = await wikiPagePublish(ctx, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -251,7 +341,16 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
     if (path === "/mcp" || path === "/mcp/") {
       let parsed: unknown;
       if (req.method === "POST") {
-        const raw = await readBody(req);
+        let raw: string;
+        try {
+          raw = await readBody(req);
+        } catch (err) {
+          if (err instanceof PayloadTooLargeError) {
+            json(res, 413, { error: "payload_too_large", message: err.message });
+            return;
+          }
+          throw err;
+        }
         parsed = raw.length > 0 ? JSON.parse(raw) : undefined;
       }
       const mcp = createWikiMcpServer({ ...opts, hostId, hub });

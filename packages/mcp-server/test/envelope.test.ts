@@ -1,0 +1,164 @@
+import { createHash } from "node:crypto";
+import { AddressInfo } from "node:net";
+import { describe, expect, it } from "vitest";
+import { ReconcileGate } from "../src/reconcile.js";
+import { startMcpHttpServer } from "../src/server.js";
+import { makeTempVault } from "./helpers.js";
+
+async function setupTestServer() {
+  const vault = await makeTempVault();
+  const token = "test-token";
+  const hash = createHash("sha256").update(token, "utf8").digest("hex");
+  const gate = new ReconcileGate(async () => undefined);
+  await gate.runFirst();
+  const server = await startMcpHttpServer({
+    bind: "127.0.0.1",
+    port: 0,
+    vaultDir: vault,
+    tokenMap: new Map([[hash, "macos-dev"]]),
+    gate,
+    putObject: async () => undefined,
+  });
+  const { port } = server.address() as AddressInfo;
+  return {
+    vault,
+    token,
+    port,
+    close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+  };
+}
+
+describe("C4 typed result envelope and request body cap", () => {
+  it("tools/call returns structuredContent and mirror text in content[0]", async () => {
+    const ctx = await setupTestServer();
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "wiki_status",
+            arguments: {},
+          },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result?: {
+          structuredContent?: Record<string, unknown>;
+          content?: Array<{ type: string; text: string }>;
+        };
+      };
+      expect(body.result?.structuredContent).toBeDefined();
+      expect(body.result?.structuredContent?.ok).toBe(true);
+      expect(body.result?.structuredContent?.reconcile_ready).toBe(true);
+      expect(body.result?.content?.[0]?.type).toBe("text");
+      const parsedText = JSON.parse(body.result?.content?.[0]?.text ?? "{}");
+      expect(parsedText).toEqual(body.result?.structuredContent);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("tools/list includes all 8 tools with outputSchema and annotations", async () => {
+    const ctx = await setupTestServer();
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/list",
+          params: {},
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result?: {
+          tools?: Array<{
+            name: string;
+            outputSchema?: Record<string, unknown>;
+            annotations?: Record<string, unknown>;
+          }>;
+        };
+      };
+      const tools = body.result?.tools ?? [];
+      const toolMap = new Map(tools.map((t) => [t.name, t]));
+
+      const expectedReads = ["wiki_query", "wiki_read_page", "wiki_memory_recall", "wiki_status"];
+      const nonIdempotentWrites = ["wiki_capture", "wiki_log_append"];
+      const idempotentWrites = ["wiki_workitem_write", "wiki_page_publish"];
+
+      expect(toolMap.size).toBe(8);
+
+      for (const name of expectedReads) {
+        const tool = toolMap.get(name);
+        expect(tool, `tool ${name} exists`).toBeDefined();
+        expect(tool?.outputSchema, `tool ${name} has outputSchema`).toBeDefined();
+        expect(tool?.annotations).toEqual({ readOnlyHint: true });
+      }
+
+      for (const name of nonIdempotentWrites) {
+        const tool = toolMap.get(name);
+        expect(tool, `tool ${name} exists`).toBeDefined();
+        expect(tool?.outputSchema, `tool ${name} has outputSchema`).toBeDefined();
+        expect(tool?.annotations).toEqual({
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        });
+      }
+
+      for (const name of idempotentWrites) {
+        const tool = toolMap.get(name);
+        expect(tool, `tool ${name} exists`).toBeDefined();
+        expect(tool?.outputSchema, `tool ${name} has outputSchema`).toBeDefined();
+        expect(tool?.annotations).toEqual({
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+          idempotentHint: true,
+        });
+      }
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("POST /mcp with body > 1 MiB returns JSON error without crash", async () => {
+    const ctx = await setupTestServer();
+    try {
+      // Create body slightly larger than 1 MiB (1048576 bytes)
+      const oversized = "x".repeat(1024 * 1024 + 10);
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ padding: oversized }),
+      });
+      expect(res.status).toBe(413);
+      const body = (await res.json()) as { error?: string };
+      expect(body.error).toBeDefined();
+
+      // Ensure server is still alive and responsive after oversized request
+      const healthRes = await fetch(`http://127.0.0.1:${ctx.port}/health`);
+      expect(healthRes.status).toBe(200);
+    } finally {
+      await ctx.close();
+    }
+  });
+});
