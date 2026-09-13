@@ -19,6 +19,22 @@ The policy controlling whether post-release verification is expected. The suppor
 **Verification trigger**:
 An event that resurfaces opt-in verification: a matching regression report, an explicit user request, or a relevant code or release change after the last proof.
 
+**New host**:
+A machine that should write the wiki for the first time. A new chat tab on an already-provisioned machine is not a new host.
+_Avoid_: new environment, new user, new session
+
+**Host-id bearer**:
+Operator-issued HTTP MCP authentication bound to one host identity. The client holds it in process environment or host Configure; the vault never stores the raw value.
+_Avoid_: API key, plugin token, session token
+
+**Attended issuance**:
+An operator action on metal that creates a host-id bearer, shows the raw value once, and does not write client config files.
+_Avoid_: auto-provision, first-run wizard, doctor apply
+
+**Full MCP read/write**:
+Live HTTP MCP tools include capture, work-item write, and page publish. A local vault mirror is optional for reads.
+_Avoid_: captures-only, local git writer
+
 **Ranked audit report**:
 A read-only evidence packet that classifies active project work without changing lifecycle state.
 
