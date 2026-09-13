@@ -92,6 +92,7 @@ import { parseDotenvFile } from "./utils/dotenv.js";
 import { configPath } from "./commands/config.js";
 import { readCliPackageJson } from "./utils/package-info.js";
 import { runSkillwikiMcpStdio } from "./mcp/server.js";
+import { runMcpAuthIssueHost } from "./commands/mcp-auth.js";
 import { guardProtectedVaultWrite } from "./utils/protected-vault-write-guard.js";
 import { runWritePreflightCommand } from "./commands/write-preflight.js";
 import { evaluateDirtyVolumeGate } from "./utils/vault-write-gates.js";
@@ -2159,6 +2160,22 @@ program
   .description("start stdio Model Context Protocol server (read-only vault tools)")
   .action(async () => {
     await runSkillwikiMcpStdio();
+  });
+
+const mcpAuthCmd = program.command("mcp-auth").description("attended HTTP MCP host-id bearer issuance (metal)");
+mcpAuthCmd
+  .command("issue-host")
+  .description("append a host-id hash to the metal map; print raw once on a TTY")
+  .requiredOption("--host-id <id>", "host identity to bind")
+  .option("--map <path>", "hash map file (defaults to SKILLWIKI_MCP_TOKEN_MAP)")
+  .option("--write", "append the hash (default is dry-run)", false)
+  .action(async (opts) => {
+    const mapPath = opts.map || process.env.SKILLWIKI_MCP_TOKEN_MAP || "";
+    emit(await runMcpAuthIssueHost({
+      hostId: String(opts.hostId),
+      mapPath,
+      write: !!opts.write,
+    }));
   });
 
 for (const w of getDeprecatedWarnings(process.env.HOME ?? "")) {

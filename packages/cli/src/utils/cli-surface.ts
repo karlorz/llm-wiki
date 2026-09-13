@@ -122,6 +122,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--checks <list>")
     .option("--wiki <name>");
   program.command("mcp"); // stdio MCP server (no vault-doc flags in surface)
+  program.command("mcp-auth");
 
   // Subcommands
   const graphCmd = program.commands.find(c => c.name() === "graph")!;
@@ -277,6 +278,9 @@ export function buildCliSurface(): Map<string, Set<string>> {
   fleetCmd.command("validate");
   fleetCmd.command("context").option("--file <path>").option("--host-id <id>");
   fleetCmd.command("health").option("--file <path>").option("--host-id <id>").option("--json");
+
+  const mcpAuth = program.commands.find(c => c.name() === "mcp-auth")!;
+  mcpAuth.command("issue-host").requiredOption("--host-id <id>").option("--map <path>").option("--write");
 
   // Extract surface map
   const surface = new Map<string, Set<string>>();

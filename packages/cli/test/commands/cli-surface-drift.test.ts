@@ -32,7 +32,7 @@ describe("cli-surface drift detection", () => {
       "migrate-citations", "frontmatter-fix", "update", "self-update",
       "transcripts", "project-index", "claims", "compound", "page", "project-page", "tag", "tag-sync", "sync",
       "backup", "seed", "observe", "session-brief", "memory", "ingest", "fleet",
-      "write-preflight", "snapshot-maintenance", "mcp", "vectors",
+      "write-preflight", "snapshot-maintenance", "mcp", "mcp-auth", "vectors",
     ];
 
     for (const cmd of knownCommands) {
@@ -60,6 +60,7 @@ describe("cli-surface drift detection", () => {
       { parent: "backup", subs: ["sync", "restore"] },
       { parent: "memory", subs: ["topics", "index", "recall", "review", "import"] },
       { parent: "fleet", subs: ["validate", "context", "health"] },
+      { parent: "mcp-auth", subs: ["issue-host"] },
       { parent: "snapshot-maintenance", subs: ["journal", "projection-conflict"] },
     ];
 
@@ -83,7 +84,7 @@ describe("cli-surface drift detection", () => {
       "migrate-citations", "frontmatter-fix", "update", "self-update",
       "transcripts", "project-index", "claims", "compound", "page", "project-page", "tag", "tag-sync", "sync",
       "backup", "seed", "observe", "session-brief", "memory", "ingest", "fleet",
-      "write-preflight", "snapshot-maintenance", "mcp", "vectors",
+      "write-preflight", "snapshot-maintenance", "mcp", "mcp-auth", "vectors",
     ]);
 
     const topLevelKeys = [...surface.keys()].filter(k => !k.includes("."));
