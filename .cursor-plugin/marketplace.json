@@ -1,0 +1,34 @@
+{
+  "name": "llm-wiki",
+  "owner": {
+    "name": "karlorz"
+  },
+  "metadata": {
+    "description": "Cursor-native plugins from karlorz/llm-wiki: skillwiki HTTP MCP captures and vault-sync.",
+    "version": "0.10.72"
+  },
+  "plugins": [
+    {
+      "name": "skillwiki",
+      "source": "packages/skills",
+      "description": "21 prompt-only wiki skills plus HTTP MCP wiki_capture. Requires SKILLWIKI_MCP_TOKEN (Plugins → Configure).",
+      "category": "integrations",
+      "tags": [
+        "wiki",
+        "mcp",
+        "skillwiki"
+      ]
+    },
+    {
+      "name": "vault-sync",
+      "source": "packages/vault-sync",
+      "description": "Vault sync skills: install, status, uninstall, presync, snapshot, FUSE freshness.",
+      "category": "developer-tools",
+      "tags": [
+        "vault",
+        "sync",
+        "skillwiki"
+      ]
+    }
+  ]
+}

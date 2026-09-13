@@ -251,6 +251,14 @@ The SkillWiki Grok plugin ships `mcp.json` / `.mcp.json` pointing at
 4. Start a **new** session (SessionStart cannot inject the parent MCP env).
 5. `grok mcp doctor skillwiki`
 
+**Cursor / Grok Bot:** the Cursor-native package (`.cursor-plugin`) requires
+`SKILLWIKI_MCP_TOKEN` and pins `https://wiki.karldigi.dev/mcp` (absolute URL, no
+`${VAR:-default}`). Open **Plugins → Configure** for `skillwiki` and enter the
+bearer — the same field grok-search uses for `GROK_SEARCH_MCP_TOKEN`. Grok Bot
+does not read `~/.cursor/mcp.json` or the Mac process environment. Start a
+**new** Agent chat after Configure. Do not rempin unless the llm-wiki gitRef is
+stale.
+
 Cursor headless wrappers may copy `cursor-cli-mcp.example.json`; it is not a
 marketplace pin and is not auto-installed. Fail closed if the token is missing.
 Never put the bearer in plugin files or the wiki.

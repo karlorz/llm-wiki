@@ -20,7 +20,10 @@
 #   13. packages/agent-memory-trends/package.json (private workspace package)
 #   14. packages/skillwiki-maintenance/package.json (private workspace package)
 #   15. packages/mcp-server/package.json  (private HTTP MCP daemon)
-#   16. package-lock.json                 (npm-generated root/workspace metadata)
+#   16. packages/skills/.cursor-plugin/plugin.json (Cursor/Grok Bot plugin)
+#   17. packages/vault-sync/.cursor-plugin/plugin.json (Cursor vault-sync plugin)
+#   18. .cursor-plugin/marketplace.json   (Cursor marketplace metadata.version)
+#   19. package-lock.json                 (npm-generated root/workspace metadata)
 #
 # After editing, regenerates package-lock.json and verifies all release metadata.
 
@@ -66,6 +69,9 @@ bump_file ".claude-plugin/plugin.json (root agy URL marker)" "${REPO_ROOT}/.clau
 bump_file "packages/agent-memory-trends/package.json" "${REPO_ROOT}/packages/agent-memory-trends/package.json"
 bump_file "packages/skillwiki-maintenance/package.json" "${REPO_ROOT}/packages/skillwiki-maintenance/package.json"
 bump_file "packages/mcp-server/package.json"           "${REPO_ROOT}/packages/mcp-server/package.json"
+bump_file "packages/skills/.cursor-plugin/plugin.json" "${REPO_ROOT}/packages/skills/.cursor-plugin/plugin.json"
+bump_file "packages/vault-sync/.cursor-plugin/plugin.json" "${REPO_ROOT}/packages/vault-sync/.cursor-plugin/plugin.json"
+bump_file ".cursor-plugin/marketplace.json"            "${REPO_ROOT}/.cursor-plugin/marketplace.json"
 
 echo "  … Regenerating package-lock.json"
 (
@@ -92,6 +98,8 @@ EXPECTED_FILES=(
   "${REPO_ROOT}/packages/agent-memory-trends/package.json"
   "${REPO_ROOT}/packages/skillwiki-maintenance/package.json"
   "${REPO_ROOT}/packages/mcp-server/package.json"
+  "${REPO_ROOT}/packages/skills/.cursor-plugin/plugin.json"
+  "${REPO_ROOT}/packages/vault-sync/.cursor-plugin/plugin.json"
 )
 
 MISSING=0
@@ -107,10 +115,15 @@ if ! grep -q "\"version\": \"${VERSION}\"" "${REPO_ROOT}/.claude-plugin/marketpl
   MISSING=$((MISSING + 1))
 fi
 
+if ! grep -q "\"version\": \"${VERSION}\"" "${REPO_ROOT}/.cursor-plugin/marketplace.json"; then
+  echo "  ⚠ Missing version ${VERSION} in .cursor-plugin/marketplace.json" >&2
+  MISSING=$((MISSING + 1))
+fi
+
 if [ "$MISSING" -eq 0 ]; then
-  echo "  ✓ All 15 manifest version fields updated to ${VERSION}"
+  echo "  ✓ All 18 manifest version fields updated to ${VERSION}"
 else
-  echo "  ⚠ Expected 15 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
+  echo "  ⚠ Expected 18 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
   exit 1
 fi
 

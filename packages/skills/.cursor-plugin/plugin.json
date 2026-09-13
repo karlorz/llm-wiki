@@ -1,0 +1,31 @@
+{
+  "name": "skillwiki",
+  "version": "0.10.72",
+  "description": "Project-aware Karpathy-style knowledge base: 21 prompt-only skills (wiki-*, proj-*, using-skillwiki, skillwiki-mcp) backed by HTTP MCP wiki_capture.",
+  "author": {
+    "name": "karlorz"
+  },
+  "repository": "https://github.com/karlorz/llm-wiki",
+  "license": "MIT",
+  "keywords": [
+    "knowledge-base",
+    "wiki",
+    "mcp",
+    "skillwiki"
+  ],
+  "variables": {
+    "type": "object",
+    "properties": {
+      "SKILLWIKI_MCP_TOKEN": {
+        "type": "string",
+        "title": "SkillWiki HTTP MCP bearer",
+        "description": "Bearer for https://wiki.karldigi.dev/mcp. Same SKILLWIKI_MCP_TOKEN used by Grok CLI. Never put the value in plugin files."
+      }
+    },
+    "required": [
+      "SKILLWIKI_MCP_TOKEN"
+    ]
+  },
+  "skills": "./",
+  "mcpServers": "./mcp.json"
+}

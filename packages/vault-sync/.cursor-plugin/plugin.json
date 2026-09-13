@@ -3,20 +3,15 @@
   "version": "0.10.72",
   "description": "Cross-platform vault sync infrastructure for skillwiki: rclone push, GitHub fetch-notify, presync, snapshot, and Linux FUSE freshness refresh.",
   "author": {
-    "name": "karlorz",
-    "url": "https://github.com/karlorz"
+    "name": "karlorz"
   },
-  "homepage": "https://github.com/karlorz/llm-wiki",
   "repository": "https://github.com/karlorz/llm-wiki",
   "license": "MIT",
   "keywords": [
     "vault",
     "sync",
     "rclone",
-    "git",
-    "skillwiki",
-    "launchd",
-    "systemd"
+    "skillwiki"
   ],
   "skills": "./skills"
 }

@@ -159,6 +159,69 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+CURSOR_PLUGIN="$REPO_ROOT/packages/skills/.cursor-plugin/plugin.json"
+CURSOR_MCP="$REPO_ROOT/packages/skills/mcp.json"
+CURSOR_MARKET="$REPO_ROOT/.cursor-plugin/marketplace.json"
+VAULT_CURSOR_PLUGIN="$REPO_ROOT/packages/vault-sync/.cursor-plugin/plugin.json"
+assert_file "$CURSOR_PLUGIN"
+assert_file "$CURSOR_MARKET"
+assert_file "$VAULT_CURSOR_PLUGIN"
+assert_json_file "$CURSOR_PLUGIN"
+assert_json_file "$CURSOR_MARKET"
+assert_json_file "$VAULT_CURSOR_PLUGIN"
+
+if python3 - "$CURSOR_PLUGIN" "$CURSOR_MCP" "$CURSOR_MARKET" "$VAULT_CURSOR_PLUGIN" <<'PY'
+import json
+import sys
+
+plugin_path, mcp_path, market_path, vault_path = sys.argv[1:5]
+plugin = json.load(open(plugin_path))
+mcp = json.load(open(mcp_path))
+market = json.load(open(market_path))
+vault = json.load(open(vault_path))
+errors = []
+
+required = (plugin.get("variables") or {}).get("required") or []
+props = ((plugin.get("variables") or {}).get("properties") or {})
+if "SKILLWIKI_MCP_TOKEN" not in required:
+    errors.append("cursor plugin must require SKILLWIKI_MCP_TOKEN")
+if "SKILLWIKI_MCP_TOKEN" not in props:
+    errors.append("cursor plugin must declare SKILLWIKI_MCP_TOKEN")
+if plugin.get("mcpServers") != "./mcp.json":
+    errors.append("cursor plugin mcpServers must be ./mcp.json")
+
+server = mcp["mcpServers"]["skillwiki"]
+if server.get("type") != "http":
+    errors.append("cursor mcp type")
+if server.get("url") != "https://wiki.karldigi.dev/mcp":
+    errors.append("cursor mcp url must be absolute production (no ${VAR:-default})")
+auth = (server.get("headers") or {}).get("Authorization", "")
+if auth != "Bearer ${SKILLWIKI_MCP_TOKEN}":
+    errors.append("cursor mcp Authorization")
+
+names = [p.get("name") for p in market.get("plugins") or []]
+if "skillwiki" not in names:
+    errors.append("cursor marketplace missing skillwiki")
+if "vault-sync" not in names:
+    errors.append("cursor marketplace missing vault-sync")
+skillwiki = next(p for p in market["plugins"] if p["name"] == "skillwiki")
+source = skillwiki.get("source", "").lstrip("./")
+if source != "packages/skills":
+    errors.append("cursor marketplace skillwiki source")
+if vault.get("name") != "vault-sync":
+    errors.append("vault-sync cursor plugin name")
+if errors:
+    sys.stderr.write("\n".join(errors) + "\n")
+    sys.exit(1)
+PY
+then
+  printf 'PASS: Cursor/Grok Bot plugin token contract (grok-search shape)\n'
+  PASS=$((PASS + 1))
+else
+  printf 'FAIL: Cursor/Grok Bot plugin token contract (grok-search shape)\n'
+  FAIL=$((FAIL + 1))
+fi
+
 if grep -Fq "wiki_capture" "$SKILL" && grep -Fq "wiki_log_append" "$SKILL"; then
   printf 'PASS: skill names wiki_capture and wiki_log_append\n'
   PASS=$((PASS + 1))
