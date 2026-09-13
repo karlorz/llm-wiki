@@ -7,6 +7,8 @@ description: Use when capturing a note, idea, or bug into the wiki, appending lo
 
 Use this skill to capture a note, idea, bug, or task into the wiki, append `log.md`, or call SkillWiki HTTP MCP tools.
 
+When this MCP namespace is loaded and available, it wins over wiki-add-task local-write steps for capture intents.
+
 SkillWiki captures are HTTP MCP only (`type: http`). Claude/Grok use `SKILLWIKI_MCP_URL` as an optional override and otherwise default to `https://wiki.karldigi.dev/mcp`. Every host requires an operator-provided bearer as `SKILLWIKI_MCP_TOKEN` before MCP load. Do not start a local stdio `skillwiki mcp` / `skillwiki-mcp` server for captures.
 
 ## First-run readiness

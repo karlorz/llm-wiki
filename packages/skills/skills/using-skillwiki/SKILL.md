@@ -87,7 +87,7 @@ sha256:          # computed by skillwiki hash over body bytes after closing ---
 ```
 **Layer 2 — Typed Knowledge:** `entities/`, `concepts/`, `comparisons/`, `queries/`, `meta/`. Agent-owned pages with `^[raw/...]` citation markers at paragraph-end. Global scope — project association via `provenance_projects:` frontmatter, not directory nesting.
 **Layer 3 — Project Workspaces (`projects/{slug}/`):** Per-project lifecycle directories with `work/` (spec + plan + retro), `compound/` (distilled lessons/patterns), `architecture/` (ADRs), and `history/` (archived specs/plans).
-**No `inbox/` directory.** Ad-hoc captures go to `raw/transcripts/` or directly into a project work item via `proj-work`. Do not invent new top-level directories — extend Layer 2 via SCHEMA.md tag taxonomy if needed.
+**No `inbox/` directory.** Ad-hoc captures go to `raw/transcripts/` (destination stays `raw/transcripts/` in the vault; on leaf hosts the writer is the HTTP MCP server, not a local file create) or directly into a project work item via `proj-work`. Do not invent new top-level directories — extend Layer 2 via SCHEMA.md tag taxonomy if needed.
 
 ## Sensitive Content Policy
 Vault content must not contain live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets. This includes development-only and local-only credentials. Redact values before filing using `[REDACTED:<kind>]` or `[REDACTED:<kind>:<fingerprint>]`. If a source contains live secrets, stop and ask for a redacted source or explicit rotation/remediation direction; do not preserve the secret in `raw/`.
@@ -161,8 +161,9 @@ The vault is shared across hosts, so host-local absolute paths are not durable s
 ### Ad-hoc capture: three entry points
 | Entry | When | What happens |
 |-------|------|-------------|
-| `/wiki-add-task <text>` | You're in a Claude session | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with ad-hoc capture frontmatter |
-| Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) | Create a new `.md` file in `raw/transcripts/` — dev-loop discovers it on next cycle; do not edit it after capture |
+| `wiki_capture` | You're on a frozen-leaf host with HTTP MCP | Calls MCP `wiki_capture(kind, project, title, content)`; server writes `raw/transcripts/` remotely |
+| `/wiki-add-task <text>` | You're in an interactive session on an authoring host | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with ad-hoc capture frontmatter |
+| Filesystem drop | You're NOT in a Claude session (Obsidian, editor, sync) on an authoring host | Create a new `.md` file in `raw/transcripts/` — dev-loop discovers it on next cycle; do not edit it after capture |
 | Dev-loop discovery | Automatic, next cycle | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |
 
 ## Skill Map
@@ -177,7 +178,8 @@ The vault is shared across hosts, so host-local absolute paths are not durable s
 | `wiki-archive` | Archive typed pages, or attended preserve-move exact raw sources under `raw/archived/` |
 | `wiki-remove` | Remove maintained pages; exact raw disposal uses the separate attended `sources dispose` flow |
 | `wiki-reingest` | Detect drift in raw sources (sha256 comparison) and re-ingest updated content |
-| `wiki-add-task` | Quick-capture ideas, bugs, tasks, notes into `raw/transcripts/` without leaving the current workflow |
+| `wiki-add-task` | Quick-capture ideas, bugs, tasks, notes (captures via wiki_capture on leaf hosts; local raw/transcripts/ only on authoring hosts) |
+| `skillwiki-mcp` | HTTP MCP captures (`wiki_capture` / `wiki_log_append`); never local raw/transcripts on leaf hosts |
 | `wiki-adapter-prd` | Map foreign PRD formats (CodeStable, RFC, AIDE, Hermes) into vault pages |
 | `proj-init` | Bootstrap a project workspace (README, requirements, architecture) |
 | `proj-work` | Open or run a work item under a project's work/ directory |

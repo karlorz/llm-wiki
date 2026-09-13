@@ -84,3 +84,24 @@ describe("protected snapshot worktree safety contract", () => {
     }
   });
 });
+
+describe("leaf host capture contract", () => {
+  it("wiki-add-task SKILL.md mentions wiki_capture and does NOT say captures ALWAYS go to a local path as the writer", () => {
+    const text = readFileSync(resolve(ROOT, "packages/skills/wiki-add-task/SKILL.md"), "utf8");
+    expect(text).toContain("wiki_capture");
+    expect(text).not.toMatch(/Captures ALWAYS go to `?\$\(skillwiki path\)\/raw\/transcripts\/`?/i);
+    expect(text).toMatch(/frozen-leaf hosts capture via MCP `?wiki_capture`?/i);
+  });
+
+  it("using-skillwiki SKILL.md mentions wiki_capture as leaf-host capture", () => {
+    const text = readFileSync(resolve(ROOT, "packages/skills/using-skillwiki/SKILL.md"), "utf8");
+    expect(text).toContain("wiki_capture");
+    expect(text).toMatch(/`wiki_capture`[\s\S]{0,100}leaf host/i);
+  });
+
+  it("wiki-add-task agent does not instruct leaf hosts to append local log.md as the primary path", () => {
+    const text = readFileSync(resolve(ROOT, "packages/skills/agents/wiki-add-task.md"), "utf8");
+    expect(text).toContain("wiki_capture");
+    expect(text).toMatch(/never write local captures or append local `?log\.md`?/i);
+  });
+});

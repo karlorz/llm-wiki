@@ -24,7 +24,8 @@ Invoke a SkillWiki skill when the user: wants vault/wiki/knowledge-base operatio
 | `wiki-archive` | Archive typed pages or preserve-move raw sources |
 | `wiki-remove` | Hard-delete vault paths without snapshot resurrection |
 | `wiki-reingest` | Detect source drift and re-ingest updated content |
-| `wiki-add-task` | Quick-capture ideas, bugs, tasks, notes |
+| `wiki-add-task` | Quick-capture ideas, bugs, tasks, notes (HTTP MCP on leaf hosts; local files on authoring hosts) |
+| `skillwiki-mcp` | HTTP MCP captures (`wiki_capture`, `wiki_log_append`); never local writes on leaf hosts |
 | `wiki-adapter-prd` | Map foreign PRD formats (CodeStable, RFC, AIDE, Hermes) |
 | `wiki-sync` | Safely sync vault git repository |
 | `wiki-canvas` | Generate Obsidian Canvas visualization |
@@ -54,7 +55,7 @@ separate concerns.
 
 ## Fail-Closed Boundary
 
-Never write typed pages, `index.md`, or `log.md` directly. Never bare `rm` or `git rm` as a fleet delete (snapshot resurrects from S3). Never auto `npm install -g skillwiki` in headless/goal/satellite sessions. If `skillwiki page publish --help` is unavailable, fail closed.
+Never write typed pages, `index.md`, or `log.md` directly. On leaf hosts, captures use HTTP MCP (`wiki_capture`), never local `raw/transcripts` or `log.md` writes. Never bare `rm` or `git rm` as a fleet delete (snapshot resurrects from S3). Never auto `npm install -g skillwiki` in headless/goal/satellite sessions. If `skillwiki page publish --help` is unavailable, fail closed.
 
 ## Sensitive Content
 
