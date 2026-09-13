@@ -1,4 +1,4 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client, S3ServiceException } from "@aws-sdk/client-s3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -6,13 +6,23 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import { bearerToken, loadTokenMap, resolveHostId, unauthorizedHeaders, type TokenMap } from "./auth.js";
+import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from "./auth.js";
 import { loadConfig, type McpDaemonConfig } from "./config.js";
 import { ChangedEventHub } from "./events.js";
+import { MCP_INSTRUCTIONS } from "./mcp-instructions.js";
+import { getIssuer, handleOAuthRequest, type OAuthConfig } from "./oauth.js";
+import { FileOAuthStore, type OAuthStore } from "./oauth-store.js";
 import { rcloneCopyUpdate, ReconcileGate } from "./reconcile.js";
-import { handleWikiMemoryRecall, handleWikiQuery, handleWikiReadPage, handleWikiStatus } from "./tools/reads.js";
-import { wikiCapture, wikiLogAppend, wikiPagePublish, wikiWorkitemWrite } from "./tools/writes.js";
-import { type PutObject } from "./txn.js";
+import {
+  handleWikiContext,
+  handleWikiMemoryRecall,
+  handleWikiQuery,
+  handleWikiReadPage,
+  handleWikiStatus,
+} from "./tools/reads.js";
+import { CAPTURE_KINDS, wikiCapture, wikiLogAppend, wikiPagePublish, wikiWorkitemWrite } from "./tools/writes.js";
+import { S3PutError, type PutObject } from "./txn.js";
+import { type GetObject, type S3Adapter } from "./versions.js";
 
 export interface HttpServerOptions {
   bind: string;
@@ -21,10 +31,26 @@ export interface HttpServerOptions {
   tokenMap: TokenMap;
   gate: ReconcileGate;
   putObject: PutObject;
+  getObject?: GetObject;
   hub?: ChangedEventHub;
   s3Ok?: boolean;
   auditFile?: string;
+  oauth?: OAuthConfig;
 }
+
+const MAX_MCP_BODY_BYTES = 1048576; // 1 MiB
+
+const MCP_TOOL_NAMES = [
+  "wiki_query",
+  "wiki_read_page",
+  "wiki_memory_recall",
+  "wiki_status",
+  "wiki_context",
+  "wiki_capture",
+  "wiki_log_append",
+  "wiki_workitem_write",
+  "wiki_page_publish",
+] as const;
 
 function json(res: ServerResponse, status: number, body: unknown, extra?: Record<string, string>): void {
   const payload = JSON.stringify(body);
@@ -36,19 +62,40 @@ function json(res: ServerResponse, status: number, body: unknown, extra?: Record
   res.end(payload);
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+class PayloadTooLargeError extends Error {
+  code = "PAYLOAD_TOO_LARGE";
+}
+
+function readBody(req: IncomingMessage, limit = MAX_MCP_BODY_BYTES): Promise<string> {
   return new Promise((resolveBody, reject) => {
+    let size = 0;
+    let exceeded = false;
     const chunks: Buffer[] = [];
-    req.on("data", (c) => chunks.push(c as Buffer));
-    req.on("end", () => resolveBody(Buffer.concat(chunks).toString("utf8")));
+    req.on("data", (c: Buffer) => {
+      size += c.length;
+      if (size > limit) {
+        exceeded = true;
+        // drain remaining bytes so socket completes cleanly
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (exceeded) {
+        reject(new PayloadTooLargeError("request body exceeds 1 MiB limit"));
+      } else {
+        resolveBody(Buffer.concat(chunks).toString("utf8"));
+      }
+    });
     req.on("error", reject);
   });
 }
 
-function toolText(data: unknown, isError = false) {
+export function toolResult(data: unknown, isError = false) {
   return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    ...(isError ? { isError: true } : {}),
+    structuredContent: data as Record<string, unknown>,
+    content: [{ type: "text" as const, text: JSON.stringify(data) }],
+    ...(isError ? { isError: true as const } : {}),
   };
 }
 
@@ -61,16 +108,34 @@ function mcpServerPackageVersion(): string {
 }
 
 export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }): McpServer {
-  const server = new McpServer({ name: "skillwiki-mcp", version: mcpServerPackageVersion() });
+  const server = new McpServer(
+    { name: "skillwiki-mcp", version: mcpServerPackageVersion() },
+    { instructions: MCP_INSTRUCTIONS },
+  );
   const ctx = {
     vaultDir: opts.vaultDir,
     hostId: opts.hostId,
     gate: opts.gate,
     putObject: opts.putObject,
+    getObject: opts.getObject,
     auditFile: opts.auditFile,
     onCommit: (paths: string[]) => opts.hub?.emitChanged(paths),
   };
-  const reads = { vaultDir: opts.vaultDir, gate: opts.gate, s3Ok: opts.s3Ok };
+  const reads = {
+    vaultDir: opts.vaultDir,
+    hostId: opts.hostId,
+    gate: opts.gate,
+    getObject: opts.getObject,
+    s3Ok: opts.s3Ok,
+  };
+
+  const failureShape = {
+    ok: z.boolean(),
+    error: z.string().optional(),
+    message: z.string().optional(),
+    path: z.string().optional(),
+    currentVersion: z.string().optional(),
+  };
 
   server.registerTool(
     "wiki_query",
@@ -81,10 +146,15 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         limit: z.number().int().positive().optional(),
         include_pending: z.boolean().optional(),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+        results: z.array(z.unknown()).optional(),
+      }).passthrough(),
+      annotations: { readOnlyHint: true },
     },
     async (args) => {
       const out = await handleWikiQuery(reads, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -93,10 +163,18 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     {
       description: "Read a vault page as markdown + frontmatter + sha256 of file bytes.",
       inputSchema: z.object({ path: z.string().min(1) }),
+      outputSchema: z.object({
+        ...failureShape,
+        markdown: z.string().optional(),
+        frontmatter: z.record(z.unknown()).optional(),
+        sha256: z.string().optional(),
+        s3_verified: z.boolean().optional(),
+      }).passthrough(),
+      annotations: { readOnlyHint: true },
     },
     async (args) => {
       const out = await handleWikiReadPage(reads, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -109,10 +187,15 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         topic: z.string().min(1),
         scope: z.enum(["project", "global", "all"]).optional(),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+        memories: z.array(z.unknown()).optional(),
+      }).passthrough(),
+      annotations: { readOnlyHint: true },
     },
     async (args) => {
       const out = await handleWikiMemoryRecall(reads, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -121,10 +204,46 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     {
       description: "Vault health snapshot plus daemon reconcile and S3 connectivity.",
       inputSchema: z.object({}),
+      outputSchema: z.object({
+        ...failureShape,
+        vault_path: z.string().optional(),
+        reconcile_ready: z.boolean().optional(),
+        s3_ok: z.boolean().optional(),
+      }).passthrough(),
+      annotations: { readOnlyHint: true },
     },
     async () => {
       const out = await handleWikiStatus(reads);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
+    },
+  );
+
+  server.registerTool(
+    "wiki_context",
+    {
+      description: "Compact activation context, active project work-item directories, and writer metadata.",
+      inputSchema: z.object({}),
+      outputSchema: z.object({
+        ...failureShape,
+        projects: z
+          .array(
+            z.object({
+              slug: z.string(),
+              active_work: z.array(z.string()),
+            }),
+          )
+          .optional(),
+        writer_id: z.string().optional(),
+        reconcile_ready: z.boolean().optional(),
+        tools: z.array(z.string()).optional(),
+        cas_protocol: z.string().optional(),
+        capture_kinds: z.array(z.string()).optional(),
+      }).passthrough(),
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const out = await handleWikiContext(reads, { tools: [...MCP_TOOL_NAMES] });
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -133,16 +252,24 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     {
       description: "Create a new ad-hoc capture under raw/transcripts/. Cannot overwrite existing pages.",
       inputSchema: z.object({
-        kind: z.enum(["task", "idea", "bug", "note"]),
+        kind: z.enum(CAPTURE_KINDS),
         project: z.string().min(1),
         title: z.string().min(1),
         content: z.string().min(1),
         agent_note: z.string().optional(),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+      }).passthrough(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     },
     async (args) => {
       const out = await wikiCapture(ctx, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -153,10 +280,19 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       inputSchema: z.object({
         content: z.string().min(1),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+        appended: z.boolean().optional(),
+      }).passthrough(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
     },
     async (args) => {
       const out = await wikiLogAppend(ctx, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -170,10 +306,19 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         content: z.string().min(1),
         base_sha256: z.string().optional(),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+      }).passthrough(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: true,
+      },
     },
     async (args) => {
       const out = await wikiWorkitemWrite(ctx, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
@@ -187,17 +332,47 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         content: z.string().min(1),
         base_sha256: z.string().optional(),
       }),
+      outputSchema: z.object({
+        ...failureShape,
+      }).passthrough(),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+        idempotentHint: true,
+      },
     },
     async (args) => {
       const out = await wikiPagePublish(ctx, args);
-      return toolText(out, !out.ok);
+      return toolResult(out, !out.ok);
     },
   );
 
   return server;
 }
 
-export function createPutObject(cfg: McpDaemonConfig): PutObject {
+async function streamToBuffer(stream: unknown): Promise<Buffer> {
+  if (stream && typeof stream === "object" && "transformToByteArray" in stream) {
+    const fn = (stream as { transformToByteArray: () => Promise<Uint8Array> }).transformToByteArray;
+    if (typeof fn === "function") {
+      const arr = await fn.call(stream);
+      return Buffer.from(arr);
+    }
+  }
+  if (stream && typeof stream === "object" && Symbol.asyncIterator in stream) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream as AsyncIterable<Uint8Array | string>) {
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+  if (Buffer.isBuffer(stream)) {
+    return stream;
+  }
+  throw new Error("unsupported S3 stream body");
+}
+
+export function createS3Adapter(cfg: McpDaemonConfig): S3Adapter {
   if (!(cfg.s3Endpoint && cfg.s3Bucket && cfg.s3AccessKeyId && cfg.s3SecretAccessKey)) {
     throw new Error("S3 endpoint, bucket, and credentials are required; writes fail closed");
   }
@@ -210,23 +385,68 @@ export function createPutObject(cfg: McpDaemonConfig): PutObject {
     },
     forcePathStyle: true,
   });
-  return async (relPath, body) => {
-    const key = [cfg.s3Prefix, relPath].filter((p) => p && p.length > 0).join("/");
-    await client.send(
-      new PutObjectCommand({
-        Bucket: cfg.s3Bucket,
-        Key: key,
-        Body: body,
-      }),
-    );
+
+  const resolveKey = (relPath: string) => [cfg.s3Prefix, relPath].filter((p) => p && p.length > 0).join("/");
+
+  const putObject: PutObject = async (relPath, body) => {
+    try {
+      await client.send(
+        new PutObjectCommand({
+          Bucket: cfg.s3Bucket,
+          Key: resolveKey(relPath),
+          Body: body,
+        }),
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new S3PutError(message, error);
+    }
   };
+
+  const getObject: GetObject = async (relPath) => {
+    try {
+      const res = await client.send(
+        new GetObjectCommand({
+          Bucket: cfg.s3Bucket,
+          Key: resolveKey(relPath),
+        }),
+      );
+      if (!res.Body) return null;
+      const body = await streamToBuffer(res.Body);
+      return { body };
+    } catch (error: unknown) {
+      if (error instanceof S3ServiceException || (error && typeof error === "object" && "name" in error)) {
+        const name = (error as { name?: string }).name;
+        if (name === "NoSuchKey" || name === "NotFound") {
+          return null;
+        }
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      throw new S3PutError(message, error);
+    }
+  };
+
+  return { putObject, getObject };
+}
+
+export function createPutObject(cfg: McpDaemonConfig): PutObject {
+  return createS3Adapter(cfg).putObject;
 }
 
 export async function startMcpHttpServer(opts: HttpServerOptions): Promise<ReturnType<typeof createServer>> {
   const hub = opts.hub ?? new ChangedEventHub({ pingMs: 30_000 });
+  const oauthEnabled = Boolean(opts.oauth?.enabled);
+  if (oauthEnabled && !opts.oauth?.store && !opts.oauth?.stateDir) {
+    throw new Error("oauth.enabled requires oauth.state_dir or an injected store");
+  }
+  const oauthStore: OAuthStore | undefined = oauthEnabled
+    ? opts.oauth?.store ?? (opts.oauth?.stateDir ? new FileOAuthStore(opts.oauth.stateDir) : undefined)
+    : undefined;
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
+    const host = req.headers.host ?? "127.0.0.1";
+    const issuer = getIssuer(req, opts.oauth?.issuer);
+    const url = new URL(req.url ?? "/", `http://${host}`);
     const path = url.pathname;
 
     if (req.method === "GET" && (path === "/health" || path === "/mcp/health")) {
@@ -234,14 +454,56 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
       return;
     }
 
-    const token = bearerToken(
-      typeof req.headers.authorization === "string" ? req.headers.authorization : undefined,
-    );
-    const hostId = token ? resolveHostId(token, opts.tokenMap) : undefined;
-    if (!hostId) {
-      json(res, 401, { error: "unauthorized" }, unauthorizedHeaders());
+    if (oauthEnabled && oauthStore && opts.oauth) {
+      const isOauthPath =
+        path === "/.well-known/oauth-protected-resource" ||
+        path === "/.well-known/oauth-authorization-server" ||
+        path === "/register" ||
+        path === "/authorize" ||
+        path === "/token";
+
+      if (isOauthPath) {
+        let rawBody = "";
+        if (req.method === "POST") {
+          try {
+            rawBody = await readBody(req);
+          } catch (err) {
+            if (err instanceof PayloadTooLargeError) {
+              json(res, 413, { error: "payload_too_large", message: err.message });
+              return;
+            }
+            throw err;
+          }
+        }
+        const handled = await handleOAuthRequest(req, res, rawBody, opts.oauth, oauthStore);
+        if (handled) return;
+      }
+    }
+
+    const isMcpOrEvent =
+      path === "/mcp" ||
+      path === "/mcp/" ||
+      path === "/events" ||
+      path === "/mcp/events";
+
+    if (!isMcpOrEvent) {
+      json(res, 404, { error: "not_found" });
       return;
     }
+
+    const authHeader = typeof req.headers.authorization === "string" ? req.headers.authorization : undefined;
+    const resolved = await resolveWriter(authHeader, {
+      tokenMap: opts.tokenMap,
+      oauthStore,
+    });
+
+    if (!resolved) {
+      const prmUrl = oauthEnabled ? `${issuer}/.well-known/oauth-protected-resource` : undefined;
+      json(res, 401, { error: "unauthorized" }, unauthorizedHeaders(prmUrl));
+      return;
+    }
+
+    const hostId = resolved.writerId;
 
     if (req.method === "GET" && (path === "/events" || path === "/mcp/events")) {
       hub.subscribe(res);
@@ -251,7 +513,16 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
     if (path === "/mcp" || path === "/mcp/") {
       let parsed: unknown;
       if (req.method === "POST") {
-        const raw = await readBody(req);
+        let raw: string;
+        try {
+          raw = await readBody(req);
+        } catch (err) {
+          if (err instanceof PayloadTooLargeError) {
+            json(res, 413, { error: "payload_too_large", message: err.message });
+            return;
+          }
+          throw err;
+        }
         parsed = raw.length > 0 ? JSON.parse(raw) : undefined;
       }
       const mcp = createWikiMcpServer({ ...opts, hostId, hub });
@@ -297,7 +568,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     }),
   );
   const hub = new ChangedEventHub({ pingMs: cfg.ssePingMs });
-  const putObject = createPutObject(cfg);
+  const s3Adapter = createS3Adapter(cfg);
 
   const server = await startMcpHttpServer({
     bind: cfg.bind,
@@ -305,9 +576,11 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     vaultDir: cfg.vaultDir,
     tokenMap,
     gate,
-    putObject,
+    putObject: s3Adapter.putObject,
+    getObject: s3Adapter.getObject,
     hub,
     auditFile: cfg.auditLogPath,
+    oauth: cfg.oauth,
   });
 
   void gate.runFirst().catch((error: unknown) => {

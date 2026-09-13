@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, basename } from "node:path";
+import { currentVersion, type GetObject } from "./versions.js";
 
 export type PutObject = (relPath: string, body: Buffer) => Promise<void>;
 
@@ -13,6 +13,7 @@ export interface TxnFile {
 export interface TxnDeps {
   vaultDir: string;
   putObject: PutObject;
+  getObject?: GetObject;
   onCommit?: (paths: string[]) => void;
 }
 
@@ -41,7 +42,7 @@ export function withWriteMutex<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-function isS3Failure(error: unknown): error is Error & { code: string } {
+export function isS3Failure(error: unknown): error is Error & { code: string } {
   return Boolean(error && typeof error === "object" && (error as { code?: string }).code === "S3_PUT_FAILED");
 }
 
@@ -53,14 +54,32 @@ export class S3PutError extends Error {
   }
 }
 
-async function writeTemp(target: string, content: string): Promise<string> {
+async function writeTemp(target: string, content: Buffer | string): Promise<string> {
   const tmp = join(
     dirname(target),
     `.${basename(target)}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`,
   );
   await mkdir(dirname(target), { recursive: true });
-  await writeFile(tmp, content, { encoding: "utf8", flag: "wx" });
+  if (typeof content === "string") {
+    await writeFile(tmp, content, { encoding: "utf8", flag: "wx" });
+  } else {
+    await writeFile(tmp, content, { flag: "wx" });
+  }
   return tmp;
+}
+
+export async function writeAtomicPath(target: string, content: Buffer | string): Promise<void> {
+  const tmp = await writeTemp(target, content);
+  try {
+    await rename(tmp, target);
+  } catch (error: unknown) {
+    try {
+      await unlink(tmp);
+    } catch {
+      /* already gone */
+    }
+    throw error;
+  }
 }
 
 export function sha256Bytes(bytes: Buffer): string {
@@ -87,10 +106,10 @@ export async function commitCasWrite(
   expectedSha256?: string,
 ): Promise<CasCommitResult> {
   return withWriteMutex(async () => {
-    const target = join(deps.vaultDir, ...file.relPath.split("/"));
-    const exists = existsSync(target);
+    const ver = await currentVersion({ vaultDir: deps.vaultDir, getObject: deps.getObject }, file.relPath);
     const want = expectedSha256?.trim() ? normalizeSha256(expectedSha256) : "";
-    if (!exists) {
+
+    if (ver.absent) {
       if (want) {
         return {
           ok: false as const,
@@ -100,12 +119,11 @@ export async function commitCasWrite(
         };
       }
     } else {
-      const current = sha256Bytes(await readFile(target));
       if (!want) {
         return { ok: false as const, error: "USAGE" as const, message: "base_sha256 is required to overwrite" };
       }
-      if (current !== want) {
-        return { ok: false as const, ...fileChangedError(file.relPath, current) };
+      if (ver.sha256 !== want) {
+        return { ok: false as const, ...fileChangedError(file.relPath, ver.sha256) };
       }
     }
     await commitUnlocked(deps, [file]);

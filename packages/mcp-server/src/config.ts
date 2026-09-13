@@ -1,5 +1,6 @@
 import yaml from "js-yaml";
 import { DEFAULT_RCLONE_COPY_TIMEOUT_MS } from "./reconcile.js";
+import type { OAuthConfig, OAuthWriterMapping } from "./oauth.js";
 
 export interface McpDaemonConfig {
   vaultDir: string;
@@ -19,6 +20,7 @@ export interface McpDaemonConfig {
   rcloneTimeoutMs: number;
   ssePingMs: number;
   configPath?: string;
+  oauth?: OAuthConfig;
 }
 
 interface FileConfig {
@@ -38,6 +40,13 @@ interface FileConfig {
   };
   reconcile_interval_ms?: number;
   sse_ping_ms?: number;
+  oauth?: {
+    enabled?: boolean;
+    password_hash?: string;
+    issuer?: string;
+    state_dir?: string;
+    writers?: OAuthWriterMapping[];
+  };
 }
 
 function asPort(value: unknown, fallback: number): number {
@@ -88,5 +97,39 @@ export function loadConfig(env: NodeJS.Dict<string>, fileText?: string): McpDaem
     ),
     ssePingMs: asPort(env.SKILLWIKI_MCP_SSE_PING_MS, asPort(file.sse_ping_ms, 30_000)),
     configPath: env.SKILLWIKI_MCP_CONFIG,
+    oauth: parseOAuthConfig(env, file.oauth),
+  };
+}
+
+function parseOAuthConfig(
+  env: NodeJS.Dict<string>,
+  fileOAuth?: FileConfig["oauth"],
+): OAuthConfig {
+  const enabledEnv = env.SKILLWIKI_MCP_OAUTH_ENABLED;
+  const enabled =
+    enabledEnv !== undefined
+      ? enabledEnv === "true" || enabledEnv === "1"
+      : Boolean(fileOAuth?.enabled);
+
+  const passwordHash =
+    env.SKILLWIKI_MCP_OAUTH_PASSWORD_HASH ?? fileOAuth?.password_hash;
+  const issuer = env.SKILLWIKI_MCP_OAUTH_ISSUER ?? fileOAuth?.issuer;
+  const stateDir = env.SKILLWIKI_MCP_OAUTH_STATE_DIR ?? fileOAuth?.state_dir;
+
+  let writers = fileOAuth?.writers;
+  if (env.SKILLWIKI_MCP_OAUTH_WRITERS) {
+    try {
+      writers = JSON.parse(env.SKILLWIKI_MCP_OAUTH_WRITERS) as OAuthWriterMapping[];
+    } catch {
+      // ignore
+    }
+  }
+
+  return {
+    enabled,
+    passwordHash,
+    issuer,
+    stateDir,
+    writers,
   };
 }

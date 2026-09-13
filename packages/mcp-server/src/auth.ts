@@ -70,6 +70,41 @@ export function bearerToken(header: string | undefined): string | undefined {
   return match?.[1];
 }
 
-export function unauthorizedHeaders(): { "WWW-Authenticate": "Bearer" } {
+export interface ResolveWriterDeps {
+  tokenMap: TokenMap;
+  oauthStore?: import("./oauth-store.js").OAuthStore;
+}
+
+export async function resolveWriter(
+  header: string | undefined,
+  deps: ResolveWriterDeps,
+): Promise<{ writerId: string } | null> {
+  const token = bearerToken(header);
+  if (!token) return null;
+
+  // 1. Try host-id token map first
+  const hostId = resolveHostId(token, deps.tokenMap);
+  if (hostId) {
+    return { writerId: hostId };
+  }
+
+  // 2. Try OAuth access token if store is provided
+  if (deps.oauthStore) {
+    const tokenHash = sha256Token(token).toString("hex");
+    const tokenEntry = await deps.oauthStore.getAccessToken(tokenHash);
+    if (tokenEntry && tokenEntry.writerId) {
+      return { writerId: tokenEntry.writerId };
+    }
+  }
+
+  return null;
+}
+
+export function unauthorizedHeaders(resourceMetadata?: string): Record<string, string> {
+  if (resourceMetadata) {
+    return {
+      "WWW-Authenticate": `Bearer realm="mcp", resource_metadata="${resourceMetadata}"`,
+    };
+  }
   return { "WWW-Authenticate": "Bearer" };
 }
