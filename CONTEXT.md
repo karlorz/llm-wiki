@@ -20,11 +20,15 @@ The policy controlling whether post-release verification is expected. The suppor
 An event that resurfaces opt-in verification: a matching regression report, an explicit user request, or a relevant code or release change after the last proof.
 
 **New host**:
-A machine that should write the wiki for the first time. A new chat tab on an already-provisioned machine is not a new host.
-_Avoid_: new environment, new user, new session
+A machine that should write the wiki for the first time. A new chat tab on an already-provisioned machine is not a new host. A newly created VM that will write is a new host. Creating the machine is not issuance.
+_Avoid_: new environment, new user, new session, new workspace
+
+**Writer identity**:
+The audited principal behind every HTTP MCP write. It is realized either by a host-id bearer (one machine) or by an OAuth grant (a web client with no host, such as ChatGPT web). Every write, audit line, and allowlist decision names exactly one writer identity.
+_Avoid_: user, account, session, connector
 
 **Host-id bearer**:
-Operator-issued HTTP MCP authentication bound to one host identity. The client holds it in process environment or host Configure; the vault never stores the raw value.
+Operator-issued HTTP MCP authentication bound to one host identity; one realization of a writer identity. The client holds it in process environment or host Configure; the vault never stores the raw value.
 _Avoid_: API key, plugin token, session token
 
 **Attended issuance**:
@@ -48,3 +52,4 @@ An attended decision process that reviews ranked-audit evidence, resolves ambigu
 - Post-release verification follows delivery lifecycle and is governed by verification posture and triggers.
 - Ranked audit reports inform lifecycle reconciliation but do not authorize mutation.
 - SkillWiki owns lifecycle truth, validation, evidence shape, and managed vault mutation; orchestration systems consume those contracts.
+- Writer identity is resolved once per HTTP MCP request; host-id bearer and OAuth grant are its two realizations and neither changes what a write may touch.
