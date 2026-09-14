@@ -810,4 +810,41 @@ hosts:
       await ctx.close();
     }
   });
+
+  it("wiki_workitem_write HTTP rejects live credential patterns without writing", async () => {
+    const ctx = await setupTestServer();
+    const rel = "projects/llm-wiki/knowledge.md";
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 19,
+          method: "tools/call",
+          params: {
+            name: "wiki_workitem_write",
+            arguments: {
+              path: rel,
+              content: "Authorization: Bearer sk-live-super-secret-token-value-123456\n",
+            },
+          },
+        }),
+      });
+      const sc = ((await res.json()) as {
+        result?: { isError?: boolean; structuredContent?: { ok?: boolean; error?: string; writer_id?: string } };
+      }).result;
+      expect(sc?.isError).toBe(true);
+      expect(sc?.structuredContent?.ok).toBe(false);
+      expect(sc?.structuredContent?.error).toBe("SENSITIVE_CONTENT_DETECTED");
+      expect(sc?.structuredContent?.writer_id).toBeUndefined();
+      await expect(readFile(join(ctx.vault, rel), "utf8")).rejects.toThrow();
+    } finally {
+      await ctx.close();
+    }
+  });
 });
