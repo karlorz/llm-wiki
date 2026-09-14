@@ -72,4 +72,39 @@ describe("SSE /events", () => {
       await close();
     }
   });
+
+  it("emitChanged after stop writes nothing, ends clients, and clears the set", () => {
+    const hub = new ChangedEventHub({ pingMs: 0 });
+    const writes: string[] = [];
+    let ended = 0;
+    const res = {
+      writeHead() {},
+      write(chunk: string | Buffer) {
+        writes.push(typeof chunk === "string" ? chunk : chunk.toString());
+        return true;
+      },
+      end() {
+        ended += 1;
+      },
+      on() {
+        return this;
+      },
+    } as unknown as ServerResponse;
+
+    hub.subscribe(res);
+    expect(writes.join("")).toContain(":");
+    expect(writes.join("")).not.toContain("event: changed");
+
+    hub.stop();
+    expect(ended).toBe(1);
+    const afterStop = writes.length;
+
+    hub.emitChanged(["raw/transcripts/after-stop.md"]);
+    expect(writes.length).toBe(afterStop);
+    expect(writes.join("")).not.toContain("event: changed");
+    expect(writes.join("")).not.toContain("after-stop.md");
+
+    hub.stop();
+    expect(ended).toBe(1);
+  });
 });
