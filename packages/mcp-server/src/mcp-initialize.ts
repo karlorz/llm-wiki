@@ -531,3 +531,21 @@ export function mcpResourcesListAfterShutdownError(parsed: unknown): JsonRpcErro
   }
   return null;
 }
+
+export function mcpPromptsListAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "prompts/list" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "prompts/list after shutdown" },
+      };
+    }
+  }
+  return null;
+}
