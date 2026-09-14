@@ -3,6 +3,7 @@ export type {
   CheckResult,
   DoctorOutput,
   DoctorInput,
+  VaultSyncRuntimeConfig,
 } from "../doctor/types.js";
 export {
   DoctorRunner,
@@ -14,5 +15,9 @@ export {
   checkSatelliteTimer,
   type SatelliteTimerDeps,
 } from "../doctor/probes/satellite.js";
-export { snapshotterHealthChecks } from "../doctor/probes/vault-sync.js";
+export {
+  snapshotterHealthChecks,
+  readVaultSyncConfig,
+  PUSH_NOT_IN_PROFILE,
+} from "../doctor/probes/vault-sync.js";
 export { doctorReadOnlyScanRoot } from "../doctor/probes/metrics.js";

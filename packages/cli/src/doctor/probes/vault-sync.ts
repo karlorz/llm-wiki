@@ -47,6 +47,7 @@ export function readVaultSyncConfig(home: string): VaultSyncRuntimeConfig {
     let role: string | undefined;
     let serviceScope: string | undefined;
     let snapshotScript: string | undefined;
+    let pushEnabled: boolean | undefined;
     for (const line of content.split(/\r?\n/)) {
       const trimmed = line.trim();
       if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
@@ -59,8 +60,9 @@ export function readVaultSyncConfig(home: string): VaultSyncRuntimeConfig {
       if (k === "vault_sync.role") role = v;
       if (k === "vault_sync.service_scope") serviceScope = v;
       if (k === "vault_sync.snapshot_script") snapshotScript = v;
+      if (k === "vault_sync.push_enabled" && v === "false") pushEnabled = false;
     }
-    return { installed, role, serviceScope, snapshotScript };
+    return { installed, role, serviceScope, snapshotScript, pushEnabled };
   } catch {
     return { installed: false };
   }
@@ -449,6 +451,8 @@ interface VaultSyncInput {
   vaultSyncInstalled: boolean;
   vaultSyncRole?: string;
   vaultSyncServiceScope?: string;
+  /** Absent or true: push-enabled leaf. false: fetch-only leaf. */
+  pushEnabled?: boolean;
   os?: string;
   logDir?: string;
   cacheDir?: string;
@@ -456,6 +460,78 @@ interface VaultSyncInput {
   filterPath?: string;
   snapshotScriptPath?: string;
   env?: NodeJS.ProcessEnv;
+}
+
+export const PUSH_NOT_IN_PROFILE = "push not part of host profile";
+
+function checkLastFetchStatus(fetchLogFile: string): CheckResult {
+  try {
+    const logContent = readFileSync(fetchLogFile, "utf8");
+    const lines = logContent.trim().split("\n").filter(Boolean);
+    if (lines.length === 0) {
+      return check("warn", "vault_sync_last_fetch_status", "Vault sync last fetch status",
+        "Fetch log file is empty");
+    }
+    const lastLine = lines[lines.length - 1];
+    if (/fetch failed/i.test(lastLine)) {
+      return check("error", "vault_sync_last_fetch_status", "Vault sync last fetch status",
+        `Last fetch failed: ${lastLine.slice(0, 100)}`);
+    }
+    if (/OK/.test(lastLine)) {
+      return check("pass", "vault_sync_last_fetch_status", "Vault sync last fetch status",
+        lastLine.slice(0, 100));
+    }
+    return check("warn", "vault_sync_last_fetch_status", "Vault sync last fetch status",
+      `Last fetch log entry: ${lastLine.slice(0, 80)}`);
+  } catch {
+    return check("warn", "vault_sync_last_fetch_status", "Vault sync last fetch status",
+      `Fetch log not found at ${fetchLogFile}`);
+  }
+}
+
+/** Fixture seam: VS_LEAF_SCHEDULER_FIXTURE=enabled|disabled|missing. Runtime path unchanged. */
+function checkLeafFetchScheduler(isMac: boolean, env: NodeJS.ProcessEnv): CheckResult {
+  const fixture = env.VS_LEAF_SCHEDULER_FIXTURE;
+  if (fixture === "enabled") {
+    return check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
+      isMac ? "launchd: com.karlchow.wiki-fetch loaded" : "systemd: wiki-fetch.timer enabled");
+  }
+  if (fixture === "disabled") {
+    return check("error", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
+      isMac
+        ? "launchd: com.karlchow.wiki-fetch not loaded — enable wiki-fetch"
+        : "systemd: wiki-fetch.timer is disabled — enable wiki-fetch.timer");
+  }
+  if (fixture === "missing") {
+    return check("error", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
+      "Scheduler check failed — enable wiki-fetch");
+  }
+
+  try {
+    if (isMac) {
+      const uidStr = execSync("id -u", {
+        encoding: "utf8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+      const uid = parseInt(uidStr, 10);
+      execSync(`launchctl print gui/${uid}/com.karlchow.wiki-fetch`, {
+        encoding: "utf8", timeout: 2000, stdio: ["pipe", "ignore", "ignore"],
+      });
+      return check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
+        "launchd: com.karlchow.wiki-fetch loaded");
+    }
+    const out = execSync("systemctl --user is-enabled wiki-fetch.timer", {
+      encoding: "utf8", timeout: 2000, stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    if (out === "enabled") {
+      return check("pass", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
+        "systemd: wiki-fetch.timer enabled");
+    }
+    return check("error", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
+      `systemd: wiki-fetch.timer is ${out} — enable wiki-fetch.timer`);
+  } catch {
+    return check("error", "vault_sync_jobs_enabled", "Vault sync jobs enabled",
+      "Scheduler check failed — enable wiki-fetch");
+  }
 }
 
 function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
@@ -538,6 +614,28 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
     return [c1, ...healthChecks, cFetch, c4, c5];
   }
 
+  const env = input.env ?? process.env;
+  const fetchLogFile = join(logDir, "wiki-fetch.log");
+
+  if (input.pushEnabled === false) {
+    const fetchHelperPath = join(shareDir, "wiki-fetch-notify.sh");
+    const c1 = existsSync(fetchHelperPath)
+      ? check("pass", "vault_sync_installed", "Vault sync installed", `Found: ${fetchHelperPath}`)
+      : check("error", "vault_sync_installed", "Vault sync installed",
+        `Fetch helper not found at ${fetchHelperPath}`);
+    const c2 = checkLeafFetchScheduler(isMac, env);
+    const c3 = check("pass", "vault_sync_last_push_age", "Vault sync last push recency",
+      PUSH_NOT_IN_PROFILE);
+    const cPushResult = check("pass", "vault_sync_last_push_result", "Vault sync last push result",
+      PUSH_NOT_IN_PROFILE);
+    const cFetch = checkLastFetchStatus(fetchLogFile);
+    const c4 = check("pass", "vault_sync_filter_present", "Vault sync filter file present",
+      PUSH_NOT_IN_PROFILE);
+    const c5 = check("pass", "vault_sync_snapshot_guard", "Snapshot script guard",
+      "Not a snapshotter host — check skipped");
+    return [c1, c2, c3, cPushResult, cFetch, c4, c5];
+  }
+
   const pushScriptPath = join(shareDir, "wiki-push.sh");
   const c1 = existsSync(pushScriptPath)
     ? check("pass", "vault_sync_installed", "Vault sync installed", `Found: ${pushScriptPath}`)
@@ -605,31 +703,7 @@ function vaultSyncChecks(input: VaultSyncInput): CheckResult[] {
       `result=refused reason=${pushState.reason ?? ""} timestamp=${pushState.timestamp ?? ""}`);
   }
 
-  const fetchLogFile = join(logDir, "wiki-fetch.log");
-  let cFetch: CheckResult;
-  try {
-    const logContent = readFileSync(fetchLogFile, "utf8");
-    const lines = logContent.trim().split("\n").filter(Boolean);
-    if (lines.length === 0) {
-      cFetch = check("warn", "vault_sync_last_fetch_status", "Vault sync last fetch status",
-        "Fetch log file is empty");
-    } else {
-      const lastLine = lines[lines.length - 1];
-      if (/fetch failed/i.test(lastLine)) {
-        cFetch = check("error", "vault_sync_last_fetch_status", "Vault sync last fetch status",
-          `Last fetch failed: ${lastLine.slice(0, 100)}`);
-      } else if (/OK/.test(lastLine)) {
-        cFetch = check("pass", "vault_sync_last_fetch_status", "Vault sync last fetch status",
-          lastLine.slice(0, 100));
-      } else {
-        cFetch = check("warn", "vault_sync_last_fetch_status", "Vault sync last fetch status",
-          `Last fetch log entry: ${lastLine.slice(0, 80)}`);
-      }
-    }
-  } catch {
-    cFetch = check("warn", "vault_sync_last_fetch_status", "Vault sync last fetch status",
-      `Fetch log not found at ${fetchLogFile}`);
-  }
+  const cFetch = checkLastFetchStatus(fetchLogFile);
 
   let c4: CheckResult;
   try {
@@ -774,6 +848,7 @@ export const vaultSyncProbe: DoctorProbe = {
       vaultSyncInstalled: ctx.vsConfig.installed,
       vaultSyncRole: ctx.vsConfig.role,
       vaultSyncServiceScope: ctx.vsConfig.serviceScope,
+      pushEnabled: ctx.vsConfig.pushEnabled,
       snapshotScriptPath: ctx.vsConfig.snapshotScript,
       env: ctx.input.env ?? process.env,
     }));

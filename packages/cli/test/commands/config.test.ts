@@ -245,6 +245,23 @@ describe("runConfigSet vault_sync.* typed validation (A1)", () => {
     expect(r.result.ok).toBe(false);
   });
 
+  it("accepts vault_sync.push_enabled true/false", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "vault_sync.push_enabled", value: "false", home: h });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    const got = await runConfigGet({ key: "vault_sync.push_enabled", home: h });
+    expect(got.exitCode).toBe(0);
+    if (got.result.ok) expect(got.result.data.value).toBe("false");
+  });
+
+  it("rejects invalid vault_sync.push_enabled", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "vault_sync.push_enabled", value: "1", home: h });
+    expect(r.exitCode).toBe(54);
+    expect(r.result.ok).toBe(false);
+  });
+
   it("accepts a valid duration 15m", async () => {
     const h = home();
     const r = await runConfigSet({ key: "vault_sync.fuse_max_dir_cache", value: "15m", home: h });

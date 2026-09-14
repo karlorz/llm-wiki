@@ -7,7 +7,7 @@ import {
 } from "../src/schemas.js";
 
 describe("VaultSyncConfig schema (A1)", () => {
-  it("lists the 11 keys the installer writes", () => {
+  it("lists the 12 keys the installer writes", () => {
     expect(VAULT_SYNC_KEYS).toEqual([
       "vault_sync.installed",
       "vault_sync.role",
@@ -16,6 +16,7 @@ describe("VaultSyncConfig schema (A1)", () => {
       "vault_sync.snapshot_profile",
       "vault_sync.snapshot_script",
       "vault_sync.snapshot_worktree",
+      "vault_sync.push_enabled",
       "vault_sync.fuse_refresh_enabled",
       "vault_sync.fuse_refresh_interval",
       "vault_sync.fuse_max_dir_cache",
@@ -40,6 +41,7 @@ describe("VaultSyncConfig schema (A1)", () => {
       "vault_sync.snapshot_profile": "/etc/vault-sync/profiles/sg01-snapshotter.env",
       "vault_sync.snapshot_script": "/usr/local/bin/wiki-snapshot.sh",
       "vault_sync.snapshot_worktree": "/root/wiki-git",
+      "vault_sync.push_enabled": "false",
       "vault_sync.fuse_refresh_enabled": "true",
       "vault_sync.fuse_refresh_interval": "300s",
       "vault_sync.fuse_max_dir_cache": "15m",
@@ -58,11 +60,14 @@ describe("VaultSyncConfig schema (A1)", () => {
 });
 
 describe("parseVaultSyncKeyValue (per-key validation used by config set)", () => {
-  describe("booleans (installed, fuse_refresh_enabled)", () => {
+  describe("booleans (installed, fuse_refresh_enabled, push_enabled)", () => {
     it("accepts true/false only", () => {
       expect(parseVaultSyncKeyValue("vault_sync.installed", "true").ok).toBe(true);
       expect(parseVaultSyncKeyValue("vault_sync.installed", "false").ok).toBe(true);
       expect(parseVaultSyncKeyValue("vault_sync.fuse_refresh_enabled", "true").ok).toBe(true);
+      expect(parseVaultSyncKeyValue("vault_sync.push_enabled", "true").ok).toBe(true);
+      expect(parseVaultSyncKeyValue("vault_sync.push_enabled", "false").ok).toBe(true);
+      expect(parseVaultSyncKeyValue("vault_sync.push_enabled", "1").ok).toBe(false);
     });
     it("rejects 1/0/yes/empty", () => {
       expect(parseVaultSyncKeyValue("vault_sync.installed", "1").ok).toBe(false);

@@ -356,4 +356,53 @@ Body
       expect(fetchCheck?.detail).toContain("ERROR");
     }
   });
+
+  it("fetch-only leaf does not require wiki-push units, filter, or push log", async () => {
+    const home = makeHome();
+    const vault = makeVault();
+    writeFileSync(
+      join(home, ".skillwiki", ".env"),
+      `WIKI_PATH=${vault}\nvault_sync.push_enabled=false\n`,
+    );
+    const isMac = platform() === "darwin";
+    const binDir = isMac
+      ? join(home, "Library", "Application Support", "vault-sync", "bin")
+      : join(home, ".local", "share", "vault-sync", "bin");
+    const logDir = isMac
+      ? join(home, "Library", "Logs")
+      : join(home, ".local", "state", "vault-sync", "log");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "wiki-fetch-notify.sh"), "#!/bin/sh\n");
+    if (isMac) {
+      mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
+      writeFileSync(join(home, "Library", "LaunchAgents", "com.karlchow.wiki-fetch.plist"), "<plist/>");
+    } else {
+      mkdirSync(join(home, ".config", "systemd", "user"), { recursive: true });
+      writeFileSync(join(home, ".config", "systemd", "user", "wiki-fetch.timer"), "[Timer]\n");
+    }
+    mkdirSync(logDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    writeFileSync(join(logDir, "wiki-fetch.log"), `${ts} OK behind=0 delta=0 (no notify)\n`);
+
+    const r = await runHealth({
+      vault,
+      home,
+      envValue: undefined,
+      argv: ["node", "skillwiki", "health"],
+      currentVersion: "0.8.5-test",
+      sync: "optional",
+      noFail: true,
+    });
+
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const vs = r.result.data.components.vault_sync.checks;
+      expect(vs.find(c => c.id === "vault_sync_installed")?.status).toBe("pass");
+      expect(vs.find(c => c.id === "vault_sync_jobs_enabled")?.status).toBe("pass");
+      expect(vs.find(c => c.id === "vault_sync_last_push_age")?.status).toBe("pass");
+      expect(vs.find(c => c.id === "vault_sync_last_push_age")?.detail).toContain("push not part of host profile");
+      expect(vs.find(c => c.id === "vault_sync_filter_present")?.status).toBe("pass");
+      expect(vs.find(c => c.id === "vault_sync_last_fetch_status")?.status).toBe("pass");
+    }
+  });
 });
