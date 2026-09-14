@@ -85,6 +85,21 @@ describe("C1 S3 version authority (TDD RED)", () => {
         currentVersion({ vaultDir: vault, getObject: failingGet }, rel),
       ).rejects.toMatchObject({ code: "S3_PUT_FAILED" });
     });
+
+    it("with no getObject reads the working copy and returns absent on ENOENT", async () => {
+      const vault = await makeTempVault();
+      const rel = "concepts/alpha.md";
+      const localContent = await readFile(join(vault, rel), "utf8");
+
+      const present = await currentVersion({ vaultDir: vault }, rel);
+      expect(present.absent).toBe(false);
+      expect(present.sha256).toBe(sha256Utf8(localContent));
+      expect(present.bytes?.toString("utf8")).toBe(localContent);
+
+      const missing = await currentVersion({ vaultDir: vault }, "concepts/no-such.md");
+      expect(missing.absent).toBe(true);
+      expect(missing.sha256).toBe("absent");
+    });
   });
 
   describe("commitCasWrite with S3 authority", () => {
