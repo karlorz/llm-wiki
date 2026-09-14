@@ -881,4 +881,44 @@ hosts:
       await ctx.close();
     }
   });
+
+  it("wiki_workitem_write HTTP create with base_sha256 when path is absent is FILE_CHANGED and writes nothing", async () => {
+    const ctx = await setupTestServer();
+    const rel = "projects/llm-wiki/knowledge.md";
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 28,
+          method: "tools/call",
+          params: {
+            name: "wiki_workitem_write",
+            arguments: { path: rel, content: "should not create\n", base_sha256: "00".repeat(32) },
+          },
+        }),
+      });
+      const sc = ((await res.json()) as {
+        result?: {
+          isError?: boolean;
+          structuredContent?: { ok?: boolean; error?: string; currentVersion?: string; writer_id?: string };
+        };
+      }).result;
+      expect(res.status).toBe(200);
+      expect(sc?.isError).toBe(true);
+      expect(sc?.structuredContent?.ok).toBe(false);
+      expect(sc?.structuredContent?.error).toBe("FILE_CHANGED");
+      expect(sc?.structuredContent?.currentVersion).toBe("sha256:absent");
+      expect(sc?.structuredContent?.writer_id).toBeUndefined();
+      expect(JSON.stringify(sc)).not.toContain("chatgpt-web");
+      await expect(readFile(join(ctx.vault, rel), "utf8")).rejects.toThrow();
+    } finally {
+      await ctx.close();
+    }
+  });
 });
