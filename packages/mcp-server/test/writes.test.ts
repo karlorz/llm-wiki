@@ -17,6 +17,11 @@ describe("wiki_capture validation", () => {
     expect(slugify("Fix the template mismatch!")).toBe("fix-the-template-mismatch");
   });
 
+  it("empty or punctuation-only titles return capture", () => {
+    expect(slugify("")).toBe("capture");
+    expect(slugify("!!!")).toBe("capture");
+  });
+
   it("renders ad-hoc capture frontmatter that the raw schema accepts", () => {
     const md = renderCaptureMarkdown({
       kind: "idea",
