@@ -6,21 +6,25 @@ import { describe, expect, it } from "vitest";
 import { ReconcileGate } from "../src/reconcile.js";
 import { startMcpHttpServer } from "../src/server.js";
 import { MAX_READ_PAGE_BYTES } from "../src/tools/reads.js";
-import { makeTempVault } from "./helpers.js";
+import { makeS3Store, makeTempVault } from "./helpers.js";
 
-async function setupTestServer() {
+async function setupTestServer(opts?: { seedLogS3?: boolean }) {
   const vault = await makeTempVault();
   const token = "test-token";
   const hash = createHash("sha256").update(token, "utf8").digest("hex");
   const gate = new ReconcileGate(async () => undefined);
   await gate.runFirst();
+  const s3 = opts?.seedLogS3
+    ? makeS3Store({ "log.md": await readFile(join(vault, "log.md"), "utf8") })
+    : undefined;
   const server = await startMcpHttpServer({
     bind: "127.0.0.1",
     port: 0,
     vaultDir: vault,
     tokenMap: new Map([[hash, "macos-dev"]]),
     gate,
-    putObject: async () => undefined,
+    putObject: s3?.putObject ?? (async () => undefined),
+    getObject: s3?.getObject,
   });
   const { port } = server.address() as AddressInfo;
   return {
@@ -1033,6 +1037,68 @@ hosts:
       expect(body.result?.structuredContent?.path).toBe(rel);
       expect(body.result?.structuredContent?.markdown).toBeUndefined();
       expect(body.result?.structuredContent?.writer_id).toBeUndefined();
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("wiki_log_append HTTP receipt has event_path and does not invent writer_id", async () => {
+    const ctx = await setupTestServer({ seedLogS3: true });
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 5,
+          method: "tools/call",
+          params: {
+            name: "wiki_log_append",
+            arguments: { content: "capture | note: http log receipt" },
+          },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result?: {
+          structuredContent?: {
+            ok?: boolean;
+            path?: string;
+            event_path?: string;
+            s3_verified?: boolean;
+            writer_id?: string;
+          };
+        };
+      };
+      const sc = body.result?.structuredContent;
+      expect(sc?.ok).toBe(true);
+      expect(sc?.path).toBe("log.md");
+      expect(sc?.s3_verified).toBe(true);
+      expect(sc?.event_path).toMatch(/^meta\/log-events\/\d{4}-\d{2}-\d{2}\/[0-9a-f]{64}\.json$/);
+      expect(sc?.writer_id).toBeUndefined();
+
+      const readRes = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 6,
+          method: "tools/call",
+          params: { name: "wiki_read_page", arguments: { path: sc?.event_path } },
+        }),
+      });
+      const readBody = (await readRes.json()) as {
+        result?: { structuredContent?: { ok?: boolean; markdown?: string } };
+      };
+      expect(readBody.result?.structuredContent?.ok).toBe(true);
     } finally {
       await ctx.close();
     }
