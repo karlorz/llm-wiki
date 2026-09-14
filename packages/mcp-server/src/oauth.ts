@@ -84,13 +84,16 @@ function jsonResponse(res: ServerResponse, status: number, body: unknown, extra?
   res.end(payload);
 }
 
+const HTML_ESCAPE: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+};
+
 function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+  return value.replace(/[&<>"']/g, (ch) => HTML_ESCAPE[ch] ?? ch);
 }
 
 function htmlResponse(res: ServerResponse, status: number, html: string): void {
@@ -293,14 +296,15 @@ export async function handleOAuthRequest(
       return true;
     }
 
-    const formPost = (req.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded");
+    const wantsHtml =
+      req.method === "GET" || (req.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded");
     if (!password && req.method === "GET") {
       htmlResponse(res, 200, authorizeLoginHtml(params));
       return true;
     }
 
     if (!oauthCfg.passwordHash || !password || !verifyPassword(password, oauthCfg.passwordHash)) {
-      if (req.method === "GET" || formPost) {
+      if (wantsHtml) {
         htmlResponse(res, 401, authorizeLoginHtml(params, "Invalid operator password"));
         return true;
       }

@@ -260,20 +260,18 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       putObject: async () => undefined,
       oauth: {
         enabled: true,
-        passwordHash: hashPassword("mypassword"),
+        passwordHash: "unused",
         store,
       },
     });
     try {
       const { port } = server.address() as AddressInfo;
       const baseUrl = `http://127.0.0.1:${port}`;
-      const codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk_long_verifier_string_at_least_43_chars";
-      const codeChallenge = createHash("sha256").update(codeVerifier, "ascii").digest("base64url");
       const qs = new URLSearchParams({
         response_type: "code",
         client_id: "chatgpt-dcr-client",
         redirect_uri: "https://chatgpt.com/connector/oauth/callback-id",
-        code_challenge: codeChallenge,
+        code_challenge: "test-challenge",
         code_challenge_method: "S256",
         state: "state-xyz",
         scope: "offline_access",
@@ -287,7 +285,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       expect(html).toContain('name="client_id"');
       expect(html).toContain("chatgpt-dcr-client");
       expect(html).toContain("state-xyz");
-      expect(html).not.toContain("mypassword");
+      expect(html).not.toContain("unused");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
     }
