@@ -418,4 +418,90 @@ describe("C4 typed result envelope and request body cap", () => {
       await ctx.close();
     }
   });
+
+  it("wiki_capture HTTP invalid kind and missing fields fail-closed with no transcript written", async () => {
+    const ctx = await setupTestServer();
+    const transcriptDir = join(ctx.vault, "raw", "transcripts");
+
+    async function callCapture(args: Record<string, unknown>, id: number) {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "wiki_capture", arguments: args },
+        }),
+      });
+      const body = (await res.json()) as {
+        error?: { code?: number; message?: string };
+        result?: {
+          isError?: boolean;
+          structuredContent?: { ok?: boolean; error?: string; path?: string; writer_id?: string };
+        };
+      };
+      return {
+        status: res.status,
+        jsonrpcError: body.error,
+        isError: body.result?.isError,
+        structured: body.result?.structuredContent,
+        raw: body,
+      };
+    }
+
+    async function assertNoWrite(label: string, out: Awaited<ReturnType<typeof callCapture>>) {
+      expect(out.status, label).toBe(200);
+      const failedClosed = Boolean(out.jsonrpcError) || out.isError === true || out.structured?.ok === false;
+      expect(failedClosed, label).toBe(true);
+      expect(out.structured?.ok, label).not.toBe(true);
+      expect(out.structured?.path, label).toBeUndefined();
+      expect(out.structured?.writer_id, label).toBeUndefined();
+      expect(JSON.stringify(out.raw), label).not.toContain("chatgpt-web");
+      expect(await readdir(transcriptDir), label).toEqual([]);
+    }
+
+    try {
+      await assertNoWrite(
+        "invalid kind",
+        await callCapture(
+          { kind: "session-log", project: "llm-wiki", title: "should-not-write", content: "no file" },
+          70,
+        ),
+      );
+      await assertNoWrite(
+        "missing kind",
+        await callCapture({ project: "llm-wiki", title: "should-not-write", content: "no file" }, 71),
+      );
+      await assertNoWrite(
+        "missing title",
+        await callCapture({ kind: "note", project: "llm-wiki", content: "no file" }, 72),
+      );
+      await assertNoWrite(
+        "missing content",
+        await callCapture({ kind: "note", project: "llm-wiki", title: "should-not-write" }, 73),
+      );
+      await assertNoWrite(
+        "missing project",
+        await callCapture({ kind: "note", title: "should-not-write", content: "no file" }, 74),
+      );
+      await assertNoWrite(
+        "empty title",
+        await callCapture({ kind: "note", project: "llm-wiki", title: "", content: "no file" }, 75),
+      );
+      const whitespace = await callCapture(
+        { kind: "note", project: "llm-wiki", title: "   ", content: "no file" },
+        76,
+      );
+      await assertNoWrite("whitespace title", whitespace);
+      expect(whitespace.isError).toBe(true);
+      expect(whitespace.structured?.error).toBe("USAGE");
+    } finally {
+      await ctx.close();
+    }
+  });
 });
