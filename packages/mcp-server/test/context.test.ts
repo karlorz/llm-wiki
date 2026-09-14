@@ -453,4 +453,70 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       await ctx.close();
     }
   });
+
+  it("wiki_memory_recall HTTP missing and empty query fail-closed with no writer_id and no file written", async () => {
+    const ctx = await setupTestServer();
+    const logBefore = await readFile(join(ctx.vault, "log.md"), "utf8");
+    const alphaBefore = await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8");
+
+    async function callRecall(args: Record<string, unknown>, id: number) {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "wiki_memory_recall", arguments: args },
+        }),
+      });
+      const body = (await res.json()) as {
+        error?: { code?: number; message?: string };
+        result?: {
+          isError?: boolean;
+          structuredContent?: {
+            ok?: boolean;
+            error?: string;
+            writer_id?: string;
+            sources?: unknown;
+            memories?: unknown;
+          };
+        };
+      };
+      return {
+        status: res.status,
+        jsonrpcError: body.error,
+        isError: body.result?.isError,
+        structured: body.result?.structuredContent,
+        raw: body,
+      };
+    }
+
+    async function assertNoWrite(label: string, out: Awaited<ReturnType<typeof callRecall>>) {
+      expect(out.status, label).toBe(200);
+      const failedClosed = Boolean(out.jsonrpcError) || out.isError === true || out.structured?.ok === false;
+      expect(failedClosed, label).toBe(true);
+      expect(out.structured?.ok, label).not.toBe(true);
+      expect(out.structured?.sources, label).toBeUndefined();
+      expect(out.structured?.memories, label).toBeUndefined();
+      expect(out.structured?.writer_id, label).toBeUndefined();
+      expect(JSON.stringify(out.raw), label).not.toContain("chatgpt-web");
+      expect(await readdir(join(ctx.vault, "raw", "transcripts")), label).toEqual([]);
+      expect(await readFile(join(ctx.vault, "log.md"), "utf8"), label).toBe(logBefore);
+      expect(await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8"), label).toBe(alphaBefore);
+    }
+
+    try {
+      await assertNoWrite("missing query", await callRecall({}, 90));
+      await assertNoWrite("missing topic", await callRecall({ project: "llm-wiki" }, 91));
+      await assertNoWrite("empty topic", await callRecall({ project: "llm-wiki", topic: "" }, 92));
+      await assertNoWrite("empty query", await callRecall({ project: "llm-wiki", query: "" }, 93));
+    } finally {
+      await ctx.close();
+    }
+  });
 });
