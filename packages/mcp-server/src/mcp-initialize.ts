@@ -144,3 +144,21 @@ export function mcpPromptsGetBeforeInitializeError(parsed: unknown): JsonRpcErro
   }
   return null;
 }
+
+export function mcpPingBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "ping" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "ping before initialize" },
+      };
+    }
+  }
+  return null;
+}
