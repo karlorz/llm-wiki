@@ -87,6 +87,21 @@ function homeWithCodexPlugin(version: string, sourceType: "local" | "git" = "loc
   return h;
 }
 
+function addGrokPlugin(h: string, version: string): void {
+  const pluginDir = join(h, ".grok", "installed-plugins", "skills-01cace44");
+  mkdirSync(join(pluginDir, ".claude-plugin"), { recursive: true });
+  writeFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), JSON.stringify({
+    name: "skillwiki",
+    version,
+  }));
+}
+
+function homeWithGrokPlugin(version: string): string {
+  const h = home();
+  addGrokPlugin(h, version);
+  return h;
+}
+
 const SCHEMA = `# Vault Schema\n\n## Tag Taxonomy\n\n\`\`\`yaml\ntaxonomy:\n  - model\n\`\`\`\n`;
 const FLEET = `schema_version: 1
 vault_remote: git@github.com:karlorz/wiki.git
@@ -489,6 +504,50 @@ describe("runDoctor", () => {
       expect(drift?.detail).toContain("Codex plugin v0.2.0-beta.13");
       expect(drift?.detail).toContain("claude plugin update skillwiki@llm-wiki");
       expect(drift?.detail).toContain("codex plugin marketplace upgrade llm-wiki");
+    }
+  });
+
+  it("plugin_version_drift passes when only Grok plugin version matches", async () => {
+    const h = homeWithGrokPlugin("0.2.0-beta.15");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
+      expect(drift?.status).toBe("pass");
+      expect(drift?.detail).toContain("Grok plugin and CLI both at v0.2.0-beta.15");
+      expect(drift?.detail).not.toContain("CLI only");
+    }
+  });
+
+  it("plugin_version_drift warns with Grok remediation when Grok plugin is stale", async () => {
+    const h = homeWithGrokPlugin("0.2.0-beta.14");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
+      expect(drift?.status).toBe("warn");
+      expect(drift?.detail).toContain("Grok plugin v0.2.0-beta.14");
+      expect(drift?.detail).toContain("CLI v0.2.0-beta.15");
+      expect(drift?.detail).toContain("grok plugin update skillwiki");
+      expect(drift?.detail).not.toContain("claude plugin update");
+    }
+  });
+
+  it("plugin_version_drift reports Claude, Codex, and Grok drift together", async () => {
+    const h = homeWithPlugin("0.2.0-beta.14");
+    addCodexPlugin(h, "0.2.0-beta.13", "git");
+    addGrokPlugin(h, "0.2.0-beta.12");
+    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      const drift = r.result.data.checks.find(c => c.id === "plugin_version_drift");
+      expect(drift?.status).toBe("warn");
+      expect(drift?.detail).toContain("Claude plugin v0.2.0-beta.14");
+      expect(drift?.detail).toContain("Codex plugin v0.2.0-beta.13");
+      expect(drift?.detail).toContain("Grok plugin v0.2.0-beta.12");
+      expect(drift?.detail).toContain("claude plugin update skillwiki@llm-wiki");
+      expect(drift?.detail).toContain("codex plugin marketplace upgrade llm-wiki");
+      expect(drift?.detail).toContain("grok plugin update skillwiki");
     }
   });
 

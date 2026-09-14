@@ -14,6 +14,13 @@ function makeHome(registryJson?: string): string {
   return home;
 }
 
+function addGrokInstall(home: string, dir: string, name: string, version: string): string {
+  const installPath = join(home, ".grok", "installed-plugins", dir);
+  mkdirSync(join(installPath, ".claude-plugin"), { recursive: true });
+  writeFileSync(join(installPath, ".claude-plugin", "plugin.json"), JSON.stringify({ name, version }));
+  return installPath;
+}
+
 const VALID_ENTRY = {
   scope: "user",
   installPath: "/some/path",
@@ -201,6 +208,53 @@ enabled = true
     const channels = findPluginInstallations(home).map(plugin => plugin.channel);
 
     expect(channels).toEqual(["claude", "codex"]);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("returns Grok install from ~/.grok/installed-plugins when plugin.json name is skillwiki", () => {
+    const home = makeHome();
+    const installPath = addGrokInstall(home, "skills-01cace44", "skillwiki", "0.10.78");
+
+    const result = findPluginInstallations(home);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      channel: "grok",
+      label: "Grok",
+      pluginName: "skillwiki",
+      marketplace: "llm-wiki",
+      version: "0.10.78",
+      installPath,
+    });
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("ignores Grok plugins whose plugin.json name is not skillwiki", () => {
+    const home = makeHome();
+    addGrokInstall(home, "grok-search-b0b1462f", "grok-search", "1.0.0");
+
+    expect(findPluginInstallations(home)).toHaveLength(0);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("returns Claude, Codex, and Grok installations together", () => {
+    const home = makeHome(
+      JSON.stringify({
+        version: 1,
+        plugins: { "skillwiki@llm-wiki": [VALID_ENTRY] },
+      }),
+    );
+    mkdirSync(join(home, ".codex", "plugins", "cache", "llm-wiki", "skillwiki", "0.8.4"), { recursive: true });
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex", "config.toml"), `
+[plugins."skillwiki@llm-wiki"]
+enabled = true
+`);
+    addGrokInstall(home, "skills-01cace44", "skillwiki", "0.10.78");
+
+    const channels = findPluginInstallations(home).map(plugin => plugin.channel);
+
+    expect(channels).toEqual(["claude", "codex", "grok"]);
     rmSync(home, { recursive: true, force: true });
   });
 });

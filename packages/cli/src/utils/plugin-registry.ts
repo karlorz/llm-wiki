@@ -17,8 +17,8 @@ interface InstalledPlugins {
 }
 
 export interface PluginChannelInstall {
-  channel: "claude" | "codex";
-  label: "Claude" | "Codex";
+  channel: "claude" | "codex" | "grok";
+  label: "Claude" | "Codex" | "Grok";
   key: string;
   pluginName: string;
   marketplace: string;
@@ -77,7 +77,58 @@ export function findPluginInstallations(home: string, key: string = PLUGIN_KEY):
   const codexPlugin = findCodexPlugin(home, key, parsed.pluginName, parsed.marketplace);
   if (codexPlugin) installs.push(codexPlugin);
 
+  const grokPlugin = findGrokPlugin(home, key, parsed.pluginName, parsed.marketplace);
+  if (grokPlugin) installs.push(grokPlugin);
+
   return installs;
+}
+
+function findGrokPlugin(
+  home: string,
+  key: string,
+  pluginName: string,
+  marketplace: string,
+): PluginChannelInstall | null {
+  const pluginsRoot = join(home, ".grok", "installed-plugins");
+  if (!existsSync(pluginsRoot)) return null;
+
+  let entries;
+  try {
+    entries = readdirSync(pluginsRoot, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  let best: PluginChannelInstall | null = null;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const installPath = join(pluginsRoot, entry.name);
+    let manifest: { name?: unknown; version?: unknown };
+    try {
+      manifest = JSON.parse(readFileSync(join(installPath, ".claude-plugin", "plugin.json"), "utf8")) as {
+        name?: unknown;
+        version?: unknown;
+      };
+    } catch {
+      continue;
+    }
+    if (manifest.name !== pluginName) continue;
+    if (typeof manifest.version !== "string" || manifest.version.length === 0) continue;
+
+    const candidate: PluginChannelInstall = {
+      channel: "grok",
+      label: "Grok",
+      key,
+      pluginName,
+      marketplace,
+      installPath,
+      version: manifest.version,
+    };
+    if (!best || semverGt(candidate.version, best.version)) {
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 function findCodexPlugin(

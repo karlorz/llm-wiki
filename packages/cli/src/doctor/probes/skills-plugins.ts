@@ -223,6 +223,9 @@ function pluginUpdateCommand(plugin: PluginChannelInstall, currentVersion: strin
   if (plugin.channel === "claude") {
     return "claude plugin update skillwiki@llm-wiki";
   }
+  if (plugin.channel === "grok") {
+    return "grok plugin update skillwiki";
+  }
   if (plugin.sourceType === "git") {
     return "codex plugin marketplace upgrade llm-wiki && codex plugin remove skillwiki@llm-wiki && codex plugin add skillwiki@llm-wiki";
   }
