@@ -1,8 +1,14 @@
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { commitWrite, writeAtomicPath } from "../src/txn.js";
+import { commitWrite, normalizeSha256, writeAtomicPath } from "../src/txn.js";
 import { makeTempVault } from "./helpers.js";
+
+describe("normalizeSha256", () => {
+  it("trims, strips a sha256: prefix, and lowercases", () => {
+    expect(normalizeSha256("  SHA256:ABCDEF0123456789  ")).toBe("abcdef0123456789");
+  });
+});
 
 describe("write transaction", () => {
   it("puts to S3 then moves into the working dir", async () => {
