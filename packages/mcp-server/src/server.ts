@@ -15,6 +15,7 @@ import {
   mcpDuplicateInitializeError,
   mcpElicitationCreateAfterShutdownError,
   mcpElicitationCreateBeforeInitializeError,
+  mcpInitializeAfterSecondShutdownError,
   mcpInitializeAfterShutdownError,
   mcpInitializeProtocolError,
   mcpLoggingSetLevelAfterShutdownError,
@@ -732,6 +733,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const shutdownErr = mcpShutdownBeforeInitializeError(parsed);
         if (shutdownErr) {
           json(res, 200, shutdownErr);
+          return;
+        }
+        const afterSecondShutdownErr = mcpInitializeAfterSecondShutdownError(parsed);
+        if (afterSecondShutdownErr) {
+          json(res, 200, afterSecondShutdownErr);
           return;
         }
         const afterShutdownErr = mcpInitializeAfterShutdownError(parsed);

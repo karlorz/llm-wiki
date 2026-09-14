@@ -801,3 +801,21 @@ export function mcpNotificationsProgressAfterShutdownError(parsed: unknown): Jso
   }
   return null;
 }
+
+export function mcpInitializeAfterSecondShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let shutdownCount = 0;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") shutdownCount += 1;
+    if (method === "initialize" && shutdownCount >= 2) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "initialize after second shutdown" },
+      };
+    }
+  }
+  return null;
+}
