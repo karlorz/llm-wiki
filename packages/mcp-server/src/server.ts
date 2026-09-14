@@ -10,6 +10,7 @@ import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from 
 import { handleConsoleRequest, isConsolePath, isConsoleRequestAllowed } from "./console.js";
 import { loadConfig, type McpDaemonConfig } from "./config.js";
 import {
+  mcpCompletionCompleteBeforeInitializeError,
   mcpInitializeProtocolError,
   mcpLoggingSetLevelBeforeInitializeError,
   mcpNotificationsCancelledError,
@@ -658,6 +659,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const loggingErr = mcpLoggingSetLevelBeforeInitializeError(parsed);
         if (loggingErr) {
           json(res, 200, loggingErr);
+          return;
+        }
+        const completeErr = mcpCompletionCompleteBeforeInitializeError(parsed);
+        if (completeErr) {
+          json(res, 200, completeErr);
           return;
         }
       }
