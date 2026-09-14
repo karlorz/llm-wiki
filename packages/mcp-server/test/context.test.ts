@@ -526,4 +526,50 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       await ctx.close();
     }
   });
+
+  it("wiki_context HTTP known project filters to that slug only", async () => {
+    const ctx = await setupTestServer();
+    await mkdir(join(ctx.vault, "projects/alpha/work/2026-09-06-task-f"), { recursive: true });
+    await mkdir(join(ctx.vault, "projects/beta/work/2026-08-20-item-2"), { recursive: true });
+    const logBefore = await readFile(join(ctx.vault, "log.md"), "utf8");
+    const alphaBefore = await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8");
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 83,
+          method: "tools/call",
+          params: { name: "wiki_context", arguments: { project: "alpha" } },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result?: {
+          structuredContent?: {
+            ok?: boolean;
+            writer_id?: string;
+            projects?: Array<{ slug: string; active_work: string[] }>;
+          };
+        };
+      };
+      const sc = body.result?.structuredContent;
+      expect(sc?.ok).toBe(true);
+      expect(sc?.writer_id).toBe("macos-dev");
+      expect(sc?.writer_id).not.toBe("chatgpt-web");
+      expect(JSON.stringify(body)).not.toContain("chatgpt-web");
+      expect(sc?.projects?.map((p) => p.slug)).toEqual(["alpha"]);
+      expect(sc?.projects?.map((p) => p.slug)).not.toContain("beta");
+      expect(sc?.projects?.[0]?.active_work).toEqual(["2026-09-06-task-f"]);
+      expect(await readFile(join(ctx.vault, "log.md"), "utf8")).toBe(logBefore);
+      expect(await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8")).toBe(alphaBefore);
+    } finally {
+      await ctx.close();
+    }
+  });
 });
