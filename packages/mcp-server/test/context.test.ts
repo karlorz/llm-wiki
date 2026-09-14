@@ -284,6 +284,8 @@ describe("C5 compact activation over MCP and wiki_context", () => {
 
   it("wiki_context blocks when gate is not ready", async () => {
     const ctx = await setupTestServer({ gateReady: false });
+    const alphaBefore = await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8");
+    const logBefore = await readFile(join(ctx.vault, "log.md"), "utf8");
     try {
       const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
         method: "POST",
@@ -305,13 +307,18 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         result?: {
-          structuredContent?: { ok: boolean; error?: string };
+          structuredContent?: { ok: boolean; error?: string; writer_id?: string; projects?: unknown };
           isError?: boolean;
         };
       };
       expect(body.result?.structuredContent?.ok).toBe(false);
       expect(body.result?.structuredContent?.error).toBe("TOOLS_NOT_READY");
       expect(body.result?.isError).toBe(true);
+      expect(body.result?.structuredContent?.writer_id).toBeUndefined();
+      expect(body.result?.structuredContent?.projects).toBeUndefined();
+      expect(JSON.stringify(body)).not.toContain("chatgpt-web");
+      expect(await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8")).toBe(alphaBefore);
+      expect(await readFile(join(ctx.vault, "log.md"), "utf8")).toBe(logBefore);
     } finally {
       await ctx.close();
     }
