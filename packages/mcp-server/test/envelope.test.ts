@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
+import { writeFile } from "node:fs/promises";
 import { AddressInfo } from "node:net";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ReconcileGate } from "../src/reconcile.js";
 import { startMcpHttpServer } from "../src/server.js";
+import { MAX_READ_PAGE_BYTES } from "../src/tools/reads.js";
 import { makeTempVault } from "./helpers.js";
 
 async function setupTestServer() {
@@ -157,6 +160,58 @@ describe("C4 typed result envelope and request body cap", () => {
       // Ensure server is still alive and responsive after oversized request
       const healthRes = await fetch(`http://127.0.0.1:${ctx.port}/health`);
       expect(healthRes.status).toBe(200);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("wiki_read_page rejects >256 KiB page with PAGE_TOO_LARGE and compact response envelope", async () => {
+    const ctx = await setupTestServer();
+    try {
+      const largeRelPath = "concepts/large-page.md";
+      const largeContent = "---\ntitle: Large Page\n---\n" + "x".repeat(MAX_READ_PAGE_BYTES + 1);
+      await writeFile(join(ctx.vault, largeRelPath), largeContent, "utf8");
+
+      const largeRes = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "wiki_read_page",
+            arguments: { path: largeRelPath },
+          },
+        }),
+      });
+      expect(largeRes.status).toBe(200);
+
+      const rawResponseText = await largeRes.text();
+      expect(Buffer.byteLength(rawResponseText, "utf8")).toBeLessThan(4096);
+
+      const largeBody = JSON.parse(rawResponseText) as {
+        result?: {
+          isError?: boolean;
+          structuredContent?: Record<string, unknown>;
+          content?: Array<{ type: string; text: string }>;
+        };
+      };
+
+      const expected = {
+        ok: false,
+        error: "PAGE_TOO_LARGE",
+        path: largeRelPath,
+        message: `page exceeds ${MAX_READ_PAGE_BYTES}-byte wiki_read_page limit; request a smaller page`,
+      };
+      expect(largeBody.result?.isError).toBe(true);
+      expect(largeBody.result?.structuredContent).toEqual(expected);
+      expect(largeBody.result?.content?.[0]?.type).toBe("text");
+      expect(JSON.parse(largeBody.result?.content?.[0]?.text ?? "{}")).toEqual(expected);
     } finally {
       await ctx.close();
     }

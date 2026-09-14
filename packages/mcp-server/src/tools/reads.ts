@@ -10,6 +10,8 @@ import { sha256Bytes } from "../txn.js";
 import { currentVersion, type GetObject } from "../versions.js";
 import { CAPTURE_KINDS } from "./writes.js";
 
+export const MAX_READ_PAGE_BYTES = 256 * 1024;
+
 export interface ReadContext {
   vaultDir: string;
   hostId?: string;
@@ -82,6 +84,15 @@ export async function handleWikiReadPage(ctx: ReadContext, input: { path: string
 
   if (!bytes) {
     return { ok: false as const, error: "FILE_NOT_FOUND", path: input.path };
+  }
+
+  if (bytes.byteLength > MAX_READ_PAGE_BYTES) {
+    return {
+      ok: false as const,
+      error: "PAGE_TOO_LARGE",
+      path: input.path,
+      message: `page exceeds ${MAX_READ_PAGE_BYTES}-byte wiki_read_page limit; request a smaller page`,
+    };
   }
 
   const markdown = bytes.toString("utf8");
