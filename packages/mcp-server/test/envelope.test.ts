@@ -921,4 +921,78 @@ hosts:
       await ctx.close();
     }
   });
+
+  it("wiki_status HTTP receipt uses host-id writer_id and known fleet identity", async () => {
+    const ctx = await setupTestServer();
+    await mkdir(join(ctx.vault, "projects/llm-wiki/architecture"), { recursive: true });
+    await writeFile(
+      join(ctx.vault, "projects/llm-wiki/architecture/fleet.yaml"),
+      `schema_version: 1
+vault_remote: git@github.com:karlorz/wiki.git
+hosts:
+  macos-dev:
+    class: dev-macos
+    role: leaf
+    writes_to: [s3, github]
+    protected: false
+    identity:
+      hostnames: [macos-dev]
+  sg01:
+    class: prod-linux
+    role: snapshotter
+    writes_to: [github]
+    protected: true
+    identity:
+      hostnames: [sg01]
+`,
+      "utf8",
+    );
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 23,
+          method: "tools/call",
+          params: { name: "wiki_status", arguments: {} },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result?: {
+          structuredContent?: {
+            ok?: boolean;
+            writer_id?: string;
+            host_id?: string;
+            fleet?: {
+              identity_status?: string;
+              manifest_loaded?: boolean;
+              host_id?: string;
+              source?: string;
+            };
+          };
+          content?: Array<{ type: string; text: string }>;
+        };
+      };
+      const sc = body.result?.structuredContent;
+      expect(sc?.ok).toBe(true);
+      expect(sc?.writer_id).toBe("macos-dev");
+      expect(sc?.host_id).toBe("macos-dev");
+      expect(sc?.writer_id).not.toBe("chatgpt-web");
+      expect(sc?.host_id).not.toBe("chatgpt-web");
+      expect(sc?.fleet).toBeDefined();
+      expect(sc?.fleet?.identity_status).toBe("known");
+      expect(sc?.fleet?.manifest_loaded).toBe(true);
+      expect(sc?.fleet?.host_id).toBe("macos-dev");
+      expect(sc?.fleet?.source).toBe("host-id");
+      expect(JSON.parse(body.result?.content?.[0]?.text ?? "{}")).toEqual(sc);
+    } finally {
+      await ctx.close();
+    }
+  });
 });
