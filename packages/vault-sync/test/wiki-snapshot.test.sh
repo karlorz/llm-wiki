@@ -1060,6 +1060,7 @@ setup_projection_parity_fixture() {
 
   printf '# Expected Index\n' > "$root/expected-index.md"
   printf '# Expected Log\n\n- latest event\n' > "$root/expected-log.md"
+  printf '# Expected Log\n\n- latest event\n- mid-sync mcp append\n' > "$root/newer-log.md"
   printf '# Stale Index\n' > "$root/stale-index.md"
   printf '# Stale Log\n' > "$root/stale-log.md"
   : > "$root/rclone.calls"
@@ -1133,6 +1134,10 @@ if [ "$cmd" = "sync" ]; then
   if [ "${RCLONE_SYNC_STALE_PROJECTION:-0}" = "1" ]; then
     cp "$SNAPSHOT_TEST_ROOT/stale-index.md" "$3/index.md"
     cp "$SNAPSHOT_TEST_ROOT/stale-log.md" "$3/log.md"
+  elif [ "${RCLONE_SYNC_NEWER_LOG:-0}" = "1" ]; then
+    cp "$SNAPSHOT_TEST_ROOT/expected-index.md" "$3/index.md"
+    cp "$SNAPSHOT_TEST_ROOT/newer-log.md" "$3/log.md"
+    cp "$SNAPSHOT_TEST_ROOT/newer-log.md" "$SNAPSHOT_TEST_ROOT/expected-log.md"
   else
     cp "$SNAPSHOT_TEST_ROOT/expected-index.md" "$3/index.md"
     cp "$SNAPSHOT_TEST_ROOT/expected-log.md" "$3/log.md"
@@ -1268,6 +1273,35 @@ test_snapshot_stale_worktree_projection_fails_before_commit() {
   rm -rf "$root"
 }
 
+test_snapshot_newer_log_during_sync_promotes_when_store_matches() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_SYNC_NEWER_LOG=1
+  local rc=$?
+
+  if [ "$rc" -eq 0 ] \
+      && grep -q 'projection expectations refreshed from store after sync' "$root/wiki-snapshot.log" \
+      && grep -q 'projection worktree parity confirmed' "$root/wiki-snapshot.log" \
+      && grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log" \
+      && cmp -s "$root/newer-log.md" "$git_dir/log.md"; then
+    printf 'PASS: newer log during rclone sync promotes when worktree matches current store\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: newer-log-during-sync fixture (rc=%s log=%s)\n' \
+      "$rc" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
 test_snapshot_semantic_projection_drift_fails_before_commit() {
   local root
   root="$(mktemp -d)"
@@ -1301,6 +1335,7 @@ test_snapshot_semantic_projection_drift_fails_before_commit() {
 test_snapshot_waits_for_direct_remote_projection_parity
 test_snapshot_projection_parity_timeout_fails_before_sync
 test_snapshot_stale_worktree_projection_fails_before_commit
+test_snapshot_newer_log_during_sync_promotes_when_store_matches
 test_snapshot_semantic_projection_drift_fails_before_commit
 
 # ── Canonical completion record (v0.10.14) ────────────────────

@@ -482,10 +482,14 @@ snapshot_freeze_projection_expectations() {
         return 1
     fi
 
-    PROJECTION_EXPECTED_INDEX_SHA256="$(snapshot_projection_hash_file "$PROJECTION_STATE_DIR/expected-index.md")" || return 1
-    PROJECTION_EXPECTED_LOG_SHA256="$(snapshot_projection_hash_file "$PROJECTION_STATE_DIR/expected-log.md")" || return 1
+    snapshot_record_projection_expectation_hashes || return 1
     log "projection expected bytes frozen index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 log_sha256=$PROJECTION_EXPECTED_LOG_SHA256"
     return 0
+}
+
+snapshot_record_projection_expectation_hashes() {
+    PROJECTION_EXPECTED_INDEX_SHA256="$(snapshot_projection_hash_file "$PROJECTION_STATE_DIR/expected-index.md")" || return 1
+    PROJECTION_EXPECTED_LOG_SHA256="$(snapshot_projection_hash_file "$PROJECTION_STATE_DIR/expected-log.md")" || return 1
 }
 
 snapshot_live_projection_matches_frozen() {
@@ -556,6 +560,51 @@ snapshot_wait_for_direct_projection_parity() {
         fi
         sleep "$PROJECTION_PARITY_POLL_SECONDS"
     done
+}
+
+snapshot_refresh_projection_expectations_from_store() {
+    if [ -z "$PROJECTION_STATE_DIR" ]; then
+        return 0
+    fi
+
+    local index_pid log_pid index_rc log_rc
+    timeout "$PROJECTION_READ_TIMEOUT_SECONDS" \
+        rclone cat "${CLOUD_REMOTE%/}/index.md" --retries 1 \
+        >"$PROJECTION_STATE_DIR/expected-index.md" 2>>"$LOG_FILE" &
+    index_pid=$!
+    timeout "$PROJECTION_READ_TIMEOUT_SECONDS" \
+        rclone cat "${CLOUD_REMOTE%/}/log.md" --retries 1 \
+        >"$PROJECTION_STATE_DIR/expected-log.md" 2>>"$LOG_FILE" &
+    log_pid=$!
+    wait "$index_pid"
+    index_rc=$?
+    wait "$log_pid"
+    log_rc=$?
+    if [ "$index_rc" -ne 0 ]; then
+        log "ERROR: could not read current store index.md after sync"
+        return 1
+    fi
+    if [ "$log_rc" -ne 0 ]; then
+        log "ERROR: could not read current store log.md after sync"
+        return 1
+    fi
+    snapshot_record_projection_expectation_hashes || return 1
+    log "projection expectations refreshed from store after sync expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256"
+    return 0
+}
+
+snapshot_gate_projection_candidate() {
+    local refresh_fail="$1"
+    local verify_fail="$2"
+    if ! snapshot_refresh_projection_expectations_from_store; then
+        log "$refresh_fail"
+        return 1
+    fi
+    if ! snapshot_verify_projection_candidate; then
+        log "$verify_fail"
+        return 1
+    fi
+    return 0
 }
 
 snapshot_verify_worktree_projection_parity() {
@@ -1014,8 +1063,9 @@ snapshot_reconcile_delete_intents() {
 if ! snapshot_reconcile_delete_intents; then
     exit 1
 fi
-if ! snapshot_verify_projection_candidate; then
-    log "FAIL projection candidate verification; snapshot promotion refused"
+if ! snapshot_gate_projection_candidate \
+    "FAIL projection expectation refresh after sync; snapshot promotion refused" \
+    "FAIL projection candidate verification; snapshot promotion refused"; then
     exit 1
 fi
 
@@ -1088,8 +1138,9 @@ if [ "$needs_repair" = true ]; then
     if ! snapshot_reconcile_delete_intents; then
         exit 1
     fi
-    if ! snapshot_verify_projection_candidate; then
-        log "FAIL post-repair projection candidate verification; snapshot promotion refused"
+    if ! snapshot_gate_projection_candidate \
+        "FAIL post-repair projection expectation refresh after sync; snapshot promotion refused" \
+        "FAIL post-repair projection candidate verification; snapshot promotion refused"; then
         exit 1
     fi
     if ! snapshot_freeze_git_receipt; then
