@@ -4,11 +4,29 @@ function day(event: SkillwikiLogEventV1): string {
   return event.occurred_at.slice(0, 10);
 }
 
-function marker(event: SkillwikiLogEventV1): string {
+export function renderLogEventMarker(event: Pick<SkillwikiLogEventV1, "operation_id">): string {
   return `<!-- skillwiki-log-event:${event.operation_id} -->`;
 }
 
-function bodyFor(event: SkillwikiLogEventV1): string {
+function verbatimField(event: SkillwikiLogEventV1): string | undefined {
+  if (event.kind === "legacy-log-entry" && typeof event.metadata.legacy_markdown === "string") {
+    return event.metadata.legacy_markdown;
+  }
+  if (event.kind === "log-append" && typeof event.metadata.appended_markdown === "string") {
+    return event.metadata.appended_markdown;
+  }
+  return undefined;
+}
+
+function verbatimMarkdown(raw: string, event: SkillwikiLogEventV1): string {
+  const text = raw.trimEnd();
+  const mark = renderLogEventMarker(event);
+  return text.includes(mark) ? text : `${text}\n${mark}`;
+}
+
+export function renderLogEventBody(event: SkillwikiLogEventV1): string {
+  const raw = verbatimField(event);
+  if (raw !== undefined) return verbatimMarkdown(raw, event);
   if (event.kind === "page-publish" || event.kind === "project-page-publish") {
     const tax = Array.isArray(event.metadata.taxonomy_added)
       ? (event.metadata.taxonomy_added as string[])
@@ -21,11 +39,6 @@ function bodyFor(event: SkillwikiLogEventV1): string {
       `- Taxonomy: ${tax.length > 0 ? `added ${tax.join(", ")}` : "no additions"}`,
       event.note ? `- Note: ${event.note}` : "",
     ].filter(Boolean).join("\n");
-  }
-  if (event.kind === "legacy-log-entry" && typeof event.metadata.legacy_markdown === "string") {
-    const legacy = event.metadata.legacy_markdown.trimEnd();
-    if (legacy.includes(marker(event))) return legacy;
-    return `${legacy}\n${marker(event)}`;
   }
   if (event.kind === "session-brief" || event.kind === "archive" || event.kind === "remove" || event.kind === "log-entry") {
     return [
@@ -58,12 +71,18 @@ export function renderLogProjection(events: readonly SkillwikiLogEventV1[]): str
     "",
   ];
   for (const event of ordered) {
-    if (event.kind === "legacy-log-entry" && typeof event.metadata.legacy_markdown === "string") {
-      const block = bodyFor(event);
+    if (verbatimField(event) !== undefined) {
+      const block = renderLogEventBody(event);
       lines.push(block.endsWith("\n") ? block.trimEnd() : block, "");
       continue;
     }
-    lines.push(`## [${day(event)}] ${event.kind} | ${event.target}`, "", bodyFor(event), marker(event), "");
+    lines.push(
+      `## [${day(event)}] ${event.kind} | ${event.target}`,
+      "",
+      renderLogEventBody(event),
+      renderLogEventMarker(event),
+      "",
+    );
   }
   return `${lines.join("\n").replace(/\n+$/, "")}\n`;
 }

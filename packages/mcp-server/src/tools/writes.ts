@@ -3,13 +3,24 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { RawSourceSchema } from "@skillwiki/shared";
 import { extractFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
+import {
+  canonicalEventJson,
+  eventPathFor,
+  validateLogEvent,
+  type SkillwikiLogEventV1,
+} from "../../../cli/src/utils/log-events.js";
+import { renderLogEventBody, renderLogEventMarker } from "../../../cli/src/utils/log-projection.js";
+import { operationId } from "../../../cli/src/utils/operation-id.js";
 import { scanSensitiveContent } from "../../../cli/src/utils/sensitive-content.js";
 import { validateTypedTarget } from "../../../cli/src/utils/typed-page.js";
 import { isAllowedWritePath } from "../allowlist.js";
 import { appendAudit } from "../audit.js";
 import { ReconcileGate } from "../reconcile.js";
-import { commitCasWrite, commitWrite, S3PutError, type PutObject } from "../txn.js";
+import { commitCasWrite, commitWrite, sha256Bytes, S3PutError, type PutObject } from "../txn.js";
 import { type GetObject } from "../versions.js";
+
+const LOG_APPEND_NAMESPACE = "skillwiki-mcp-log-append-v1";
+const OPERATION_ID_RE = /^[0-9a-f]{64}$/;
 
 export const CAPTURE_KINDS = ["task", "idea", "bug", "note"] as const;
 export type CaptureKind = (typeof CAPTURE_KINDS)[number];
@@ -44,7 +55,18 @@ export type ToolFailure = {
 export type OverwriteSuccess = { ok: true; path: string };
 
 export type CaptureSuccess = { ok: true; path: string };
-export type LogSuccess = { ok: true; path: "log.md"; appended: true };
+export type LogSuccess = {
+  ok: true;
+  path: "log.md";
+  appended: boolean;
+  operation_id: string;
+  event_path: string;
+  appended_sha256: string;
+  event_sha256: string;
+  log_sha256: string;
+  s3_verified: true;
+  projection_repaired?: boolean;
+};
 
 export function slugify(title: string): string {
   const words = title
@@ -105,13 +127,12 @@ async function commitOrFail(
   ctx: WriteContext,
   started: number,
   tool: string,
-  relPath: string,
-  content: string,
+  files: { relPath: string; content: string }[],
 ): Promise<ToolFailure | null> {
   try {
     await commitWrite(
       { vaultDir: ctx.vaultDir, putObject: ctx.putObject, onCommit: ctx.onCommit },
-      [{ relPath, content }],
+      files,
     );
     return null;
   } catch (error: unknown) {
@@ -123,7 +144,7 @@ async function commitOrFail(
     appendAudit(ctx.auditFile, {
       host_id: ctx.hostId,
       tool,
-      path: relPath,
+      path: files[0]?.relPath,
       ok: false,
       error: code,
       ms: Date.now() - started,
@@ -178,7 +199,7 @@ export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promi
   const schema = RawSourceSchema.safeParse(fm.data);
   if (!schema.success) return fail("SCHEMA", schema.error.issues[0]?.message);
 
-  const writeFail = await commitOrFail(ctx, started, "wiki_capture", relPath, content);
+  const writeFail = await commitOrFail(ctx, started, "wiki_capture", [{ relPath, content }]);
   if (writeFail) return writeFail;
 
   appendAudit(ctx.auditFile, {
@@ -191,9 +212,97 @@ export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promi
   return { ok: true, path: relPath };
 }
 
+type ExistingEvent = { body: Buffer; fromS3: boolean };
+
+async function readExistingEvent(
+  ctx: WriteContext,
+  eventPath: string,
+): Promise<ExistingEvent | null> {
+  if (ctx.getObject) {
+    try {
+      const got = await ctx.getObject(eventPath);
+      if (got?.body) return { body: got.body, fromS3: true };
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return { body: await readFile(join(ctx.vaultDir, ...eventPath.split("/"))), fromS3: false };
+  } catch {
+    return null;
+  }
+}
+
+async function verifyEventGetObject(
+  ctx: WriteContext,
+  eventPath: string,
+  eventSha256: string,
+  known?: ExistingEvent,
+): Promise<ToolFailure | null> {
+  if (!ctx.getObject) {
+    return fail("S3_VERIFY_FAILED", "event GetObject is required for wiki_log_append");
+  }
+  try {
+    const got = known?.fromS3 ? known : await ctx.getObject(eventPath);
+    if (!got?.body) {
+      return fail("S3_VERIFY_FAILED", "event object missing after write");
+    }
+    if (sha256Bytes(got.body) !== eventSha256) {
+      return fail("S3_VERIFY_FAILED", "event GetObject hash mismatch");
+    }
+    return null;
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return fail("S3_VERIFY_FAILED", message);
+  }
+}
+
+function logAppendReceipt(input: {
+  appended: boolean;
+  operationId: string;
+  eventPath: string;
+  appendedSha: string;
+  eventSha: string;
+  logText: string;
+  repaired?: boolean;
+}): LogSuccess {
+  const receipt: LogSuccess = {
+    ok: true,
+    path: "log.md",
+    appended: input.appended,
+    operation_id: input.operationId,
+    event_path: input.eventPath,
+    appended_sha256: input.appendedSha,
+    event_sha256: input.eventSha,
+    log_sha256: sha256Bytes(Buffer.from(input.logText, "utf8")),
+    s3_verified: true,
+  };
+  if (input.repaired) receipt.projection_repaired = true;
+  return receipt;
+}
+
+function buildLogAppendEvent(input: {
+  date: string;
+  hostId: string;
+  operationId: string;
+  exactBlock: string;
+}): SkillwikiLogEventV1 {
+  return {
+    schema: "skillwiki-log-event/v1",
+    operation_id: input.operationId,
+    occurred_at: `${input.date}T00:00:00.000Z`,
+    host_id: input.hostId,
+    actor: "skillwiki-mcp",
+    kind: "log-append",
+    target: "log.md",
+    note: "mcp log-append",
+    metadata: { appended_markdown: input.exactBlock },
+  };
+}
+
 export async function wikiLogAppend(
   ctx: WriteContext,
-  input: { content: string },
+  input: { content: string; operation_id?: string },
 ): Promise<LogSuccess | ToolFailure> {
   const started = Date.now();
   const blocked = notReady(ctx);
@@ -201,7 +310,10 @@ export async function wikiLogAppend(
 
   const body = (input.content ?? "").trim();
   if (!body) return fail("USAGE", "content is required");
-  if (!isAllowedWritePath("log.md", "log_append")) return fail("PATH_DENIED", "log.md");
+  const clientOp = input.operation_id?.trim();
+  if (clientOp && !OPERATION_ID_RE.test(clientOp)) {
+    return fail("USAGE", "operation_id must be 64 lowercase hex chars");
+  }
 
   const sensitive = scanSensitiveContent(body, { file: "log.md" });
   if (sensitive.length > 0) {
@@ -224,11 +336,81 @@ export async function wikiLogAppend(
   }
 
   const date = today(ctx.now);
-  const entry = body.startsWith("## [") ? body : `## [${date}] ${body}`;
-  const next = `${existing.replace(/\s+$/, "")}\n\n${entry}\n`;
+  const exactBlock = body.startsWith("## [") ? body : `## [${date}] ${body}`;
+  const opId = clientOp || operationId(LOG_APPEND_NAMESPACE, [date, exactBlock]);
+  const event = buildLogAppendEvent({
+    date,
+    hostId: ctx.hostId,
+    operationId: opId,
+    exactBlock,
+  });
+  const validated = validateLogEvent(event);
+  if (!validated.ok) {
+    const detail = validated.detail as { message?: string } | undefined;
+    return fail(validated.error, detail?.message ?? "invalid log-event record");
+  }
+  const eventJson = canonicalEventJson(validated.data);
+  const eventPath = eventPathFor(validated.data);
+  if (!isAllowedWritePath(eventPath, "log_append")) return fail("PATH_DENIED", eventPath);
 
-  const writeFail = await commitOrFail(ctx, started, "wiki_log_append", "log.md", next);
+  const projected = renderLogEventBody(validated.data);
+  const marker = renderLogEventMarker(validated.data);
+  const appendedSha = sha256Bytes(Buffer.from(exactBlock, "utf8"));
+  const eventSha = sha256Bytes(Buffer.from(eventJson, "utf8"));
+
+  const existingEvent = await readExistingEvent(ctx, eventPath);
+  if (existingEvent) {
+    if (existingEvent.body.toString("utf8") !== eventJson) {
+      appendAudit(ctx.auditFile, {
+        host_id: ctx.hostId,
+        tool: "wiki_log_append",
+        path: eventPath,
+        ok: false,
+        error: "EVENT_IDENTITY_COLLISION",
+        ms: Date.now() - started,
+      });
+      return fail("EVENT_IDENTITY_COLLISION", eventPath);
+    }
+    const verifyFail = await verifyEventGetObject(ctx, eventPath, eventSha, existingEvent);
+    if (verifyFail) return verifyFail;
+
+    let logText = existing;
+    let repaired = false;
+    if (!existing.includes(marker)) {
+      logText = `${existing.replace(/\s+$/, "")}\n\n${projected}\n`;
+      const writeFail = await commitOrFail(ctx, started, "wiki_log_append", [
+        { relPath: "log.md", content: logText },
+      ]);
+      if (writeFail) return writeFail;
+      repaired = true;
+    }
+    appendAudit(ctx.auditFile, {
+      host_id: ctx.hostId,
+      tool: "wiki_log_append",
+      path: "log.md",
+      ok: true,
+      ms: Date.now() - started,
+    });
+    return logAppendReceipt({
+      appended: false,
+      operationId: opId,
+      eventPath,
+      appendedSha,
+      eventSha,
+      logText,
+      repaired,
+    });
+  }
+
+  const next = `${existing.replace(/\s+$/, "")}\n\n${projected}\n`;
+  const writeFail = await commitOrFail(ctx, started, "wiki_log_append", [
+    { relPath: eventPath, content: eventJson },
+    { relPath: "log.md", content: next },
+  ]);
   if (writeFail) return writeFail;
+
+  const verifyFail = await verifyEventGetObject(ctx, eventPath, eventSha);
+  if (verifyFail) return verifyFail;
 
   appendAudit(ctx.auditFile, {
     host_id: ctx.hostId,
@@ -237,7 +419,14 @@ export async function wikiLogAppend(
     ok: true,
     ms: Date.now() - started,
   });
-  return { ok: true, path: "log.md", appended: true };
+  return logAppendReceipt({
+    appended: true,
+    operationId: opId,
+    eventPath,
+    appendedSha,
+    eventSha,
+    logText: next,
+  });
 }
 
 export interface OverwriteInput {

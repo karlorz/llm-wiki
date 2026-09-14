@@ -16,6 +16,7 @@ const WORKSPACE_DIR_RE =
   /^projects\/[a-z0-9][a-z0-9-]*\/(?:architecture|requirements|compound)\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.md$/;
 const PAGE_PUBLISH_RE =
   /^(entities|concepts|comparisons|queries|meta)\/[a-z0-9][a-z0-9._/-]*\.md$/;
+const LOG_EVENT_RE = /^meta\/log-events\/\d{4}-\d{2}-\d{2}\/[0-9a-f]{64}\.json$/;
 
 function hasNul(value: string): boolean {
   return value.includes("\0");
@@ -55,7 +56,7 @@ export function isAllowedWritePath(relPosix: string, kind: WriteKind): boolean {
     return false;
   }
   if (kind === "capture") return CAPTURE_RE.test(posix);
-  if (kind === "log_append") return posix === "log.md";
+  if (kind === "log_append") return posix === "log.md" || LOG_EVENT_RE.test(posix);
   if (kind === "workitem") {
     return (
       WORKITEM_FILE_RE.test(posix) ||

@@ -19,6 +19,7 @@ import {
   handleWikiQuery,
   handleWikiReadPage,
   handleWikiStatus,
+  MAX_READ_PAGE_BYTES,
 } from "./tools/reads.js";
 import { CAPTURE_KINDS, wikiCapture, wikiLogAppend, wikiPagePublish, wikiWorkitemWrite } from "./tools/writes.js";
 import { S3PutError, type PutObject } from "./txn.js";
@@ -161,13 +162,18 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
   server.registerTool(
     "wiki_read_page",
     {
-      description: "Read a vault page as markdown + frontmatter + sha256 of file bytes.",
-      inputSchema: z.object({ path: z.string().min(1) }),
+      description:
+        "Read a vault page as markdown + frontmatter + sha256 of file bytes. Optional tail_bytes (1..262144) returns the last n bytes of an oversized page without raising PAGE_TOO_LARGE.",
+      inputSchema: z.object({
+        path: z.string().min(1),
+        tail_bytes: z.number().int().min(1).max(MAX_READ_PAGE_BYTES).optional(),
+      }),
       outputSchema: z.object({
         ...failureShape,
         markdown: z.string().optional(),
         frontmatter: z.record(z.unknown()).optional(),
         sha256: z.string().optional(),
+        byte_length: z.number().optional(),
         s3_verified: z.boolean().optional(),
       }).passthrough(),
       annotations: { readOnlyHint: true },
@@ -276,13 +282,22 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
   server.registerTool(
     "wiki_log_append",
     {
-      description: "Append-only structural log.md entry. Cannot rewrite history.",
+      description:
+        "Append-only structural log.md entry. Writes a skillwiki-log-event/v1 record first, then a projection block. Success returns a receipt; verify via wiki_read_page(event_path). Optional operation_id is 64 hex.",
       inputSchema: z.object({
         content: z.string().min(1),
+        operation_id: z.string().regex(/^[0-9a-f]{64}$/).optional(),
       }),
       outputSchema: z.object({
         ...failureShape,
         appended: z.boolean().optional(),
+        operation_id: z.string().optional(),
+        event_path: z.string().optional(),
+        appended_sha256: z.string().optional(),
+        event_sha256: z.string().optional(),
+        log_sha256: z.string().optional(),
+        s3_verified: z.boolean().optional(),
+        projection_repaired: z.boolean().optional(),
       }).passthrough(),
       annotations: {
         readOnlyHint: false,

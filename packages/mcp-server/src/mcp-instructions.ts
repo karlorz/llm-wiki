@@ -20,7 +20,7 @@ Mutating tools (wiki_workitem_write, wiki_page_publish) enforce CAS concurrency 
 
 ### Capture Kinds
 Ad-hoc records via wiki_capture require kind in: task | idea | bug | note.
-Captures append remotely to raw/transcripts/ and never overwrite existing files. Use wiki_log_append for append-only log entries.
+Captures append remotely to raw/transcripts/ and never overwrite existing files. Use wiki_log_append for append-only log entries. Success returns a receipt; verify via wiki_read_page(event_path). Do not require reading log.md. wiki_read_page accepts optional tail_bytes for browsing oversized pages.
 
 ### Sensitive Content
 Never send credentials, API keys, auth tokens, passwords, or PII. Redact sensitive values using [REDACTED:<kind>] (e.g. [REDACTED:token]) before writing.`;

@@ -20,6 +20,30 @@ export interface ReadContext {
   s3Ok?: boolean;
 }
 
+export type WikiReadPageResult =
+  | { ok: false; error: "TOOLS_NOT_READY"; message: string }
+  | { ok: false; error: "PATH_DENIED"; path: string }
+  | { ok: false; error: "FILE_NOT_FOUND"; path: string }
+  | { ok: false; error: "USAGE"; message: string; path: string }
+  | {
+      ok: false;
+      error: "PAGE_TOO_LARGE";
+      path: string;
+      message: string;
+      sha256: string;
+      byte_length: number;
+      s3_verified: boolean;
+    }
+  | {
+      ok: true;
+      path: string;
+      markdown: string;
+      frontmatter: Record<string, unknown>;
+      sha256: string;
+      byte_length?: number;
+      s3_verified: boolean;
+    };
+
 function notReady(): { ok: false; error: "TOOLS_NOT_READY"; message: string } {
   return { ok: false, error: "TOOLS_NOT_READY", message: "tools blocked until first S3 reconcile completes" };
 }
@@ -54,11 +78,23 @@ async function readLocalBytes(abs: string): Promise<Buffer | null> {
   }
 }
 
-export async function handleWikiReadPage(ctx: ReadContext, input: { path: string }) {
+function utf8SafeTail(bytes: Buffer, tailBytes: number): Buffer {
+  if (tailBytes >= bytes.byteLength) return bytes;
+  let start = bytes.byteLength - tailBytes;
+  while (start < bytes.byteLength && start > 0 && (bytes[start] & 0xc0) === 0x80) {
+    start += 1;
+  }
+  return bytes.subarray(start);
+}
+
+export async function handleWikiReadPage(
+  ctx: ReadContext,
+  input: { path: string; tail_bytes?: number },
+): Promise<WikiReadPageResult> {
   const blocked = ensureReady(ctx.gate);
   if (blocked) return blocked;
   const abs = resolveWithinVault(ctx.vaultDir, input.path);
-  if (!abs) return { ok: false as const, error: "PATH_DENIED", path: input.path };
+  if (!abs) return { ok: false, error: "PATH_DENIED", path: input.path };
 
   let s3Verified = false;
   let bytes: Buffer | null = null;
@@ -68,7 +104,7 @@ export async function handleWikiReadPage(ctx: ReadContext, input: { path: string
     try {
       const ver = await currentVersion({ vaultDir: ctx.vaultDir, getObject: ctx.getObject }, input.path);
       if (ver.absent) {
-        return { ok: false as const, error: "FILE_NOT_FOUND", path: input.path };
+        return { ok: false, error: "FILE_NOT_FOUND", path: input.path };
       }
       bytes = ver.bytes ?? (await readLocalBytes(abs));
       sha256 = ver.sha256;
@@ -83,26 +119,54 @@ export async function handleWikiReadPage(ctx: ReadContext, input: { path: string
   }
 
   if (!bytes) {
-    return { ok: false as const, error: "FILE_NOT_FOUND", path: input.path };
+    return { ok: false, error: "FILE_NOT_FOUND", path: input.path };
+  }
+
+  const fullSha = sha256 ?? sha256Bytes(bytes);
+  const tail = input.tail_bytes;
+  if (tail !== undefined) {
+    if (!Number.isInteger(tail) || tail < 1 || tail > MAX_READ_PAGE_BYTES) {
+      return {
+        ok: false,
+        error: "USAGE",
+        message: `tail_bytes must be an integer from 1 to ${MAX_READ_PAGE_BYTES}`,
+        path: input.path,
+      };
+    }
+    const slice = utf8SafeTail(bytes, tail);
+    const markdown = slice.toString("utf8");
+    const fm = extractFrontmatter(markdown);
+    return {
+      ok: true,
+      path: input.path,
+      markdown,
+      frontmatter: fm.ok ? fm.data : {},
+      sha256: fullSha,
+      byte_length: bytes.byteLength,
+      s3_verified: s3Verified,
+    };
   }
 
   if (bytes.byteLength > MAX_READ_PAGE_BYTES) {
     return {
-      ok: false as const,
+      ok: false,
       error: "PAGE_TOO_LARGE",
       path: input.path,
       message: `page exceeds ${MAX_READ_PAGE_BYTES}-byte wiki_read_page limit; request a smaller page`,
+      sha256: fullSha,
+      byte_length: bytes.byteLength,
+      s3_verified: s3Verified,
     };
   }
 
   const markdown = bytes.toString("utf8");
   const fm = extractFrontmatter(markdown);
   return {
-    ok: true as const,
+    ok: true,
     path: input.path,
     markdown,
     frontmatter: fm.ok ? fm.data : {},
-    sha256: sha256 ?? sha256Bytes(bytes),
+    sha256: fullSha,
     s3_verified: s3Verified,
   };
 }
