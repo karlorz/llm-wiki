@@ -20,6 +20,7 @@ import {
   mcpNotificationsInitializedError,
   mcpPingAfterShutdownError,
   mcpPingBeforeInitializeError,
+  mcpPromptsGetAfterShutdownError,
   mcpPromptsGetBeforeInitializeError,
   mcpPromptsListAfterShutdownError,
   mcpPromptsListBeforeInitializeError,
@@ -743,6 +744,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const promptsListAfterShutdownErr = mcpPromptsListAfterShutdownError(parsed);
         if (promptsListAfterShutdownErr) {
           json(res, 200, promptsListAfterShutdownErr);
+          return;
+        }
+        const promptsGetAfterShutdownErr = mcpPromptsGetAfterShutdownError(parsed);
+        if (promptsGetAfterShutdownErr) {
+          json(res, 200, promptsGetAfterShutdownErr);
           return;
         }
         const duplicateInitErr = mcpDuplicateInitializeError(parsed);
