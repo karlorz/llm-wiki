@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { RawSourceSchema } from "@skillwiki/shared";
@@ -23,6 +23,21 @@ const LOG_APPEND_NAMESPACE = "skillwiki-mcp-log-append-v1";
 const OPERATION_ID_RE = /^[0-9a-f]{64}$/;
 
 export const CAPTURE_KINDS = ["task", "idea", "bug", "note"] as const;
+const PROJECT_SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+export function normalizeCaptureProject(raw: string | undefined): string | null {
+  const slug = (raw ?? "").trim().replace(/^\[\[|\]\]$/g, "");
+  if (!slug || !PROJECT_SLUG_RE.test(slug)) return null;
+  return slug;
+}
+
+export function vaultHasProject(vaultDir: string, slug: string): boolean {
+  try {
+    return statSync(join(vaultDir, "projects", slug)).isDirectory();
+  } catch {
+    return false;
+  }
+}
 export type CaptureKind = (typeof CAPTURE_KINDS)[number];
 
 export interface WriteContext {
@@ -165,9 +180,12 @@ export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promi
 
   const kinds: CaptureKind[] = ["task", "idea", "bug", "note"];
   if (!kinds.includes(input.kind)) return fail("USAGE", "kind must be task|idea|bug|note");
-  if (!input.title?.trim() || !input.content?.trim() || !input.project?.trim()) {
+  if (!input.title?.trim() || !input.content?.trim()) {
     return fail("USAGE", "project, title, and content are required");
   }
+  const project = normalizeCaptureProject(input.project);
+  if (!project) return fail("USAGE", "project must be a vault project slug");
+  if (!vaultHasProject(ctx.vaultDir, project)) return fail("USAGE", "unknown project");
 
   const combined = `${input.title}\n${input.content}\n${input.agent_note ?? ""}`;
   const sensitive = scanSensitiveContent(combined, { file: "wiki_capture" });
@@ -188,7 +206,7 @@ export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promi
 
   const content = renderCaptureMarkdown({
     kind: input.kind,
-    project: input.project,
+    project,
     title: input.title,
     content: input.content,
     date,
