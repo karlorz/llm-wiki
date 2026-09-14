@@ -39,6 +39,22 @@ _Avoid_: auto-provision, first-run wizard, doctor apply
 Live HTTP MCP tools include capture, work-item write, and page publish. A local vault mirror is optional for reads.
 _Avoid_: captures-only, local git writer
 
+**Fetch-only leaf**:
+`vault_sync.installed=true`, role leaf, `vault_sync.push_enabled=false`. wiki-fetch is required; wiki-push is not part of the host profile.
+_Avoid_: HTTP MCP leaf, MCP-healthy host, disabled-push heuristic
+
+**Push-enabled leaf**:
+`vault_sync.installed=true`, role leaf, `vault_sync.push_enabled` true or absent. wiki-push remains required. macos-dev stays here.
+_Avoid_: treating every HTTP MCP host as fetch-only
+
+**HTTP MCP writer**:
+Agent writes go through HTTP MCP. Orthogonal to the vault-sync job profile.
+_Avoid_: HTTP MCP leaf as a doctor profile name
+
+**vault_sync.push_enabled**:
+Explicit host-profile flag. Absent means true.
+_Avoid_: inferring from timer state, fleet.yaml class, or `--check-mcp` pass
+
 **Ranked audit report**:
 A read-only evidence packet that classifies active project work without changing lifecycle state.
 
@@ -53,3 +69,5 @@ An attended decision process that reviews ranked-audit evidence, resolves ambigu
 - Ranked audit reports inform lifecycle reconciliation but do not authorize mutation.
 - SkillWiki owns lifecycle truth, validation, evidence shape, and managed vault mutation; orchestration systems consume those contracts.
 - Writer identity is resolved once per HTTP MCP request; host-id bearer and OAuth grant are its two realizations and neither changes what a write may touch.
+- HTTP MCP writer is orthogonal to fetch-only leaf vs push-enabled leaf.
+- vault_sync.push_enabled selects the vault-sync job profile on an installed leaf.

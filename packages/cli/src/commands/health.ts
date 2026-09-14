@@ -2,7 +2,14 @@ import { ok, ExitCode, type ExitCodeValue, type Result } from "@skillwiki/shared
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { platform } from "node:os";
-import { runDoctor, snapshotterHealthChecks, type CheckResult, type DoctorOutput } from "./doctor.js";
+import {
+  runDoctor,
+  snapshotterHealthChecks,
+  readVaultSyncConfig,
+  PUSH_NOT_IN_PROFILE,
+  type CheckResult,
+  type DoctorOutput,
+} from "./doctor.js";
 import { runLint, type LintBucketSummary, type LintSummaryOutput, type LintSeverity } from "./lint.js";
 import { inventorySources } from "../utils/source-lifecycle.js";
 import { VAULT_SYNC_FILTER_REQUIRED_EXCLUDES } from "../utils/vault-hygiene-ignores.js";
@@ -255,35 +262,6 @@ function classifyLog(path: string, id: string, label: string, okPattern: RegExp)
   return { id, label, status: "warn", detail: last.slice(0, 120) };
 }
 
-/** Read vault_sync.role + service_scope + snapshot_script from ~/.skillwiki/.env. */
-function readVaultSyncRoleAndScope(home: string): {
-  role?: string;
-  serviceScope?: string;
-  snapshotScript?: string;
-} {
-  try {
-    const content = readFileSync(join(home, ".skillwiki", ".env"), "utf8");
-    let role: string | undefined;
-    let serviceScope: string | undefined;
-    let snapshotScript: string | undefined;
-    for (const line of content.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
-      const eq = trimmed.indexOf("=");
-      if (eq <= 0) continue;
-      const k = trimmed.slice(0, eq).trim();
-      const v = trimmed.slice(eq + 1).trim();
-      if (v.length === 0) continue;
-      if (k === "vault_sync.role") role = v;
-      if (k === "vault_sync.service_scope") serviceScope = v;
-      if (k === "vault_sync.snapshot_script") snapshotScript = v;
-    }
-    return { role, serviceScope, snapshotScript };
-  } catch {
-    return {};
-  }
-}
-
 function runVaultSyncHealth(home: string, syncMode: SyncMode, env: NodeJS.ProcessEnv = process.env): VaultSyncComponent {
   if (syncMode === "off") {
     return {
@@ -305,8 +283,12 @@ function runVaultSyncHealth(home: string, syncMode: SyncMode, env: NodeJS.Proces
   const filterPath = join(home, ".config", "rclone", "wiki-push-filters.txt");
   const checks: CheckResult[] = [];
 
-  const pushScript = join(shareDir, "wiki-push.sh");
-  if (syncMode === "optional" && !existsSync(pushScript)) {
+  const vsConfig = readVaultSyncConfig(home);
+  const fetchOnly = vsConfig.pushEnabled === false;
+  const installedScript = fetchOnly
+    ? join(shareDir, "wiki-fetch-notify.sh")
+    : join(shareDir, "wiki-push.sh");
+  if (syncMode === "optional" && !existsSync(installedScript)) {
     return {
       status: "pass",
       blocking: false,
@@ -315,15 +297,13 @@ function runVaultSyncHealth(home: string, syncMode: SyncMode, env: NodeJS.Proces
       checks: [{
         id: "vault_sync_installed",
         status: "pass",
-        detail: `vault-sync not installed at ${pushScript}; optional check skipped`,
+        detail: `vault-sync not installed at ${installedScript}; optional check skipped`,
       }],
     };
   }
 
   // Snapshotter role: produce the same snapshotter health checks as doctor so
-  // status, doctor, and health agree (v0.10.14). Reads vault_sync.role +
-  // service_scope from ~/.skillwiki/.env (bypassing the CLI whitelist).
-  const vsConfig = readVaultSyncRoleAndScope(home);
+  // status, doctor, and health agree (v0.10.14).
   if (vsConfig.role === "snapshotter") {
     const snapshotScript = vsConfig.snapshotScript ?? join(shareDir, "wiki-snapshot.sh");
     const installed: CheckResult = existsSync(snapshotScript)
@@ -352,34 +332,42 @@ function runVaultSyncHealth(home: string, syncMode: SyncMode, env: NodeJS.Proces
     };
   }
 
-  checks.push(existsSync(pushScript)
-    ? { id: "vault_sync_installed", label: "Vault sync installed", status: "pass", detail: `Found: ${pushScript}` }
-    : { id: "vault_sync_installed", label: "Vault sync installed", status: "error", detail: `Script missing: ${pushScript}` });
+  checks.push(existsSync(installedScript)
+    ? { id: "vault_sync_installed", label: "Vault sync installed", status: "pass", detail: `Found: ${installedScript}` }
+    : { id: "vault_sync_installed", label: "Vault sync installed", status: "error", detail: `Script missing: ${installedScript}` });
 
   if (isMac) {
     const pushPlist = join(home, "Library", "LaunchAgents", "com.karlchow.wiki-push.plist");
     const fetchPlist = join(home, "Library", "LaunchAgents", "com.karlchow.wiki-fetch.plist");
-    checks.push(existsSync(pushPlist) && existsSync(fetchPlist)
-      ? { id: "vault_sync_jobs_enabled", label: "Vault sync jobs enabled", status: "pass", detail: "launchd unit files present (read-only mode)" }
-      : { id: "vault_sync_jobs_enabled", label: "Vault sync jobs enabled", status: "warn", detail: "launchd unit files missing (read-only mode)" });
+    const jobsOk = fetchOnly ? existsSync(fetchPlist) : existsSync(pushPlist) && existsSync(fetchPlist);
+    checks.push(jobsOk
+      ? { id: "vault_sync_jobs_enabled", label: "Vault sync jobs enabled", status: "pass", detail: fetchOnly ? "launchd: wiki-fetch unit file present (read-only mode)" : "launchd unit files present (read-only mode)" }
+      : { id: "vault_sync_jobs_enabled", label: "Vault sync jobs enabled", status: "warn", detail: fetchOnly ? "launchd wiki-fetch unit file missing (read-only mode)" : "launchd unit files missing (read-only mode)" });
     checks.push({ id: "vault_sync_fuse_refresh_job", label: "Vault sync fuse refresh job", status: "pass", detail: "macOS host — check skipped" });
   } else {
     const pushTimer = join(home, ".config", "systemd", "user", "wiki-push.timer");
     const fetchTimer = join(home, ".config", "systemd", "user", "wiki-fetch.timer");
     const fuseTimer = join(home, ".config", "systemd", "user", "wiki-fuse-refresh.timer");
     const fuseService = join(home, ".config", "systemd", "user", "wiki-fuse-refresh.service");
-    checks.push(existsSync(pushTimer) && existsSync(fetchTimer)
-      ? { id: "vault_sync_jobs_enabled", label: "Vault sync jobs enabled", status: "pass", detail: "systemd timer unit files present (read-only mode)" }
-      : { id: "vault_sync_jobs_enabled", label: "Vault sync jobs enabled", status: "warn", detail: "systemd timer unit files missing (read-only mode)" });
+    const jobsOk = fetchOnly ? existsSync(fetchTimer) : existsSync(pushTimer) && existsSync(fetchTimer);
+    checks.push(jobsOk
+      ? { id: "vault_sync_jobs_enabled", label: "Vault sync jobs enabled", status: "pass", detail: fetchOnly ? "systemd: wiki-fetch.timer unit file present (read-only mode)" : "systemd timer unit files present (read-only mode)" }
+      : { id: "vault_sync_jobs_enabled", label: "Vault sync jobs enabled", status: "warn", detail: fetchOnly ? "systemd wiki-fetch.timer unit file missing (read-only mode)" : "systemd timer unit files missing (read-only mode)" });
     checks.push(existsSync(fuseTimer) && existsSync(fuseService)
       ? { id: "vault_sync_fuse_refresh_job", label: "Vault sync fuse refresh job", status: "pass", detail: "wiki-fuse-refresh unit files present (read-only mode)" }
       : { id: "vault_sync_fuse_refresh_job", label: "Vault sync fuse refresh job", status: "warn", detail: "wiki-fuse-refresh unit files missing (read-only mode)" });
   }
 
-  checks.push(classifyLog(join(logDir, "wiki-push.log"), "vault_sync_last_push_age", "Vault sync last push recency", /OK push/));
+  if (fetchOnly) {
+    checks.push({ id: "vault_sync_last_push_age", label: "Vault sync last push recency", status: "pass", detail: PUSH_NOT_IN_PROFILE });
+  } else {
+    checks.push(classifyLog(join(logDir, "wiki-push.log"), "vault_sync_last_push_age", "Vault sync last push recency", /OK push/));
+  }
   checks.push(classifyLog(join(logDir, "wiki-fetch.log"), "vault_sync_last_fetch_status", "Vault sync last fetch status", /NOTIFY|OK behind|OK/));
 
-  if (!existsSync(filterPath)) {
+  if (fetchOnly) {
+    checks.push({ id: "vault_sync_filter_present", label: "Vault sync filter file present", status: "pass", detail: PUSH_NOT_IN_PROFILE });
+  } else if (!existsSync(filterPath)) {
     checks.push({ id: "vault_sync_filter_present", label: "Vault sync filter file present", status: "error", detail: `Filter missing: ${filterPath}` });
   } else {
     const content = readFileSync(filterPath, "utf8");

@@ -40,6 +40,8 @@ export interface VaultSyncRuntimeConfig {
   role?: string;
   serviceScope?: string;
   snapshotScript?: string;
+  /** Absent or true: push-enabled leaf. false: fetch-only leaf. */
+  pushEnabled?: boolean;
 }
 
 export interface DoctorContext {
