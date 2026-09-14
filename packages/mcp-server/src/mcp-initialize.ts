@@ -477,3 +477,21 @@ export function mcpPingAfterShutdownError(parsed: unknown): JsonRpcErrorBody | n
   }
   return null;
 }
+
+export function mcpToolsListAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "tools/list" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "tools/list after shutdown" },
+      };
+    }
+  }
+  return null;
+}

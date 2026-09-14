@@ -31,6 +31,7 @@ import {
   mcpSamplingCreateMessageBeforeInitializeError,
   mcpShutdownBeforeInitializeError,
   mcpToolsCallBeforeInitializeError,
+  mcpToolsListAfterShutdownError,
   mcpToolsListBeforeInitializeError,
 } from "./mcp-initialize.js";
 import { ChangedEventHub } from "./events.js";
@@ -719,6 +720,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const pingAfterShutdownErr = mcpPingAfterShutdownError(parsed);
         if (pingAfterShutdownErr) {
           json(res, 200, pingAfterShutdownErr);
+          return;
+        }
+        const toolsListAfterShutdownErr = mcpToolsListAfterShutdownError(parsed);
+        if (toolsListAfterShutdownErr) {
+          json(res, 200, toolsListAfterShutdownErr);
           return;
         }
         const duplicateInitErr = mcpDuplicateInitializeError(parsed);
