@@ -9,6 +9,7 @@ import { z } from "zod";
 import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from "./auth.js";
 import { handleConsoleRequest, isConsolePath, isConsoleRequestAllowed } from "./console.js";
 import { loadConfig, type McpDaemonConfig } from "./config.js";
+import { mcpInitializeProtocolError } from "./mcp-initialize.js";
 import { ChangedEventHub } from "./events.js";
 import { MCP_INSTRUCTIONS } from "./mcp-instructions.js";
 import { getIssuer, handleOAuthRequest, type OAuthConfig } from "./oauth.js";
@@ -590,6 +591,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
           parsed = raw.length > 0 ? JSON.parse(raw) : undefined;
         } catch {
           json(res, 400, { error: "invalid_json" });
+          return;
+        }
+        const initErr = mcpInitializeProtocolError(parsed);
+        if (initErr) {
+          json(res, 200, initErr);
           return;
         }
       }
