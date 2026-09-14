@@ -162,3 +162,36 @@ export function mcpPingBeforeInitializeError(parsed: unknown): JsonRpcErrorBody 
   }
   return null;
 }
+
+export function mcpNotificationsInitializedError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  let seenInitialized = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") {
+      seenInitialize = true;
+      continue;
+    }
+    if (method === "notifications/initialized") {
+      if (seenInitialized) {
+        return {
+          jsonrpc: "2.0",
+          id: jsonRpcId((item as { id?: unknown }).id),
+          error: { code: -32000, message: "duplicate notifications/initialized" },
+        };
+      }
+      seenInitialized = true;
+      continue;
+    }
+    if (seenInitialize && !seenInitialized) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "notifications/initialized missing" },
+      };
+    }
+  }
+  return null;
+}
