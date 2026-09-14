@@ -18,6 +18,7 @@ import {
   mcpLoggingSetLevelBeforeInitializeError,
   mcpNotificationsCancelledError,
   mcpNotificationsInitializedError,
+  mcpPingAfterShutdownError,
   mcpPingBeforeInitializeError,
   mcpPromptsGetBeforeInitializeError,
   mcpPromptsListBeforeInitializeError,
@@ -713,6 +714,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const afterShutdownErr = mcpInitializeAfterShutdownError(parsed);
         if (afterShutdownErr) {
           json(res, 200, afterShutdownErr);
+          return;
+        }
+        const pingAfterShutdownErr = mcpPingAfterShutdownError(parsed);
+        if (pingAfterShutdownErr) {
+          json(res, 200, pingAfterShutdownErr);
           return;
         }
         const duplicateInitErr = mcpDuplicateInitializeError(parsed);
