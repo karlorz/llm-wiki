@@ -670,6 +670,71 @@ describe("query", () => {
     )).toBe(true);
   });
 
+  it("keeps llm-wiki work in scope=all top 5 when playground packets and monetization are present", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "queries"), { recursive: true });
+    mkdirSync(join(v, "projects", "llm-wiki", "work", "2026-09-14-chatgpt-web-query-receipt-compact-proof"), { recursive: true });
+    const sharedSources = [
+      "raw/articles/shared-packet.md",
+      "queries/2026-07-04-knowledge-monetization-strategy.md",
+    ];
+    const sourceBlock = sharedSources.map((source) => `  - ${source}`).join("\n");
+    for (const slug of [
+      "2026-07-06-agent-evidence-review-board",
+      "2026-07-06-agent-memory-lineage-legal-hold-review",
+      "2026-07-06-memory-lineage-buyer-story-fix-spec",
+    ]) {
+      mkdirSync(join(v, "projects", "playground", "work", slug), { recursive: true });
+      writeFileSync(
+        join(v, "projects", "playground", "work", slug, "plan.md"),
+        `---\ntitle: ${slug}\nkind: feature\nstatus: planned\nsources:\n${sourceBlock}\n---\nllm-wiki open work HTTP MCP doctor agent evidence packet.\n`.repeat(20),
+      );
+    }
+    writeFileSync(
+      join(v, "queries", "2026-07-04-knowledge-monetization-strategy.md"),
+      `---\ntitle: Knowledge Monetization Strategy\ntype: query\ncreated: 2026-07-04\nupdated: 2026-07-04\ntags: []\nsources:\n${sourceBlock}\n---\nllm-wiki open work HTTP MCP doctor skillwiki packet.\n`.repeat(40),
+    );
+    writeFileSync(
+      join(v, "projects", "llm-wiki", "work", "2026-09-14-chatgpt-web-query-receipt-compact-proof", "spec.md"),
+      "---\ntitle: ChatGPT web query receipt compact proof\nkind: feature\nstatus: planned\nsources: []\n---\nLand wiki_query scope on HTTP MCP.\n",
+    );
+
+    const r = await runQuery({
+      text: "llm-wiki open work HTTP MCP doctor",
+      vault: v,
+      scope: "all",
+      limit: 5,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) return;
+    expect(r.result.data.results[0]?.path).not.toBe("queries/2026-07-04-knowledge-monetization-strategy.md");
+    expect(r.result.data.results.slice(0, 5).some((item) =>
+      item.path.startsWith("projects/llm-wiki/work/"),
+    )).toBe(true);
+  });
+
+  it("does not award path-segment bonus on default typed pages", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "concepts"), { recursive: true });
+    writeFileSync(
+      join(v, "concepts", "llm-wiki.md"),
+      "---\ntitle: Bravo\ntype: concept\ncreated: 2026-09-14\nupdated: 2026-09-14\ntags: []\nsources: []\n---\nUnrelated body.\n",
+    );
+    writeFileSync(
+      join(v, "concepts", "bravo.md"),
+      "---\ntitle: llm-wiki match\ntype: concept\ncreated: 2026-09-14\nupdated: 2026-09-14\ntags: []\nsources: []\n---\nllm-wiki in the body.\n",
+    );
+
+    const r = await runQuery({ text: "llm-wiki", vault: v, limit: 5 });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) return;
+    expect(r.result.data.results[0]?.path).toBe("concepts/bravo.md");
+  });
+
   it("rejects an unknown query scope", async () => {
     const r = await runQuery({ text: "alpha", vault: VAULT, scope: "inbox" });
     expect(r.exitCode).not.toBe(0);
