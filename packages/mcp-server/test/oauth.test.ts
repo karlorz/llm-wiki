@@ -247,6 +247,52 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
     }
   });
 
+  it("GET /authorize without password returns an HTML login form instead of JSON 401", async () => {
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const store = new InMemoryOAuthStore();
+    const server = await startMcpHttpServer({
+      bind: "127.0.0.1",
+      port: 0,
+      vaultDir,
+      tokenMap: new Map(),
+      gate,
+      putObject: async () => undefined,
+      oauth: {
+        enabled: true,
+        passwordHash: hashPassword("mypassword"),
+        store,
+      },
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const baseUrl = `http://127.0.0.1:${port}`;
+      const codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk_long_verifier_string_at_least_43_chars";
+      const codeChallenge = createHash("sha256").update(codeVerifier, "ascii").digest("base64url");
+      const qs = new URLSearchParams({
+        response_type: "code",
+        client_id: "chatgpt-dcr-client",
+        redirect_uri: "https://chatgpt.com/connector/oauth/callback-id",
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+        state: "state-xyz",
+        scope: "offline_access",
+        resource: `${baseUrl}/mcp`,
+      });
+      const res = await fetch(`${baseUrl}/authorize?${qs.toString()}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toMatch(/text\/html/);
+      const html = await res.text();
+      expect(html).toContain('name="password"');
+      expect(html).toContain('name="client_id"');
+      expect(html).toContain("chatgpt-dcr-client");
+      expect(html).toContain("state-xyz");
+      expect(html).not.toContain("mypassword");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
   it("full OAuth flow: metadata, DCR, authorize with password + PKCE, token exchange, tools/call, and audit", async () => {
     const gate = new ReconcileGate(async () => undefined);
     await gate.runFirst();

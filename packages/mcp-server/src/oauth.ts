@@ -84,6 +84,60 @@ function jsonResponse(res: ServerResponse, status: number, body: unknown, extra?
   res.end(payload);
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function htmlResponse(res: ServerResponse, status: number, html: string): void {
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(html),
+    "Cache-Control": "no-store",
+  });
+  res.end(html);
+}
+
+const AUTHORIZE_HIDDEN_KEYS = [
+  "client_id",
+  "redirect_uri",
+  "code_challenge",
+  "code_challenge_method",
+  "response_type",
+  "state",
+  "scope",
+  "resource",
+] as const;
+
+function authorizeLoginHtml(params: Record<string, string>, error?: string): string {
+  const hiddens = AUTHORIZE_HIDDEN_KEYS.filter((key) => params[key])
+    .map((key) => `<input type="hidden" name="${key}" value="${escapeHtml(params[key])}">`)
+    .join("\n");
+  const err = error ? `<p role="alert">${escapeHtml(error)}</p>` : "";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SkillWiki operator login</title>
+</head>
+<body>
+<h1>SkillWiki</h1>
+<p>Enter the operator password to allow ChatGPT to access this vault.</p>
+${err}
+<form method="post" action="/authorize">
+${hiddens}
+<p><label>Operator password <input type="password" name="password" required autocomplete="current-password"></label></p>
+<p><button type="submit">Allow</button></p>
+</form>
+</body>
+</html>`;
+}
+
 function parseBodyParams(
   method: string | undefined,
   contentType: string,
@@ -239,7 +293,17 @@ export async function handleOAuthRequest(
       return true;
     }
 
+    const formPost = (req.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded");
+    if (!password && req.method === "GET") {
+      htmlResponse(res, 200, authorizeLoginHtml(params));
+      return true;
+    }
+
     if (!oauthCfg.passwordHash || !password || !verifyPassword(password, oauthCfg.passwordHash)) {
+      if (req.method === "GET" || formPost) {
+        htmlResponse(res, 401, authorizeLoginHtml(params, "Invalid operator password"));
+        return true;
+      }
       jsonResponse(res, 401, { error: "access_denied", error_description: "Invalid operator password" });
       return true;
     }
