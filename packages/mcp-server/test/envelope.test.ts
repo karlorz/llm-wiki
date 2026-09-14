@@ -9,12 +9,14 @@ import { startMcpHttpServer } from "../src/server.js";
 import { MAX_READ_PAGE_BYTES } from "../src/tools/reads.js";
 import { makeS3Store, makeTempVault } from "./helpers.js";
 
-async function setupTestServer(opts?: { seedLogS3?: boolean; auditFile?: string }) {
+async function setupTestServer(opts?: { seedLogS3?: boolean; auditFile?: string; gateReady?: boolean }) {
   const vault = await makeTempVault();
   const token = "test-token";
   const hash = createHash("sha256").update(token, "utf8").digest("hex");
   const gate = new ReconcileGate(async () => undefined);
-  await gate.runFirst();
+  if (opts?.gateReady !== false) {
+    await gate.runFirst();
+  }
   const s3 = opts?.seedLogS3
     ? makeS3Store({ "log.md": await readFile(join(vault, "log.md"), "utf8") })
     : undefined;
@@ -1179,6 +1181,96 @@ hosts:
       expect(captureAudit?.path).toBe(sc?.path);
     } finally {
       await ctx.close();
+    }
+  });
+
+  it("wiki_workitem_write and wiki_page_publish HTTP 401 without/unknown bearer and TOOLS_NOT_READY", async () => {
+    const mutating: Array<{
+      name: "wiki_workitem_write" | "wiki_page_publish";
+      path: string;
+      content: string;
+    }> = [
+      {
+        name: "wiki_workitem_write",
+        path: "projects/llm-wiki/knowledge.md",
+        content: "---\ntitle: blocked\n---\nshould not write\n",
+      },
+      {
+        name: "wiki_page_publish",
+        path: "concepts/blocked-publish.md",
+        content: "---\ntitle: Blocked\ncreated: 2026-09-14\nupdated: 2026-09-14\ntype: concept\ntags: []\nsources: []\n---\nshould not write\n",
+      },
+    ];
+
+    const ready = await setupTestServer();
+    try {
+      for (const tool of mutating) {
+        const none = await fetch(`http://127.0.0.1:${ready.port}/mcp`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 50,
+            method: "tools/call",
+            params: { name: tool.name, arguments: { path: tool.path, content: tool.content } },
+          }),
+        });
+        expect(none.status, tool.name).toBe(401);
+        expect(none.headers.get("www-authenticate")).toBe("Bearer");
+        expect(((await none.json()) as { error?: string }).error).toBe("unauthorized");
+
+        const unknown = await fetch(`http://127.0.0.1:${ready.port}/mcp`, {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer unknown-not-in-token-map",
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 51,
+            method: "tools/call",
+            params: { name: tool.name, arguments: { path: tool.path, content: tool.content } },
+          }),
+        });
+        expect(unknown.status, tool.name).toBe(401);
+        expect(((await unknown.json()) as { error?: string }).error).toBe("unauthorized");
+        await expect(readFile(join(ready.vault, tool.path), "utf8")).rejects.toThrow();
+      }
+    } finally {
+      await ready.close();
+    }
+
+    const blocked = await setupTestServer({ gateReady: false });
+    try {
+      for (const tool of mutating) {
+        const res = await fetch(`http://127.0.0.1:${blocked.port}/mcp`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${blocked.token}`,
+            "Content-Type": "application/json",
+            Accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 52,
+            method: "tools/call",
+            params: { name: tool.name, arguments: { path: tool.path, content: tool.content } },
+          }),
+        });
+        expect(res.status).toBe(200);
+        const sc = ((await res.json()) as {
+          result?: { isError?: boolean; structuredContent?: { ok?: boolean; error?: string; path?: string; writer_id?: string } };
+        }).result;
+        expect(sc?.isError).toBe(true);
+        expect(sc?.structuredContent?.ok).toBe(false);
+        expect(sc?.structuredContent?.error).toBe("TOOLS_NOT_READY");
+        expect(sc?.structuredContent?.path).toBeUndefined();
+        expect(sc?.structuredContent?.writer_id).toBeUndefined();
+        await expect(readFile(join(blocked.vault, tool.path), "utf8")).rejects.toThrow();
+      }
+    } finally {
+      await blocked.close();
     }
   });
 });
