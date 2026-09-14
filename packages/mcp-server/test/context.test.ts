@@ -255,6 +255,33 @@ describe("C5 compact activation over MCP and wiki_context", () => {
     }
   });
 
+  it("wiki_context HTTP unknown bearer is 401 and writes nothing", async () => {
+    const ctx = await setupTestServer();
+    const alphaBefore = await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8");
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer unknown-not-in-token-map",
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 71,
+          method: "tools/call",
+          params: { name: "wiki_context", arguments: {} },
+        }),
+      });
+      expect(res.status).toBe(401);
+      expect(res.headers.get("www-authenticate")).toBe("Bearer");
+      expect(((await res.json()) as { error?: string }).error).toBe("unauthorized");
+      expect(await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8")).toBe(alphaBefore);
+    } finally {
+      await ctx.close();
+    }
+  });
+
   it("wiki_context blocks when gate is not ready", async () => {
     const ctx = await setupTestServer({ gateReady: false });
     try {
