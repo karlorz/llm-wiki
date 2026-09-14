@@ -9,7 +9,11 @@ import { z } from "zod";
 import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from "./auth.js";
 import { handleConsoleRequest, isConsolePath, isConsoleRequestAllowed } from "./console.js";
 import { loadConfig, type McpDaemonConfig } from "./config.js";
-import { mcpInitializeProtocolError, mcpToolsListBeforeInitializeError } from "./mcp-initialize.js";
+import {
+  mcpInitializeProtocolError,
+  mcpToolsCallBeforeInitializeError,
+  mcpToolsListBeforeInitializeError,
+} from "./mcp-initialize.js";
 import { ChangedEventHub } from "./events.js";
 import { MCP_INSTRUCTIONS } from "./mcp-instructions.js";
 import { getIssuer, handleOAuthRequest, type OAuthConfig } from "./oauth.js";
@@ -601,6 +605,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const listErr = mcpToolsListBeforeInitializeError(parsed);
         if (listErr) {
           json(res, 200, listErr);
+          return;
+        }
+        const callErr = mcpToolsCallBeforeInitializeError(parsed);
+        if (callErr) {
+          json(res, 200, callErr);
           return;
         }
       }
