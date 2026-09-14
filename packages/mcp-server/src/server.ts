@@ -22,6 +22,7 @@ import {
   mcpResourcesReadBeforeInitializeError,
   mcpResourcesTemplatesListBeforeInitializeError,
   mcpRootsListBeforeInitializeError,
+  mcpSamplingCreateMessageBeforeInitializeError,
   mcpToolsCallBeforeInitializeError,
   mcpToolsListBeforeInitializeError,
 } from "./mcp-initialize.js";
@@ -676,6 +677,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const templatesErr = mcpResourcesTemplatesListBeforeInitializeError(parsed);
         if (templatesErr) {
           json(res, 200, templatesErr);
+          return;
+        }
+        const samplingErr = mcpSamplingCreateMessageBeforeInitializeError(parsed);
+        if (samplingErr) {
+          json(res, 200, samplingErr);
           return;
         }
       }
