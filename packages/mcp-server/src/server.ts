@@ -22,6 +22,7 @@ import {
   mcpResourcesReadBeforeInitializeError,
   mcpResourcesSubscribeBeforeInitializeError,
   mcpResourcesTemplatesListBeforeInitializeError,
+  mcpResourcesUnsubscribeBeforeInitializeError,
   mcpRootsListBeforeInitializeError,
   mcpSamplingCreateMessageBeforeInitializeError,
   mcpToolsCallBeforeInitializeError,
@@ -688,6 +689,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const subscribeErr = mcpResourcesSubscribeBeforeInitializeError(parsed);
         if (subscribeErr) {
           json(res, 200, subscribeErr);
+          return;
+        }
+        const unsubscribeErr = mcpResourcesUnsubscribeBeforeInitializeError(parsed);
+        if (unsubscribeErr) {
+          json(res, 200, unsubscribeErr);
           return;
         }
       }
