@@ -13,6 +13,7 @@ import {
   mcpCompletionCompleteBeforeInitializeError,
   mcpDuplicateInitializeError,
   mcpElicitationCreateBeforeInitializeError,
+  mcpInitializeAfterShutdownError,
   mcpInitializeProtocolError,
   mcpLoggingSetLevelBeforeInitializeError,
   mcpNotificationsCancelledError,
@@ -704,14 +705,19 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
           json(res, 200, elicitationErr);
           return;
         }
-        const duplicateInitErr = mcpDuplicateInitializeError(parsed);
-        if (duplicateInitErr) {
-          json(res, 200, duplicateInitErr);
-          return;
-        }
         const shutdownErr = mcpShutdownBeforeInitializeError(parsed);
         if (shutdownErr) {
           json(res, 200, shutdownErr);
+          return;
+        }
+        const afterShutdownErr = mcpInitializeAfterShutdownError(parsed);
+        if (afterShutdownErr) {
+          json(res, 200, afterShutdownErr);
+          return;
+        }
+        const duplicateInitErr = mcpDuplicateInitializeError(parsed);
+        if (duplicateInitErr) {
+          json(res, 200, duplicateInitErr);
           return;
         }
       }
