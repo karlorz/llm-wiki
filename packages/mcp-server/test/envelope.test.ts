@@ -560,4 +560,68 @@ describe("C4 typed result envelope and request body cap", () => {
       await ctx.close();
     }
   });
+
+  it("wiki_page_publish HTTP missing content or target fail-closed with no file written", async () => {
+    const ctx = await setupTestServer();
+    const target = "concepts/should-not-publish.md";
+    const existing = "concepts/alpha.md";
+    const existingBefore = await readFile(join(ctx.vault, existing), "utf8");
+    const logBefore = await readFile(join(ctx.vault, "log.md"), "utf8");
+
+    async function callPublish(args: Record<string, unknown>, id: number) {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "wiki_page_publish", arguments: args },
+        }),
+      });
+      const body = (await res.json()) as {
+        error?: { code?: number; message?: string };
+        result?: {
+          isError?: boolean;
+          structuredContent?: { ok?: boolean; error?: string; path?: string; writer_id?: string };
+        };
+      };
+      return {
+        status: res.status,
+        jsonrpcError: body.error,
+        isError: body.result?.isError,
+        structured: body.result?.structuredContent,
+        raw: body,
+      };
+    }
+
+    async function assertNoWrite(label: string, out: Awaited<ReturnType<typeof callPublish>>) {
+      expect(out.status, label).toBe(200);
+      const failedClosed = Boolean(out.jsonrpcError) || out.isError === true || out.structured?.ok === false;
+      expect(failedClosed, label).toBe(true);
+      expect(out.structured?.ok, label).not.toBe(true);
+      expect(out.structured?.writer_id, label).toBeUndefined();
+      expect(JSON.stringify(out.raw), label).not.toContain("chatgpt-web");
+      await expect(readFile(join(ctx.vault, target), "utf8"), label).rejects.toThrow();
+      expect(await readFile(join(ctx.vault, existing), "utf8"), label).toBe(existingBefore);
+      expect(await readFile(join(ctx.vault, "log.md"), "utf8"), label).toBe(logBefore);
+    }
+
+    try {
+      await assertNoWrite("missing path", await callPublish({ content: "should not write\n" }, 90));
+      await assertNoWrite("missing content", await callPublish({ path: existing }, 91));
+      await assertNoWrite("empty path", await callPublish({ path: "", content: "should not write\n" }, 92));
+      await assertNoWrite("empty content", await callPublish({ path: existing, content: "" }, 93));
+      const whitespacePath = await callPublish({ path: "   ", content: "should not write\n" }, 94);
+      await assertNoWrite("whitespace path", whitespacePath);
+      expect(whitespacePath.isError).toBe(true);
+      expect(whitespacePath.structured?.error).toBe("USAGE");
+    } finally {
+      await ctx.close();
+    }
+  });
 });
