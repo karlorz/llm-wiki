@@ -995,4 +995,46 @@ hosts:
       await ctx.close();
     }
   });
+
+  it("wiki_read_page HTTP missing path is FILE_NOT_FOUND fail-closed", async () => {
+    const ctx = await setupTestServer();
+    const rel = "concepts/missing-http-read.md";
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 26,
+          method: "tools/call",
+          params: { name: "wiki_read_page", arguments: { path: rel } },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result?: {
+          isError?: boolean;
+          structuredContent?: {
+            ok?: boolean;
+            error?: string;
+            path?: string;
+            markdown?: string;
+            writer_id?: string;
+          };
+        };
+      };
+      expect(body.result?.isError).toBe(true);
+      expect(body.result?.structuredContent?.ok).toBe(false);
+      expect(body.result?.structuredContent?.error).toBe("FILE_NOT_FOUND");
+      expect(body.result?.structuredContent?.path).toBe(rel);
+      expect(body.result?.structuredContent?.markdown).toBeUndefined();
+      expect(body.result?.structuredContent?.writer_id).toBeUndefined();
+    } finally {
+      await ctx.close();
+    }
+  });
 });
