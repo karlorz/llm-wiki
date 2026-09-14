@@ -44,6 +44,7 @@ describe("buildCliSurface", () => {
     expect(surface.get("init")!.has("--force")).toBe(true);
     expect(surface.get("init")!.has("--domain")).toBe(true);
     expect(surface.get("query")!.has("--include-pending")).toBe(true);
+    expect(surface.get("query")!.has("--scope")).toBe(true);
     expect(surface.get("sources.pending")!.has("--include-legacy-archived")).toBe(true);
     expect(surface.get("archive")!.has("--cascade")).toBe(true);
     expect(surface.get("archive")!.has("--apply")).toBe(true);

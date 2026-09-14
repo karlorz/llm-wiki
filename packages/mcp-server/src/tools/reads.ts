@@ -54,7 +54,7 @@ function ensureReady(gate: ReconcileGate): { ok: false; error: "TOOLS_NOT_READY"
 
 export async function handleWikiQuery(
   ctx: ReadContext,
-  input: { query: string; limit?: number; include_pending?: boolean },
+  input: { query: string; limit?: number; include_pending?: boolean; scope?: "typed" | "work" | "all" },
 ) {
   const blocked = ensureReady(ctx.gate);
   if (blocked) return blocked;
@@ -63,6 +63,7 @@ export async function handleWikiQuery(
     text: input.query,
     limit: input.limit,
     includePending: input.include_pending,
+    scope: input.scope,
   });
   if (!result.result.ok) {
     return { ok: false as const, error: result.result.error, detail: result.result };

@@ -1,11 +1,13 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { ok, ExitCode, type Result } from "@skillwiki/shared";
-import { scanVault, readPage } from "../utils/vault.js";
+import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
+import { scanVault, readPage, type VaultPage } from "../utils/vault.js";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { runGraphBuild } from "./graph.js";
 import { fuseRankings, RRF_K } from "../utils/rrf.js";
 import { loadVectorIndex, rankVectorIndex } from "../utils/vector-index.js";
+
+export type QueryScope = "typed" | "work" | "all";
 
 export interface QueryInput {
   text: string;
@@ -13,6 +15,7 @@ export interface QueryInput {
   limit?: number;
   includePending?: boolean;
   hybrid?: boolean;
+  scope?: QueryScope | string;
 }
 
 export interface QueryResult {
@@ -57,14 +60,29 @@ const CONCEPT_INDICATORS = new Set([
   "theory", "approach", "method", "framework", "model", "definition",
 ]);
 
+function resolveQueryScope(value: string | undefined): QueryScope | null {
+  const scope = value ?? "typed";
+  if (scope === "typed" || scope === "work" || scope === "all") return scope;
+  return null;
+}
+
 export async function runQuery(
   input: QueryInput,
 ): Promise<{ exitCode: number; result: Result<QueryOutput> }> {
   const scan = await scanVault(input.vault);
   if (!scan.ok) return { exitCode: ExitCode.VAULT_PATH_INVALID, result: scan };
 
+  const scope = resolveQueryScope(input.scope);
+  if (!scope) {
+    return {
+      exitCode: ExitCode.USAGE,
+      result: err("USAGE", { message: "scope must be typed, work, or all" }),
+    };
+  }
+
   const limit = input.limit ?? 10;
   const queryTerms = tokenize(input.text);
+  const candidates = queryCandidates(scan.data.typedKnowledge, scan.data.workItems, scope);
 
   if (queryTerms.length === 0) {
     return {
@@ -88,13 +106,13 @@ export async function runQuery(
   }
 
   const pages: PageData[] = [];
-  for (const p of scan.data.typedKnowledge) {
+  for (const p of candidates) {
     const text = await readPage(p);
     const fm = extractFrontmatter(text);
     if (!fm.ok) continue;
 
     const title = String(fm.data.title ?? "");
-    const type = String(fm.data.type ?? "");
+    const type = String(fm.data.type ?? (p.relPath.includes("/work/") ? "work" : ""));
     const tags = Array.isArray(fm.data.tags)
       ? fm.data.tags.map(String)
       : [];
@@ -232,6 +250,16 @@ export async function runQuery(
       humanHint,
     }),
   };
+}
+
+function queryCandidates(
+  typedKnowledge: VaultPage[],
+  workItems: VaultPage[],
+  scope: QueryScope,
+): VaultPage[] {
+  if (scope === "work") return workItems;
+  if (scope === "all") return [...typedKnowledge, ...workItems];
+  return typedKnowledge;
 }
 
 // ---------------------------------------------------------------------------

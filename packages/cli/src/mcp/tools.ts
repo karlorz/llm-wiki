@@ -23,18 +23,20 @@ export function registerMcpTools(server: McpServer): void {
   server.registerTool(
     "skillwiki.query",
     {
-      description: "Ranked vault query over typed knowledge (read-only). Returns Result envelope JSON.",
+      description:
+        "Ranked vault query. Default scope is typed knowledge. Use scope=work or all for Layer-3 work items. Returns Result envelope JSON.",
       inputSchema: z.object({
         ...vaultFields,
         text: z.string().min(1).describe("Query text"),
         limit: z.number().int().positive().optional().describe("Max results (default 10)"),
+        scope: z.enum(["typed", "work", "all"]).optional().describe("typed (default), work, or all"),
       }),
     },
-    async ({ vault, wiki, text, limit }) =>
+    async ({ vault, wiki, text, limit, scope }) =>
       runMcpToolHandler("skillwiki.query", { vault, wiki }, async () => {
         const v = await resolveMcpVault({ vault, wiki });
         if (!v.ok) return formatToolResult({ exitCode: 25, result: v });
-        const r = await runQuery({ vault: v.data.vault, text, limit });
+        const r = await runQuery({ vault: v.data.vault, text, limit, scope });
         return formatToolResult(r);
       }),
   );

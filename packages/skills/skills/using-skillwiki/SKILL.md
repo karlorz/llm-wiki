@@ -184,7 +184,7 @@ If the vault has `.WIKI_GIT_FROZEN`:
 |-------|----------------|
 | `wiki-init` | Bootstrap a vault and install `_Templates/web-clipper/llm-wiki-clippings.json` plus import guidance |
 | `wiki-ingest` | Convert URLs, files, or pasted text into typed-knowledge pages |
-| `wiki-query` | Search typed knowledge by default; explicitly requested fresh/raw evidence uses the separate pending channel |
+| `wiki-query` | Search typed knowledge by default; work-queue / doctor / MCP diagnose questions use `wiki_context` or `--scope work` / `--scope all`; explicitly requested fresh/raw evidence uses the separate pending channel |
 | `wiki-lint` | Vault health and lint checks; use `health` for whole-system reports and `lint --summary` for bounded lint buckets |
 | `wiki-crystallize` | Distill the current working session into a typed-knowledge page |
 | `wiki-audit` | Verify raw provenance references and source frontmatter integrity |
@@ -286,7 +286,7 @@ Before asking questions or running scheduled maintenance, resolve the session ki
 ## Typical Workflow
 1. **Init** (`wiki-init`) — create vault, set domain and taxonomy
 2. **Ingest** (`wiki-ingest`) — add sources, build pages
-3. **Query** (`wiki-query`) — search typed knowledge; explicitly include pending captures for fresh/raw intent
+3. **Query** (`wiki-query`) — search typed knowledge; work-queue / doctor / MCP questions use `wiki_context` or `--scope work` / `--scope all`; explicitly include pending captures for fresh/raw intent
 4. **Lint** (`wiki-lint`) — periodic health checks
 5. **Crystallize** (`wiki-crystallize`) — save session insights as pages
 6. **Audit** (`wiki-audit`) — verify source integrity

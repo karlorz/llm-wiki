@@ -296,6 +296,7 @@ program
   .description("score and rank vault pages by relevance to a query")
   .option("--limit <n>", "max results to return", (s) => parseInt(s, 10), 10)
   .option("--include-pending", "include a separate pending-evidence channel")
+  .option("--scope <scope>", "typed, work, or all (default typed)")
   .option("--hybrid", "RRF-fuse 4-signal ranks with the local TF-IDF cache")
   .option("--wiki <name>", "wiki profile name")
   .action(async (text, vault, opts) => {
@@ -307,6 +308,7 @@ program
       limit: opts.limit,
       includePending: opts.includePending,
       hybrid: opts.hybrid,
+      scope: opts.scope,
     }), v.vault, { postCommit: false });
   });
 

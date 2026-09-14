@@ -141,11 +141,13 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
   server.registerTool(
     "wiki_query",
     {
-      description: "Ranked vault query over typed knowledge (read-only).",
+      description:
+        "Ranked vault query. Default scope is typed knowledge only. Use scope=work or scope=all for Layer-3 work items; wiki_context lists active work.",
       inputSchema: z.object({
         query: z.string().min(1),
         limit: z.number().int().positive().optional(),
         include_pending: z.boolean().optional(),
+        scope: z.enum(["typed", "work", "all"]).optional(),
       }),
       outputSchema: z.object({
         ...failureShape,

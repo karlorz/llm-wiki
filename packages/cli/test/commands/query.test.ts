@@ -595,4 +595,85 @@ describe("query", () => {
     expect(firstCycle).toBeDefined();
     expect(top!.score).toBeGreaterThan(firstCycle!.score);
   });
+
+  it("keeps default typed query from ranking Layer-3 work items", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "queries"), { recursive: true });
+    mkdirSync(join(v, "projects", "llm-wiki", "work", "2026-09-14-doctor-grok-plugin-channel"), { recursive: true });
+    writeFileSync(
+      join(v, "queries", "alpha.md"),
+      "---\ntitle: Alpha\ntype: query\ncreated: 2026-09-14\nupdated: 2026-09-14\ntags: []\nsources: []\n---\nTyped alpha page.\n",
+    );
+    writeFileSync(
+      join(v, "projects", "llm-wiki", "work", "2026-09-14-doctor-grok-plugin-channel", "spec.md"),
+      "---\ntitle: Doctor does not see the Grok plugin channel\nkind: issue\nstatus: planned\n---\nFix plugin_version_drift for Grok.\n",
+    );
+
+    const r = await runQuery({ text: "doctor grok plugin", vault: v });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) return;
+    expect(r.result.data.results.some((item) => item.path.includes("projects/llm-wiki/work/"))).toBe(false);
+  });
+
+  it("ranks work-item specs when scope is work", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "queries"), { recursive: true });
+    mkdirSync(join(v, "projects", "llm-wiki", "work", "2026-09-14-doctor-grok-plugin-channel"), { recursive: true });
+    writeFileSync(
+      join(v, "queries", "2026-07-04-knowledge-monetization-strategy.md"),
+      "---\ntitle: Knowledge Monetization Strategy\ntype: query\ncreated: 2026-07-04\nupdated: 2026-07-04\ntags: []\nsources: []\n---\nskillwiki doctor plugin_version_drift Grok plugin HTTP MCP work items.\n",
+    );
+    writeFileSync(
+      join(v, "projects", "llm-wiki", "work", "2026-09-14-doctor-grok-plugin-channel", "spec.md"),
+      "---\ntitle: Doctor does not see the Grok plugin channel\nkind: issue\nstatus: planned\n---\nFix plugin_version_drift for Grok.\n",
+    );
+
+    const r = await runQuery({ text: "llm-wiki open work HTTP MCP doctor", vault: v, scope: "work", limit: 5 });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) return;
+    expect(r.result.data.results.some((item) =>
+      item.path === "projects/llm-wiki/work/2026-09-14-doctor-grok-plugin-channel/spec.md",
+    )).toBe(true);
+    expect(r.result.data.results.some((item) => item.path.startsWith("queries/"))).toBe(false);
+  });
+
+  it("merges work items with typed pages when scope is all", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "queries"), { recursive: true });
+    mkdirSync(join(v, "projects", "llm-wiki", "work", "2026-09-14-doctor-grok-plugin-channel"), { recursive: true });
+    writeFileSync(
+      join(v, "queries", "2026-07-04-knowledge-monetization-strategy.md"),
+      "---\ntitle: Knowledge Monetization Strategy\ntype: query\ncreated: 2026-07-04\nupdated: 2026-07-04\ntags: []\nsources: []\n---\nskillwiki doctor plugin_version_drift Grok plugin HTTP MCP work items packet.\n".repeat(40),
+    );
+    writeFileSync(
+      join(v, "projects", "llm-wiki", "work", "2026-09-14-doctor-grok-plugin-channel", "spec.md"),
+      "---\ntitle: Doctor does not see the Grok plugin channel\nkind: issue\nstatus: planned\n---\nskillwiki doctor plugin_version_drift Grok plugin.\n",
+    );
+
+    const r = await runQuery({
+      text: "skillwiki doctor plugin_version_drift Grok plugin",
+      vault: v,
+      scope: "all",
+      limit: 5,
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.result.ok).toBe(true);
+    if (!r.result.ok) return;
+    expect(r.result.data.results[0]?.path).not.toBe("queries/2026-07-04-knowledge-monetization-strategy.md");
+    expect(r.result.data.results.some((item) =>
+      item.path === "projects/llm-wiki/work/2026-09-14-doctor-grok-plugin-channel/spec.md",
+    )).toBe(true);
+  });
+
+  it("rejects an unknown query scope", async () => {
+    const r = await runQuery({ text: "alpha", vault: VAULT, scope: "inbox" });
+    expect(r.exitCode).not.toBe(0);
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toBe("USAGE");
+  });
 });
