@@ -711,4 +711,69 @@ hosts:
       await ctx.close();
     }
   });
+
+  it("wiki_workitem_write HTTP missing and empty project fail-closed with no file written", async () => {
+    const ctx = await setupTestServer();
+    const logBefore = await readFile(join(ctx.vault, "log.md"), "utf8");
+
+    async function callWrite(path: string, id: number) {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: {
+            name: "wiki_workitem_write",
+            arguments: { path, content: "should not write\n" },
+          },
+        }),
+      });
+      const body = (await res.json()) as {
+        error?: { code?: number; message?: string };
+        result?: {
+          isError?: boolean;
+          structuredContent?: { ok?: boolean; error?: string; path?: string; writer_id?: string };
+        };
+      };
+      return { status: res.status, jsonrpcError: body.error, isError: body.result?.isError, structured: body.result?.structuredContent, raw: body };
+    }
+
+    async function assertNoWrite(label: string, rel: string, id: number) {
+      const out = await callWrite(rel, id);
+      expect(out.status, label).toBe(200);
+      const failedClosed = Boolean(out.jsonrpcError) || out.isError === true || out.structured?.ok === false;
+      expect(failedClosed, label).toBe(true);
+      expect(out.structured?.ok, label).not.toBe(true);
+      expect(out.structured?.writer_id, label).toBeUndefined();
+      expect(JSON.stringify(out.raw), label).not.toContain("chatgpt-web");
+      await expect(readFile(join(ctx.vault, rel), "utf8"), label).rejects.toThrow();
+      expect(await readFile(join(ctx.vault, "log.md"), "utf8"), label).toBe(logBefore);
+    }
+
+    try {
+      await assertNoWrite(
+        "empty project slug",
+        "projects//work/2026-09-14-missing-project/spec.md",
+        50,
+      );
+      await assertNoWrite(
+        "whitespace project slug",
+        "projects/ /work/2026-09-14-missing-project/spec.md",
+        51,
+      );
+      await assertNoWrite(
+        "missing project slug",
+        "projects/work/2026-09-14-missing-project/spec.md",
+        52,
+      );
+    } finally {
+      await ctx.close();
+    }
+  });
 });
