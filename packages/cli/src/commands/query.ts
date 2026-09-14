@@ -51,6 +51,16 @@ const W_TYPE_AFFINITY = 1.0;
 // Non-seed discount: pages with zero keyword match get their structural
 // signals scaled down so they never outrank direct keyword matches.
 const NON_SEED_FACTOR = 0.4;
+
+// Structural signals reward connection to relevant pages. On large vaults,
+// generic query terms turn thousands of pages into weak keyword seeds, and
+// page families that share identical source lists (packet/report clusters)
+// self-reinforce via source-overlap sums until they outrank strong direct
+// matches — the same failure mode the 2026-08-04 historical-cycle guardrail
+// addressed for research cycles. For scope=work and the work pool of
+// scope=all, only the strongest keyword seeds provide structural signal.
+// Default typed ranking (and the typed pool of scope=all) is unchanged.
+const STRUCTURAL_SEED_TOP_K = 20;
 const HISTORICAL_CYCLE_FACTOR = 0.55;
 const HISTORICAL_CYCLE_RE = /(?:^|\/)(?:\d{4}-\d{2}-\d{2}-)?.*\b(?:daily|deep|maintenance|research|office[- ]hours|sleep)\b.*\b(?:cycle|run|review|research)\b/i;
 
@@ -131,13 +141,23 @@ export async function runQuery(
   let results: QueryResult[];
   let rankingGuardrails: QueryOutput["ranking_guardrails"];
   if (scope === "all") {
-    const rankedWork = rankPages(pages.filter((page) => isWorkPath(page.relPath)), graph, queryTerms);
+    const rankedWork = rankPages(
+      pages.filter((page) => isWorkPath(page.relPath)),
+      graph,
+      queryTerms,
+      STRUCTURAL_SEED_TOP_K,
+    );
     const rankedTyped = rankPages(pages.filter((page) => !isWorkPath(page.relPath)), graph, queryTerms);
     structural = [...rankedWork.results, ...rankedTyped.results];
     results = zipMergeScopeResults(rankedWork.results, rankedTyped.results, limit);
     rankingGuardrails = rankedTyped.rankingGuardrails;
   } else {
-    const ranked = rankPages(pages, graph, queryTerms);
+    const ranked = rankPages(
+      pages,
+      graph,
+      queryTerms,
+      scope === "work" ? STRUCTURAL_SEED_TOP_K : undefined,
+    );
     structural = ranked.results;
     results = structural.slice(0, limit);
     rankingGuardrails = ranked.rankingGuardrails;
@@ -271,25 +291,42 @@ function rankPages(
   pages: PageData[],
   graph: GraphData | null,
   queryTerms: string[],
+  structuralSeedLimit?: number,
 ): {
   results: QueryResult[];
   rankingGuardrails?: QueryOutput["ranking_guardrails"];
 } {
-  const seedPaths = new Set<string>();
-  const operationalSeedPaths = new Set<string>();
+  const seedPages: PageData[] = [];
   let historicalCyclePageCount = 0;
   let hasDirectOperationalSeed = false;
   for (const page of pages) {
     if (page.historicalCycle) historicalCyclePageCount += 1;
     if (page.keywordScore <= 0) continue;
-    seedPaths.add(page.relPath);
-    if (!page.historicalCycle) {
-      operationalSeedPaths.add(page.relPath);
-      hasDirectOperationalSeed = true;
-    }
+    seedPages.push(page);
+    if (!page.historicalCycle) hasDirectOperationalSeed = true;
   }
   const suppressRepetitiveHistoricalCycles =
     historicalCyclePageCount >= 3 && hasDirectOperationalSeed;
+
+  // Structural seed gating (work/all scopes): only the strongest keyword
+  // matches provide structural signal, so weak-seed page families sharing
+  // identical source lists cannot self-reinforce past direct matches.
+  const gatedSeedPages =
+    structuralSeedLimit !== undefined && seedPages.length > structuralSeedLimit
+      ? [...seedPages]
+          .sort(
+            (a, b) =>
+              b.keywordScore - a.keywordScore || a.relPath.localeCompare(b.relPath),
+          )
+          .slice(0, structuralSeedLimit)
+      : seedPages;
+
+  const seedPaths = new Set(gatedSeedPages.map((page) => page.relPath));
+  const operationalSeedPaths = new Set(
+    gatedSeedPages
+      .filter((page) => !page.historicalCycle)
+      .map((page) => page.relPath),
+  );
 
   // When historical-cycle suppression is active, structural signals must not
   // use historical-cycle pages as seeds — otherwise large research-cycle
