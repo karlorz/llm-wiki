@@ -181,7 +181,7 @@ snapshot_direct_s3_preflight() {
     fi
     SNAPSHOT_REMOTE_INVENTORY_READY=1
 
-    grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|\.playwright-cli/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" | LC_ALL=C sort -u > "$direct_notes" || true
+    grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|\.playwright-cli/|\.superpowers/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" | LC_ALL=C sort -u > "$direct_notes" || true
     (
         cd "$SNAPSHOT_WORKTREE" || exit 1
         if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
@@ -504,6 +504,20 @@ snapshot_live_projection_matches_frozen() {
     return 0
 }
 
+snapshot_projection_log_is_store_ahead() {
+    local freeze="${1:-}"
+    local remote="${2:-}"
+    local freeze_bytes remote_bytes
+    [ -f "$freeze" ] && [ -f "$remote" ] || return 1
+    freeze_bytes="$(wc -c < "$freeze" | tr -d ' ')"
+    remote_bytes="$(wc -c < "$remote" | tr -d ' ')"
+    case "$freeze_bytes" in ''|*[!0-9]*) return 1 ;; esac
+    case "$remote_bytes" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$freeze_bytes" -gt 0 ] || return 1
+    [ "$remote_bytes" -gt "$freeze_bytes" ] || return 1
+    head -c "$freeze_bytes" "$remote" | cmp -s "$freeze" -
+}
+
 snapshot_wait_for_direct_projection_parity() {
     if [ -z "$PROJECTION_STATE_DIR" ]; then
         # Test-only skip path above. Production always has frozen state.
@@ -543,6 +557,19 @@ snapshot_wait_for_direct_projection_parity() {
                 remote_index_sha="$(snapshot_projection_hash_file "$remote_index" 2>/dev/null || echo unavailable)"
                 remote_log_sha="$(snapshot_projection_hash_file "$remote_log" 2>/dev/null || echo unavailable)"
                 log "projection direct-store parity confirmed attempts=$attempts expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 live_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 remote_index_sha256=$remote_index_sha expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 live_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 remote_log_sha256=$remote_log_sha"
+                return 0
+            fi
+            if cmp -s "$PROJECTION_STATE_DIR/expected-index.md" "$remote_index" \
+                && snapshot_projection_log_is_store_ahead "$PROJECTION_STATE_DIR/expected-log.md" "$remote_log"; then
+                if ! cp "$remote_index" "$PROJECTION_STATE_DIR/expected-index.md" \
+                    || ! cp "$remote_log" "$PROJECTION_STATE_DIR/expected-log.md"; then
+                    log "ERROR: could not adopt store-ahead projection bytes"
+                    return 1
+                fi
+                snapshot_record_projection_expectation_hashes || return 1
+                remote_index_sha="$(snapshot_projection_hash_file "$remote_index" 2>/dev/null || echo unavailable)"
+                remote_log_sha="$(snapshot_projection_hash_file "$remote_log" 2>/dev/null || echo unavailable)"
+                log "projection store-ahead log accepted attempts=$attempts expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 remote_index_sha256=$remote_index_sha expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 remote_log_sha256=$remote_log_sha"
                 return 0
             fi
         fi
@@ -874,6 +901,7 @@ RCLONE_OPTS=(
     --exclude ".claude/**"
     --exclude ".antigravitycli/**"
     --exclude ".playwright-cli/**"
+    --exclude ".superpowers/**"
     --exclude "._*"
     --exclude ".conflict*"
     --exclude "*.conflict-*"
