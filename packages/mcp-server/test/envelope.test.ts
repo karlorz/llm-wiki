@@ -247,4 +247,63 @@ describe("C4 typed result envelope and request body cap", () => {
       await ctx.close();
     }
   });
+
+  it("wiki_workitem_write HTTP missing path or content fail-closed with no file written", async () => {
+    const ctx = await setupTestServer();
+    const rel = "projects/llm-wiki/work/2026-09-14-missing-fields/spec.md";
+
+    async function callWrite(args: Record<string, unknown>, id: number) {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "wiki_workitem_write", arguments: args },
+        }),
+      });
+      const body = (await res.json()) as {
+        error?: { code?: number; message?: string };
+        result?: {
+          isError?: boolean;
+          structuredContent?: { ok?: boolean; error?: string; path?: string; writer_id?: string };
+        };
+      };
+      return {
+        status: res.status,
+        jsonrpcError: body.error,
+        isError: body.result?.isError,
+        structured: body.result?.structuredContent,
+        raw: body,
+      };
+    }
+
+    async function assertNoWrite(label: string, out: Awaited<ReturnType<typeof callWrite>>) {
+      expect(out.status, label).toBe(200);
+      const failedClosed = Boolean(out.jsonrpcError) || out.isError === true || out.structured?.ok === false;
+      expect(failedClosed, label).toBe(true);
+      expect(out.structured?.ok, label).not.toBe(true);
+      expect(out.structured?.writer_id, label).toBeUndefined();
+      expect(JSON.stringify(out.raw), label).not.toContain("chatgpt-web");
+      await expect(readFile(join(ctx.vault, rel), "utf8"), label).rejects.toThrow();
+    }
+
+    try {
+      await assertNoWrite("missing path", await callWrite({ content: "should not write\n" }, 90));
+      await assertNoWrite("missing content", await callWrite({ path: rel }, 91));
+      await assertNoWrite("empty path", await callWrite({ path: "", content: "should not write\n" }, 92));
+      await assertNoWrite("empty content", await callWrite({ path: rel, content: "" }, 93));
+      const whitespace = await callWrite({ path: "   ", content: "should not write\n" }, 94);
+      await assertNoWrite("whitespace path", whitespace);
+      expect(whitespace.isError).toBe(true);
+      expect(whitespace.structured?.error).toBe("USAGE");
+    } finally {
+      await ctx.close();
+    }
+  });
 });
