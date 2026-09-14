@@ -10,6 +10,7 @@ import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from 
 import { handleConsoleRequest, isConsolePath, isConsoleRequestAllowed } from "./console.js";
 import { loadConfig, type McpDaemonConfig } from "./config.js";
 import {
+  mcpCompletionCompleteAfterShutdownError,
   mcpCompletionCompleteBeforeInitializeError,
   mcpDuplicateInitializeError,
   mcpElicitationCreateBeforeInitializeError,
@@ -761,6 +762,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const resourcesTemplatesListAfterShutdownErr = mcpResourcesTemplatesListAfterShutdownError(parsed);
         if (resourcesTemplatesListAfterShutdownErr) {
           json(res, 200, resourcesTemplatesListAfterShutdownErr);
+          return;
+        }
+        const completionCompleteAfterShutdownErr = mcpCompletionCompleteAfterShutdownError(parsed);
+        if (completionCompleteAfterShutdownErr) {
+          json(res, 200, completionCompleteAfterShutdownErr);
           return;
         }
         const duplicateInitErr = mcpDuplicateInitializeError(parsed);
