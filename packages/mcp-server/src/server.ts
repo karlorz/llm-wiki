@@ -13,6 +13,7 @@ import {
   mcpInitializeProtocolError,
   mcpPromptsListBeforeInitializeError,
   mcpResourcesListBeforeInitializeError,
+  mcpResourcesReadBeforeInitializeError,
   mcpToolsCallBeforeInitializeError,
   mcpToolsListBeforeInitializeError,
 } from "./mcp-initialize.js";
@@ -622,6 +623,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const promptsErr = mcpPromptsListBeforeInitializeError(parsed);
         if (promptsErr) {
           json(res, 200, promptsErr);
+          return;
+        }
+        const resourcesReadErr = mcpResourcesReadBeforeInitializeError(parsed);
+        if (resourcesReadErr) {
+          json(res, 200, resourcesReadErr);
           return;
         }
       }
