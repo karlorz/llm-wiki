@@ -357,4 +357,65 @@ describe("C4 typed result envelope and request body cap", () => {
       await ctx.close();
     }
   });
+
+  it("wiki_log_append HTTP missing content and bad operation_id fail-closed with log unchanged", async () => {
+    const ctx = await setupTestServer();
+    const before = await readFile(join(ctx.vault, "log.md"), "utf8");
+
+    async function callAppend(args: Record<string, unknown>, id: number) {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "wiki_log_append", arguments: args },
+        }),
+      });
+      const body = (await res.json()) as {
+        error?: { code?: number; message?: string };
+        result?: {
+          isError?: boolean;
+          structuredContent?: { ok?: boolean; error?: string; path?: string; writer_id?: string };
+        };
+      };
+      return {
+        status: res.status,
+        jsonrpcError: body.error,
+        isError: body.result?.isError,
+        structured: body.result?.structuredContent,
+        raw: body,
+      };
+    }
+
+    async function assertNoAppend(label: string, out: Awaited<ReturnType<typeof callAppend>>) {
+      expect(out.status, label).toBe(200);
+      const failedClosed = Boolean(out.jsonrpcError) || out.isError === true || out.structured?.ok === false;
+      expect(failedClosed, label).toBe(true);
+      expect(out.structured?.ok, label).not.toBe(true);
+      expect(out.structured?.writer_id, label).toBeUndefined();
+      expect(JSON.stringify(out.raw), label).not.toContain("chatgpt-web");
+      expect(await readFile(join(ctx.vault, "log.md"), "utf8"), label).toBe(before);
+    }
+
+    try {
+      await assertNoAppend("missing content", await callAppend({}, 80));
+      await assertNoAppend("empty content", await callAppend({ content: "" }, 81));
+      const whitespace = await callAppend({ content: "   " }, 82);
+      await assertNoAppend("whitespace content", whitespace);
+      expect(whitespace.isError).toBe(true);
+      expect(whitespace.structured?.error).toBe("USAGE");
+      await assertNoAppend(
+        "bad operation_id",
+        await callAppend({ content: "should not append", operation_id: "not-64-hex" }, 83),
+      );
+    } finally {
+      await ctx.close();
+    }
+  });
 });
