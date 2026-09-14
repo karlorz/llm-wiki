@@ -847,4 +847,38 @@ hosts:
       await ctx.close();
     }
   });
+
+  it("wiki_workitem_write HTTP create: omit base_sha256 when path is absent", async () => {
+    const ctx = await setupTestServer();
+    const rel = "projects/llm-wiki/knowledge.md";
+    const body = "---\ntitle: k\n---\nbody\n";
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 15,
+          method: "tools/call",
+          params: {
+            name: "wiki_workitem_write",
+            arguments: { path: rel, content: body },
+          },
+        }),
+      });
+      const sc = ((await res.json()) as {
+        result?: { structuredContent?: { ok?: boolean; path?: string; writer_id?: string } };
+      }).result?.structuredContent;
+      expect(sc?.ok).toBe(true);
+      expect(sc?.path).toBe(rel);
+      expect(sc?.writer_id).toBeUndefined();
+      expect(await readFile(join(ctx.vault, rel), "utf8")).toBe(body);
+    } finally {
+      await ctx.close();
+    }
+  });
 });
