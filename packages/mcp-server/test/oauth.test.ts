@@ -5,11 +5,24 @@ import { join } from "node:path";
 import { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bearerToken, resolveWriter, unauthorizedHeaders } from "../src/auth.js";
-import { hashPassword } from "../src/oauth.js";
+import { consentClientLabel, hashPassword } from "../src/oauth.js";
 import { FileOAuthStore, InMemoryOAuthStore } from "../src/oauth-store.js";
 import { ReconcileGate } from "../src/reconcile.js";
 import { startMcpHttpServer } from "../src/server.js";
 import { makeTempVault } from "./helpers.js";
+
+describe("OAuth consent client label", () => {
+  it("uses the registered client name when present", () => {
+    expect(consentClientLabel("Doubao")).toBe("Doubao");
+    expect(consentClientLabel("  ChatGPT  ")).toBe("ChatGPT");
+  });
+
+  it("falls back to this client instead of hard-coding ChatGPT", () => {
+    expect(consentClientLabel(undefined)).toBe("this client");
+    expect(consentClientLabel("")).toBe("this client");
+    expect(consentClientLabel("   ")).toBe("this client");
+  });
+});
 
 describe("OAuth Writer Resolution (auth.ts)", () => {
   it("resolves host-id first when token is in tokenMap", async () => {
@@ -247,6 +260,157 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
     }
   });
 
+  it("POST /token fail-closes when redirect_uri does not match the authorization code", async () => {
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const store = new InMemoryOAuthStore();
+    const server = await startMcpHttpServer({
+      bind: "127.0.0.1",
+      port: 0,
+      vaultDir,
+      tokenMap: new Map(),
+      gate,
+      putObject: async () => undefined,
+      oauth: {
+        enabled: true,
+        passwordHash: hashPassword("mypassword"),
+        store,
+      },
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const baseUrl = `http://127.0.0.1:${port}`;
+      const codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk_long_verifier_string_at_least_43_chars";
+      const codeChallenge = createHash("sha256").update(codeVerifier, "ascii").digest("base64url");
+      const issued = "http://127.0.0.1/callback";
+      const authRes = await fetch(`${baseUrl}/authorize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          password: "mypassword",
+          client_id: "client-1",
+          redirect_uri: issued,
+          code_challenge: codeChallenge,
+          code_challenge_method: "S256",
+          response_type: "code",
+        }).toString(),
+        redirect: "manual",
+      });
+      expect(authRes.status).toBe(302);
+      const code = new URL(authRes.headers.get("location")!).searchParams.get("code");
+      expect(code).toBeTruthy();
+
+      const tokenRes = await fetch(`${baseUrl}/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: "client-1",
+          code: code!,
+          redirect_uri: "http://127.0.0.1/other",
+          code_verifier: codeVerifier,
+        }).toString(),
+      });
+      expect(tokenRes.status).toBe(400);
+      const json = (await tokenRes.json()) as { error?: string; error_description?: string; access_token?: string };
+      expect(json).toEqual({ error: "invalid_grant", error_description: "redirect_uri mismatch" });
+      expect(json.access_token).toBeUndefined();
+
+      const healthRes = await fetch(`${baseUrl}/health`);
+      expect(healthRes.status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
+  it("POST /revoke fail-closes for an unknown token and an already-revoked refresh token", async () => {
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const store = new InMemoryOAuthStore();
+    const server = await startMcpHttpServer({
+      bind: "127.0.0.1",
+      port: 0,
+      vaultDir,
+      tokenMap: new Map(),
+      gate,
+      putObject: async () => undefined,
+      oauth: {
+        enabled: true,
+        passwordHash: hashPassword("mypassword"),
+        store,
+      },
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const baseUrl = `http://127.0.0.1:${port}`;
+      const postRevoke = (token: string) =>
+        fetch(`${baseUrl}/revoke`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ token }).toString(),
+        });
+
+      const unknown = await postRevoke("unknown-oauth-token");
+      expect(unknown.status).toBe(404);
+      const unknownJson = (await unknown.json()) as { error?: string; access_token?: string };
+      expect(unknownJson).toEqual({ error: "not_found" });
+      expect(unknownJson.access_token).toBeUndefined();
+
+      const codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk_long_verifier_string_at_least_43_chars";
+      const codeChallenge = createHash("sha256").update(codeVerifier, "ascii").digest("base64url");
+      const redirectUri = "http://127.0.0.1/callback";
+      const authRes = await fetch(`${baseUrl}/authorize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          password: "mypassword",
+          client_id: "client-1",
+          redirect_uri: redirectUri,
+          code_challenge: codeChallenge,
+          code_challenge_method: "S256",
+          response_type: "code",
+        }).toString(),
+        redirect: "manual",
+      });
+      const code = new URL(authRes.headers.get("location")!).searchParams.get("code");
+      const tokenRes = await fetch(`${baseUrl}/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: "client-1",
+          code: code!,
+          redirect_uri: redirectUri,
+          code_verifier: codeVerifier,
+        }).toString(),
+      });
+      const tokenBody = (await tokenRes.json()) as { refresh_token?: string };
+      const refreshToken = tokenBody.refresh_token!;
+      expect(refreshToken).toBeTruthy();
+
+      const rotate = await fetch(`${baseUrl}/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+        }).toString(),
+      });
+      expect(rotate.status).toBe(200);
+
+      const revoked = await postRevoke(refreshToken);
+      expect(revoked.status).toBe(404);
+      const revokedJson = (await revoked.json()) as { error?: string; access_token?: string };
+      expect(revokedJson).toEqual({ error: "not_found" });
+      expect(revokedJson.access_token).toBeUndefined();
+
+      const healthRes = await fetch(`${baseUrl}/health`);
+      expect(healthRes.status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
   it("GET /authorize without password returns an HTML login form instead of JSON 401", async () => {
     const gate = new ReconcileGate(async () => undefined);
     await gate.runFirst();
@@ -285,7 +449,95 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       expect(html).toContain('name="client_id"');
       expect(html).toContain("chatgpt-dcr-client");
       expect(html).toContain("state-xyz");
+      expect(html).toContain("allow this client to access this vault");
+      expect(html).not.toContain("ChatGPT");
       expect(html).not.toContain("unused");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
+  it("GET /authorize names the registered client instead of hard-coding ChatGPT", async () => {
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const store = new InMemoryOAuthStore();
+    await store.saveClient({
+      clientId: "doubao-dcr-client",
+      clientName: "Doubao",
+      redirectUris: ["http://127.0.0.1/callback"],
+    });
+    const server = await startMcpHttpServer({
+      bind: "127.0.0.1",
+      port: 0,
+      vaultDir,
+      tokenMap: new Map(),
+      gate,
+      putObject: async () => undefined,
+      oauth: {
+        enabled: true,
+        passwordHash: "unused",
+        store,
+      },
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const baseUrl = `http://127.0.0.1:${port}`;
+      const qs = new URLSearchParams({
+        response_type: "code",
+        client_id: "doubao-dcr-client",
+        redirect_uri: "http://127.0.0.1/callback",
+        code_challenge: "test-challenge",
+        code_challenge_method: "S256",
+      });
+      const res = await fetch(`${baseUrl}/authorize?${qs.toString()}`);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("allow Doubao to access this vault");
+      expect(html).not.toContain("ChatGPT");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
+  it("GET /authorize HTML-escapes a hostile registered client name", async () => {
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const store = new InMemoryOAuthStore();
+    await store.saveClient({
+      clientId: "escape-dcr-client",
+      clientName: `<script>alert(1)</script> & "quoted"`,
+      redirectUris: ["http://127.0.0.1/callback"],
+    });
+    const server = await startMcpHttpServer({
+      bind: "127.0.0.1",
+      port: 0,
+      vaultDir,
+      tokenMap: new Map(),
+      gate,
+      putObject: async () => undefined,
+      oauth: {
+        enabled: true,
+        passwordHash: "unused",
+        store,
+      },
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const baseUrl = `http://127.0.0.1:${port}`;
+      const qs = new URLSearchParams({
+        response_type: "code",
+        client_id: "escape-dcr-client",
+        redirect_uri: "http://127.0.0.1/callback",
+        code_challenge: "test-challenge",
+        code_challenge_method: "S256",
+      });
+      const res = await fetch(`${baseUrl}/authorize?${qs.toString()}`);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain(
+        "allow &lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;quoted&quot; to access this vault",
+      );
+      expect(html).not.toContain("<script>alert(1)</script>");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
     }
@@ -498,6 +750,34 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       expect(ctxRes.status).toBe(200);
       const ctxData = (await ctxRes.json()) as { result?: { structuredContent?: { writer_id?: string } } };
       expect(ctxData.result?.structuredContent?.writer_id).toBe("chatgpt-web");
+
+      const statusRes = await fetch(`${baseUrl}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 21,
+          method: "tools/call",
+          params: { name: "wiki_status", arguments: {} },
+        }),
+      });
+      expect(statusRes.status).toBe(200);
+      const statusData = (await statusRes.json()) as {
+        result?: {
+          structuredContent?: {
+            writer_id?: string;
+            host_id?: string;
+            fleet?: { identity_status?: string };
+          };
+        };
+      };
+      expect(statusData.result?.structuredContent?.writer_id).toBe("chatgpt-web");
+      expect(statusData.result?.structuredContent?.host_id).toBe("chatgpt-web");
+      expect(statusData.result?.structuredContent?.fleet?.identity_status).toBeDefined();
 
       // 12. Call wiki_capture -> audits as chatgpt-web in host_id
       const captureRes = await fetch(`${baseUrl}/mcp`, {

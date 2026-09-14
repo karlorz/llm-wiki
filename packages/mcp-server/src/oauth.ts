@@ -116,11 +116,17 @@ const AUTHORIZE_HIDDEN_KEYS = [
   "resource",
 ] as const;
 
-function authorizeLoginHtml(params: Record<string, string>, error?: string): string {
+export function consentClientLabel(clientName?: string | null): string {
+  const trimmed = clientName?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : "this client";
+}
+
+function authorizeLoginHtml(params: Record<string, string>, error?: string, clientName?: string | null): string {
   const hiddens = AUTHORIZE_HIDDEN_KEYS.filter((key) => params[key])
     .map((key) => `<input type="hidden" name="${key}" value="${escapeHtml(params[key])}">`)
     .join("\n");
   const err = error ? `<p role="alert">${escapeHtml(error)}</p>` : "";
+  const clientLabel = escapeHtml(consentClientLabel(clientName));
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -130,7 +136,7 @@ function authorizeLoginHtml(params: Record<string, string>, error?: string): str
 </head>
 <body>
 <h1>SkillWiki</h1>
-<p>Enter the operator password to allow ChatGPT to access this vault.</p>
+<p>Enter the operator password to allow ${clientLabel} to access this vault.</p>
 ${err}
 <form method="post" action="/authorize">
 ${hiddens}
@@ -298,14 +304,16 @@ export async function handleOAuthRequest(
 
     const wantsHtml =
       req.method === "GET" || (req.headers["content-type"] ?? "").includes("application/x-www-form-urlencoded");
+    const registeredClient = await store.getClient(client_id);
+    const clientName = registeredClient?.clientName;
     if (!password && req.method === "GET") {
-      htmlResponse(res, 200, authorizeLoginHtml(params));
+      htmlResponse(res, 200, authorizeLoginHtml(params, undefined, clientName));
       return true;
     }
 
     if (!oauthCfg.passwordHash || !password || !verifyPassword(password, oauthCfg.passwordHash)) {
       if (wantsHtml) {
-        htmlResponse(res, 401, authorizeLoginHtml(params, "Invalid operator password"));
+        htmlResponse(res, 401, authorizeLoginHtml(params, "Invalid operator password", clientName));
         return true;
       }
       jsonResponse(res, 401, { error: "access_denied", error_description: "Invalid operator password" });
@@ -370,6 +378,11 @@ export async function handleOAuthRequest(
 
       if (!verifyPkce(code_verifier, authCode.codeChallenge, authCode.codeChallengeMethod)) {
         jsonResponse(res, 400, { error: "invalid_grant", error_description: "Code verifier does not match challenge" });
+        return true;
+      }
+
+      if (authCode.redirectUri !== (params.redirect_uri ?? "")) {
+        jsonResponse(res, 400, { error: "invalid_grant", error_description: "redirect_uri mismatch" });
         return true;
       }
 
