@@ -170,6 +170,22 @@ describe("wiki_page_publish CAS", () => {
     expect(await readFile(join(vault, "concepts/alpha.md"), "utf8")).toBe(next);
   });
 
+  it("rejects overwrite of an existing typed page without base_sha256", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const original = await readFile(join(vault, "concepts/alpha.md"), "utf8");
+    const result = await wikiPagePublish(
+      { vaultDir: vault, hostId: "macos-dev", gate, putObject: async () => undefined },
+      { path: "concepts/alpha.md", content: original.replace("Alpha concept body.", "clobber") },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toBe("USAGE");
+    expect((result as { writer_id?: string }).writer_id).toBeUndefined();
+    expect(await readFile(join(vault, "concepts/alpha.md"), "utf8")).toBe(original);
+  });
+
   it("denies raw/ paths", async () => {
     const vault = await makeTempVault();
     const gate = readyGate();
