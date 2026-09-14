@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -500,6 +500,62 @@ describe("C4 typed result envelope and request body cap", () => {
       await assertNoWrite("whitespace title", whitespace);
       expect(whitespace.isError).toBe(true);
       expect(whitespace.structured?.error).toBe("USAGE");
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("wiki_workitem_write HTTP CAS: stale base_sha256 is FILE_CHANGED and writes nothing", async () => {
+    const ctx = await setupTestServer();
+    const rel = "projects/llm-wiki/work/2026-09-14-http-cas/spec.md";
+    const original = "---\nstatus: planned\n---\nold\n";
+    const next = "---\nstatus: in-progress\n---\nnew\n";
+    const originalSha = createHash("sha256").update(Buffer.from(original, "utf8")).digest("hex");
+    await mkdir(join(ctx.vault, "projects/llm-wiki/work/2026-09-14-http-cas"), { recursive: true });
+    await writeFile(join(ctx.vault, rel), original, "utf8");
+    try {
+      const stale = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 7,
+          method: "tools/call",
+          params: {
+            name: "wiki_workitem_write",
+            arguments: { path: rel, content: next, base_sha256: "00".repeat(32) },
+          },
+        }),
+      });
+      expect(stale.status).toBe(200);
+      const staleBody = (await stale.json()) as {
+        result?: {
+          isError?: boolean;
+          structuredContent?: {
+            ok?: boolean;
+            error?: string;
+            currentVersion?: string;
+            path?: string;
+            writer_id?: string;
+          };
+          content?: Array<{ type: string; text: string }>;
+        };
+      };
+      const staleSc = staleBody.result?.structuredContent;
+      expect(staleBody.result?.isError).toBe(true);
+      expect(staleSc?.ok).toBe(false);
+      expect(staleSc?.error).toBe("FILE_CHANGED");
+      expect(staleSc?.path).toBe(rel);
+      expect(staleSc?.currentVersion).toBe(`sha256:${originalSha}`);
+      expect(staleSc?.writer_id).toBeUndefined();
+      expect(JSON.stringify(staleBody)).not.toContain("chatgpt-web");
+      expect(JSON.stringify(staleSc)).not.toMatch(/Bearer|sk-/);
+      expect(JSON.parse(staleBody.result?.content?.[0]?.text ?? "{}")).toEqual(staleSc);
+      expect(await readFile(join(ctx.vault, rel), "utf8")).toBe(original);
     } finally {
       await ctx.close();
     }
