@@ -693,3 +693,21 @@ export function mcpResourcesSubscribeAfterShutdownError(parsed: unknown): JsonRp
   }
   return null;
 }
+
+export function mcpResourcesUnsubscribeAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "resources/unsubscribe" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "resources/unsubscribe after shutdown" },
+      };
+    }
+  }
+  return null;
+}

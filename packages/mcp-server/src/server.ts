@@ -34,6 +34,7 @@ import {
   mcpResourcesSubscribeBeforeInitializeError,
   mcpResourcesTemplatesListAfterShutdownError,
   mcpResourcesTemplatesListBeforeInitializeError,
+  mcpResourcesUnsubscribeAfterShutdownError,
   mcpResourcesUnsubscribeBeforeInitializeError,
   mcpRootsListAfterShutdownError,
   mcpRootsListBeforeInitializeError,
@@ -791,6 +792,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const resourcesSubscribeAfterShutdownErr = mcpResourcesSubscribeAfterShutdownError(parsed);
         if (resourcesSubscribeAfterShutdownErr) {
           json(res, 200, resourcesSubscribeAfterShutdownErr);
+          return;
+        }
+        const resourcesUnsubscribeAfterShutdownErr = mcpResourcesUnsubscribeAfterShutdownError(parsed);
+        if (resourcesUnsubscribeAfterShutdownErr) {
+          json(res, 200, resourcesUnsubscribeAfterShutdownErr);
           return;
         }
         const duplicateInitErr = mcpDuplicateInitializeError(parsed);
