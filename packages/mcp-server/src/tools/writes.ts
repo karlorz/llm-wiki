@@ -54,7 +54,7 @@ export type ToolFailure = {
 
 export type OverwriteSuccess = { ok: true; path: string };
 
-export type CaptureSuccess = { ok: true; path: string };
+export type CaptureSuccess = { ok: true; path: string; writer_id: string };
 export type LogSuccess = {
   ok: true;
   path: "log.md";
@@ -209,7 +209,7 @@ export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promi
     ok: true,
     ms: Date.now() - started,
   });
-  return { ok: true, path: relPath };
+  return { ok: true, path: relPath, writer_id: ctx.hostId };
 }
 
 type ExistingEvent = { body: Buffer; fromS3: boolean };

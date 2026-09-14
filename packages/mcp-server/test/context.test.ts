@@ -163,6 +163,10 @@ describe("C5 compact activation over MCP and wiki_context", () => {
             tools: string[];
             cas_protocol: string;
             capture_kinds: string[];
+            compact_activation?: {
+              instructions_sha256: string;
+              instructions_bytes: number;
+            };
           };
           content?: Array<{ type: string; text: string }>;
         };
@@ -175,6 +179,12 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       expect(sc?.reconcile_ready).toBe(true);
       expect(sc?.capture_kinds).toEqual(["task", "idea", "bug", "note"]);
       expect(sc?.cas_protocol).toContain("base_sha256");
+
+      // Verify compact_activation digest and byte length
+      expect(sc?.compact_activation).toBeDefined();
+      const expectedDigest = createHash("sha256").update(MCP_INSTRUCTIONS).digest("hex");
+      expect(sc?.compact_activation?.instructions_sha256).toBe(expectedDigest);
+      expect(sc?.compact_activation?.instructions_bytes).toBe(Buffer.byteLength(MCP_INSTRUCTIONS));
 
       // Verify tools list includes all 9 tools
       expect(sc?.tools).toBeDefined();

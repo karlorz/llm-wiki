@@ -5,6 +5,7 @@ import { runQuery } from "../../../cli/src/commands/query.js";
 import { runStatus } from "../../../cli/src/commands/status.js";
 import { extractFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
 import { resolveWithinVault } from "../allowlist.js";
+import { MCP_INSTRUCTIONS } from "../mcp-instructions.js";
 import { ReconcileGate } from "../reconcile.js";
 import { sha256Bytes } from "../txn.js";
 import { currentVersion, type GetObject } from "../versions.js";
@@ -54,7 +55,7 @@ function ensureReady(gate: ReconcileGate): { ok: false; error: "TOOLS_NOT_READY"
 
 export async function handleWikiQuery(
   ctx: ReadContext,
-  input: { query: string; limit?: number; include_pending?: boolean },
+  input: { query: string; limit?: number; include_pending?: boolean; scope?: "typed" | "work" | "all" },
 ) {
   const blocked = ensureReady(ctx.gate);
   if (blocked) return blocked;
@@ -63,6 +64,7 @@ export async function handleWikiQuery(
     text: input.query,
     limit: input.limit,
     includePending: input.include_pending,
+    scope: input.scope,
   });
   if (!result.result.ok) {
     return { ok: false as const, error: result.result.error, detail: result.result };
@@ -244,6 +246,8 @@ export async function handleWikiContext(ctx: ReadContext, extra?: { tools?: stri
     }),
   );
 
+  const instructionsBuffer = Buffer.from(MCP_INSTRUCTIONS, "utf8");
+
   return {
     ok: true as const,
     projects,
@@ -252,5 +256,9 @@ export async function handleWikiContext(ctx: ReadContext, extra?: { tools?: stri
     tools: extra?.tools ?? [],
     cas_protocol: "Read canonical sha256 via wiki_read_page, pass base_sha256 in write; on FILE_CHANGED re-read and retry.",
     capture_kinds: CAPTURE_KINDS,
+    compact_activation: {
+      instructions_sha256: sha256Bytes(instructionsBuffer),
+      instructions_bytes: instructionsBuffer.byteLength,
+    },
   };
 }

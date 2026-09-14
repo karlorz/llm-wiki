@@ -523,6 +523,11 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
         }),
       });
       expect(captureRes.status).toBe(200);
+      const captureData = (await captureRes.json()) as {
+        result?: { structuredContent?: { ok?: boolean; path?: string; writer_id?: string } };
+      };
+      expect(captureData.result?.structuredContent?.ok).toBe(true);
+      expect(captureData.result?.structuredContent?.writer_id).toBe("chatgpt-web");
 
       const auditContent = await readFile(auditFile, "utf8");
       const lines = auditContent.trim().split("\n").map((l) => JSON.parse(l) as { host_id: string; tool: string });

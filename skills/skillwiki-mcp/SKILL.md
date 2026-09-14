@@ -44,6 +44,8 @@ On leaf hosts, wiki captures go through MCP. Do **not** write `raw/transcripts/`
 
 Local `~/wiki` (or `skillwiki path`) is fine for reads. MCP read tools are optional. Prefer ordinary file reads of the local mirror.
 
+`wiki_query` is typed knowledge only unless `scope` is `work` or `all`. For queued work, doctor, plugin-drift, or MCP diagnose questions, call `wiki_context` first (active_work) or pass `scope: "work"` / `"all"`. Do not treat a top typed packet hit as the live work queue.
+
 ## Errors
 
 Report handshake, capture, and append failures literally. If tools are missing after a 401 or `missing_prereq`, stop and tell the operator to export `SKILLWIKI_MCP_TOKEN`, run `grok plugin update skillwiki`, and start a new session. Do not fall back to local `raw/transcripts/` writes.
