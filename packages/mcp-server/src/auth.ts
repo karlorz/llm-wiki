@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
-import yaml from "js-yaml";
+import { parseMcpTokenMap } from "./token-map.js";
 
 export type TokenMap = Map<string, string>;
 
@@ -21,25 +21,7 @@ function rememberEntries(map: TokenMap): TokenEntry[] {
 }
 
 export function parseTokenMap(yamlText: string): TokenMap {
-  const parsed = yaml.load(yamlText);
-  const map = new Map<string, string>();
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    rememberEntries(map);
-    return map;
-  }
-  const records = parsed as Record<string, unknown>;
-  const nested = records.tokens;
-  const source =
-    nested && typeof nested === "object" && !Array.isArray(nested)
-      ? (nested as Record<string, unknown>)
-      : records;
-  for (const [hash, hostId] of Object.entries(source)) {
-    if (hash === "tokens") continue;
-    if (typeof hostId !== "string" || hostId.length === 0) continue;
-    const normalized = hash.trim().toLowerCase();
-    if (!/^[0-9a-f]{64}$/.test(normalized)) continue;
-    map.set(normalized, hostId);
-  }
+  const map = parseMcpTokenMap(yamlText);
   rememberEntries(map);
   return map;
 }
@@ -51,6 +33,15 @@ export function loadTokenMap(path: string): TokenMap {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Map();
     throw error;
   }
+}
+
+/** Replace live map entries and refresh timing-safe lookup buffers. */
+export function replaceTokenMap(map: TokenMap, yamlText: string): void {
+  map.clear();
+  for (const [hash, hostId] of parseTokenMap(yamlText)) {
+    map.set(hash, hostId);
+  }
+  rememberEntries(map);
 }
 
 export function resolveHostId(token: string, map: TokenMap): string | undefined {

@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from "./auth.js";
+import { handleConsoleRequest, isConsolePath, isConsoleRequestAllowed } from "./console.js";
 import { loadConfig, type McpDaemonConfig } from "./config.js";
 import { ChangedEventHub } from "./events.js";
 import { MCP_INSTRUCTIONS } from "./mcp-instructions.js";
@@ -30,6 +31,7 @@ export interface HttpServerOptions {
   port: number;
   vaultDir: string;
   tokenMap: TokenMap;
+  tokenMapPath?: string;
   gate: ReconcileGate;
   putObject: PutObject;
   getObject?: GetObject;
@@ -142,12 +144,13 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     "wiki_query",
     {
       description:
-        "Ranked vault query. Default scope is typed knowledge only. Use scope=work or scope=all for Layer-3 work items; wiki_context lists active work.",
+        "Ranked vault query. Default scope is typed knowledge only. Use scope=work or scope=all for Layer-3 work items; wiki_context lists active work. Optional project must be a vault slug; unknown or empty project fail closed.",
       inputSchema: z.object({
         query: z.string().min(1),
         limit: z.number().int().positive().optional(),
         include_pending: z.boolean().optional(),
         scope: z.enum(["typed", "work", "all"]).optional(),
+        project: z.string().optional(),
       }),
       outputSchema: z.object({
         ...failureShape,
@@ -210,18 +213,31 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
   server.registerTool(
     "wiki_status",
     {
-      description: "Vault health snapshot plus daemon reconcile and S3 connectivity.",
-      inputSchema: z.object({}),
+      description:
+        "Vault health snapshot plus daemon reconcile and S3 connectivity. Optional host_id must match the authenticated writer; unknown or missing host identity fail closed.",
+      inputSchema: z.object({
+        host_id: z.string().optional(),
+      }),
       outputSchema: z.object({
         ...failureShape,
         vault_path: z.string().optional(),
         reconcile_ready: z.boolean().optional(),
         s3_ok: z.boolean().optional(),
+        writer_id: z.string().optional(),
+        host_id: z.string().optional(),
+        fleet: z
+          .object({
+            identity_status: z.enum(["known", "unknown", "invalid"]),
+            manifest_loaded: z.boolean(),
+            host_id: z.string().optional(),
+            source: z.string().optional(),
+          })
+          .optional(),
       }).passthrough(),
       annotations: { readOnlyHint: true },
     },
-    async () => {
-      const out = await handleWikiStatus(reads);
+    async (args) => {
+      const out = await handleWikiStatus(reads, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -229,8 +245,11 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
   server.registerTool(
     "wiki_context",
     {
-      description: "Compact activation context, active project work-item directories, and writer metadata.",
-      inputSchema: z.object({}),
+      description:
+        "Compact activation context, active project work-item directories, and writer metadata. Optional project slug filters to one vault project; unknown or empty project fail closed.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+      }),
       outputSchema: z.object({
         ...failureShape,
         projects: z
@@ -255,8 +274,8 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       }).passthrough(),
       annotations: { readOnlyHint: true },
     },
-    async () => {
-      const out = await handleWikiContext(reads, { tools: [...MCP_TOOL_NAMES] });
+    async (args) => {
+      const out = await handleWikiContext(reads, { tools: [...MCP_TOOL_NAMES], project: args.project });
       return toolResult(out, !out.ok);
     },
   );
@@ -479,6 +498,12 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
       return;
     }
 
+    if (req.method === "GET" && path === "/favicon.ico") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     if (oauthEnabled && oauthStore && opts.oauth) {
       const isOauthPath =
         path === "/.well-known/oauth-protected-resource" ||
@@ -503,6 +528,19 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const handled = await handleOAuthRequest(req, res, rawBody, opts.oauth, oauthStore);
         if (handled) return;
       }
+    }
+
+    if (isConsolePath(path)) {
+      if (!isConsoleRequestAllowed(req)) {
+        json(res, 404, { error: "not_found" });
+        return;
+      }
+      await handleConsoleRequest(req, res, url, {
+        tokenMap: opts.tokenMap,
+        tokenMapPath: opts.tokenMapPath,
+        auditFile: opts.auditFile,
+      });
+      return;
     }
 
     const isMcpOrEvent =
@@ -548,7 +586,12 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
           }
           throw err;
         }
-        parsed = raw.length > 0 ? JSON.parse(raw) : undefined;
+        try {
+          parsed = raw.length > 0 ? JSON.parse(raw) : undefined;
+        } catch {
+          json(res, 400, { error: "invalid_json" });
+          return;
+        }
       }
       const mcp = createWikiMcpServer({ ...opts, hostId, hub });
       const transport = new StreamableHTTPServerTransport({
@@ -600,6 +643,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     port: cfg.port,
     vaultDir: cfg.vaultDir,
     tokenMap,
+    tokenMapPath: cfg.tokenMapPath,
     gate,
     putObject: s3Adapter.putObject,
     getObject: s3Adapter.getObject,

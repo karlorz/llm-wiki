@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { runFleetContext } from "../../../cli/src/commands/fleet.js";
 import { runMemoryRecall } from "../../../cli/src/commands/memory.js";
 import { runQuery } from "../../../cli/src/commands/query.js";
 import { runStatus } from "../../../cli/src/commands/status.js";
@@ -9,7 +10,7 @@ import { MCP_INSTRUCTIONS } from "../mcp-instructions.js";
 import { ReconcileGate } from "../reconcile.js";
 import { sha256Bytes } from "../txn.js";
 import { currentVersion, type GetObject } from "../versions.js";
-import { CAPTURE_KINDS } from "./writes.js";
+import { CAPTURE_KINDS, normalizeCaptureProject, vaultHasProject } from "./writes.js";
 
 export const MAX_READ_PAGE_BYTES = 256 * 1024;
 
@@ -55,16 +56,34 @@ function ensureReady(gate: ReconcileGate): { ok: false; error: "TOOLS_NOT_READY"
 
 export async function handleWikiQuery(
   ctx: ReadContext,
-  input: { query: string; limit?: number; include_pending?: boolean; scope?: "typed" | "work" | "all" },
+  input: { query: string; limit?: number; include_pending?: boolean; scope?: string; project?: string },
 ) {
   const blocked = ensureReady(ctx.gate);
   if (blocked) return blocked;
+  if (!input.query.trim()) {
+    return { ok: false as const, error: "USAGE", message: "query must not be empty" };
+  }
+  if (input.project !== undefined) {
+    const project = normalizeCaptureProject(input.project);
+    if (!project) {
+      return { ok: false as const, error: "USAGE", message: "project must be a vault project slug" };
+    }
+    if (!vaultHasProject(ctx.vaultDir, project)) {
+      return { ok: false as const, error: "USAGE", message: "unknown project" };
+    }
+  }
+  if (input.scope !== undefined) {
+    const scope = input.scope.trim();
+    if (scope !== "typed" && scope !== "work" && scope !== "all") {
+      return { ok: false as const, error: "USAGE", message: "scope must be typed, work, or all" };
+    }
+  }
   const result = await runQuery({
     vault: ctx.vaultDir,
     text: input.query,
     limit: input.limit,
     includePending: input.include_pending,
-    scope: input.scope,
+    scope: input.scope?.trim() as "typed" | "work" | "all" | undefined,
   });
   if (!result.result.ok) {
     return { ok: false as const, error: result.result.error, detail: result.result };
@@ -175,15 +194,28 @@ export async function handleWikiReadPage(
 
 export async function handleWikiMemoryRecall(
   ctx: ReadContext,
-  input: { project: string; topic: string; scope?: "project" | "global" | "all" },
+  input: { project: string; topic: string; scope?: string },
 ) {
   const blocked = ensureReady(ctx.gate);
   if (blocked) return blocked;
+  const project = normalizeCaptureProject(input.project);
+  if (!project) {
+    return { ok: false as const, error: "USAGE", message: "project must be a vault project slug" };
+  }
+  if (!vaultHasProject(ctx.vaultDir, project)) {
+    return { ok: false as const, error: "USAGE", message: "unknown project" };
+  }
+  if (input.scope !== undefined) {
+    const scope = input.scope.trim();
+    if (scope !== "project" && scope !== "global" && scope !== "all") {
+      return { ok: false as const, error: "USAGE", message: "scope must be project, global, or all" };
+    }
+  }
   const result = await runMemoryRecall({
     vault: ctx.vaultDir,
-    project: input.project,
+    project,
     topic: input.topic,
-    scope: input.scope,
+    scope: input.scope?.trim() as "project" | "global" | "all" | undefined,
   });
   if (!result.result.ok) {
     return { ok: false as const, error: result.result.error, detail: result.result };
@@ -191,9 +223,59 @@ export async function handleWikiMemoryRecall(
   return { ok: true as const, ...result.result.data };
 }
 
-export async function handleWikiStatus(ctx: ReadContext & { s3Ok?: boolean }) {
+export type StatusFleetIdentity = {
+  identity_status: "known" | "unknown" | "invalid";
+  manifest_loaded: boolean;
+  host_id?: string;
+  source?: string;
+};
+
+async function statusFleetIdentity(ctx: ReadContext): Promise<StatusFleetIdentity> {
+  const fleet = await runFleetContext({
+    vault: ctx.vaultDir,
+    hostId: ctx.hostId,
+    env: {},
+    home: "",
+    cwd: ctx.vaultDir,
+  });
+  if (!fleet.result.ok) {
+    return { identity_status: "unknown", manifest_loaded: false };
+  }
+  const data = fleet.result.data;
+  return {
+    identity_status: data.identity_status,
+    manifest_loaded: data.manifest_loaded,
+    ...(data.host_id ? { host_id: data.host_id } : {}),
+    ...(data.source ? { source: data.source } : {}),
+  };
+}
+
+export async function handleWikiStatus(
+  ctx: ReadContext & { s3Ok?: boolean },
+  input?: { host_id?: string },
+) {
   const blocked = ensureReady(ctx.gate);
   if (blocked) return blocked;
+
+  if (input?.host_id !== undefined) {
+    const requested = input.host_id.trim();
+    if (!requested) {
+      return { ok: false as const, error: "USAGE", message: "host identity is required" };
+    }
+    if (!ctx.hostId || requested !== ctx.hostId) {
+      return { ok: false as const, error: "USAGE", message: "unknown host-id" };
+    }
+  }
+
+  if (!ctx.hostId) {
+    return { ok: false as const, error: "USAGE", message: "host identity is required" };
+  }
+
+  const writerId = ctx.hostId;
+  const fleet = await statusFleetIdentity(ctx);
+  if (input?.host_id !== undefined && fleet.manifest_loaded && fleet.identity_status !== "known") {
+    return { ok: false as const, error: "USAGE", message: "unknown host-id" };
+  }
   const result = await runStatus({
     vault: ctx.vaultDir,
     home: process.env.HOME ?? "",
@@ -206,12 +288,26 @@ export async function handleWikiStatus(ctx: ReadContext & { s3Ok?: boolean }) {
     reconcile_ready: ctx.gate.ready,
     s3_ok: ctx.s3Ok ?? true,
     ...(typeof base === "object" ? base : {}),
+    ...(writerId ? { writer_id: writerId, host_id: writerId } : {}),
+    fleet,
   };
 }
 
-export async function handleWikiContext(ctx: ReadContext, extra?: { tools?: string[] }) {
+export async function handleWikiContext(
+  ctx: ReadContext,
+  extra?: { tools?: string[]; project?: string },
+) {
   const blocked = ensureReady(ctx.gate);
   if (blocked) return blocked;
+
+  let requested: string | undefined;
+  if (extra?.project !== undefined) {
+    const project = extra.project.trim();
+    if (!project || project.includes("/") || project.includes("\\") || project === "." || project === "..") {
+      return { ok: false as const, error: "USAGE", message: "project must be a vault project slug" };
+    }
+    requested = project;
+  }
 
   const projectsDir = join(ctx.vaultDir, "projects");
 
@@ -246,11 +342,16 @@ export async function handleWikiContext(ctx: ReadContext, extra?: { tools?: stri
     }),
   );
 
+  if (requested && !projects.some((p) => p.slug === requested)) {
+    return { ok: false as const, error: "USAGE", message: `unknown project: ${requested}` };
+  }
+  const filtered = requested ? projects.filter((p) => p.slug === requested) : projects;
+
   const instructionsBuffer = Buffer.from(MCP_INSTRUCTIONS, "utf8");
 
   return {
     ok: true as const,
-    projects,
+    projects: filtered,
     writer_id: ctx.hostId ?? "unknown",
     reconcile_ready: ctx.gate.ready,
     tools: extra?.tools ?? [],
