@@ -308,6 +308,7 @@ export const VaultSyncConfigSchema = z.object({
   "vault_sync.snapshot_profile": vaultSyncPathOrNone,
   "vault_sync.snapshot_script": vaultSyncPathOrNone,
   "vault_sync.snapshot_worktree": vaultSyncPathOrNone,
+  "vault_sync.push_enabled": vaultSyncBool,
   "vault_sync.fuse_refresh_enabled": vaultSyncBool,
   "vault_sync.fuse_refresh_interval": vaultSyncDuration,
   "vault_sync.fuse_max_dir_cache": vaultSyncDuration,

@@ -66,6 +66,7 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    skillwiki config set vault_sync.fuse_refresh_interval 300s   # Linux only
    skillwiki config set vault_sync.fuse_max_dir_cache 15m       # Linux only
    ```
+   Do **not** auto-set `vault_sync.push_enabled=true`. Install remains the full-role path. A fetch-only host is configured after install by setting `vault_sync.push_enabled=false` and leaving wiki-push disabled.
    Snapshotter installs also record `vault_sync.snapshot_script` and the conventional profile path `vault_sync.snapshot_profile=/etc/vault-sync/profiles/<host>-snapshotter.env`.
    The snapshotter profile is the operational authority for its host-local
    rclone alias and should contain `CLOUD_REMOTE=<remote:path>`. Managed leaf

@@ -1246,6 +1246,120 @@ describe("runDoctor", () => {
       expect(vsErrors.length).toBeGreaterThanOrEqual(1);
     });
 
+    function createVaultSyncFetchLog(home: string, lines: string[]): string {
+      const logDir = createVaultSyncLogDir(home);
+      const logPath = join(logDir, "wiki-fetch.log");
+      writeFileSync(logPath, lines.join("\n") + "\n");
+      return logPath;
+    }
+
+    function plantFetchHelper(home: string): string {
+      const shareDir = createVaultSyncShareDir(home);
+      const helper = join(shareDir, "wiki-fetch-notify.sh");
+      writeFileSync(helper, "#!/usr/bin/env bash\n");
+      return helper;
+    }
+
+    it("fetch-only leaf skips push errors and still reports fetch when scheduler fixture is enabled", async () => {
+      const h = home();
+      vaultSyncConfig(h, true, "leaf", { push_enabled: "false" });
+      plantFetchHelper(h);
+      createVaultSyncPushState(h, [
+        "result=refused",
+        "reason=rclone-failed",
+        "timestamp=2026-09-02T19:49:58Z",
+      ]);
+      createVaultSyncFetchLog(h, ["2026-09-14T00:00:00Z OK behind=0 delta=0 (no notify)"]);
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        VS_LEAF_SCHEDULER_FIXTURE: "enabled",
+        SKILLWIKI_MCP_TOKEN: "planted-mcp-auth-fetch-only",
+      };
+      const mcpFetch = (async (_input: unknown, init?: RequestInit) => {
+        const raw = typeof init?.body === "string" ? init.body : "{}";
+        const parsed = JSON.parse(raw) as { id?: unknown; method?: string };
+        if (parsed.method === "initialize") {
+          return new Response(JSON.stringify({
+            jsonrpc: "2.0",
+            id: parsed.id,
+            result: {
+              protocolVersion: "2025-11-25",
+              capabilities: { tools: {} },
+              serverInfo: { name: "skillwiki-mcp", version: "0.10.79" },
+            },
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        if (parsed.method === "tools/list") {
+          return new Response(JSON.stringify({
+            jsonrpc: "2.0",
+            id: parsed.id,
+            result: {
+              tools: [
+                "wiki_query", "wiki_memory_recall", "wiki_read_page", "wiki_status",
+                "wiki_capture", "wiki_log_append", "wiki_page_publish", "wiki_workitem_write",
+              ].map((name) => ({ name })),
+            },
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        return new Response("{}", { status: 400 });
+      }) as typeof fetch;
+
+      const r = await runDoctor({
+        home: h,
+        envValue: undefined,
+        argv: ["node", "skillwiki", "doctor", "--check-mcp"],
+        currentVersion: "0.10.79",
+        checkMcp: true,
+        env,
+        mcpFetch,
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+
+      const jobs = r.result.data.checks.find(c => c.id === "vault_sync_jobs_enabled");
+      expect(jobs?.status).toBe("pass");
+      expect(jobs?.detail).not.toMatch(/vault-sync-install/);
+
+      const age = r.result.data.checks.find(c => c.id === "vault_sync_last_push_age");
+      expect(age?.status).toBe("pass");
+      expect(age?.detail).toContain("push not part of host profile");
+
+      const pushResult = r.result.data.checks.find(c => c.id === "vault_sync_last_push_result");
+      expect(pushResult?.status).toBe("pass");
+      expect(pushResult?.detail).toContain("push not part of host profile");
+
+      const fetchRow = r.result.data.checks.find(c => c.id === "vault_sync_last_fetch_status");
+      expect(fetchRow?.status).toBe("pass");
+      expect(fetchRow?.detail).toMatch(/OK/);
+
+      const rclone = r.result.data.checks.find(c => c.id === "rclone_version");
+      expect(rclone?.status).toBe("pass");
+      expect(rclone?.detail).toContain("push not required");
+
+      const handshake = r.result.data.checks.find(c => c.id === "mcp_handshake");
+      expect(handshake?.status).toBe("pass");
+    });
+
+    it("fetch-only leaf errors on disabled fetch without vault-sync-install copy", async () => {
+      const h = home();
+      vaultSyncConfig(h, true, "leaf", { push_enabled: "false" });
+      plantFetchHelper(h);
+      createVaultSyncFetchLog(h, ["2026-09-14T00:00:00Z OK behind=0"]);
+      const r = await runDoctor({
+        home: h,
+        envValue: undefined,
+        argv: ["node", "skillwiki", "doctor"],
+        currentVersion: "0.10.79",
+        env: { ...process.env, VS_LEAF_SCHEDULER_FIXTURE: "disabled" },
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const jobs = r.result.data.checks.find(c => c.id === "vault_sync_jobs_enabled");
+      expect(jobs?.status).toBe("error");
+      expect(jobs?.detail).toMatch(/wiki-fetch/);
+      expect(jobs?.detail).not.toMatch(/vault-sync-install/);
+    });
+
     it("vault_sync_last_push_age passes when log ends with OK push within 180s", async () => {
       const h = home();
       vaultSyncConfig(h, true);

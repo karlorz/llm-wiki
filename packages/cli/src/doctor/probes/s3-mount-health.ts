@@ -208,11 +208,18 @@ function checkRcloneFlagAudit(resolvedPath: string | undefined): CheckResult {
 }
 
 /** Check B: rclone version — does it support --vfs-write-wait? */
-function checkRcloneVersion(resolvedPath: string | undefined, vaultSyncInstalled: boolean): CheckResult {
+function checkRcloneVersion(
+  resolvedPath: string | undefined,
+  vaultSyncInstalled: boolean,
+  pushEnabled = true,
+): CheckResult {
+  const fuse = resolvedPath ? detectFuseMount(resolvedPath) : null;
+  if (pushEnabled === false && !fuse) {
+    return check("pass", "rclone_version", "rclone version", "push not required — check skipped");
+  }
   if (!resolvedPath && !vaultSyncInstalled) {
     return check("pass", "rclone_version", "rclone version", "No vault path — check skipped");
   }
-  const fuse = resolvedPath ? detectFuseMount(resolvedPath) : null;
   if (!fuse && !vaultSyncInstalled) {
     return check("pass", "rclone_version", "rclone version", "local disk — check skipped");
   }
@@ -326,7 +333,7 @@ export const s3MountHealthProbe: DoctorProbe = {
       checkS3MountPerf(ctx.resolvedPath),
       checkS3MountFreshness(ctx.resolvedPath),
       checkRcloneFlagAudit(ctx.resolvedPath),
-      checkRcloneVersion(ctx.resolvedPath, ctx.vsConfig.installed),
+      checkRcloneVersion(ctx.resolvedPath, ctx.vsConfig.installed, ctx.vsConfig.pushEnabled !== false),
       checkWriteTest(ctx.resolvedPath),
       checkVfsCacheHealth(ctx.resolvedPath),
     ];
