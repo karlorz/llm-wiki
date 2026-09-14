@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readdir, readFile, writeFile } from "node:fs/promises";
 import { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -158,6 +158,34 @@ describe("C4 typed result envelope and request body cap", () => {
       expect(body.error).toBeDefined();
 
       // Ensure server is still alive and responsive after oversized request
+      const healthRes = await fetch(`http://127.0.0.1:${ctx.port}/health`);
+      expect(healthRes.status).toBe(200);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("POST /mcp with a valid bearer and malformed JSON is 400 and writes nothing", async () => {
+    const ctx = await setupTestServer();
+    const beforeLog = await readFile(join(ctx.vault, "log.md"), "utf8");
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: "{not-json",
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: string; writer_id?: string };
+      expect(body.error).toBe("invalid_json");
+      expect(body.writer_id).toBeUndefined();
+      expect(JSON.stringify(body)).not.toContain("chatgpt-web");
+      expect(await readdir(join(ctx.vault, "raw", "transcripts"))).toEqual([]);
+      expect(await readFile(join(ctx.vault, "log.md"), "utf8")).toBe(beforeLog);
+
       const healthRes = await fetch(`http://127.0.0.1:${ctx.port}/health`);
       expect(healthRes.status).toBe(200);
     } finally {
