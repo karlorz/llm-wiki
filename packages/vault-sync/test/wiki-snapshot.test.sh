@@ -62,6 +62,8 @@ else
 fi
 
 assert_contains "snapshot preserves max-delete guard" "--max-delete 10"
+assert_contains "snapshot rclone excludes superpowers" 'exclude ".superpowers/'
+assert_contains "snapshot S3-not-git ignores superpowers" ".superpowers/"
 assert_contains "snapshot has raw dedup guard function" "raw_dedup_guard()"
 assert_contains "snapshot calls raw dedup guard before commit" "if ! raw_dedup_guard; then"
 assert_contains "snapshot has conflict marker guard function" "conflict_marker_guard()"
@@ -1060,6 +1062,7 @@ setup_projection_parity_fixture() {
 
   printf '# Expected Index\n' > "$root/expected-index.md"
   printf '# Expected Log\n\n- latest event\n' > "$root/expected-log.md"
+  printf '# Expected Log\n\n- latest event\n- mid-sync mcp append\n' > "$root/newer-log.md"
   printf '# Stale Index\n' > "$root/stale-index.md"
   printf '# Stale Log\n' > "$root/stale-log.md"
   : > "$root/rclone.calls"
@@ -1122,6 +1125,10 @@ if [ "$cmd" = "cat" ]; then
   count="$(cat "$count_file")"
   count=$((count + 1))
   printf '%s\n' "$count" > "$count_file"
+  if [ "${RCLONE_PARITY_STORE_AHEAD_LOG:-0}" = "1" ] && [ "$object" = "log.md" ]; then
+    cp "$SNAPSHOT_TEST_ROOT/newer-log.md" /dev/stdout
+    exit 0
+  fi
   if [ "$count" -gt "${RCLONE_PARITY_VISIBLE_AFTER_CALLS:-0}" ]; then
     cp "$SNAPSHOT_TEST_ROOT/expected-$object" /dev/stdout
   else
@@ -1133,6 +1140,13 @@ if [ "$cmd" = "sync" ]; then
   if [ "${RCLONE_SYNC_STALE_PROJECTION:-0}" = "1" ]; then
     cp "$SNAPSHOT_TEST_ROOT/stale-index.md" "$3/index.md"
     cp "$SNAPSHOT_TEST_ROOT/stale-log.md" "$3/log.md"
+  elif [ "${RCLONE_SYNC_NEWER_LOG:-0}" = "1" ] \
+      || [ "${RCLONE_PARITY_STORE_AHEAD_LOG:-0}" = "1" ]; then
+    cp "$SNAPSHOT_TEST_ROOT/expected-index.md" "$3/index.md"
+    cp "$SNAPSHOT_TEST_ROOT/newer-log.md" "$3/log.md"
+    if [ "${RCLONE_SYNC_NEWER_LOG:-0}" = "1" ]; then
+      cp "$SNAPSHOT_TEST_ROOT/newer-log.md" "$SNAPSHOT_TEST_ROOT/expected-log.md"
+    fi
   else
     cp "$SNAPSHOT_TEST_ROOT/expected-index.md" "$3/index.md"
     cp "$SNAPSHOT_TEST_ROOT/expected-log.md" "$3/log.md"
@@ -1268,6 +1282,64 @@ test_snapshot_stale_worktree_projection_fails_before_commit() {
   rm -rf "$root"
 }
 
+test_snapshot_store_ahead_log_promotes_when_index_matches() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_PARITY_STORE_AHEAD_LOG=1
+  local rc=$?
+
+  if [ "$rc" -eq 0 ] \
+      && grep -q 'projection store-ahead log accepted' "$root/wiki-snapshot.log" \
+      && grep -q 'projection worktree parity confirmed' "$root/wiki-snapshot.log" \
+      && grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log" \
+      && cmp -s "$root/newer-log.md" "$git_dir/log.md"; then
+    printf 'PASS: store-ahead log during wait promotes when index matches and log is freeze prefix\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: store-ahead-log-wait fixture (rc=%s log=%s)\n' \
+      "$rc" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_newer_log_during_sync_promotes_when_store_matches() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_SYNC_NEWER_LOG=1
+  local rc=$?
+
+  if [ "$rc" -eq 0 ] \
+      && grep -q 'projection expectations refreshed from store after sync' "$root/wiki-snapshot.log" \
+      && grep -q 'projection worktree parity confirmed' "$root/wiki-snapshot.log" \
+      && grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log" \
+      && cmp -s "$root/newer-log.md" "$git_dir/log.md"; then
+    printf 'PASS: newer log during rclone sync promotes when worktree matches current store\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: newer-log-during-sync fixture (rc=%s log=%s)\n' \
+      "$rc" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
 test_snapshot_semantic_projection_drift_fails_before_commit() {
   local root
   root="$(mktemp -d)"
@@ -1301,6 +1373,8 @@ test_snapshot_semantic_projection_drift_fails_before_commit() {
 test_snapshot_waits_for_direct_remote_projection_parity
 test_snapshot_projection_parity_timeout_fails_before_sync
 test_snapshot_stale_worktree_projection_fails_before_commit
+test_snapshot_store_ahead_log_promotes_when_index_matches
+test_snapshot_newer_log_during_sync_promotes_when_store_matches
 test_snapshot_semantic_projection_drift_fails_before_commit
 
 # ── Canonical completion record (v0.10.14) ────────────────────

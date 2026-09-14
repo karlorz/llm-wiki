@@ -181,7 +181,7 @@ snapshot_direct_s3_preflight() {
     fi
     SNAPSHOT_REMOTE_INVENTORY_READY=1
 
-    grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|\.playwright-cli/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" | LC_ALL=C sort -u > "$direct_notes" || true
+    grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|\.playwright-cli/|\.superpowers/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" | LC_ALL=C sort -u > "$direct_notes" || true
     (
         cd "$SNAPSHOT_WORKTREE" || exit 1
         if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
@@ -482,10 +482,14 @@ snapshot_freeze_projection_expectations() {
         return 1
     fi
 
-    PROJECTION_EXPECTED_INDEX_SHA256="$(snapshot_projection_hash_file "$PROJECTION_STATE_DIR/expected-index.md")" || return 1
-    PROJECTION_EXPECTED_LOG_SHA256="$(snapshot_projection_hash_file "$PROJECTION_STATE_DIR/expected-log.md")" || return 1
+    snapshot_record_projection_expectation_hashes || return 1
     log "projection expected bytes frozen index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 log_sha256=$PROJECTION_EXPECTED_LOG_SHA256"
     return 0
+}
+
+snapshot_record_projection_expectation_hashes() {
+    PROJECTION_EXPECTED_INDEX_SHA256="$(snapshot_projection_hash_file "$PROJECTION_STATE_DIR/expected-index.md")" || return 1
+    PROJECTION_EXPECTED_LOG_SHA256="$(snapshot_projection_hash_file "$PROJECTION_STATE_DIR/expected-log.md")" || return 1
 }
 
 snapshot_live_projection_matches_frozen() {
@@ -498,6 +502,20 @@ snapshot_live_projection_matches_frozen() {
         return 1
     fi
     return 0
+}
+
+snapshot_projection_log_is_store_ahead() {
+    local freeze="${1:-}"
+    local remote="${2:-}"
+    local freeze_bytes remote_bytes
+    [ -f "$freeze" ] && [ -f "$remote" ] || return 1
+    freeze_bytes="$(wc -c < "$freeze" | tr -d ' ')"
+    remote_bytes="$(wc -c < "$remote" | tr -d ' ')"
+    case "$freeze_bytes" in ''|*[!0-9]*) return 1 ;; esac
+    case "$remote_bytes" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$freeze_bytes" -gt 0 ] || return 1
+    [ "$remote_bytes" -gt "$freeze_bytes" ] || return 1
+    head -c "$freeze_bytes" "$remote" | cmp -s "$freeze" -
 }
 
 snapshot_wait_for_direct_projection_parity() {
@@ -541,6 +559,19 @@ snapshot_wait_for_direct_projection_parity() {
                 log "projection direct-store parity confirmed attempts=$attempts expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 live_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 remote_index_sha256=$remote_index_sha expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 live_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 remote_log_sha256=$remote_log_sha"
                 return 0
             fi
+            if cmp -s "$PROJECTION_STATE_DIR/expected-index.md" "$remote_index" \
+                && snapshot_projection_log_is_store_ahead "$PROJECTION_STATE_DIR/expected-log.md" "$remote_log"; then
+                if ! cp "$remote_index" "$PROJECTION_STATE_DIR/expected-index.md" \
+                    || ! cp "$remote_log" "$PROJECTION_STATE_DIR/expected-log.md"; then
+                    log "ERROR: could not adopt store-ahead projection bytes"
+                    return 1
+                fi
+                snapshot_record_projection_expectation_hashes || return 1
+                remote_index_sha="$(snapshot_projection_hash_file "$remote_index" 2>/dev/null || echo unavailable)"
+                remote_log_sha="$(snapshot_projection_hash_file "$remote_log" 2>/dev/null || echo unavailable)"
+                log "projection store-ahead log accepted attempts=$attempts expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 remote_index_sha256=$remote_index_sha expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256 remote_log_sha256=$remote_log_sha"
+                return 0
+            fi
         fi
 
         now="$(date +%s)"
@@ -556,6 +587,51 @@ snapshot_wait_for_direct_projection_parity() {
         fi
         sleep "$PROJECTION_PARITY_POLL_SECONDS"
     done
+}
+
+snapshot_refresh_projection_expectations_from_store() {
+    if [ -z "$PROJECTION_STATE_DIR" ]; then
+        return 0
+    fi
+
+    local index_pid log_pid index_rc log_rc
+    timeout "$PROJECTION_READ_TIMEOUT_SECONDS" \
+        rclone cat "${CLOUD_REMOTE%/}/index.md" --retries 1 \
+        >"$PROJECTION_STATE_DIR/expected-index.md" 2>>"$LOG_FILE" &
+    index_pid=$!
+    timeout "$PROJECTION_READ_TIMEOUT_SECONDS" \
+        rclone cat "${CLOUD_REMOTE%/}/log.md" --retries 1 \
+        >"$PROJECTION_STATE_DIR/expected-log.md" 2>>"$LOG_FILE" &
+    log_pid=$!
+    wait "$index_pid"
+    index_rc=$?
+    wait "$log_pid"
+    log_rc=$?
+    if [ "$index_rc" -ne 0 ]; then
+        log "ERROR: could not read current store index.md after sync"
+        return 1
+    fi
+    if [ "$log_rc" -ne 0 ]; then
+        log "ERROR: could not read current store log.md after sync"
+        return 1
+    fi
+    snapshot_record_projection_expectation_hashes || return 1
+    log "projection expectations refreshed from store after sync expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256"
+    return 0
+}
+
+snapshot_gate_projection_candidate() {
+    local refresh_fail="$1"
+    local verify_fail="$2"
+    if ! snapshot_refresh_projection_expectations_from_store; then
+        log "$refresh_fail"
+        return 1
+    fi
+    if ! snapshot_verify_projection_candidate; then
+        log "$verify_fail"
+        return 1
+    fi
+    return 0
 }
 
 snapshot_verify_worktree_projection_parity() {
@@ -825,6 +901,7 @@ RCLONE_OPTS=(
     --exclude ".claude/**"
     --exclude ".antigravitycli/**"
     --exclude ".playwright-cli/**"
+    --exclude ".superpowers/**"
     --exclude "._*"
     --exclude ".conflict*"
     --exclude "*.conflict-*"
@@ -1014,8 +1091,9 @@ snapshot_reconcile_delete_intents() {
 if ! snapshot_reconcile_delete_intents; then
     exit 1
 fi
-if ! snapshot_verify_projection_candidate; then
-    log "FAIL projection candidate verification; snapshot promotion refused"
+if ! snapshot_gate_projection_candidate \
+    "FAIL projection expectation refresh after sync; snapshot promotion refused" \
+    "FAIL projection candidate verification; snapshot promotion refused"; then
     exit 1
 fi
 
@@ -1088,8 +1166,9 @@ if [ "$needs_repair" = true ]; then
     if ! snapshot_reconcile_delete_intents; then
         exit 1
     fi
-    if ! snapshot_verify_projection_candidate; then
-        log "FAIL post-repair projection candidate verification; snapshot promotion refused"
+    if ! snapshot_gate_projection_candidate \
+        "FAIL post-repair projection expectation refresh after sync; snapshot promotion refused" \
+        "FAIL post-repair projection candidate verification; snapshot promotion refused"; then
         exit 1
     fi
     if ! snapshot_freeze_git_receipt; then
