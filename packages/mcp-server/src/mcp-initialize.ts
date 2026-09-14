@@ -195,3 +195,56 @@ export function mcpNotificationsInitializedError(parsed: unknown): JsonRpcErrorB
   }
   return null;
 }
+
+function cancelledRequestId(item: { params?: unknown }): string | number | null {
+  const params = item.params;
+  if (!params || typeof params !== "object" || Array.isArray(params)) return null;
+  return jsonRpcId((params as { requestId?: unknown }).requestId);
+}
+
+function mcpCancelledNotificationError(item: { id?: unknown; params?: unknown }): JsonRpcErrorBody | null {
+  const requestId = cancelledRequestId(item);
+  if (requestId === null) {
+    return {
+      jsonrpc: "2.0",
+      id: jsonRpcId(item.id),
+      error: { code: -32602, message: "requestId is required" },
+    };
+  }
+  return null;
+}
+
+export function mcpNotificationsCancelledError(parsed: unknown): JsonRpcErrorBody | null {
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const req = parsed as { method?: unknown; id?: unknown; params?: unknown };
+    if (req.method !== "notifications/cancelled") return null;
+    return mcpCancelledNotificationError(req);
+  }
+  if (!Array.isArray(parsed)) return null;
+
+  const initializeIds = new Set<string | number>();
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const req = item as { method?: unknown; id?: unknown };
+    if (req.method === "initialize") {
+      const id = jsonRpcId(req.id);
+      if (id !== null) initializeIds.add(id);
+    }
+  }
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const req = item as { method?: unknown; id?: unknown; params?: unknown };
+    if (req.method !== "notifications/cancelled") continue;
+    const missing = mcpCancelledNotificationError(req);
+    if (missing) return missing;
+    const requestId = cancelledRequestId(req);
+    if (requestId !== null && initializeIds.has(requestId)) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId(req.id),
+        error: { code: -32000, message: "notifications/cancelled of initialize" },
+      };
+    }
+  }
+  return null;
+}
