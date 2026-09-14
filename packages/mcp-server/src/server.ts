@@ -246,6 +246,12 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         tools: z.array(z.string()).optional(),
         cas_protocol: z.string().optional(),
         capture_kinds: z.array(z.string()).optional(),
+        compact_activation: z
+          .object({
+            instructions_sha256: z.string(),
+            instructions_bytes: z.number(),
+          })
+          .optional(),
       }).passthrough(),
       annotations: { readOnlyHint: true },
     },
@@ -268,6 +274,8 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       }),
       outputSchema: z.object({
         ...failureShape,
+        path: z.string().optional(),
+        writer_id: z.string().optional(),
       }).passthrough(),
       annotations: {
         readOnlyHint: false,

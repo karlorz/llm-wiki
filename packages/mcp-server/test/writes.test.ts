@@ -301,6 +301,7 @@ describe("wiki_capture write", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected ok");
     expect(result.path).toBe("raw/transcripts/2026-09-13-note-hello-from-mcp.md");
+    expect(result.writer_id).toBe("macos-dev");
     expect(await readFile(join(vault, result.path), "utf8")).toContain("A capture body");
     await expect(access(join(vault, "concepts", "alpha.md"))).resolves.toBeUndefined();
   });
