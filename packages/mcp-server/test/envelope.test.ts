@@ -624,4 +624,91 @@ describe("C4 typed result envelope and request body cap", () => {
       await ctx.close();
     }
   });
+
+  it("wiki_status HTTP unknown host-id fail-closed with no other-host leak", async () => {
+    const ctx = await setupTestServer();
+    await mkdir(join(ctx.vault, "projects/llm-wiki/architecture"), { recursive: true });
+    await writeFile(
+      join(ctx.vault, "projects/llm-wiki/architecture/fleet.yaml"),
+      `schema_version: 1
+vault_remote: git@github.com:karlorz/wiki.git
+hosts:
+  macos-dev:
+    class: dev-macos
+    role: leaf
+    writes_to: [s3, github]
+    protected: false
+    identity:
+      hostnames: [macos-dev]
+  sg01:
+    class: prod-linux
+    role: snapshotter
+    writes_to: [github]
+    protected: true
+    identity:
+      hostnames: [sg01]
+`,
+      "utf8",
+    );
+    const logBefore = await readFile(join(ctx.vault, "log.md"), "utf8");
+
+    async function callStatus(args: Record<string, unknown>, id: number) {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "wiki_status", arguments: args },
+        }),
+      });
+      const body = (await res.json()) as {
+        error?: { code?: number; message?: string };
+        result?: {
+          isError?: boolean;
+          structuredContent?: {
+            ok?: boolean;
+            error?: string;
+            writer_id?: string;
+            host_id?: string;
+            fleet?: { host_id?: string; identity_status?: string };
+          };
+        };
+      };
+      return {
+        status: res.status,
+        jsonrpcError: body.error,
+        isError: body.result?.isError,
+        structured: body.result?.structuredContent,
+        raw: body,
+      };
+    }
+
+    async function assertNoLeak(label: string, out: Awaited<ReturnType<typeof callStatus>>) {
+      expect(out.status, label).toBe(200);
+      const failedClosed = Boolean(out.jsonrpcError) || out.isError === true || out.structured?.ok === false;
+      expect(failedClosed, label).toBe(true);
+      expect(out.structured?.ok, label).not.toBe(true);
+      expect(out.structured?.writer_id, label).toBeUndefined();
+      expect(out.structured?.host_id, label).toBeUndefined();
+      expect(out.structured?.fleet, label).toBeUndefined();
+      const dumped = JSON.stringify(out.raw);
+      expect(dumped, label).not.toContain("chatgpt-web");
+      expect(dumped, label).not.toContain("sg01");
+      expect(dumped, label).not.toContain("snapshotter");
+      expect(await readFile(join(ctx.vault, "log.md"), "utf8"), label).toBe(logBefore);
+    }
+
+    try {
+      await assertNoLeak("other host-id", await callStatus({ host_id: "sg01" }, 40));
+      await assertNoLeak("unknown host-id", await callStatus({ host_id: "not-a-fleet-host" }, 41));
+    } finally {
+      await ctx.close();
+    }
+  });
 });
