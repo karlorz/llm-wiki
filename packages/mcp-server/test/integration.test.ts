@@ -27,12 +27,29 @@ describe("integration vs temp vault + mock S3", () => {
     const vault = await makeTempVault();
     const gate = new ReconcileGate(async () => undefined);
     await gate.runFirst();
-    const status = await handleWikiStatus({ vaultDir: vault, gate, s3Ok: true });
+    const status = await handleWikiStatus({ vaultDir: vault, hostId: "macos-dev", gate, s3Ok: true });
     expect(status.ok).toBe(true);
     if (!status.ok) throw new Error("expected ok");
     expect(status.reconcile_ready).toBe(true);
     expect(status.s3_ok).toBe(true);
     expect(status.vault_path).toBe(vault);
+    expect(status.writer_id).toBe("macos-dev");
+    expect(status.host_id).toBe("macos-dev");
+    expect(status.writer_id).not.toBe("chatgpt-web");
+    expect(status.fleet.identity_status).toBe("unknown");
+    expect(status.fleet.manifest_loaded).toBe(false);
+  });
+
+  it("status fails closed when no authenticated host is present", async () => {
+    const vault = await makeTempVault();
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const status = await handleWikiStatus({ vaultDir: vault, gate, s3Ok: true });
+    expect(status.ok).toBe(false);
+    if (status.ok) throw new Error("expected failure");
+    expect(status.error).toBe("USAGE");
+    expect((status as { writer_id?: string }).writer_id).toBeUndefined();
+    expect((status as { fleet?: { host_id?: string } }).fleet).toBeUndefined();
   });
 
   it("N parallel wiki_capture calls produce N distinct files", async () => {
