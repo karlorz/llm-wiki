@@ -1,7 +1,7 @@
 import { access, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { renderCaptureMarkdown, slugify, wikiCapture, wikiLogAppend, type CaptureKind } from "../src/tools/writes.js";
+import { normalizeCaptureProject, renderCaptureMarkdown, slugify, wikiCapture, wikiLogAppend, type CaptureKind } from "../src/tools/writes.js";
 import { handleWikiReadPage, MAX_READ_PAGE_BYTES } from "../src/tools/reads.js";
 import { ReconcileGate } from "../src/reconcile.js";
 import { S3PutError, sha256Bytes } from "../src/txn.js";
@@ -20,6 +20,12 @@ describe("wiki_capture validation", () => {
   it("empty or punctuation-only titles return capture", () => {
     expect(slugify("")).toBe("capture");
     expect(slugify("!!!")).toBe("capture");
+  });
+
+  it("empty, whitespace, and invalid slugs return null", () => {
+    expect(normalizeCaptureProject("")).toBeNull();
+    expect(normalizeCaptureProject("   ")).toBeNull();
+    expect(normalizeCaptureProject("Not A Slug")).toBeNull();
   });
 
   it("renders ad-hoc capture frontmatter that the raw schema accepts", () => {
