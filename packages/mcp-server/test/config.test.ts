@@ -103,4 +103,16 @@ rclone:
       }),
     ).toThrow(/SKILLWIKI_MCP_VAULT \/ vault_dir is required/);
   });
+
+  it("falls back SKILLWIKI_MCP_PORT zero, negative, and non-numeric to 8801", () => {
+    const required = {
+      SKILLWIKI_MCP_VAULT: "/vault",
+      SKILLWIKI_MCP_TOKEN_MAP: "/tokens.yaml",
+      SKILLWIKI_MCP_RCLONE_REMOTE: "seaweed-wiki",
+      SKILLWIKI_MCP_RCLONE_BUCKET: "cloud/wiki",
+    };
+    for (const port of ["0", "-1", "abc"]) {
+      expect(loadConfig({ ...required, SKILLWIKI_MCP_PORT: port }).port, port).toBe(8801);
+    }
+  });
 });
