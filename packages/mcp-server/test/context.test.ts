@@ -34,14 +34,23 @@ async function setupTestServer(options?: { gateReady?: boolean }) {
   };
 }
 
+const MCP_INSTRUCTIONS_BLOCK =
+  /<!-- mcp-instructions:begin -->\r?\n([\s\S]*?)\r?\n<!-- mcp-instructions:end -->/;
+
+function extractMcpInstructionsBlock(markdown: string): string | null {
+  const match = markdown.match(MCP_INSTRUCTIONS_BLOCK);
+  return match ? match[1].replace(/\r\n/g, "\n").trim() : null;
+}
+
 describe("C5 compact activation over MCP and wiki_context", () => {
   it("extracted marker block from canonical activation.md matches MCP_INSTRUCTIONS exactly", () => {
     const canonicalPath = join(__dirname, "../../skills/using-skillwiki/activation.md");
     const content = readFileSync(canonicalPath, "utf8");
-    const match = content.match(/<!-- mcp-instructions:begin -->\n([\s\S]*?)\n<!-- mcp-instructions:end -->/);
-    expect(match, "canonical activation.md must contain mcp-instructions markers").not.toBeNull();
-    const extracted = match![1].trim();
-    expect(extracted).toBe(MCP_INSTRUCTIONS.trim());
+    const lf = content.replace(/\r\n/g, "\n");
+    const crlf = lf.replace(/\n/g, "\r\n");
+    expect(extractMcpInstructionsBlock(content), "canonical activation.md must contain mcp-instructions markers").not.toBeNull();
+    expect(extractMcpInstructionsBlock(lf)).toBe(MCP_INSTRUCTIONS.trim());
+    expect(extractMcpInstructionsBlock(crlf)).toBe(MCP_INSTRUCTIONS.trim());
   });
 
   it("JSON-RPC initialize returns instructions containing fail-closed, CAS, and capture kinds", async () => {
