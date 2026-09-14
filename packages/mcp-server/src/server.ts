@@ -11,6 +11,7 @@ import { handleConsoleRequest, isConsolePath, isConsoleRequestAllowed } from "./
 import { loadConfig, type McpDaemonConfig } from "./config.js";
 import {
   mcpCompletionCompleteBeforeInitializeError,
+  mcpDuplicateInitializeError,
   mcpElicitationCreateBeforeInitializeError,
   mcpInitializeProtocolError,
   mcpLoggingSetLevelBeforeInitializeError,
@@ -700,6 +701,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const elicitationErr = mcpElicitationCreateBeforeInitializeError(parsed);
         if (elicitationErr) {
           json(res, 200, elicitationErr);
+          return;
+        }
+        const duplicateInitErr = mcpDuplicateInitializeError(parsed);
+        if (duplicateInitErr) {
+          json(res, 200, duplicateInitErr);
           return;
         }
       }
