@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,7 +9,7 @@ import { startMcpHttpServer } from "../src/server.js";
 import { MAX_READ_PAGE_BYTES } from "../src/tools/reads.js";
 import { makeS3Store, makeTempVault } from "./helpers.js";
 
-async function setupTestServer(opts?: { seedLogS3?: boolean }) {
+async function setupTestServer(opts?: { seedLogS3?: boolean; auditFile?: string }) {
   const vault = await makeTempVault();
   const token = "test-token";
   const hash = createHash("sha256").update(token, "utf8").digest("hex");
@@ -25,6 +26,7 @@ async function setupTestServer(opts?: { seedLogS3?: boolean }) {
     gate,
     putObject: s3?.putObject ?? (async () => undefined),
     getObject: s3?.getObject,
+    auditFile: opts?.auditFile,
   });
   const { port } = server.address() as AddressInfo;
   return {
@@ -1099,6 +1101,82 @@ hosts:
         result?: { structuredContent?: { ok?: boolean; markdown?: string } };
       };
       expect(readBody.result?.structuredContent?.ok).toBe(true);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("wiki_capture receipt includes host-id writer_id over HTTP MCP", async () => {
+    const auditFile = join(await mkdtemp(join(tmpdir(), "skillwiki-mcp-audit-")), "audit.jsonl");
+    const ctx = await setupTestServer({ auditFile });
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: {
+            name: "wiki_capture",
+            arguments: {
+              kind: "note",
+              project: "llm-wiki",
+              title: "http receipt writer",
+              content: "Host-id receipt body",
+            },
+          },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result?: {
+          isError?: boolean;
+          structuredContent?: { ok?: boolean; writer_id?: string; path?: string };
+          content?: Array<{ type: string; text: string }>;
+        };
+      };
+      const sc = body.result?.structuredContent;
+      expect(body.result?.isError).toBeUndefined();
+      expect(sc?.ok).toBe(true);
+      expect(sc?.writer_id).toBe("macos-dev");
+      expect(sc?.writer_id).not.toBe("chatgpt-web");
+      expect(sc?.path).toMatch(/^raw\/transcripts\/\d{4}-\d{2}-\d{2}-note-http-receipt-writer\.md$/);
+      expect(JSON.parse(body.result?.content?.[0]?.text ?? "{}")).toEqual(sc);
+
+      const readRes = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 4,
+          method: "tools/call",
+          params: { name: "wiki_read_page", arguments: { path: sc?.path } },
+        }),
+      });
+      expect(readRes.status).toBe(200);
+      const readBody = (await readRes.json()) as {
+        result?: { structuredContent?: { ok?: boolean; markdown?: string; path?: string } };
+      };
+      expect(readBody.result?.structuredContent?.ok).toBe(true);
+      expect(readBody.result?.structuredContent?.path).toBe(sc?.path);
+      expect(readBody.result?.structuredContent?.markdown).toContain("Host-id receipt body");
+
+      const audit = (await readFile(auditFile, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { tool?: string; host_id?: string; path?: string; ok?: boolean });
+      const captureAudit = audit.find((row) => row.tool === "wiki_capture" && row.ok);
+      expect(captureAudit?.host_id).toBe("macos-dev");
+      expect(captureAudit?.path).toBe(sc?.path);
     } finally {
       await ctx.close();
     }
