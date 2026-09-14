@@ -311,9 +311,15 @@ function rankPages(
   // Structural seed gating (work/all scopes): only the strongest keyword
   // matches provide structural signal, so weak-seed page families sharing
   // identical source lists cannot self-reinforce past direct matches.
+  // Gating runs before historical-cycle exclusion on purpose: the gate models
+  // "the strongest keyword matches", and suppression then removes cycle pages
+  // from whatever survived the gate. Reordering these changes ranking.
+  // Longer term, bounding per-family contribution inside scoreSourceOverlap
+  // could subsume both this gate and the historical-cycle guardrail; they are
+  // kept separate while default typed ranking must stay unchanged.
   const gatedSeedPages =
     structuralSeedLimit !== undefined && seedPages.length > structuralSeedLimit
-      ? [...seedPages]
+      ? seedPages
           .sort(
             (a, b) =>
               b.keywordScore - a.keywordScore || a.relPath.localeCompare(b.relPath),
@@ -321,24 +327,20 @@ function rankPages(
           .slice(0, structuralSeedLimit)
       : seedPages;
 
-  const seedPaths = new Set(gatedSeedPages.map((page) => page.relPath));
-  const operationalSeedPaths = new Set(
-    gatedSeedPages
-      .filter((page) => !page.historicalCycle)
-      .map((page) => page.relPath),
-  );
-
   // When historical-cycle suppression is active, structural signals must not
   // use historical-cycle pages as seeds — otherwise large research-cycle
   // clusters self-reinforce via source-overlap and drown operational pages
   // even after HISTORICAL_CYCLE_FACTOR demotion.
-  const structuralSeedPaths = suppressRepetitiveHistoricalCycles
-    ? operationalSeedPaths
-    : seedPaths;
+  const structuralSeedPages = suppressRepetitiveHistoricalCycles
+    ? gatedSeedPages.filter((page) => !page.historicalCycle)
+    : gatedSeedPages;
+  const structuralSeedPaths = new Set(
+    structuralSeedPages.map((page) => page.relPath),
+  );
 
   const results: QueryResult[] = pages
     .map((page) => {
-      const sourceOverlap = scoreSourceOverlap(page, pages, structuralSeedPaths);
+      const sourceOverlap = scoreSourceOverlap(page, structuralSeedPages);
       const wikilink = scoreWikilink(page.relPath, structuralSeedPaths, graph);
       const aa = scoreAdamicAdar(page.relPath, structuralSeedPaths, graph);
       const typeAffinity = scoreTypeAffinity(page.type, queryTerms);
@@ -384,13 +386,12 @@ function rankPages(
 /** Source overlap: count shared raw sources between this page and seed pages. */
 function scoreSourceOverlap(
   page: { relPath: string; sources: string[] },
-  allPages: { relPath: string; sources: string[]; keywordScore: number }[],
-  seedPaths: Set<string>,
+  seedPages: { relPath: string; sources: string[] }[],
 ): number {
   if (page.sources.length === 0) return 0;
   let total = 0;
-  for (const seed of allPages) {
-    if (seed.relPath === page.relPath || !seedPaths.has(seed.relPath)) continue;
+  for (const seed of seedPages) {
+    if (seed.relPath === page.relPath) continue;
     const shared = page.sources.filter((s) => seed.sources.includes(s)).length;
     total += shared;
   }
