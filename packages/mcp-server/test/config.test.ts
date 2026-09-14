@@ -93,4 +93,14 @@ rclone:
     );
     expect(fromFile.rcloneTimeoutMs).toBe(900_000);
   });
+
+  it("throws when SKILLWIKI_MCP_VAULT / vault_dir is missing", () => {
+    expect(() =>
+      loadConfig({
+        SKILLWIKI_MCP_TOKEN_MAP: "/tokens.yaml",
+        SKILLWIKI_MCP_RCLONE_REMOTE: "seaweed-wiki",
+        SKILLWIKI_MCP_RCLONE_BUCKET: "cloud/wiki",
+      }),
+    ).toThrow(/SKILLWIKI_MCP_VAULT \/ vault_dir is required/);
+  });
 });
