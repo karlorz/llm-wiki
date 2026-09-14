@@ -94,17 +94,6 @@ export async function runQuery(
   // Load or build graph (builds if missing or stale > 24h)
   const graph = await loadOrBuildGraph(input.vault);
 
-  // Load page data and compute keyword scores
-  interface PageData {
-    relPath: string;
-    title: string;
-    type: string;
-    tags: string[];
-    sources: string[];
-    keywordScore: number;
-    historicalCycle: boolean;
-  }
-
   const pages: PageData[] = [];
   for (const p of candidates) {
     const text = await readPage(p);
@@ -123,7 +112,7 @@ export async function runQuery(
     const split = splitFrontmatter(text);
     const body = split.ok ? split.data.body : text;
 
-    const keywordScore = computeKeywordScore(queryTerms, title, tags, body);
+    const keywordScore = computeKeywordScore(queryTerms, title, tags, body, p.relPath);
     pages.push({
       relPath: p.relPath,
       title,
@@ -135,66 +124,25 @@ export async function runQuery(
     });
   }
 
-  // Identify seed pages — those with direct keyword match — and calculate the
-  // ranking guardrail inputs in the same pass.
-  const seedPaths = new Set<string>();
-  const operationalSeedPaths = new Set<string>();
-  let historicalCyclePageCount = 0;
-  let hasDirectOperationalSeed = false;
-  for (const page of pages) {
-    if (page.historicalCycle) historicalCyclePageCount += 1;
-    if (page.keywordScore <= 0) continue;
-    seedPaths.add(page.relPath);
-    if (!page.historicalCycle) {
-      operationalSeedPaths.add(page.relPath);
-      hasDirectOperationalSeed = true;
-    }
+  // scope=all ranks work and typed in separate pools so typed source-overlap
+  // cannot drown Layer-3 work, then zip-merges work-first. Default typed
+  // ranking is unchanged because typed pages never enter the work pool.
+  let structural: QueryResult[];
+  let results: QueryResult[];
+  let rankingGuardrails: QueryOutput["ranking_guardrails"];
+  if (scope === "all") {
+    const rankedWork = rankPages(pages.filter((page) => isWorkPath(page.relPath)), graph, queryTerms);
+    const rankedTyped = rankPages(pages.filter((page) => !isWorkPath(page.relPath)), graph, queryTerms);
+    structural = [...rankedWork.results, ...rankedTyped.results];
+    results = zipMergeScopeResults(rankedWork.results, rankedTyped.results, limit);
+    rankingGuardrails = rankedTyped.rankingGuardrails;
+  } else {
+    const ranked = rankPages(pages, graph, queryTerms);
+    structural = ranked.results;
+    results = structural.slice(0, limit);
+    rankingGuardrails = ranked.rankingGuardrails;
   }
-  const suppressRepetitiveHistoricalCycles =
-    historicalCyclePageCount >= 3 && hasDirectOperationalSeed;
 
-  // When historical-cycle suppression is active, structural signals must not
-  // use historical-cycle pages as seeds — otherwise large research-cycle
-  // clusters self-reinforce via source-overlap and drown operational pages
-  // even after HISTORICAL_CYCLE_FACTOR demotion.
-  const structuralSeedPaths = suppressRepetitiveHistoricalCycles
-    ? operationalSeedPaths
-    : seedPaths;
-
-  // Composite scoring with 4 signals
-  // Seed pages (keyword match > 0) always rank above non-seed pages
-  // because non-seed structural signals are discounted by NON_SEED_FACTOR.
-  const structural: QueryResult[] = pages
-    .map((page) => {
-      const sourceOverlap = scoreSourceOverlap(page, pages, structuralSeedPaths);
-      const wikilink = scoreWikilink(page.relPath, structuralSeedPaths, graph);
-      const aa = scoreAdamicAdar(page.relPath, structuralSeedPaths, graph);
-      const typeAffinity = scoreTypeAffinity(page.type, queryTerms);
-      const isSeed = page.keywordScore > 0;
-
-      const structuralBoost =
-        sourceOverlap * W_SOURCE_OVERLAP +
-        wikilink * W_WIKILINK +
-        aa * W_ADAMIC_ADAR;
-
-      const composite = isSeed
-        ? page.keywordScore * W_KEYWORD + structuralBoost + typeAffinity * W_TYPE_AFFINITY
-        : structuralBoost * NON_SEED_FACTOR + typeAffinity * W_TYPE_AFFINITY;
-      const guardedComposite = suppressRepetitiveHistoricalCycles && page.historicalCycle
-        ? composite * HISTORICAL_CYCLE_FACTOR
-        : composite;
-
-      return {
-        path: page.relPath,
-        score: Math.round(guardedComposite * 1000) / 1000,
-        title: page.title,
-        type: page.type,
-      };
-    })
-    .filter((r) => r.score > 0)
-    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
-
-  let results = structural.slice(0, limit);
   let hybridMeta: QueryOutput["hybrid"];
   if (input.hybrid) {
     const index = await loadVectorIndex(input.vault);
@@ -233,13 +181,6 @@ export async function runQuery(
         : "no matching pages found"
       : results.map((r) => `${r.path} (score: ${r.score})`).join("\n");
 
-  const rankingGuardrails = suppressRepetitiveHistoricalCycles
-    ? {
-        repetitive_historical_cycles_suppressed: true,
-        historical_cycle_page_count: historicalCyclePageCount,
-      }
-    : undefined;
-
   return {
     exitCode: ExitCode.OK,
     result: ok({
@@ -260,6 +201,143 @@ function queryCandidates(
   if (scope === "work") return workItems;
   if (scope === "all") return [...typedKnowledge, ...workItems];
   return typedKnowledge;
+}
+
+interface PageData {
+  relPath: string;
+  title: string;
+  type: string;
+  tags: string[];
+  sources: string[];
+  keywordScore: number;
+  historicalCycle: boolean;
+}
+
+function isWorkPath(relPath: string): boolean {
+  return relPath.includes("/work/");
+}
+
+/** Generic path tokens that should not dominate work ranking. */
+const GENERIC_PATH_TERMS = new Set([
+  "work",
+  "open",
+  "projects",
+  "spec",
+  "plan",
+  "log",
+  "md",
+  "http",
+  "mcp",
+  "and",
+  "the",
+  "for",
+  "with",
+  "from",
+  "item",
+  "items",
+]);
+
+function pathSegmentBonus(terms: string[], relPath: string): number {
+  if (!isWorkPath(relPath)) return 0;
+  const segments = new Set(
+    relPath
+      .toLowerCase()
+      .split("/")
+      .flatMap((part) => {
+        const noExt = part.replace(/\.(md|markdown)$/i, "");
+        return noExt === part ? [part] : [part, noExt];
+      }),
+  );
+  let bonus = 0;
+  for (const term of terms) {
+    if (GENERIC_PATH_TERMS.has(term)) continue;
+    if (segments.has(term)) bonus += 100;
+  }
+  return bonus;
+}
+
+function zipMergeScopeResults(work: QueryResult[], typed: QueryResult[], limit: number): QueryResult[] {
+  const merged: QueryResult[] = [];
+  const n = Math.max(work.length, typed.length);
+  for (let i = 0; i < n && merged.length < limit; i++) {
+    if (i < work.length) merged.push(work[i]);
+    if (merged.length >= limit) break;
+    if (i < typed.length) merged.push(typed[i]);
+  }
+  return merged;
+}
+
+function rankPages(
+  pages: PageData[],
+  graph: GraphData | null,
+  queryTerms: string[],
+): {
+  results: QueryResult[];
+  rankingGuardrails?: QueryOutput["ranking_guardrails"];
+} {
+  const seedPaths = new Set<string>();
+  const operationalSeedPaths = new Set<string>();
+  let historicalCyclePageCount = 0;
+  let hasDirectOperationalSeed = false;
+  for (const page of pages) {
+    if (page.historicalCycle) historicalCyclePageCount += 1;
+    if (page.keywordScore <= 0) continue;
+    seedPaths.add(page.relPath);
+    if (!page.historicalCycle) {
+      operationalSeedPaths.add(page.relPath);
+      hasDirectOperationalSeed = true;
+    }
+  }
+  const suppressRepetitiveHistoricalCycles =
+    historicalCyclePageCount >= 3 && hasDirectOperationalSeed;
+
+  // When historical-cycle suppression is active, structural signals must not
+  // use historical-cycle pages as seeds — otherwise large research-cycle
+  // clusters self-reinforce via source-overlap and drown operational pages
+  // even after HISTORICAL_CYCLE_FACTOR demotion.
+  const structuralSeedPaths = suppressRepetitiveHistoricalCycles
+    ? operationalSeedPaths
+    : seedPaths;
+
+  const results: QueryResult[] = pages
+    .map((page) => {
+      const sourceOverlap = scoreSourceOverlap(page, pages, structuralSeedPaths);
+      const wikilink = scoreWikilink(page.relPath, structuralSeedPaths, graph);
+      const aa = scoreAdamicAdar(page.relPath, structuralSeedPaths, graph);
+      const typeAffinity = scoreTypeAffinity(page.type, queryTerms);
+      const isSeed = page.keywordScore > 0;
+
+      const structuralBoost =
+        sourceOverlap * W_SOURCE_OVERLAP +
+        wikilink * W_WIKILINK +
+        aa * W_ADAMIC_ADAR;
+
+      const composite = isSeed
+        ? page.keywordScore * W_KEYWORD + structuralBoost + typeAffinity * W_TYPE_AFFINITY
+        : structuralBoost * NON_SEED_FACTOR + typeAffinity * W_TYPE_AFFINITY;
+      const guardedComposite = suppressRepetitiveHistoricalCycles && page.historicalCycle
+        ? composite * HISTORICAL_CYCLE_FACTOR
+        : composite;
+
+      return {
+        path: page.relPath,
+        score: Math.round(guardedComposite * 1000) / 1000,
+        title: page.title,
+        type: page.type,
+      };
+    })
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+
+  return {
+    results,
+    rankingGuardrails: suppressRepetitiveHistoricalCycles
+      ? {
+          repetitive_historical_cycles_suppressed: true,
+          historical_cycle_page_count: historicalCyclePageCount,
+        }
+      : undefined,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +423,7 @@ function computeKeywordScore(
   title: string,
   tags: string[],
   body: string,
+  relPath?: string,
 ): number {
   const lowerTitle = title.toLowerCase();
   const lowerTags = tags.map((t) => t.toLowerCase());
@@ -356,6 +435,7 @@ function computeKeywordScore(
     if (lowerTags.some((t) => t.includes(term))) score += 2;
     if (lowerBody.includes(term)) score += 1;
   }
+  if (relPath) score += pathSegmentBonus(terms, relPath);
   return score;
 }
 
