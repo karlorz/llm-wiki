@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -216,6 +216,40 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       const gammaProj = sc?.projects.find((p) => p.slug === "gamma");
       expect(gammaProj).toBeDefined();
       expect(gammaProj?.active_work).toEqual([]);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("wiki_context HTTP without bearer is 401 and writes nothing", async () => {
+    const ctx = await setupTestServer();
+    const alphaBefore = await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8");
+    const logBefore = await readFile(join(ctx.vault, "log.md"), "utf8");
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 70,
+          method: "tools/call",
+          params: { name: "wiki_context", arguments: {} },
+        }),
+      });
+      expect(res.status).toBe(401);
+      expect(res.headers.get("www-authenticate")).toBe("Bearer");
+      const body = (await res.json()) as {
+        error?: string;
+        result?: { structuredContent?: { writer_id?: string; projects?: unknown } };
+      };
+      expect(body.error).toBe("unauthorized");
+      expect(body.result?.structuredContent?.writer_id).toBeUndefined();
+      expect(body.result?.structuredContent?.projects).toBeUndefined();
+      expect(await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8")).toBe(alphaBefore);
+      expect(await readFile(join(ctx.vault, "log.md"), "utf8")).toBe(logBefore);
     } finally {
       await ctx.close();
     }
