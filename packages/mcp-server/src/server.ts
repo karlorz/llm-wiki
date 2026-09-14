@@ -11,6 +11,7 @@ import { handleConsoleRequest, isConsolePath, isConsoleRequestAllowed } from "./
 import { loadConfig, type McpDaemonConfig } from "./config.js";
 import {
   mcpInitializeProtocolError,
+  mcpPromptsListBeforeInitializeError,
   mcpResourcesListBeforeInitializeError,
   mcpToolsCallBeforeInitializeError,
   mcpToolsListBeforeInitializeError,
@@ -616,6 +617,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const resourcesErr = mcpResourcesListBeforeInitializeError(parsed);
         if (resourcesErr) {
           json(res, 200, resourcesErr);
+          return;
+        }
+        const promptsErr = mcpPromptsListBeforeInitializeError(parsed);
+        if (promptsErr) {
+          json(res, 200, promptsErr);
           return;
         }
       }
