@@ -36,6 +36,7 @@ import {
   mcpResourcesUnsubscribeBeforeInitializeError,
   mcpRootsListAfterShutdownError,
   mcpRootsListBeforeInitializeError,
+  mcpSamplingCreateMessageAfterShutdownError,
   mcpSamplingCreateMessageBeforeInitializeError,
   mcpShutdownBeforeInitializeError,
   mcpToolsCallAfterShutdownError,
@@ -779,6 +780,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const rootsListAfterShutdownErr = mcpRootsListAfterShutdownError(parsed);
         if (rootsListAfterShutdownErr) {
           json(res, 200, rootsListAfterShutdownErr);
+          return;
+        }
+        const samplingCreateMessageAfterShutdownErr = mcpSamplingCreateMessageAfterShutdownError(parsed);
+        if (samplingCreateMessageAfterShutdownErr) {
+          json(res, 200, samplingCreateMessageAfterShutdownErr);
           return;
         }
         const duplicateInitErr = mcpDuplicateInitializeError(parsed);
