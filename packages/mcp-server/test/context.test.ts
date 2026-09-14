@@ -387,4 +387,70 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       await ctx.close();
     }
   });
+
+  it("wiki_query HTTP missing and empty query fail-closed with no writer_id and no file written", async () => {
+    const ctx = await setupTestServer();
+    const logBefore = await readFile(join(ctx.vault, "log.md"), "utf8");
+    const alphaBefore = await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8");
+
+    async function callQuery(args: Record<string, unknown>, id: number) {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "wiki_query", arguments: args },
+        }),
+      });
+      const body = (await res.json()) as {
+        error?: { code?: number; message?: string };
+        result?: {
+          isError?: boolean;
+          structuredContent?: {
+            ok?: boolean;
+            error?: string;
+            writer_id?: string;
+            results?: unknown;
+          };
+        };
+      };
+      return {
+        status: res.status,
+        jsonrpcError: body.error,
+        isError: body.result?.isError,
+        structured: body.result?.structuredContent,
+        raw: body,
+      };
+    }
+
+    async function assertNoWrite(label: string, out: Awaited<ReturnType<typeof callQuery>>) {
+      expect(out.status, label).toBe(200);
+      const failedClosed = Boolean(out.jsonrpcError) || out.isError === true || out.structured?.ok === false;
+      expect(failedClosed, label).toBe(true);
+      expect(out.structured?.ok, label).not.toBe(true);
+      expect(out.structured?.results, label).toBeUndefined();
+      expect(out.structured?.writer_id, label).toBeUndefined();
+      expect(JSON.stringify(out.raw), label).not.toContain("chatgpt-web");
+      expect(await readdir(join(ctx.vault, "raw", "transcripts")), label).toEqual([]);
+      expect(await readFile(join(ctx.vault, "log.md"), "utf8"), label).toBe(logBefore);
+      expect(await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8"), label).toBe(alphaBefore);
+    }
+
+    try {
+      await assertNoWrite("missing query", await callQuery({}, 90));
+      await assertNoWrite("empty query", await callQuery({ query: "" }, 91));
+      const whitespace = await callQuery({ query: "   " }, 92);
+      await assertNoWrite("whitespace query", whitespace);
+      expect(whitespace.isError).toBe(true);
+      expect(whitespace.structured?.error).toBe("USAGE");
+    } finally {
+      await ctx.close();
+    }
+  });
 });
