@@ -202,16 +202,19 @@ describe("C4 typed result envelope and request body cap", () => {
         };
       };
 
-      const expected = {
-        ok: false,
-        error: "PAGE_TOO_LARGE",
-        path: largeRelPath,
-        message: `page exceeds ${MAX_READ_PAGE_BYTES}-byte wiki_read_page limit; request a smaller page`,
-      };
+      const structured = largeBody.result?.structuredContent as Record<string, unknown> | undefined;
       expect(largeBody.result?.isError).toBe(true);
-      expect(largeBody.result?.structuredContent).toEqual(expected);
+      expect(structured?.ok).toBe(false);
+      expect(structured?.error).toBe("PAGE_TOO_LARGE");
+      expect(structured?.path).toBe(largeRelPath);
+      expect(structured?.message).toBe(
+        `page exceeds ${MAX_READ_PAGE_BYTES}-byte wiki_read_page limit; request a smaller page`,
+      );
+      expect(structured?.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(structured?.byte_length).toBe(Buffer.byteLength(largeContent, "utf8"));
+      expect(typeof structured?.s3_verified).toBe("boolean");
       expect(largeBody.result?.content?.[0]?.type).toBe("text");
-      expect(JSON.parse(largeBody.result?.content?.[0]?.text ?? "{}")).toEqual(expected);
+      expect(JSON.parse(largeBody.result?.content?.[0]?.text ?? "{}")).toEqual(structured);
     } finally {
       await ctx.close();
     }

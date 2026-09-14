@@ -38,9 +38,15 @@ describe("write allowlist", () => {
     expect(isAllowedWritePath("log.md", "capture")).toBe(false);
   });
 
-  it("allows log.md for log_append only", () => {
+  it("allows log.md and dated log-event JSON for log_append only", () => {
     expect(isAllowedWritePath("log.md", "log_append")).toBe(true);
+    expect(
+      isAllowedWritePath(`meta/log-events/2026-09-14/${"a".repeat(64)}.json`, "log_append"),
+    ).toBe(true);
     expect(isAllowedWritePath("raw/transcripts/2026-09-13-note-hello.md", "log_append")).toBe(false);
+    expect(isAllowedWritePath("meta/latest-session-brief.md", "log_append")).toBe(false);
+    expect(isAllowedWritePath("meta/log-events/2026-09-14/not-a-hash.json", "log_append")).toBe(false);
+    expect(isAllowedWritePath("meta/other.json", "log_append")).toBe(false);
   });
 
   it("never allows AGENTS.md or CLAUDE.md", () => {

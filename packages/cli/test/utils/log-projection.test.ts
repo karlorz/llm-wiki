@@ -47,4 +47,40 @@ describe("renderLogProjection", () => {
     expect(text).toContain("- Event kind: future-kind");
     expect(text).toContain(`<!-- skillwiki-log-event:${unknown.operation_id} -->`);
   });
+
+  it("renders log-append from appended_markdown plus event marker", () => {
+    const event = base({
+      operation_id: "e".repeat(64),
+      occurred_at: "2026-09-14T00:00:00.000Z",
+      actor: "skillwiki-mcp",
+      kind: "log-append",
+      target: "log.md",
+      note: "mcp append",
+      metadata: { appended_markdown: "## [2026-09-14] capture | note: canary-line" },
+    });
+    const text = renderLogProjection([event]);
+    expect(text).toContain("## [2026-09-14] capture | note: canary-line");
+    expect(text).toContain(`<!-- skillwiki-log-event:${event.operation_id} -->`);
+    expect(text).not.toContain("- Event kind: log-append");
+    expect(text).not.toContain("appended_markdown");
+  });
+
+  it("orders same-day day-bucketed events by operation_id", () => {
+    const laterId = base({
+      operation_id: "f".repeat(64),
+      occurred_at: "2026-09-14T00:00:00.000Z",
+      kind: "log-append",
+      target: "log.md",
+      metadata: { appended_markdown: "## [2026-09-14] second" },
+    });
+    const earlierId = base({
+      operation_id: "e".repeat(64),
+      occurred_at: "2026-09-14T00:00:00.000Z",
+      kind: "log-append",
+      target: "log.md",
+      metadata: { appended_markdown: "## [2026-09-14] first" },
+    });
+    const text = renderLogProjection([laterId, earlierId]);
+    expect(text.indexOf("## [2026-09-14] first")).toBeLessThan(text.indexOf("## [2026-09-14] second"));
+  });
 });

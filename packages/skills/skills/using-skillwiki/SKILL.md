@@ -192,7 +192,7 @@ If the vault has `.WIKI_GIT_FROZEN`:
 | `wiki-remove` | Remove maintained pages; exact raw disposal uses the separate attended `sources dispose` flow |
 | `wiki-reingest` | Detect drift in raw sources (sha256 comparison) and re-ingest updated content |
 | `wiki-add-task` | Quick-capture ideas, bugs, tasks, notes (captures via wiki_capture on leaf hosts; local raw/transcripts/ only on authoring hosts) |
-| `skillwiki-mcp` | HTTP MCP captures (`wiki_capture` / `wiki_log_append`); never local raw/transcripts on leaf hosts |
+| `skillwiki-mcp` | HTTP MCP captures (`wiki_capture` / `wiki_log_append`); never local raw/transcripts on leaf hosts. `wiki_log_append` returns a receipt; verify via `wiki_read_page(event_path)`. Use `wiki_read_page` `tail_bytes` to browse oversized `log.md`. |
 | `wiki-adapter-prd` | Map foreign PRD formats (CodeStable, RFC, AIDE, Hermes) into vault pages |
 | `proj-init` | Bootstrap a project workspace (README, requirements, architecture) |
 | `proj-work` | Open or run a work item under a project's work/ directory |
