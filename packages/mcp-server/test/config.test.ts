@@ -115,4 +115,18 @@ rclone:
       expect(loadConfig({ ...required, SKILLWIKI_MCP_PORT: port }).port, port).toBe(8801);
     }
   });
+
+  it("ignores malformed YAML fileText and still loads required fields from env", () => {
+    const env = {
+      SKILLWIKI_MCP_VAULT: "/vault",
+      SKILLWIKI_MCP_TOKEN_MAP: "/tokens.yaml",
+      SKILLWIKI_MCP_RCLONE_REMOTE: "seaweed-wiki",
+      SKILLWIKI_MCP_RCLONE_BUCKET: "cloud/wiki",
+    };
+    const cfg = loadConfig(env, "foo: [unclosed");
+    expect(cfg.vaultDir).toBe("/vault");
+    expect(cfg.tokenMapPath).toBe("/tokens.yaml");
+    expect(cfg.rcloneRemote).toBe("seaweed-wiki");
+    expect(cfg.rcloneBucket).toBe("cloud/wiki");
+  });
 });
