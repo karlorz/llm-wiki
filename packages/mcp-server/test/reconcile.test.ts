@@ -25,6 +25,23 @@ describe("reconcile gate", () => {
     expect(gate.ready).toBe(true);
     expect(() => gate.assertReady()).not.toThrow();
   });
+
+  it("runPeriodic inbound copy completion sets ready", async () => {
+    let resolveCopy!: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveCopy = resolve;
+    });
+    const gate = new ReconcileGate(async () => {
+      await started;
+    });
+    expect(gate.ready).toBe(false);
+    const periodic = gate.runPeriodic();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(gate.ready).toBe(false);
+    resolveCopy();
+    await periodic;
+    expect(gate.ready).toBe(true);
+  });
 });
 
 describe("rcloneCopyUpdate timeout", () => {
