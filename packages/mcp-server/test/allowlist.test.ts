@@ -112,4 +112,20 @@ describe("write allowlist", () => {
     expect(isAllowedWritePath("projects/llm-wiki/knowledge.md", "page_publish")).toBe(false);
     expect(isAllowedWritePath("log.md", "page_publish")).toBe(false);
   });
+
+  it("denies .obsidian and .skillwiki path segments for capture, log_append, workitem, and page_publish", () => {
+    const cases: Array<[Parameters<typeof isAllowedWritePath>[1], string]> = [
+      ["capture", "raw/transcripts/.obsidian/2026-09-13-note-hello.md"],
+      ["capture", "raw/.skillwiki/transcripts/2026-09-13-note-hello.md"],
+      ["log_append", `meta/.obsidian/log-events/2026-09-14/${"a".repeat(64)}.json`],
+      ["log_append", ".skillwiki/log.md"],
+      ["workitem", "projects/llm-wiki/work/2026-09-13-tier2/.obsidian/spec.md"],
+      ["workitem", "projects/llm-wiki/architecture/.skillwiki/x.md"],
+      ["page_publish", "concepts/foo/.obsidian/x.md"],
+      ["page_publish", "concepts/foo/.skillwiki/x.md"],
+    ];
+    for (const [kind, path] of cases) {
+      expect(isAllowedWritePath(path, kind), `${kind} ${path}`).toBe(false);
+    }
+  });
 });
