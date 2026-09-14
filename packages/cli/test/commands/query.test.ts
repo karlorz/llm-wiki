@@ -715,6 +715,62 @@ describe("query", () => {
     )).toBe(true);
   });
 
+  /**
+   * Real-vault regression (2026-09-14 ranking gate): thousands of pages become
+   * weak keyword seeds for generic terms, and packet families sharing identical
+   * source lists self-reinforce via source-overlap sums (e.g. 23 siblings x 6
+   * shared sources x W_SOURCE_OVERLAP = 552) until they outrank strong direct
+   * matches. Structural seeds must gate to the top keyword matches in work/all
+   * scopes so weak-seed clusters provide no structural signal.
+   */
+  it("gates structural seeds so weak-seed packet clusters cannot outrank strong work matches", async () => {
+    const v = makeVault();
+    tmpDirs.push(v);
+    mkdirSync(join(v, "queries"), { recursive: true });
+
+    // Weak-seed packet cluster: 24 items sharing the same 6 sources, each
+    // matching only generic body terms ("open work").
+    const packetSources = Array.from({ length: 6 }, (_, i) => `raw/articles/packet-source-${i}.md`);
+    const packetSourceBlock = packetSources.map((s) => `  - ${s}`).join("\n");
+    for (let i = 1; i <= 24; i += 1) {
+      const slug = `2026-07-05-evidence-packet-${String(i).padStart(2, "0")}`;
+      mkdirSync(join(v, "projects", "playground", "work", slug), { recursive: true });
+      writeFileSync(
+        join(v, "projects", "playground", "work", slug, "spec.md"),
+        `---\ntitle: Evidence Packet ${i}\nkind: feature\nstatus: planned\nsources:\n${packetSourceBlock}\n---\nBuyer story covers open work evidence for packet ${i}.\n`,
+      );
+    }
+
+    // Strong seed field: 21 llm-wiki work items with direct title matches and
+    // no shared sources, like the real vault's HTTP MCP work items.
+    for (let i = 1; i <= 21; i += 1) {
+      const slug = `2026-09-${String(i).padStart(2, "0")}-http-mcp-item-${String(i).padStart(2, "0")}`;
+      mkdirSync(join(v, "projects", "llm-wiki", "work", slug), { recursive: true });
+      writeFileSync(
+        join(v, "projects", "llm-wiki", "work", slug, "spec.md"),
+        `---\ntitle: HTTP MCP doctor slice ${i}\nkind: feature\nstatus: planned\nsources: []\n---\nOpen work on the HTTP MCP doctor path, slice ${i}.\n`,
+      );
+    }
+
+    const scopes: Array<"work" | "all"> = ["work", "all"];
+    for (const scope of scopes) {
+      const r = await runQuery({
+        text: "llm-wiki open work HTTP MCP doctor",
+        vault: v,
+        scope,
+        limit: 5,
+      });
+      expect(r.exitCode).toBe(0);
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const workHits = r.result.data.results.filter((item) => item.path.includes("/work/"));
+      expect(workHits.length).toBeGreaterThan(0);
+      for (const item of workHits) {
+        expect(item.path.startsWith("projects/llm-wiki/work/")).toBe(true);
+      }
+    }
+  });
+
   it("does not award path-segment bonus on default typed pages", async () => {
     const v = makeVault();
     tmpDirs.push(v);
