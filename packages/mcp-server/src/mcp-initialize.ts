@@ -729,3 +729,21 @@ export function mcpElicitationCreateAfterShutdownError(parsed: unknown): JsonRpc
   }
   return null;
 }
+
+export function mcpNotificationsInitializedAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "notifications/initialized" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "notifications/initialized after shutdown" },
+      };
+    }
+  }
+  return null;
+}

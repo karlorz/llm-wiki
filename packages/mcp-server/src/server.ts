@@ -20,6 +20,7 @@ import {
   mcpLoggingSetLevelAfterShutdownError,
   mcpLoggingSetLevelBeforeInitializeError,
   mcpNotificationsCancelledError,
+  mcpNotificationsInitializedAfterShutdownError,
   mcpNotificationsInitializedError,
   mcpPingAfterShutdownError,
   mcpPingBeforeInitializeError,
@@ -668,6 +669,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const pingErr = mcpPingBeforeInitializeError(parsed);
         if (pingErr) {
           json(res, 200, pingErr);
+          return;
+        }
+        const initializedAfterShutdownErr = mcpNotificationsInitializedAfterShutdownError(parsed);
+        if (initializedAfterShutdownErr) {
+          json(res, 200, initializedAfterShutdownErr);
           return;
         }
         const initializedErr = mcpNotificationsInitializedError(parsed);
