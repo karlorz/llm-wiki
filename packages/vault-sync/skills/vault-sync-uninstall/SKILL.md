@@ -34,7 +34,9 @@ Remove vault-sync from the current host. Stops scheduler jobs, removes deployed 
 5. **Unregister from skillwiki config**:
    ```
    skillwiki config set vault_sync.installed false
+   skillwiki config set vault_sync.fetch_projection none
    ```
+   The projection clone itself is retained for recovery or manual removal; uninstall clears only the host-local routing key.
 6. **`--keep-logs`** (default): preserve `wiki-*.log`. **`--purge`**: also remove logs.
 7. **Refuse to run on a host** where `fleet.yaml` marks it as `protected: true`. Override: `--force-protected` (sg01 hand-migration scenario only).
 

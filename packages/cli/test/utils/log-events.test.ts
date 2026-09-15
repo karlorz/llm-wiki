@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
-import { writeLogEvent, type SkillwikiLogEventV1 } from "../../src/utils/log-events.js";
+import { readLogEvents, writeLogEvent, type SkillwikiLogEventV1 } from "../../src/utils/log-events.js";
 
 describe("writeLogEvent", () => {
   it("creates, no-ops identical, collides on different bytes", async () => {
@@ -33,5 +34,28 @@ describe("writeLogEvent", () => {
     const other: SkillwikiLogEventV1 = { ...event, operation_id: "b".repeat(64), host_id: "sg01" };
     expect(await writeLogEvent(vault, other)).toMatchObject({ ok: true, data: { created: true } });
     expect(readdirSync(join(vault, "meta", "log-events", "2026-07-15"))).toHaveLength(2);
+  });
+
+  it("reads ledger events independently of Git ignore state", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "log-events-git-exclude-"));
+    execFileSync("git", ["init", "-q"], { cwd: vault });
+    writeFileSync(join(vault, ".git", "info", "exclude"), "meta/log-events/\n");
+    const event: SkillwikiLogEventV1 = {
+      schema: "skillwiki-log-event/v1",
+      operation_id: "c".repeat(64),
+      occurred_at: "2026-09-15T00:00:00.000Z",
+      host_id: "macos-dev",
+      actor: "skillwiki-cli",
+      kind: "page-publish",
+      target: "concepts/example.md",
+      note: "Published while ignored by Git presentation",
+      metadata: {},
+    };
+
+    expect(await writeLogEvent(vault, event)).toMatchObject({ ok: true });
+    expect(await readLogEvents(vault)).toMatchObject({
+      ok: true,
+      data: [event],
+    });
   });
 });

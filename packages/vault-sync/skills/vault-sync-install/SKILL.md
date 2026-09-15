@@ -1,7 +1,7 @@
 ---
 name: vault-sync-install
 description: "Install vault-sync: scripts, scheduler, optional Linux FUSE-only mode. Use for install, reinstall, or role switch."
-argument-hint: "[--mode=full|fuse-only] [--role=leaf|snapshotter] [--service-scope=user|system] [--vault-path=<path>] [--package-version=<ver>] [--package-commit=<sha>] [--dry-run] [--override-snapshotter]"
+argument-hint: "[--mode=full|fuse-only] [--role=leaf|snapshotter] [--service-scope=user|system] [--vault-path=<path>] [--fetch-projection=<absolute-path>] [--package-version=<ver>] [--package-commit=<sha>] [--dry-run] [--override-snapshotter]"
 ---
 
 # vault-sync-install
@@ -26,6 +26,7 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
      - On override: print warning, note that fleet.yaml update is deferred to user.
    - `--service-scope=auto|user|system` for Linux snapshotter or FUSE-only installs. `auto` uses `system` when run as root and `user` otherwise. Full leaf installs stay on user units.
    - `--vault-path=<path>` for the FUSE-only mount guard. Defaults to `~/wiki`.
+   - `--fetch-projection=<absolute-path>` (leaf/full only; env `VS_FETCH_PROJECTION`) provisions or validates an independent sibling Git clone used by fetch and Git status. It must be distinct and non-nested with the live vault and must not reuse `vault_sync.snapshot_worktree`.
    - `--max-dir-cache=<duration>` for the FUSE freshness envelope. Defaults to `15m`.
    - `--package-version=<ver>` / `--package-commit=<sha>` (optional) — set deploy provenance for `runtime-manifest.json`. Equivalent env: `VS_PACKAGE_VERSION`, `VS_PACKAGE_COMMIT`. Metadata only; does not change copied scripts. Required for honest manifests when the package root is rsynced without monorepo `package.json` / git.
 3. **Check prerequisites**:
@@ -34,7 +35,8 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    - macOS: `command -v launchctl` — required.
    - Linux full mode: `systemctl --user` must be available. Fail with hint if not.
    - Linux FUSE-only mode: `systemctl` must be available. User scope requires `systemctl --user`; system scope writes root units under `/etc/systemd/system`.
-4. **Deploy scripts**:
+4. **Prepare the optional leaf fetch projection** before activating services. Stop the existing fetch loop when present, preserve its active/enabled state, reject unresolved operation journals, and acquire the live vault's managed-write lock before cloning or changing projection config. For a missing target, clone the live vault's `origin/main` into a temporary sibling, verify origin, branch, `SCHEMA.md`, clean status, and zero `meta/log-events/**` paths, then atomically rename it. Existing targets are validated and never overwritten. A failed install restores the prior service state and config, releases the lock, and removes only a clone created by that installer run; it never removes the live vault or an existing projection. A fresh host with no old fetch units proceeds without treating absent units as an error.
+5. **Deploy scripts**:
    ```
    mkdir -p $(platform_share_dir)/bin
    cp packages/vault-sync/scripts/*.sh $(platform_share_dir)/bin/
@@ -45,19 +47,20 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    For full installs, also create or repair `~/bin/wiki-sync.sh` as a symlink
    to `$(platform_share_dir)/bin/wiki-sync.sh` when safe. Do not clobber a real
    non-symlink user file at that path.
-5. **Deploy filter file**:
+6. **Deploy filter file**:
    ```
    mkdir -p $(platform_rclone_config_dir)
    cp packages/vault-sync/filters/wiki-push-filters.txt $(platform_rclone_config_dir)/
    ```
-6. **Install scheduler units**:
+7. **Install scheduler units**:
    - macOS: render `.plist.tmpl` files with `@SCRIPT_DIR@` → `$(platform_share_dir)/bin`, `@LOG_DIR@` → `$(platform_log_dir)`. Validate plist syntax plus `Label` / `ProgramArguments[0]`, write to `~/Library/LaunchAgents/`, then run `launchctl bootstrap gui/$UID <plist>`.
    - Linux leaf: render `.service` + `.timer` with `@SCRIPT_DIR@` → `$(platform_share_dir)/bin`. Write to `~/.config/systemd/user/`. Run `systemctl --user daemon-reload && systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer`.
    - Linux snapshotter: render `wiki-snapshot.service` + `wiki-snapshot.timer` plus `wiki-fuse-refresh.service` + `wiki-fuse-refresh.timer`. Write to `/etc/systemd/system/` for `--service-scope system` or `~/.config/systemd/user/` for `--service-scope user`. Enable `wiki-snapshot.timer` on a 30-minute cadence (`*:02` and `*:32`) plus the 5-minute FUSE refresh timer.
    - Linux post-check: run `wiki-fuse-refresh.sh --check-only --max-dir-cache 15m` and surface a warning if the active mount exceeds the freshness envelope.
    - Linux only: `loginctl enable-linger $USER`. If this fails, surface as a hard error — without it, headless LXC will silently not sync.
-7. **Register in skillwiki config** for full mode:
+8. **Register in skillwiki config** for full mode:
    ```
+   When `--fetch-projection` is present, persist `vault_sync.fetch_projection=<absolute-path>` before fetch service activation. The fetch service reads this host-local key directly; MCP, authoring, push, and `skillwiki path` remain live-vault scoped.
    skillwiki config set vault_sync.installed true
    skillwiki config set vault_sync.role <role>
    skillwiki config set vault_sync.scheduler <launchd|systemd>
@@ -74,8 +77,10 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    remote names are local aliases and may legitimately differ between hosts.
    Status treats a missing remote as unconfigured/unknown; it must not probe a
    guessed alias and report a false outage.
-8. **Write runtime inventory** for successful non-dry-run full installs: `$(platform_share_dir)/runtime-manifest.json` (package/installer version, host role, SHA-256 hashes of installed scripts and LaunchAgents plists).
-9. **`--dry-run` mode**: print the entire plan (paths, commands, fleet.yaml diff) but execute nothing.
+9. **Write runtime inventory** for successful non-dry-run full installs: `$(platform_share_dir)/runtime-manifest.json` (package/installer version, host role, SHA-256 hashes of installed scripts and LaunchAgents plists).
+10. **`--dry-run` mode**: print the entire plan (paths, commands, fleet.yaml diff, and projection bootstrap/validation) but execute nothing.
+
+The projection option does not quarantine the live vault's `.git` metadata. That is a separate attended rollout step performed only after live MCP/S3 and projection acceptance succeeds.
 
 ## FUSE-Only Mode
 
@@ -175,6 +180,7 @@ Resolve the vault-sync package root before invoking the companion script:
 ```bash
 # monorepo
 bash packages/vault-sync/skills/vault-sync-install/install.sh --role leaf --dry-run
+bash packages/vault-sync/skills/vault-sync-install/install.sh --role leaf --vault-path /absolute/wiki --fetch-projection /absolute/wiki-git --dry-run
 # plugin root (cwd = vault-sync plugin package)
 bash skills/vault-sync-install/install.sh --role leaf --dry-run
 ```
@@ -201,6 +207,7 @@ bash packages/vault-sync/skills/vault-sync-install/install.sh --mode fuse-only -
 
 # Companion script (headless / CI)
 VS_ROLE=leaf VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
+VS_ROLE=leaf VS_VAULT_PATH=/absolute/wiki VS_FETCH_PROJECTION=/absolute/wiki-git VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 VS_ROLE=snapshotter VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 VS_MODE=fuse-only VS_VAULT_PATH=/root/wiki VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 VS_PACKAGE_VERSION=0.9.60 VS_PACKAGE_COMMIT=<sha> VS_ROLE=snapshotter VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh

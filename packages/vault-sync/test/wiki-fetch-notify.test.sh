@@ -831,11 +831,199 @@ STUB
   rm -rf "$root"
 }
 
+test_configured_fetch_projection_isolates_live_vault() {
+  local root home remote source live projection remote_work script_dir notify_log
+  root="$(mktemp -d)"
+  home="$root/home"
+  remote="$root/origin.git"
+  source="$root/source"
+  live="$root/wiki"
+  projection="$root/wiki-fetch"
+  remote_work="$root/remote-work"
+  script_dir="$root/scripts"
+  notify_log="$root/notify.log"
+
+  git init --bare "$remote" >/dev/null
+  mkdir -p "$source" "$script_dir/lib" "$home/.skillwiki"
+  git -C "$source" init -b main >/dev/null
+  git -C "$source" remote add origin "$remote"
+  printf 'base\n' > "$source/note.md"
+  git_commit "$source" init
+  git -C "$source" push -u origin main >/dev/null
+  git clone --branch main "$remote" "$live" >/dev/null
+  git clone --branch main "$remote" "$projection" >/dev/null
+  git clone --branch main "$remote" "$remote_work" >/dev/null
+  printf 'remote\n' > "$remote_work/remote.md"
+  git_commit "$remote_work" remote
+  git -C "$remote_work" push origin main >/dev/null
+
+  local live_origin_before projection_origin_before remote_head
+  live_origin_before="$(git -C "$live" rev-parse origin/main)"
+  projection_origin_before="$(git -C "$projection" rev-parse origin/main)"
+  remote_head="$(git -C "$remote_work" rev-parse HEAD)"
+  printf 'WIKI_PATH=%s\nvault_sync.fetch_projection=%s\n' "$live" "$projection" > "$home/.skillwiki/.env"
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  cp "$(cd "$(dirname "$SOURCE_SCRIPT")" && pwd)/lib/git-operation-journal.sh" "$script_dir/lib/git-operation-journal.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"; }
+STUB
+  cat > "$script_dir/lib/lockfile.sh" <<'STUB'
+lockfile_acquire() { return 0; }
+STUB
+
+  HOME="$home" NOTIFY_LOG="$notify_log" "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+
+  assert_eq "configured projection fetch leaves live origin ref unchanged" \
+    "$(git -C "$live" rev-parse origin/main)" "$live_origin_before"
+  assert_eq "configured projection fetch updates projection origin ref" \
+    "$(git -C "$projection" rev-parse origin/main)" "$remote_head"
+  assert_eq "projection fixture began behind" "$projection_origin_before" "$live_origin_before"
+  rm -rf "$root"
+}
+
+test_same_path_projection_fails_closed() {
+  local root home remote live remote_work script_dir
+  root="$(mktemp -d)"
+  home="$root/home"
+  remote="$root/origin.git"
+  live="$root/wiki"
+  remote_work="$root/remote-work"
+  script_dir="$root/scripts"
+
+  git init --bare "$remote" >/dev/null
+  mkdir -p "$live" "$script_dir/lib" "$home/.skillwiki"
+  git -C "$live" init -b main >/dev/null
+  git -C "$live" remote add origin "$remote"
+  printf 'base\n' > "$live/note.md"
+  git_commit "$live" init
+  git -C "$live" push -u origin main >/dev/null
+  git clone --branch main "$remote" "$remote_work" >/dev/null
+  printf 'remote\n' > "$remote_work/remote.md"
+  git_commit "$remote_work" remote
+  git -C "$remote_work" push origin main >/dev/null
+  local before
+  before="$(git -C "$live" rev-parse origin/main)"
+  printf 'WIKI_PATH=%s\nvault_sync.fetch_projection=%s\n' "$live" "$live" > "$home/.skillwiki/.env"
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  cp "$(cd "$(dirname "$SOURCE_SCRIPT")" && pwd)/lib/git-operation-journal.sh" "$script_dir/lib/git-operation-journal.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { :; }
+STUB
+  cat > "$script_dir/lib/lockfile.sh" <<'STUB'
+lockfile_acquire() { return 0; }
+STUB
+
+  HOME="$home" "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+  assert_eq "same-path projection does not fetch the live vault" "$(git -C "$live" rev-parse origin/main)" "$before"
+  assert_contains "same-path projection refusal is explicit" \
+    "$(cat "$home/logs/wiki-fetch.log" 2>/dev/null || true)" "fetch projection must be distinct from live vault"
+  rm -rf "$root"
+}
+
+test_invalid_projection_paths_fail_closed() {
+  local root home live nested script_dir before
+  root="$(mktemp -d)"
+  home="$root/home"
+  live="$root/wiki"
+  nested="$live/fetch"
+  script_dir="$root/scripts"
+  mkdir -p "$live" "$nested" "$script_dir/lib" "$home/.skillwiki"
+  git -C "$live" init -b main >/dev/null
+  git -C "$live" config user.name test
+  git -C "$live" config user.email test@test
+  printf 'base\n' > "$live/note.md"
+  git_commit "$live" init
+  git -C "$nested" init -b main >/dev/null
+  before="$(git -C "$nested" rev-parse HEAD 2>/dev/null || true)"
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  cp "$(cd "$(dirname "$SOURCE_SCRIPT")" && pwd)/lib/git-operation-journal.sh" "$script_dir/lib/git-operation-journal.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { :; }
+STUB
+  cat > "$script_dir/lib/lockfile.sh" <<'STUB'
+lockfile_acquire() { return 0; }
+STUB
+
+  printf 'WIKI_PATH=%s\nvault_sync.fetch_projection=%s\n' "$live" "$nested" > "$home/.skillwiki/.env"
+  HOME="$home" "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+  assert_eq "nested projection remains untouched" "$(git -C "$nested" rev-parse HEAD 2>/dev/null || true)" "$before"
+  assert_contains "nested projection refusal is explicit" \
+    "$(cat "$home/logs/wiki-fetch.log" 2>/dev/null || true)" "fetch projection and live vault must not be nested"
+
+  printf 'WIKI_PATH=%s\nvault_sync.fetch_projection=relative-fetch\n' "$live" > "$home/.skillwiki/.env"
+  : > "$home/logs/wiki-fetch.log"
+  HOME="$home" "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+  assert_contains "relative projection refusal is explicit" \
+    "$(cat "$home/logs/wiki-fetch.log" 2>/dev/null || true)" "fetch projection path must be absolute"
+
+  rm -rf "$root"
+}
+
+test_duplicate_projection_config_uses_last_value() {
+  local root home live safe projection script_dir
+  root="$(mktemp -d)"
+  home="$root/home"
+  live="$root/wiki"
+  safe="$root/safe"
+  projection="$root/projection"
+  script_dir="$root/scripts"
+  mkdir -p "$live" "$safe" "$projection" "$script_dir/lib" "$home/.skillwiki"
+  git -C "$projection" init -b main >/dev/null
+  printf 'WIKI_PATH=%s\nvault_sync.fetch_projection=%s\nvault_sync.fetch_projection=%s\n' \
+    "$live" "$safe" "$projection" > "$home/.skillwiki/.env"
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  cp "$(cd "$(dirname "$SOURCE_SCRIPT")" && pwd)/lib/git-operation-journal.sh" "$script_dir/lib/git-operation-journal.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { :; }
+STUB
+  cat > "$script_dir/lib/lockfile.sh" <<'STUB'
+lockfile_acquire() { return 0; }
+STUB
+
+  HOME="$home" "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+  case "$(cat "$home/logs/wiki-fetch.log" 2>/dev/null || true)" in
+    *"$safe"*)
+      printf "FAIL: %s — unexpected first projection path '%s'\n" \
+        "last duplicate projection avoids first-path Git access" "$safe"
+      FAIL=$((FAIL + 1))
+      ;;
+    *)
+      printf "PASS: %s\n" "last duplicate projection avoids first-path Git access"
+      PASS=$((PASS + 1))
+      ;;
+  esac
+  rm -rf "$root"
+}
+
 test_p2_no_handoff_no_pause
 test_p2_handoff_present_reminder_backoff
 test_p2_handoff_persists_writes_pause_marker
 test_p2_disable_env_var_bypasses_hard_pause
 test_stale_handoff_with_dirty_wip_does_not_skip_pull
+test_configured_fetch_projection_isolates_live_vault
+test_same_path_projection_fails_closed
+test_invalid_projection_paths_fail_closed
+test_duplicate_projection_config_uses_last_value
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

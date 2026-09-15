@@ -393,7 +393,7 @@ file_value() {
   if [ ! -f "$file" ]; then
     return 1
   fi
-  awk -F= -v k="$key" '$1==k {print substr($0, index($0,"=")+1); exit}' "$file"
+  awk -F= -v k="$key" '$1==k {value=substr($0, index($0,"=")+1); found=1} END {if (found) print value}' "$file"
 }
 
 config_value() {
@@ -473,6 +473,19 @@ resolve_vault_path() {
       fi
       ;;
   esac
+}
+
+status_path_identity() {
+  local path="$1"
+  local probe suffix="" base
+  while [ "$path" != "/" ] && [ "${path%/}" != "$path" ]; do path="${path%/}"; done
+  probe="$path"
+  while [ ! -d "$probe" ] && [ "$probe" != "/" ]; do
+    base="$(basename "$probe")"
+    suffix="/$base$suffix"
+    probe="$(dirname "$probe")"
+  done
+  printf '%s%s\n' "$(cd "$probe" 2>/dev/null && pwd -P)" "$suffix"
 }
 
 assert_read_only_allows_no_state_changes() {
@@ -972,6 +985,33 @@ FILTER_PATH="$(platform_rclone_config_dir)/wiki-push-filters.txt"
 
 # Resolve vault once; all vault git/conflict checks use this absolute path.
 VAULT_PATH="$(resolve_vault_path)"
+FETCH_PROJECTION="$(config_value "vault_sync.fetch_projection" 2>/dev/null || true)"
+GIT_HEALTH_PATH="$VAULT_PATH"
+GIT_HEALTH_KIND="live vault"
+GIT_HEALTH_INVALID_DETAIL=""
+if [ -n "$FETCH_PROJECTION" ] && [ "$FETCH_PROJECTION" != "none" ]; then
+  GIT_HEALTH_PATH="$FETCH_PROJECTION"
+  GIT_HEALTH_KIND="fetch projection"
+  case "$GIT_HEALTH_PATH" in
+    /*) ;;
+    *) GIT_HEALTH_INVALID_DETAIL="Configured fetch projection path must be absolute: $GIT_HEALTH_PATH" ;;
+  esac
+  git_health_identity="$(status_path_identity "$GIT_HEALTH_PATH")"
+  vault_identity="$(status_path_identity "$VAULT_PATH")"
+  if [ -z "$GIT_HEALTH_INVALID_DETAIL" ] && [ "$git_health_identity" = "$vault_identity" ]; then
+    GIT_HEALTH_INVALID_DETAIL="Configured fetch projection equals live vault: $GIT_HEALTH_PATH"
+  elif [ -z "$GIT_HEALTH_INVALID_DETAIL" ]; then
+    case "$git_health_identity/" in
+      "$vault_identity/"*) GIT_HEALTH_INVALID_DETAIL="Configured fetch projection and live vault must not be nested: $GIT_HEALTH_PATH" ;;
+    esac
+    case "$vault_identity/" in
+      "$git_health_identity/"*) GIT_HEALTH_INVALID_DETAIL="Configured fetch projection and live vault must not be nested: $GIT_HEALTH_PATH" ;;
+    esac
+  fi
+  if [ -z "$GIT_HEALTH_INVALID_DETAIL" ] && [ ! -d "$GIT_HEALTH_PATH/.git" ]; then
+    GIT_HEALTH_INVALID_DETAIL="Configured fetch projection is not a Git repository: $GIT_HEALTH_PATH"
+  fi
+fi
 
 ROLE="${VS_ROLE:-}"
 if role_val=$(config_value "vault_sync.role"); then
@@ -1446,18 +1486,20 @@ check_runtime_proof
 # Check: store/host reachability (read-only; short timeouts)
 # Always use absolute VAULT_PATH with git -C — never depend on process cwd.
 github_reach="unknown"
-github_detail="WIKI_PATH not set or vault missing"
+github_detail="$GIT_HEALTH_KIND unavailable: $GIT_HEALTH_PATH"
 REACH_SECS="$(reachability_timeout_secs)"
-if [ -d "$VAULT_PATH/.git" ]; then
-  if with_timeout "$REACH_SECS" git -C "$VAULT_PATH" ls-remote origin refs/heads/main >/dev/null 2>&1; then
+if [ -n "$GIT_HEALTH_INVALID_DETAIL" ]; then
+  github_detail="$GIT_HEALTH_INVALID_DETAIL"
+elif [ -d "$GIT_HEALTH_PATH/.git" ]; then
+  if with_timeout "$REACH_SECS" git -C "$GIT_HEALTH_PATH" ls-remote origin refs/heads/main >/dev/null 2>&1; then
     github_reach="ok"
-    github_detail="git ls-remote origin main succeeded"
-  elif with_timeout "$REACH_SECS" git -C "$VAULT_PATH" remote get-url origin >/dev/null 2>&1; then
+    github_detail="git ls-remote origin main succeeded via $GIT_HEALTH_KIND $GIT_HEALTH_PATH"
+  elif with_timeout "$REACH_SECS" git -C "$GIT_HEALTH_PATH" remote get-url origin >/dev/null 2>&1; then
     github_reach="unreachable"
-    github_detail="GitHub ls-remote failed — local vault may still be usable"
+    github_detail="GitHub ls-remote failed via $GIT_HEALTH_KIND $GIT_HEALTH_PATH"
   else
     github_reach="unknown"
-    github_detail="No origin remote configured"
+    github_detail="No origin remote configured in $GIT_HEALTH_KIND $GIT_HEALTH_PATH"
   fi
 fi
 add_check "reachability_github" "GitHub reachability" \
@@ -1500,30 +1542,33 @@ add_check "reachability_snapshotter" "Snapshotter reachability" \
   "$snapshotter_detail"
 
 local_git_status="pass"
-local_git_detail="local vault state unknown"
-if [ ! -d "$VAULT_PATH" ]; then
+local_git_detail="$GIT_HEALTH_KIND state unknown: $GIT_HEALTH_PATH"
+if [ -n "$GIT_HEALTH_INVALID_DETAIL" ]; then
   local_git_status="warn"
-  local_git_detail="Vault directory missing: $VAULT_PATH"
-elif [ ! -d "$VAULT_PATH/.git" ]; then
+  local_git_detail="$GIT_HEALTH_INVALID_DETAIL"
+elif [ ! -d "$GIT_HEALTH_PATH" ]; then
   local_git_status="warn"
-  local_git_detail="Not a git repository"
+  local_git_detail="$GIT_HEALTH_KIND directory missing: $GIT_HEALTH_PATH"
+elif [ ! -d "$GIT_HEALTH_PATH/.git" ]; then
+  local_git_status="warn"
+  local_git_detail="$GIT_HEALTH_KIND is not a Git repository: $GIT_HEALTH_PATH"
 else
   dirty_n=0
   ahead_n=0
   behind_n=0
-  dirty_n=$(git -C "$VAULT_PATH" status --porcelain 2>/dev/null | grep -c . || true)
-  if ab=$(git -C "$VAULT_PATH" rev-list --left-right --count origin/HEAD...HEAD 2>/dev/null); then
+  dirty_n=$(git -C "$GIT_HEALTH_PATH" status --porcelain 2>/dev/null | grep -c . || true)
+  if ab=$(git -C "$GIT_HEALTH_PATH" rev-list --left-right --count origin/HEAD...HEAD 2>/dev/null); then
     behind_n=$(printf '%s' "$ab" | awk '{print $1}')
     ahead_n=$(printf '%s' "$ab" | awk '{print $2}')
   fi
   if [ "$dirty_n" -gt 0 ]; then
     local_git_status="warn"
-    local_git_detail="dirty=$dirty_n ahead=$ahead_n behind=$behind_n"
+    local_git_detail="$GIT_HEALTH_KIND $GIT_HEALTH_PATH: dirty=$dirty_n ahead=$ahead_n behind=$behind_n"
   elif [ "${ahead_n:-0}" -gt 0 ] || [ "${behind_n:-0}" -gt 0 ]; then
     local_git_status="warn"
-    local_git_detail="clean worktree; ahead=$ahead_n behind=$behind_n"
+    local_git_detail="$GIT_HEALTH_KIND $GIT_HEALTH_PATH: clean worktree; ahead=$ahead_n behind=$behind_n"
   else
-    local_git_detail="clean; ahead=0 behind=0"
+    local_git_detail="$GIT_HEALTH_KIND $GIT_HEALTH_PATH: clean; ahead=0 behind=0"
   fi
 fi
 add_check "reachability_local_vault" "Local vault git state" "$local_git_status" "$local_git_detail"

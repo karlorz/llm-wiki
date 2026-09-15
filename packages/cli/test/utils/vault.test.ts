@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect } from "vitest";
 import { join } from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import {
   resolveReadOnlyVaultRoot,
   resolveReadOnlyVaultRootWithMounts,
@@ -55,6 +56,28 @@ describe("scanVault", () => {
         "projects/myproj/work/2026-01-01-task/spec.md",
       ]);
       expect(r.data.compound.map(p => p.relPath)).toEqual(["projects/myproj/compound/lesson.md"]);
+    }
+  });
+
+  it("honors .git/info/exclude for Markdown inventory", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vault-git-exclude-"));
+    writeFileSync(join(dir, "SCHEMA.md"), "# schema\n");
+    mkdirSync(join(dir, "concepts"), { recursive: true });
+    writeFileSync(join(dir, "concepts", "visible.md"), "# visible\n");
+    writeFileSync(join(dir, "concepts", "ignored.md"), "# ignored\n");
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    writeFileSync(join(dir, ".git", "info", "exclude"), "concepts/ignored.md\n");
+
+    const result = await scanVault(dir);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.typedKnowledge.map((page) => page.relPath)).toEqual([
+        "concepts/visible.md",
+      ]);
+      expect(result.data.allMarkdown.map((page) => page.relPath)).not.toContain(
+        "concepts/ignored.md",
+      );
     }
   });
 

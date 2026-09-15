@@ -238,6 +238,30 @@ describe("runConfigSet vault_sync.* typed validation (A1)", () => {
     expect(r.result.ok).toBe(true);
   });
 
+  it("round-trips an absolute fetch projection path", async () => {
+    const h = home();
+    const projection = join(h, "wiki-fetch");
+    const set = await runConfigSet({ key: "vault_sync.fetch_projection", value: projection, home: h });
+    expect(set.exitCode).toBe(0);
+    expect(set.result.ok).toBe(true);
+
+    const get = await runConfigGet({ key: "vault_sync.fetch_projection", home: h });
+    expect(get.exitCode).toBe(0);
+    expect(get.result.ok).toBe(true);
+    if (get.result.ok) expect(get.result.data.value).toBe(projection);
+  });
+
+  it("accepts none and rejects a relative fetch projection path", async () => {
+    const h = home();
+    const none = await runConfigSet({ key: "vault_sync.fetch_projection", value: "none", home: h });
+    expect(none.exitCode).toBe(0);
+    expect(none.result.ok).toBe(true);
+
+    const relative = await runConfigSet({ key: "vault_sync.fetch_projection", value: "wiki-fetch", home: h });
+    expect(relative.exitCode).toBe(54);
+    expect(relative.result.ok).toBe(false);
+  });
+
   it("rejects a bare number for duration keys", async () => {
     const h = home();
     const r = await runConfigSet({ key: "vault_sync.fuse_refresh_interval", value: "300", home: h });
@@ -291,7 +315,7 @@ describe("runConfigGet/runConfigList vault_sync.* surface (A1)", () => {
   it("runConfigList surfaces vault_sync keys (not silently dropped)", async () => {
     const h = home();
     writeFileSync(join(h, ".skillwiki", ".env"),
-      "WIKI_PATH=/vault\nvault_sync.installed=true\nvault_sync.role=snapshotter\n");
+      "WIKI_PATH=/vault\nvault_sync.installed=true\nvault_sync.role=snapshotter\nvault_sync.fetch_projection=/vault-fetch\n");
     const r = await runConfigList({ home: h });
     expect(r.exitCode).toBe(0);
     expect(r.result.ok).toBe(true);
@@ -300,6 +324,7 @@ describe("runConfigGet/runConfigList vault_sync.* surface (A1)", () => {
       expect(keys).toContain("WIKI_PATH");
       expect(keys).toContain("vault_sync.installed");
       expect(keys).toContain("vault_sync.role");
+      expect(keys).toContain("vault_sync.fetch_projection");
     }
   });
 

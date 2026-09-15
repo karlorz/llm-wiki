@@ -7,7 +7,7 @@ import {
 } from "../src/schemas.js";
 
 describe("VaultSyncConfig schema (A1)", () => {
-  it("lists the 12 keys the installer writes", () => {
+  it("lists the 13 typed vault-sync keys", () => {
     expect(VAULT_SYNC_KEYS).toEqual([
       "vault_sync.installed",
       "vault_sync.role",
@@ -16,6 +16,7 @@ describe("VaultSyncConfig schema (A1)", () => {
       "vault_sync.snapshot_profile",
       "vault_sync.snapshot_script",
       "vault_sync.snapshot_worktree",
+      "vault_sync.fetch_projection",
       "vault_sync.push_enabled",
       "vault_sync.fuse_refresh_enabled",
       "vault_sync.fuse_refresh_interval",
@@ -27,6 +28,7 @@ describe("VaultSyncConfig schema (A1)", () => {
   it("isVaultSyncKey accepts known keys and rejects unknown", () => {
     expect(isVaultSyncKey("vault_sync.role")).toBe(true);
     expect(isVaultSyncKey("vault_sync.fuse_max_dir_cache")).toBe(true);
+    expect(isVaultSyncKey("vault_sync.fetch_projection")).toBe(true);
     expect(isVaultSyncKey("vault_sync.unknown")).toBe(false);
     expect(isVaultSyncKey("WIKI_PATH")).toBe(false);
     expect(isVaultSyncKey("not_a_key")).toBe(false);
@@ -41,6 +43,7 @@ describe("VaultSyncConfig schema (A1)", () => {
       "vault_sync.snapshot_profile": "/etc/vault-sync/profiles/sg01-snapshotter.env",
       "vault_sync.snapshot_script": "/usr/local/bin/wiki-snapshot.sh",
       "vault_sync.snapshot_worktree": "/root/wiki-git",
+      "vault_sync.fetch_projection": "/Users/test/wiki-fetch",
       "vault_sync.push_enabled": "false",
       "vault_sync.fuse_refresh_enabled": "true",
       "vault_sync.fuse_refresh_interval": "300s",
@@ -112,19 +115,22 @@ describe("parseVaultSyncKeyValue (per-key validation used by config set)", () =>
     });
   });
 
-  describe("paths (snapshot_profile/script/worktree)", () => {
+  describe("paths (snapshot_profile/script/worktree/fetch_projection)", () => {
     it("accepts absolute paths", () => {
       expect(parseVaultSyncKeyValue("vault_sync.snapshot_profile", "/etc/vault-sync/p.env").ok).toBe(true);
       expect(parseVaultSyncKeyValue("vault_sync.snapshot_script", "/usr/local/bin/wiki-snapshot.sh").ok).toBe(true);
       expect(parseVaultSyncKeyValue("vault_sync.snapshot_worktree", "/root/wiki-git").ok).toBe(true);
+      expect(parseVaultSyncKeyValue("vault_sync.fetch_projection", "/Users/test/wiki-fetch").ok).toBe(true);
     });
     it("accepts the none sentinel", () => {
       expect(parseVaultSyncKeyValue("vault_sync.snapshot_profile", "none").ok).toBe(true);
       expect(parseVaultSyncKeyValue("vault_sync.snapshot_worktree", "none").ok).toBe(true);
+      expect(parseVaultSyncKeyValue("vault_sync.fetch_projection", "none").ok).toBe(true);
     });
     it("rejects relative paths", () => {
       expect(parseVaultSyncKeyValue("vault_sync.snapshot_profile", "relative/path.env").ok).toBe(false);
       expect(parseVaultSyncKeyValue("vault_sync.snapshot_worktree", "wiki-git").ok).toBe(false);
+      expect(parseVaultSyncKeyValue("vault_sync.fetch_projection", "wiki-fetch").ok).toBe(false);
     });
     it("accepts Windows drive-letter paths on Windows", () => {
       if (process.platform !== "win32") return;

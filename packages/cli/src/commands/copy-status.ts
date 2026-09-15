@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { git } from "../utils/git.js";
 import { listReviewRequiredOps } from "../utils/operation-journal.js";
@@ -9,6 +9,8 @@ import {
   REMOTE_PROBE_TIMEOUT_MS,
 } from "../utils/remote-health.js";
 import { measureDirtyVolume } from "../utils/vault-write-gates.js";
+import { inspectConfiguredFetchProjection } from "../utils/fetch-projection.js";
+import { measureAuthoritativeLiveDrift } from "../utils/live-drift.js";
 import {
   runCopyStatus as runCopyStatusCore,
   type CopyStatus,
@@ -24,7 +26,40 @@ export interface CopyStatusInput {
 
 export type CopyStatusOutput = CopyStatus;
 
+function comparablePath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+function pathsAreNested(left: string, right: string): boolean {
+  const rel = relative(comparablePath(left), comparablePath(right));
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
 export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
+  const selection = inspectConfiguredFetchProjection(input.home);
+  const sameAsLive = selection.path !== undefined && comparablePath(selection.path) === comparablePath(input.vault);
+  const nestedWithLive = selection.path !== undefined
+    && (pathsAreNested(selection.path, input.vault) || pathsAreNested(input.vault, selection.path));
+  const configuredProjection = sameAsLive || nestedWithLive ? undefined : selection.path;
+  const projectionProblem = selection.invalidDetail
+    ?? (sameAsLive
+      ? "configured fetch projection must be distinct from live vault"
+      : nestedWithLive
+        ? "configured fetch projection and live vault must not be nested"
+        : undefined);
+  const gitVault = configuredProjection ?? input.vault;
+  const invalidProjectionDetail = projectionProblem ?? "configured fetch projection is not a git repository";
+  const gitRootProblem = (): string | undefined => {
+    if (projectionProblem) return projectionProblem;
+    if (!existsSync(join(gitVault, ".git"))) {
+      return selection.configured ? invalidProjectionDetail : "vault is not a git repository";
+    }
+    return undefined;
+  };
   return {
     probeLive() {
       if (input.s3Ok === true) return { reachable: true, detail: "MCP S3 ok" };
@@ -39,18 +74,17 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
       return { unknown: true, detail: "S3 unmeasured" };
     },
     probeGithub() {
-      if (!existsSync(join(input.vault, ".git"))) {
-        return { unknown: true, detail: "vault is not a git repository" };
-      }
-      const ls = git(input.vault, ["ls-remote", "origin", "refs/heads/main"], {
+      const problem = gitRootProblem();
+      if (problem) return { unknown: true, detail: problem };
+      const ls = git(gitVault, ["ls-remote", "origin", "refs/heads/main"], {
         timeoutMs: REMOTE_PROBE_TIMEOUT_MS,
       });
       const oid = ls.split(/\s+/)[0];
       if (!oid) return { unknown: true, detail: "git ls-remote origin main failed" };
-      const originMain = git(input.vault, ["rev-parse", "--verify", "origin/main"]);
+      const originMain = git(gitVault, ["rev-parse", "--verify", "origin/main"]);
       let ageHours: number | undefined;
       if (originMain && originMain === oid) {
-        const ct = git(input.vault, ["log", "-1", "--format=%ct", "origin/main"]);
+        const ct = git(gitVault, ["log", "-1", "--format=%ct", "origin/main"]);
         const sec = Number.parseInt(ct, 10);
         if (Number.isFinite(sec) && sec > 0) {
           ageHours = Math.max(0, Math.round((Date.now() / 1000 - sec) / 3600));
@@ -59,18 +93,17 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
       return { oid, ageHours, detail: "git ls-remote origin main" };
     },
     probeLocalGit() {
-      if (!existsSync(join(input.vault, ".git"))) {
-        return { unknown: true, detail: "vault is not a git repository" };
-      }
-      const head = git(input.vault, ["rev-parse", "HEAD"]);
+      const problem = gitRootProblem();
+      if (problem) return { unknown: true, detail: problem };
+      const head = git(gitVault, ["rev-parse", "HEAD"]);
       if (!head) return { unknown: true, detail: "HEAD unreadable" };
-      const behindRaw = git(input.vault, ["rev-list", "--count", "HEAD..origin/main"]);
+      const behindRaw = git(gitVault, ["rev-list", "--count", "HEAD..origin/main"]);
       const behind = behindRaw === "" ? undefined : Number.parseInt(behindRaw, 10);
-      const review = listReviewRequiredOps(input.vault)[0];
+      const review = listReviewRequiredOps(gitVault)[0];
       const blockedReason = review
         ? `review-required:${review.opId}`
         : undefined;
-      const dirty = measureDirtyVolume(input.vault);
+      const dirty = measureDirtyVolume(gitVault);
       const dirtyCount = dirty.is_git_repo ? dirty.expanded_files : undefined;
       const untrackedCount = dirty.is_git_repo ? dirty.untracked : undefined;
       const ledgerUntracked = dirty.is_git_repo ? dirty.ledger_files : undefined;
@@ -91,6 +124,15 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
         content_untracked: dirtyCount && dirtyCount > 0 ? contentUntracked : undefined,
         detail: dirtyHint ?? blockedReason,
       };
+    },
+    probeLiveDrift() {
+      if (!configuredProjection) {
+        return { unknown: true, detail: projectionProblem ?? "live drift requires a configured fetch projection" };
+      }
+      if (!existsSync(join(configuredProjection, ".git"))) {
+        return { unknown: true, detail: invalidProjectionDetail };
+      }
+      return measureAuthoritativeLiveDrift(input.vault, configuredProjection);
     },
   };
 }

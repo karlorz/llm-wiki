@@ -21,7 +21,37 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-$0}" )" && pwd )"
 . "$SCRIPT_DIR/lib/git-operation-journal.sh"
 platform_detect_os
 
-WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
+CONFIG_FILE="$HOME/.skillwiki/.env"
+config_value() {
+  local key="$1"
+  [ -f "$CONFIG_FILE" ] || return 0
+  awk -F= -v key="$key" '$1==key { value=substr($0, index($0, "=") + 1); found=1 } END { if (found) print value }' "$CONFIG_FILE"
+}
+
+canonical_compare_path() {
+  local path="$1" probe suffix="" base
+  while [ "$path" != "/" ] && [ "${path%/}" != "$path" ]; do path="${path%/}"; done
+  probe="$path"
+  while [ ! -d "$probe" ] && [ "$probe" != "/" ]; do
+    base="$(basename "$probe")"
+    suffix="/$base$suffix"
+    probe="$(dirname "$probe")"
+  done
+  printf '%s%s\n' "$(cd "$probe" 2>/dev/null && pwd -P)" "$suffix"
+}
+
+LIVE_WIKI_DIR="${WIKI_PATH:-$(config_value WIKI_PATH)}"
+LIVE_WIKI_DIR="${LIVE_WIKI_DIR:-$HOME/wiki}"
+CONFIG_FETCH_PROJECTION="$(config_value vault_sync.fetch_projection)"
+FETCH_PROJECTION="${WIKI_FETCH_PROJECTION:-$CONFIG_FETCH_PROJECTION}"
+FETCH_PROJECTION_CONFIGURED=0
+if [ -n "$FETCH_PROJECTION" ] && [ "$FETCH_PROJECTION" != "none" ]; then
+  WIKI_DIR="$FETCH_PROJECTION"
+  FETCH_PROJECTION_CONFIGURED=1
+else
+  WIKI_DIR="${WIKI_DIR:-$HOME/wiki}"
+fi
+export WIKI_DIR
 BRANCH="${WIKI_BRANCH:-main}"
 STATE_DIR="$(platform_cache_dir)/wiki-fetch"
 STATE_FILE="$STATE_DIR/last-behind"
@@ -70,6 +100,25 @@ fi
 log() {
   printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOG_FILE"
 }
+
+if [ "$FETCH_PROJECTION_CONFIGURED" -eq 1 ]; then
+  case "$WIKI_DIR" in
+    /*) ;;
+    *) log "ERROR: fetch projection path must be absolute: $WIKI_DIR"; exit 0 ;;
+  esac
+  LIVE_WIKI_IDENTITY="$(canonical_compare_path "$LIVE_WIKI_DIR")"
+  FETCH_PROJECTION_IDENTITY="$(canonical_compare_path "$WIKI_DIR")"
+  if [ "$LIVE_WIKI_IDENTITY" = "$FETCH_PROJECTION_IDENTITY" ]; then
+    log "ERROR: fetch projection must be distinct from live vault: $WIKI_DIR"
+    exit 0
+  fi
+  case "$FETCH_PROJECTION_IDENTITY/" in
+    "$LIVE_WIKI_IDENTITY/"*) log "ERROR: fetch projection and live vault must not be nested: $WIKI_DIR"; exit 0 ;;
+  esac
+  case "$LIVE_WIKI_IDENTITY/" in
+    "$FETCH_PROJECTION_IDENTITY/"*) log "ERROR: fetch projection and live vault must not be nested: $WIKI_DIR"; exit 0 ;;
+  esac
+fi
 
 handle_existing_handoff() {
   local blocker reason op identity previous_identity notified_at now before after
@@ -187,7 +236,11 @@ attempt_pull_on_delta() {
 
 # Guard: working tree present.
 if [ ! -d "$WIKI_DIR/.git" ]; then
-  log "ERROR: $WIKI_DIR is not a git repo"
+  if [ "$FETCH_PROJECTION_CONFIGURED" -eq 1 ]; then
+    log "ERROR: configured fetch projection is not a git repo: $WIKI_DIR"
+  else
+    log "ERROR: $WIKI_DIR is not a git repo"
+  fi
   exit 0
 fi
 

@@ -7,6 +7,8 @@ VAULT_SYNC_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PLATFORM_LIB="$VAULT_SYNC_ROOT/scripts/lib/platform.sh"
 FLEET_LIB="$VAULT_SYNC_ROOT/scripts/lib/fleet.sh"
 RUNTIME_MANIFEST_LIB="$VAULT_SYNC_ROOT/scripts/lib/runtime-manifest.sh"
+OP_JOURNAL_LIB="$VAULT_SYNC_ROOT/scripts/lib/git-operation-journal.sh"
+MANAGED_WRITE_LOCK_LIB="$VAULT_SYNC_ROOT/scripts/lib/managed-write-lock.sh"
 
 if [ ! -f "$PLATFORM_LIB" ]; then
   echo "FATAL: missing platform helper: $PLATFORM_LIB" >&2
@@ -20,6 +22,14 @@ if [ ! -f "$RUNTIME_MANIFEST_LIB" ]; then
   echo "FATAL: missing runtime-manifest helper: $RUNTIME_MANIFEST_LIB" >&2
   exit 1
 fi
+if [ ! -f "$OP_JOURNAL_LIB" ]; then
+  echo "FATAL: missing operation-journal helper: $OP_JOURNAL_LIB" >&2
+  exit 1
+fi
+if [ ! -f "$MANAGED_WRITE_LOCK_LIB" ]; then
+  echo "FATAL: missing managed-write-lock helper: $MANAGED_WRITE_LOCK_LIB" >&2
+  exit 1
+fi
 
 # shellcheck source=/dev/null
 source "$PLATFORM_LIB"
@@ -27,6 +37,10 @@ source "$PLATFORM_LIB"
 source "$FLEET_LIB"
 # shellcheck source=/dev/null
 source "$RUNTIME_MANIFEST_LIB"
+# shellcheck source=/dev/null
+source "$OP_JOURNAL_LIB"
+# shellcheck source=/dev/null
+source "$MANAGED_WRITE_LOCK_LIB"
 
 lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
@@ -37,6 +51,54 @@ is_true() {
     1|true|yes|on) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+canonical_compare_path() {
+  local path="$1"
+  local probe suffix="" base
+
+  while [ "$path" != "/" ] && [ "${path%/}" != "$path" ]; do
+    path="${path%/}"
+  done
+  probe="$path"
+  while [ ! -d "$probe" ] && [ "$probe" != "/" ]; do
+    base="$(basename "$probe")"
+    suffix="/$base$suffix"
+    probe="$(dirname "$probe")"
+  done
+  printf '%s%s\n' "$(cd "$probe" 2>/dev/null && pwd -P)" "$suffix"
+}
+
+validate_fetch_projection_paths() {
+  local live_path projection_path snapshot_worktree snapshot_path
+
+  [ -n "$FETCH_PROJECTION" ] && [ "$FETCH_PROJECTION" != "none" ] || return 0
+  [ "$MODE" = "full" ] && [ "$ROLE" = "leaf" ] \
+    || fatal "fetch projection is supported only for full leaf installs"
+  case "$FETCH_PROJECTION" in
+    /*) ;;
+    *) fatal "fetch projection path must be absolute" ;;
+  esac
+
+  live_path="$(canonical_compare_path "$VAULT_PATH")"
+  projection_path="$(canonical_compare_path "$FETCH_PROJECTION")"
+  if [ "$projection_path" = "$live_path" ]; then
+    fatal "fetch projection must be distinct from live vault"
+  fi
+  case "$projection_path/" in
+    "$live_path/"*) fatal "fetch projection and live vault must not be nested" ;;
+  esac
+  case "$live_path/" in
+    "$projection_path/"*) fatal "fetch projection and live vault must not be nested" ;;
+  esac
+
+  snapshot_worktree="$(read_env_key_raw "vault_sync.snapshot_worktree")"
+  if [ -n "$snapshot_worktree" ] && [ "$snapshot_worktree" != "none" ]; then
+    snapshot_path="$(canonical_compare_path "$snapshot_worktree")"
+    if [ "$projection_path" = "$snapshot_path" ]; then
+      fatal "fetch projection must not reuse vault_sync.snapshot_worktree"
+    fi
+  fi
 }
 
 print_cmd() {
@@ -151,6 +213,39 @@ set_env_key_raw() {
   mv "$tmp" "$env_file"
 }
 
+read_env_key_raw() {
+  local key="$1"
+  local env_file="$HOME/.skillwiki/.env"
+
+  [ -f "$env_file" ] || return 0
+  awk -v prefix="$key=" '
+    index($0, prefix) == 1 { value=substr($0, length(prefix) + 1); found=1 }
+    END { if (found) print value }
+  ' "$env_file"
+}
+
+env_key_exists_raw() {
+  local key="$1"
+  local env_file="$HOME/.skillwiki/.env"
+
+  [ -f "$env_file" ] || return 1
+  awk -v prefix="$key=" '
+    index($0, prefix) == 1 { found=1 }
+    END { exit(found ? 0 : 1) }
+  ' "$env_file"
+}
+
+unset_env_key_raw() {
+  local key="$1"
+  local env_file="$HOME/.skillwiki/.env"
+  local tmp
+
+  [ -f "$env_file" ] || return 0
+  tmp="$(mktemp)"
+  awk -v prefix="$key=" 'index($0, prefix) != 1 { print }' "$env_file" > "$tmp"
+  mv "$tmp" "$env_file"
+}
+
 set_vault_config() {
   local key="$1"
   local value="$2"
@@ -168,6 +263,231 @@ set_vault_config() {
   fi
 
   set_env_key_raw "$key" "$value"
+}
+
+fetch_projection_has_ledger_paths() {
+  local projection="$1"
+
+  if git -C "$projection" ls-files -- 'meta/log-events' | grep -q .; then
+    return 0
+  fi
+  if git -C "$projection" ls-tree -r --name-only HEAD -- 'meta/log-events' | grep -q .; then
+    return 0
+  fi
+  if [ -d "$projection/meta/log-events" ] \
+    && find "$projection/meta/log-events" -type f -print -quit 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  return 1
+}
+
+validate_fetch_projection_clone() {
+  local projection="$1"
+  local expected_origin="$2"
+  local actual_origin branch status
+
+  if [ ! -d "$projection/.git" ]; then
+    warn "fetch projection is not an independent Git clone: $projection"
+    return 1
+  fi
+  if [ "$(git -C "$projection" rev-parse --is-inside-work-tree 2>/dev/null || true)" != "true" ]; then
+    warn "fetch projection is not a Git worktree: $projection"
+    return 1
+  fi
+  actual_origin="$(git -C "$projection" remote get-url origin 2>/dev/null || true)"
+  if [ -z "$actual_origin" ]; then
+    warn "fetch projection has no origin remote: $projection"
+    return 1
+  fi
+  if [ -n "$expected_origin" ] && [ "$actual_origin" != "$expected_origin" ]; then
+    warn "fetch projection origin mismatch: expected $expected_origin, got $actual_origin"
+    return 1
+  fi
+  branch="$(git -C "$projection" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [ "$branch" != "main" ]; then
+    warn "fetch projection must be on branch main: $projection"
+    return 1
+  fi
+  if [ ! -f "$projection/SCHEMA.md" ]; then
+    warn "fetch projection is missing SCHEMA.md: $projection"
+    return 1
+  fi
+  status="$(git -C "$projection" status --porcelain --untracked-files=all 2>/dev/null || true)"
+  if [ -n "$status" ]; then
+    warn "fetch projection working tree is not clean: $projection"
+    return 1
+  fi
+  if fetch_projection_has_ledger_paths "$projection"; then
+    warn "fetch projection contains forbidden meta/log-events paths: $projection"
+    return 1
+  fi
+  return 0
+}
+
+prepare_fetch_projection() {
+  local live_origin parent base temp_root candidate
+
+  [ -n "$FETCH_PROJECTION" ] && [ "$FETCH_PROJECTION" != "none" ] || return 0
+  log "Plan: prepare fetch projection at $FETCH_PROJECTION"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    set_vault_config "vault_sync.fetch_projection" "$FETCH_PROJECTION"
+    return 0
+  fi
+
+  live_origin="$(git -C "$VAULT_PATH" remote get-url origin 2>/dev/null || true)"
+  if [ -e "$FETCH_PROJECTION" ]; then
+    validate_fetch_projection_clone "$FETCH_PROJECTION" "$live_origin" \
+      || fatal "fetch projection validation failed: $FETCH_PROJECTION"
+  else
+    if [ -z "$live_origin" ]; then
+      fatal "live vault has no Git origin for fetch projection bootstrap: $VAULT_PATH"
+    fi
+    parent="$(dirname "$FETCH_PROJECTION")"
+    base="$(basename "$FETCH_PROJECTION")"
+    mkdir -p "$parent"
+    temp_root="$(mktemp -d "$parent/.${base}.install.XXXXXX")"
+    candidate="$temp_root/clone"
+    if ! git clone --quiet --branch main --single-branch "$live_origin" "$candidate"; then
+      rm -rf "$temp_root"
+      fatal "failed to clone fetch projection from $live_origin"
+    fi
+    if ! validate_fetch_projection_clone "$candidate" "$live_origin"; then
+      rm -rf "$temp_root"
+      fatal "fetch projection validation failed before install: $FETCH_PROJECTION"
+    fi
+    if ! mv "$candidate" "$FETCH_PROJECTION"; then
+      rm -rf "$temp_root"
+      fatal "failed to install fetch projection atomically: $FETCH_PROJECTION"
+    fi
+    FETCH_PROJECTION_CREATED=1
+    rmdir "$temp_root" 2>/dev/null || true
+  fi
+
+  set_vault_config "vault_sync.fetch_projection" "$FETCH_PROJECTION"
+  FETCH_PROJECTION_CONFIG_WRITTEN=1
+  log "Validated fetch projection: $FETCH_PROJECTION"
+}
+
+restore_fetch_service_after_failed_migration() {
+  [ "${FETCH_SERVICE_MIGRATION_STARTED:-0}" -eq 1 ] || return 0
+
+  if [ "$VS_OS" = "macos" ]; then
+    if [ "${FETCH_SERVICE_WAS_ACTIVE:-0}" -eq 1 ]; then
+      local plist="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}/com.karlchow.wiki-fetch.plist"
+      if [ -f "$plist" ]; then
+        launchctl bootstrap "gui/$UID" "$plist" >/dev/null 2>&1 \
+          || warn "failed to restore previous launchd fetch service after projection migration failure"
+      else
+        warn "cannot restore previous launchd fetch service; plist is missing: $plist"
+      fi
+    fi
+  else
+    if [ "${FETCH_SERVICE_WAS_ENABLED:-0}" -eq 1 ]; then
+      if [ "${FETCH_TIMER_WAS_ACTIVE:-0}" -eq 1 ]; then
+        systemctl --user enable --now wiki-fetch.timer >/dev/null 2>&1 \
+          || warn "failed to restore previous active systemd fetch timer after projection migration failure"
+      else
+        systemctl --user enable wiki-fetch.timer >/dev/null 2>&1 \
+          || warn "failed to restore previous enabled systemd fetch timer after projection migration failure"
+      fi
+    elif [ "${FETCH_TIMER_WAS_ACTIVE:-0}" -eq 1 ]; then
+      systemctl --user start wiki-fetch.timer >/dev/null 2>&1 \
+        || warn "failed to restore previous active systemd fetch timer after projection migration failure"
+    fi
+    if [ "${FETCH_SERVICE_WAS_ACTIVE:-0}" -eq 1 ]; then
+      systemctl --user start wiki-fetch.service >/dev/null 2>&1 \
+        || warn "failed to restore previous active systemd fetch service after projection migration failure"
+    fi
+  fi
+}
+
+begin_fetch_projection_migration() {
+  local blocker=""
+
+  [ -n "$FETCH_PROJECTION" ] && [ "$FETCH_PROJECTION" != "none" ] || return 0
+  FETCH_SERVICE_MIGRATION_STARTED=1
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[dry-run] stop/disable existing fetch service before projection migration"
+    log "[dry-run] acquire live-vault managed-write lock and check operation journal"
+    return 0
+  fi
+
+  if env_key_exists_raw "vault_sync.fetch_projection"; then
+    FETCH_PROJECTION_CONFIG_PREVIOUS_PRESENT=1
+    FETCH_PROJECTION_CONFIG_PREVIOUS_VALUE="$(read_env_key_raw "vault_sync.fetch_projection")"
+  else
+    FETCH_PROJECTION_CONFIG_PREVIOUS_PRESENT=0
+    FETCH_PROJECTION_CONFIG_PREVIOUS_VALUE=""
+  fi
+  trap 'fetch_projection_install_exit_handler $?' EXIT
+
+  if [ "$VS_OS" = "macos" ]; then
+    if launchd_label_present "com.karlchow.wiki-fetch"; then
+      FETCH_SERVICE_WAS_ACTIVE=1
+    fi
+    launchctl bootout "gui/$UID/com.karlchow.wiki-fetch" >/dev/null 2>&1 || true
+  else
+    if systemctl --user is-active --quiet wiki-fetch.timer >/dev/null 2>&1; then
+      FETCH_TIMER_WAS_ACTIVE=1
+    fi
+    if systemctl --user is-active --quiet wiki-fetch.service >/dev/null 2>&1; then
+      FETCH_SERVICE_WAS_ACTIVE=1
+    fi
+    if systemctl --user is-enabled --quiet wiki-fetch.timer >/dev/null 2>&1; then
+      FETCH_SERVICE_WAS_ENABLED=1
+    fi
+    if [ "$FETCH_TIMER_WAS_ACTIVE" -eq 1 ] || [ "$FETCH_SERVICE_WAS_ACTIVE" -eq 1 ]; then
+      systemctl --user stop wiki-fetch.timer wiki-fetch.service \
+        || fatal "failed to stop existing fetch service before projection migration"
+    fi
+    if [ "$FETCH_SERVICE_WAS_ENABLED" -eq 1 ]; then
+      systemctl --user disable wiki-fetch.timer >/dev/null 2>&1 \
+        || fatal "failed to disable existing fetch timer before projection migration"
+    fi
+  fi
+  log "Stopped existing fetch service before projection migration"
+
+  if [ "$(git -C "$VAULT_PATH" rev-parse --is-inside-work-tree 2>/dev/null || true)" = "true" ]; then
+    if blocker="$(vault_sync_op_preflight_blocker "$VAULT_PATH" 2>/dev/null)"; then
+      fatal "live-vault operation journal blocks fetch projection migration: $blocker"
+    fi
+    vault_sync_managed_lock_acquire "$VAULT_PATH" "vault-sync-install-fetch-projection" \
+      || fatal "could not acquire live-vault managed-write lock for fetch projection migration"
+    FETCH_PROJECTION_LOCK_ACQUIRED=1
+    log "Acquired live-vault managed-write lock for fetch projection migration"
+  elif [ -e "$FETCH_PROJECTION" ]; then
+    log "Live vault has no Git metadata; validating the existing projection without a live-vault lock"
+  else
+    fatal "live vault must be a Git worktree to bootstrap a fetch projection"
+  fi
+}
+
+fetch_projection_install_exit_handler() {
+  local rc="$1"
+
+  if [ "${FETCH_PROJECTION_LOCK_ACQUIRED:-0}" -eq 1 ]; then
+    vault_sync_managed_lock_release \
+      || warn "failed to release live-vault managed-write lock after fetch projection migration"
+    FETCH_PROJECTION_LOCK_ACQUIRED=0
+  fi
+
+  if [ "$rc" -eq 0 ] || [ "${FETCH_PROJECTION_INSTALL_COMPLETE:-0}" -eq 1 ]; then
+    return 0
+  fi
+
+  warn "install failed; rolling back fetch projection changes"
+  restore_fetch_service_after_failed_migration
+  if [ "${FETCH_PROJECTION_CONFIG_WRITTEN:-0}" -eq 1 ]; then
+    if [ "${FETCH_PROJECTION_CONFIG_PREVIOUS_PRESENT:-0}" -eq 1 ]; then
+      set_env_key_raw "vault_sync.fetch_projection" "$FETCH_PROJECTION_CONFIG_PREVIOUS_VALUE"
+    else
+      unset_env_key_raw "vault_sync.fetch_projection"
+    fi
+  fi
+  if [ "${FETCH_PROJECTION_CREATED:-0}" -eq 1 ] && [ -e "$FETCH_PROJECTION" ]; then
+    rm -rf -- "$FETCH_PROJECTION"
+  fi
 }
 
 # --- launchd observed-state helpers (exit status only; never parse print fields) ---
@@ -439,8 +759,19 @@ ROLE="${VS_ROLE:-leaf}"
 MODE="${VS_MODE:-full}"
 SERVICE_SCOPE="${VS_SERVICE_SCOPE:-auto}"
 VAULT_PATH="${VS_VAULT_PATH:-${WIKI_PATH:-$HOME/wiki}}"
+FETCH_PROJECTION="${VS_FETCH_PROJECTION:-}"
 FUSE_MAX_DIR_CACHE="${VS_FUSE_MAX_DIR_CACHE:-15m}"
 SNAPSHOT_PROFILE_PATH=""
+FETCH_PROJECTION_CREATED=0
+FETCH_PROJECTION_CONFIG_WRITTEN=0
+FETCH_PROJECTION_CONFIG_PREVIOUS_PRESENT=0
+FETCH_PROJECTION_CONFIG_PREVIOUS_VALUE=""
+FETCH_PROJECTION_INSTALL_COMPLETE=0
+FETCH_PROJECTION_LOCK_ACQUIRED=0
+FETCH_SERVICE_MIGRATION_STARTED=0
+FETCH_TIMER_WAS_ACTIVE=0
+FETCH_SERVICE_WAS_ACTIVE=0
+FETCH_SERVICE_WAS_ENABLED=0
 DRY_RUN=0
 if is_true "${VS_DRY_RUN:-0}"; then
   DRY_RUN=1
@@ -465,6 +796,10 @@ Options:
                                   Same as above
   --vault-path <path>             Target wiki path for FUSE-only mount guard (default: ~/wiki)
   --vault-path=<path>             Same as above
+  --fetch-projection <absolute-path>
+                                  Independent Git clone used by leaf fetch/status
+  --fetch-projection=<absolute-path>
+                                  Same as above
   --max-dir-cache <duration>      FUSE freshness threshold (default: 15m)
   --max-dir-cache=<duration>      Same as above
   --dry-run                       Print plan and execute nothing
@@ -481,6 +816,7 @@ Environment overrides:
   VS_ROLE=leaf|snapshotter
   VS_SERVICE_SCOPE=auto|user|system
   VS_VAULT_PATH=<path>
+  VS_FETCH_PROJECTION=<absolute-path>
   VS_FUSE_MAX_DIR_CACHE=<duration>
   VS_DRY_RUN=1|0
   VS_OVERRIDE_SNAPSHOTTER=1|0
@@ -525,6 +861,15 @@ while [ "$#" -gt 0 ]; do
       ;;
     --vault-path=*)
       VAULT_PATH="${1#*=}"
+      shift
+      ;;
+    --fetch-projection)
+      [ "$#" -ge 2 ] || fatal "--fetch-projection requires a value"
+      FETCH_PROJECTION="$2"
+      shift 2
+      ;;
+    --fetch-projection=*)
+      FETCH_PROJECTION="${1#*=}"
       shift
       ;;
     --max-dir-cache)
@@ -602,6 +947,8 @@ esac
 if [ "$MODE" = "fuse-only" ] && [ "$ROLE" = "snapshotter" ]; then
   fatal "fuse-only mode does not install snapshotter role"
 fi
+
+validate_fetch_projection_paths
 
 platform_detect_os
 [ "$VS_OS" != "unsupported" ] || fatal "unsupported OS: $(uname -s)"
@@ -835,6 +1182,8 @@ log "OS=$VS_OS scheduler=$SCHEDULER mode=full role=$ROLE dry_run=$DRY_RUN"
 log "Plan: deploy scripts to $BIN_DIR"
 log "Plan: install wiki-sync helper in $BIN_DIR and $HOME/bin"
 log "Plan: deploy filter to $FILTER_DST"
+begin_fetch_projection_migration
+prepare_fetch_projection
 if [ "$VS_OS" = "macos" ]; then
   log "Plan: render launchd units in $HOME/Library/LaunchAgents"
 else
@@ -987,6 +1336,8 @@ fi
 if [ "$DRY_RUN" -eq 0 ]; then
   write_runtime_manifest || fatal "runtime manifest write failed — install incomplete"
 fi
+
+FETCH_PROJECTION_INSTALL_COMPLETE=1
 
 log "Install plan complete."
 if [ "$DRY_RUN" -eq 1 ]; then

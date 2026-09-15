@@ -80,6 +80,35 @@ assert_file_contains "push filter excludes managed-write coordination lock" \
   "$FILTER_UNDER_TEST" \
   "- .skillwiki/managed-write.lock"
 
+test_push_filter_transports_event_ledger_to_s3_plane() {
+  if ! command -v rclone >/dev/null 2>&1; then
+    printf 'SKIP: rclone unavailable for push-filter behavior test\n'
+    return 0
+  fi
+
+  local root source destination event_path
+  root="$(mktemp -d)"
+  source="$root/source"
+  destination="$root/destination"
+  event_path="meta/log-events/2026-09-15/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"
+  mkdir -p "$source/$(dirname "$event_path")" "$destination"
+  printf '{}\n' > "$source/$event_path"
+  printf '# derived log\n' > "$source/log.md"
+
+  rclone copy "$source" "$destination" --filter-from "$FILTER_UNDER_TEST" >/dev/null 2>&1
+  local rc=$?
+  assert_eq "push filter copy exits successfully" "$rc" "0"
+  assert_eq \
+    "push filter transports event ledger JSON" \
+    "$(cat "$destination/$event_path" 2>/dev/null || true)" \
+    "{}"
+  assert_eq \
+    "push filter still excludes root log projection" \
+    "$(test -e "$destination/log.md" && printf present || printf absent)" \
+    "absent"
+  rm -rf "$root"
+}
+
 git_commit() {
   local repo="$1" msg="$2"
   git -C "$repo" add -A >/dev/null
@@ -1283,6 +1312,7 @@ test_p1_first_detection_writes_state_and_one_fail
 test_p1_cooldown_active_suppresses_duplicate_fail
 test_p1_cooldown_expired_writes_pause_marker
 test_p1_disable_env_var_bypasses_dedup
+test_push_filter_transports_event_ledger_to_s3_plane
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
