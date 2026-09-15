@@ -140,9 +140,21 @@ export class FileOAuthStore implements OAuthStore {
     }
   }
 
+  private commit(mutate: () => void): void {
+    const snapshot = JSON.parse(JSON.stringify(this.state)) as PersistedState;
+    mutate();
+    try {
+      this.persist();
+    } catch (error) {
+      this.state = snapshot;
+      throw error;
+    }
+  }
+
   async saveClient(client: ClientEntry): Promise<void> {
-    this.state.clients[client.clientId] = { ...client };
-    this.persist();
+    this.commit(() => {
+      this.state.clients[client.clientId] = { ...client };
+    });
   }
 
   async getClient(clientId: string): Promise<ClientEntry | null> {
@@ -150,45 +162,51 @@ export class FileOAuthStore implements OAuthStore {
   }
 
   async saveAuthCode(code: AuthCodeEntry): Promise<void> {
-    this.state.authCodes[code.codeHash] = { ...code };
-    this.persist();
+    this.commit(() => {
+      this.state.authCodes[code.codeHash] = { ...code };
+    });
   }
 
   async consumeAuthCode(codeHash: string): Promise<AuthCodeEntry | null> {
     const entry = this.state.authCodes[codeHash];
     if (!entry) return null;
-    delete this.state.authCodes[codeHash];
-    this.persist();
+    this.commit(() => {
+      delete this.state.authCodes[codeHash];
+    });
     if (Date.now() > entry.expiresAt) return null;
     return entry;
   }
 
   async saveAccessToken(token: AccessTokenEntry): Promise<void> {
-    this.state.accessTokens[token.tokenHash] = { ...token };
-    this.persist();
+    this.commit(() => {
+      this.state.accessTokens[token.tokenHash] = { ...token };
+    });
   }
 
   async getAccessToken(tokenHash: string): Promise<AccessTokenEntry | null> {
     const entry = this.state.accessTokens[tokenHash];
     if (!entry) return null;
     if (Date.now() > entry.expiresAt) {
-      delete this.state.accessTokens[tokenHash];
-      this.persist();
+      this.commit(() => {
+        delete this.state.accessTokens[tokenHash];
+      });
       return null;
     }
     return entry;
   }
 
   async saveRefreshToken(token: RefreshTokenEntry): Promise<void> {
-    this.state.refreshTokens[token.tokenHash] = { ...token };
-    this.persist();
+    this.commit(() => {
+      this.state.refreshTokens[token.tokenHash] = { ...token };
+    });
   }
 
   async consumeRefreshToken(tokenHash: string): Promise<RefreshTokenEntry | null> {
     const entry = this.state.refreshTokens[tokenHash];
     if (!entry) return null;
-    delete this.state.refreshTokens[tokenHash];
-    this.persist();
+    this.commit(() => {
+      delete this.state.refreshTokens[tokenHash];
+    });
     if (Date.now() > entry.expiresAt) return null;
     return entry;
   }

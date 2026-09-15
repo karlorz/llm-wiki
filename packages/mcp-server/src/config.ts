@@ -61,9 +61,13 @@ function asPort(value: unknown, fallback: number): number {
 export function loadConfig(env: NodeJS.Dict<string>, fileText?: string): McpDaemonConfig {
   let file: FileConfig = {};
   if (fileText && fileText.trim().length > 0) {
-    const parsed = yaml.load(fileText);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      file = parsed as FileConfig;
+    try {
+      const parsed = yaml.load(fileText);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        file = parsed as FileConfig;
+      }
+    } catch {
+      /* malformed YAML: ignore fileText and keep env-only config */
     }
   }
 

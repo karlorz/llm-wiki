@@ -1,0 +1,821 @@
+import { SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/sdk/types.js";
+
+export type JsonRpcErrorBody = {
+  jsonrpc: "2.0";
+  id: string | number | null;
+  error: { code: number; message: string };
+};
+
+function jsonRpcId(value: unknown): string | number | null {
+  return typeof value === "string" || typeof value === "number" ? value : null;
+}
+
+function invalidParams(id: unknown, message: string): JsonRpcErrorBody {
+  return {
+    jsonrpc: "2.0",
+    id: jsonRpcId(id),
+    error: { code: -32602, message },
+  };
+}
+
+export function mcpInitializeProtocolError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const req = parsed as { id?: unknown; method?: unknown; params?: unknown };
+  if (req.method !== "initialize") return null;
+
+  const params = req.params;
+  const version =
+    params && typeof params === "object" && !Array.isArray(params)
+      ? (params as { protocolVersion?: unknown }).protocolVersion
+      : undefined;
+  if (typeof version !== "string" || !version.trim()) {
+    return invalidParams(req.id, "protocolVersion is required");
+  }
+  if (!SUPPORTED_PROTOCOL_VERSIONS.includes(version)) {
+    return invalidParams(req.id, `unsupported protocolVersion: ${version}`);
+  }
+  return null;
+}
+
+export function mcpToolsListBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "tools/list" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "tools/list before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpToolsCallBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "tools/call" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "tools/call before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpResourcesListBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "resources/list" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "resources/list before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpPromptsListBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "prompts/list" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "prompts/list before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpResourcesReadBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "resources/read" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "resources/read before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpPromptsGetBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "prompts/get" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "prompts/get before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpPingBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "ping" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "ping before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpNotificationsInitializedError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  let seenInitialized = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") {
+      seenInitialize = true;
+      continue;
+    }
+    if (method === "notifications/initialized") {
+      if (seenInitialized) {
+        return {
+          jsonrpc: "2.0",
+          id: jsonRpcId((item as { id?: unknown }).id),
+          error: { code: -32000, message: "duplicate notifications/initialized" },
+        };
+      }
+      seenInitialized = true;
+      continue;
+    }
+    if (seenInitialize && !seenInitialized) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "notifications/initialized missing" },
+      };
+    }
+  }
+  return null;
+}
+
+function cancelledRequestId(item: { params?: unknown }): string | number | null {
+  const params = item.params;
+  if (!params || typeof params !== "object" || Array.isArray(params)) return null;
+  return jsonRpcId((params as { requestId?: unknown }).requestId);
+}
+
+function mcpCancelledNotificationError(item: { id?: unknown; params?: unknown }): JsonRpcErrorBody | null {
+  const requestId = cancelledRequestId(item);
+  if (requestId === null) {
+    return {
+      jsonrpc: "2.0",
+      id: jsonRpcId(item.id),
+      error: { code: -32602, message: "requestId is required" },
+    };
+  }
+  return null;
+}
+
+export function mcpNotificationsCancelledError(parsed: unknown): JsonRpcErrorBody | null {
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const req = parsed as { method?: unknown; id?: unknown; params?: unknown };
+    if (req.method !== "notifications/cancelled") return null;
+    return mcpCancelledNotificationError(req);
+  }
+  if (!Array.isArray(parsed)) return null;
+
+  const initializeIds = new Set<string | number>();
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const req = item as { method?: unknown; id?: unknown };
+    if (req.method === "initialize") {
+      const id = jsonRpcId(req.id);
+      if (id !== null) initializeIds.add(id);
+    }
+  }
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const req = item as { method?: unknown; id?: unknown; params?: unknown };
+    if (req.method !== "notifications/cancelled") continue;
+    const missing = mcpCancelledNotificationError(req);
+    if (missing) return missing;
+    const requestId = cancelledRequestId(req);
+    if (requestId !== null && initializeIds.has(requestId)) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId(req.id),
+        error: { code: -32000, message: "notifications/cancelled of initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpLoggingSetLevelBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "logging/setLevel" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "logging/setLevel before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpCompletionCompleteBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "completion/complete" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "completion/complete before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpRootsListBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "roots/list" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "roots/list before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpResourcesTemplatesListBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "resources/templates/list" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "resources/templates/list before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpSamplingCreateMessageBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "sampling/createMessage" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "sampling/createMessage before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpResourcesSubscribeBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "resources/subscribe" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "resources/subscribe before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpResourcesUnsubscribeBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "resources/unsubscribe" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "resources/unsubscribe before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpElicitationCreateBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "elicitation/create" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "elicitation/create before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpDuplicateInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  let seenInitialized = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "notifications/initialized") {
+      seenInitialized = true;
+      continue;
+    }
+    if (method !== "initialize") continue;
+    if (seenInitialized) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "initialize when already initialized" },
+      };
+    }
+    if (seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "duplicate initialize" },
+      };
+    }
+    seenInitialize = true;
+  }
+  return null;
+}
+
+export function mcpShutdownBeforeInitializeError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenInitialize = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "initialize") seenInitialize = true;
+    if (method === "shutdown" && !seenInitialize) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "shutdown before initialize" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpInitializeAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "initialize" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "initialize after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpPingAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "ping" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "ping after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpToolsListAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "tools/list" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "tools/list after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpToolsCallAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "tools/call" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "tools/call after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpResourcesListAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "resources/list" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "resources/list after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpPromptsListAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "prompts/list" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "prompts/list after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpPromptsGetAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "prompts/get" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "prompts/get after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpResourcesReadAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "resources/read" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "resources/read after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpResourcesTemplatesListAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "resources/templates/list" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "resources/templates/list after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpCompletionCompleteAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "completion/complete" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "completion/complete after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpLoggingSetLevelAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "logging/setLevel" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "logging/setLevel after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpRootsListAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "roots/list" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "roots/list after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpSamplingCreateMessageAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "sampling/createMessage" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "sampling/createMessage after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpResourcesSubscribeAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "resources/subscribe" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "resources/subscribe after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpResourcesUnsubscribeAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "resources/unsubscribe" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "resources/unsubscribe after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpElicitationCreateAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "elicitation/create" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "elicitation/create after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpNotificationsInitializedAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "notifications/initialized" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "notifications/initialized after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpNotificationsCancelledAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "notifications/cancelled" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "notifications/cancelled after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpShutdownAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "shutdown after shutdown" },
+      };
+    }
+    if (method === "shutdown") seenShutdown = true;
+  }
+  return null;
+}
+
+export function mcpNotificationsProgressAfterShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let seenShutdown = false;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") seenShutdown = true;
+    if (method === "notifications/progress" && seenShutdown) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "notifications/progress after shutdown" },
+      };
+    }
+  }
+  return null;
+}
+
+export function mcpInitializeAfterSecondShutdownError(parsed: unknown): JsonRpcErrorBody | null {
+  if (!Array.isArray(parsed)) return null;
+  let shutdownCount = 0;
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const method = (item as { method?: unknown }).method;
+    if (method === "shutdown") shutdownCount += 1;
+    if (method === "initialize" && shutdownCount >= 2) {
+      return {
+        jsonrpc: "2.0",
+        id: jsonRpcId((item as { id?: unknown }).id),
+        error: { code: -32000, message: "initialize after second shutdown" },
+      };
+    }
+  }
+  return null;
+}

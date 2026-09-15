@@ -50,7 +50,7 @@ export function isAllowedWritePath(relPosix: string, kind: WriteKind): boolean {
   if (
     hasNul(posix) ||
     posix.includes("..") ||
-    segments.some((seg) => seg === "" || seg === "." || seg === "..") ||
+    segments.some((seg) => seg === "" || seg.startsWith(".")) ||
     isForbiddenWriteName(posix)
   ) {
     return false;

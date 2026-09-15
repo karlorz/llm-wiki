@@ -1,7 +1,7 @@
 import { access, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { renderCaptureMarkdown, slugify, wikiCapture, wikiLogAppend } from "../src/tools/writes.js";
+import { normalizeCaptureProject, renderCaptureMarkdown, slugify, vaultHasProject, wikiCapture, wikiLogAppend, type CaptureKind } from "../src/tools/writes.js";
 import { handleWikiReadPage, MAX_READ_PAGE_BYTES } from "../src/tools/reads.js";
 import { ReconcileGate } from "../src/reconcile.js";
 import { S3PutError, sha256Bytes } from "../src/txn.js";
@@ -15,6 +15,22 @@ function readyGate(): ReconcileGate {
 describe("wiki_capture validation", () => {
   it("slugifies the title for a new transcripts path", () => {
     expect(slugify("Fix the template mismatch!")).toBe("fix-the-template-mismatch");
+  });
+
+  it("empty or punctuation-only titles return capture", () => {
+    expect(slugify("")).toBe("capture");
+    expect(slugify("!!!")).toBe("capture");
+  });
+
+  it("empty, whitespace, and invalid slugs return null", () => {
+    expect(normalizeCaptureProject("")).toBeNull();
+    expect(normalizeCaptureProject("   ")).toBeNull();
+    expect(normalizeCaptureProject("Not A Slug")).toBeNull();
+  });
+
+  it("missing projects/<slug> directory returns false", async () => {
+    const vault = await makeTempVault();
+    expect(vaultHasProject(vault, "does-not-exist")).toBe(false);
   });
 
   it("renders ad-hoc capture frontmatter that the raw schema accepts", () => {
@@ -53,6 +69,54 @@ describe("wiki_capture validation", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected failure");
     expect(result.error).toBe("SENSITIVE_CONTENT_DETECTED");
+  });
+
+  it("rejects an unknown kind without writing a transcript", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const result = await wikiCapture({
+      vaultDir: vault,
+      hostId: "macos-dev",
+      gate,
+      putObject: async () => {
+        throw new Error("put should not run");
+      },
+    }, {
+      kind: "session-log" as CaptureKind,
+      project: "llm-wiki",
+      title: "should-not-write",
+      content: "no file",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toBe("USAGE");
+    expect((result as { writer_id?: string }).writer_id).toBeUndefined();
+    expect(await readdir(join(vault, "raw", "transcripts"))).toEqual([]);
+  });
+
+  it("rejects an unknown project without writing a transcript", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const result = await wikiCapture({
+      vaultDir: vault,
+      hostId: "macos-dev",
+      gate,
+      putObject: async () => {
+        throw new Error("put should not run");
+      },
+    }, {
+      kind: "note",
+      project: "does-not-exist",
+      title: "should-not-write",
+      content: "no file",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toBe("USAGE");
+    expect((result as { writer_id?: string }).writer_id).toBeUndefined();
+    expect(await readdir(join(vault, "raw", "transcripts"))).toEqual([]);
   });
 });
 
@@ -304,5 +368,30 @@ describe("wiki_capture write", () => {
     expect(result.writer_id).toBe("macos-dev");
     expect(await readFile(join(vault, result.path), "utf8")).toContain("A capture body");
     await expect(access(join(vault, "concepts", "alpha.md"))).resolves.toBeUndefined();
+  });
+
+  it("fail-closes capture-write when S3 put fails and leaves no transcript", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const result = await wikiCapture({
+      vaultDir: vault,
+      hostId: "macos-dev",
+      gate,
+      putObject: async () => {
+        throw new S3PutError("simulated capture put failure");
+      },
+      now: () => new Date("2026-09-13T12:00:00Z"),
+    }, {
+      kind: "note",
+      project: "llm-wiki",
+      title: "should-not-land",
+      content: "no file",
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toBe("S3_PUT_FAILED");
+    expect((result as { writer_id?: string }).writer_id).toBeUndefined();
+    expect(await readdir(join(vault, "raw", "transcripts"))).toEqual([]);
   });
 });

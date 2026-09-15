@@ -35,6 +35,7 @@ export async function makeTempVault(): Promise<string> {
     "utf8",
   );
   await mkdir(join(root, "raw", "transcripts"), { recursive: true });
+  await mkdir(join(root, "projects", "llm-wiki"), { recursive: true });
   await mkdir(join(root, "concepts"), { recursive: true });
   await writeFile(
     join(root, "concepts", "alpha.md"),

@@ -7,7 +7,51 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from "./auth.js";
+import { handleConsoleRequest, isConsolePath, isConsoleRequestAllowed } from "./console.js";
 import { loadConfig, type McpDaemonConfig } from "./config.js";
+import {
+  mcpCompletionCompleteAfterShutdownError,
+  mcpCompletionCompleteBeforeInitializeError,
+  mcpDuplicateInitializeError,
+  mcpElicitationCreateAfterShutdownError,
+  mcpElicitationCreateBeforeInitializeError,
+  mcpInitializeAfterSecondShutdownError,
+  mcpInitializeAfterShutdownError,
+  mcpInitializeProtocolError,
+  mcpLoggingSetLevelAfterShutdownError,
+  mcpLoggingSetLevelBeforeInitializeError,
+  mcpNotificationsCancelledAfterShutdownError,
+  mcpNotificationsCancelledError,
+  mcpNotificationsInitializedAfterShutdownError,
+  mcpNotificationsInitializedError,
+  mcpNotificationsProgressAfterShutdownError,
+  mcpPingAfterShutdownError,
+  mcpPingBeforeInitializeError,
+  mcpPromptsGetAfterShutdownError,
+  mcpPromptsGetBeforeInitializeError,
+  mcpPromptsListAfterShutdownError,
+  mcpPromptsListBeforeInitializeError,
+  mcpResourcesListAfterShutdownError,
+  mcpResourcesListBeforeInitializeError,
+  mcpResourcesReadAfterShutdownError,
+  mcpResourcesReadBeforeInitializeError,
+  mcpResourcesSubscribeAfterShutdownError,
+  mcpResourcesSubscribeBeforeInitializeError,
+  mcpResourcesTemplatesListAfterShutdownError,
+  mcpResourcesTemplatesListBeforeInitializeError,
+  mcpResourcesUnsubscribeAfterShutdownError,
+  mcpResourcesUnsubscribeBeforeInitializeError,
+  mcpRootsListAfterShutdownError,
+  mcpRootsListBeforeInitializeError,
+  mcpSamplingCreateMessageAfterShutdownError,
+  mcpSamplingCreateMessageBeforeInitializeError,
+  mcpShutdownAfterShutdownError,
+  mcpShutdownBeforeInitializeError,
+  mcpToolsCallAfterShutdownError,
+  mcpToolsCallBeforeInitializeError,
+  mcpToolsListAfterShutdownError,
+  mcpToolsListBeforeInitializeError,
+} from "./mcp-initialize.js";
 import { ChangedEventHub } from "./events.js";
 import { MCP_INSTRUCTIONS } from "./mcp-instructions.js";
 import { getIssuer, handleOAuthRequest, type OAuthConfig } from "./oauth.js";
@@ -30,6 +74,7 @@ export interface HttpServerOptions {
   port: number;
   vaultDir: string;
   tokenMap: TokenMap;
+  tokenMapPath?: string;
   gate: ReconcileGate;
   putObject: PutObject;
   getObject?: GetObject;
@@ -142,12 +187,13 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     "wiki_query",
     {
       description:
-        "Ranked vault query. Default scope is typed knowledge only. Use scope=work or scope=all for Layer-3 work items; wiki_context lists active work.",
+        "Ranked vault query. Default scope is typed knowledge only. Use scope=work or scope=all for Layer-3 work items; wiki_context lists active work. Optional project must be a vault slug; unknown or empty project fail closed.",
       inputSchema: z.object({
         query: z.string().min(1),
         limit: z.number().int().positive().optional(),
         include_pending: z.boolean().optional(),
         scope: z.enum(["typed", "work", "all"]).optional(),
+        project: z.string().optional(),
       }),
       outputSchema: z.object({
         ...failureShape,
@@ -210,18 +256,31 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
   server.registerTool(
     "wiki_status",
     {
-      description: "Vault health snapshot plus daemon reconcile and S3 connectivity.",
-      inputSchema: z.object({}),
+      description:
+        "Vault health snapshot plus daemon reconcile and S3 connectivity. Optional host_id must match the authenticated writer; unknown or missing host identity fail closed.",
+      inputSchema: z.object({
+        host_id: z.string().optional(),
+      }),
       outputSchema: z.object({
         ...failureShape,
         vault_path: z.string().optional(),
         reconcile_ready: z.boolean().optional(),
         s3_ok: z.boolean().optional(),
+        writer_id: z.string().optional(),
+        host_id: z.string().optional(),
+        fleet: z
+          .object({
+            identity_status: z.enum(["known", "unknown", "invalid"]),
+            manifest_loaded: z.boolean(),
+            host_id: z.string().optional(),
+            source: z.string().optional(),
+          })
+          .optional(),
       }).passthrough(),
       annotations: { readOnlyHint: true },
     },
-    async () => {
-      const out = await handleWikiStatus(reads);
+    async (args) => {
+      const out = await handleWikiStatus(reads, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -229,8 +288,11 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
   server.registerTool(
     "wiki_context",
     {
-      description: "Compact activation context, active project work-item directories, and writer metadata.",
-      inputSchema: z.object({}),
+      description:
+        "Compact activation context, active project work-item directories, and writer metadata. Optional project slug filters to one vault project; unknown or empty project fail closed.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+      }),
       outputSchema: z.object({
         ...failureShape,
         projects: z
@@ -255,8 +317,8 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       }).passthrough(),
       annotations: { readOnlyHint: true },
     },
-    async () => {
-      const out = await handleWikiContext(reads, { tools: [...MCP_TOOL_NAMES] });
+    async (args) => {
+      const out = await handleWikiContext(reads, { tools: [...MCP_TOOL_NAMES], project: args.project });
       return toolResult(out, !out.ok);
     },
   );
@@ -479,6 +541,12 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
       return;
     }
 
+    if (req.method === "GET" && path === "/favicon.ico") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     if (oauthEnabled && oauthStore && opts.oauth) {
       const isOauthPath =
         path === "/.well-known/oauth-protected-resource" ||
@@ -503,6 +571,19 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         const handled = await handleOAuthRequest(req, res, rawBody, opts.oauth, oauthStore);
         if (handled) return;
       }
+    }
+
+    if (isConsolePath(path)) {
+      if (!isConsoleRequestAllowed(req)) {
+        json(res, 404, { error: "not_found" });
+        return;
+      }
+      await handleConsoleRequest(req, res, url, {
+        tokenMap: opts.tokenMap,
+        tokenMapPath: opts.tokenMapPath,
+        auditFile: opts.auditFile,
+      });
+      return;
     }
 
     const isMcpOrEvent =
@@ -548,7 +629,217 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
           }
           throw err;
         }
-        parsed = raw.length > 0 ? JSON.parse(raw) : undefined;
+        try {
+          parsed = raw.length > 0 ? JSON.parse(raw) : undefined;
+        } catch {
+          json(res, 400, { error: "invalid_json" });
+          return;
+        }
+        const initErr = mcpInitializeProtocolError(parsed);
+        if (initErr) {
+          json(res, 200, initErr);
+          return;
+        }
+        const listErr = mcpToolsListBeforeInitializeError(parsed);
+        if (listErr) {
+          json(res, 200, listErr);
+          return;
+        }
+        const callErr = mcpToolsCallBeforeInitializeError(parsed);
+        if (callErr) {
+          json(res, 200, callErr);
+          return;
+        }
+        const resourcesErr = mcpResourcesListBeforeInitializeError(parsed);
+        if (resourcesErr) {
+          json(res, 200, resourcesErr);
+          return;
+        }
+        const promptsErr = mcpPromptsListBeforeInitializeError(parsed);
+        if (promptsErr) {
+          json(res, 200, promptsErr);
+          return;
+        }
+        const resourcesReadErr = mcpResourcesReadBeforeInitializeError(parsed);
+        if (resourcesReadErr) {
+          json(res, 200, resourcesReadErr);
+          return;
+        }
+        const promptsGetErr = mcpPromptsGetBeforeInitializeError(parsed);
+        if (promptsGetErr) {
+          json(res, 200, promptsGetErr);
+          return;
+        }
+        const pingErr = mcpPingBeforeInitializeError(parsed);
+        if (pingErr) {
+          json(res, 200, pingErr);
+          return;
+        }
+        const initializedAfterShutdownErr = mcpNotificationsInitializedAfterShutdownError(parsed);
+        if (initializedAfterShutdownErr) {
+          json(res, 200, initializedAfterShutdownErr);
+          return;
+        }
+        const initializedErr = mcpNotificationsInitializedError(parsed);
+        if (initializedErr) {
+          json(res, 200, initializedErr);
+          return;
+        }
+        const cancelledErr = mcpNotificationsCancelledError(parsed);
+        if (cancelledErr) {
+          json(res, 200, cancelledErr);
+          return;
+        }
+        const loggingErr = mcpLoggingSetLevelBeforeInitializeError(parsed);
+        if (loggingErr) {
+          json(res, 200, loggingErr);
+          return;
+        }
+        const completeErr = mcpCompletionCompleteBeforeInitializeError(parsed);
+        if (completeErr) {
+          json(res, 200, completeErr);
+          return;
+        }
+        const rootsErr = mcpRootsListBeforeInitializeError(parsed);
+        if (rootsErr) {
+          json(res, 200, rootsErr);
+          return;
+        }
+        const templatesErr = mcpResourcesTemplatesListBeforeInitializeError(parsed);
+        if (templatesErr) {
+          json(res, 200, templatesErr);
+          return;
+        }
+        const samplingErr = mcpSamplingCreateMessageBeforeInitializeError(parsed);
+        if (samplingErr) {
+          json(res, 200, samplingErr);
+          return;
+        }
+        const subscribeErr = mcpResourcesSubscribeBeforeInitializeError(parsed);
+        if (subscribeErr) {
+          json(res, 200, subscribeErr);
+          return;
+        }
+        const unsubscribeErr = mcpResourcesUnsubscribeBeforeInitializeError(parsed);
+        if (unsubscribeErr) {
+          json(res, 200, unsubscribeErr);
+          return;
+        }
+        const elicitationErr = mcpElicitationCreateBeforeInitializeError(parsed);
+        if (elicitationErr) {
+          json(res, 200, elicitationErr);
+          return;
+        }
+        const shutdownErr = mcpShutdownBeforeInitializeError(parsed);
+        if (shutdownErr) {
+          json(res, 200, shutdownErr);
+          return;
+        }
+        const afterSecondShutdownErr = mcpInitializeAfterSecondShutdownError(parsed);
+        if (afterSecondShutdownErr) {
+          json(res, 200, afterSecondShutdownErr);
+          return;
+        }
+        const afterShutdownErr = mcpInitializeAfterShutdownError(parsed);
+        if (afterShutdownErr) {
+          json(res, 200, afterShutdownErr);
+          return;
+        }
+        const pingAfterShutdownErr = mcpPingAfterShutdownError(parsed);
+        if (pingAfterShutdownErr) {
+          json(res, 200, pingAfterShutdownErr);
+          return;
+        }
+        const toolsListAfterShutdownErr = mcpToolsListAfterShutdownError(parsed);
+        if (toolsListAfterShutdownErr) {
+          json(res, 200, toolsListAfterShutdownErr);
+          return;
+        }
+        const toolsCallAfterShutdownErr = mcpToolsCallAfterShutdownError(parsed);
+        if (toolsCallAfterShutdownErr) {
+          json(res, 200, toolsCallAfterShutdownErr);
+          return;
+        }
+        const resourcesListAfterShutdownErr = mcpResourcesListAfterShutdownError(parsed);
+        if (resourcesListAfterShutdownErr) {
+          json(res, 200, resourcesListAfterShutdownErr);
+          return;
+        }
+        const promptsListAfterShutdownErr = mcpPromptsListAfterShutdownError(parsed);
+        if (promptsListAfterShutdownErr) {
+          json(res, 200, promptsListAfterShutdownErr);
+          return;
+        }
+        const promptsGetAfterShutdownErr = mcpPromptsGetAfterShutdownError(parsed);
+        if (promptsGetAfterShutdownErr) {
+          json(res, 200, promptsGetAfterShutdownErr);
+          return;
+        }
+        const resourcesReadAfterShutdownErr = mcpResourcesReadAfterShutdownError(parsed);
+        if (resourcesReadAfterShutdownErr) {
+          json(res, 200, resourcesReadAfterShutdownErr);
+          return;
+        }
+        const resourcesTemplatesListAfterShutdownErr = mcpResourcesTemplatesListAfterShutdownError(parsed);
+        if (resourcesTemplatesListAfterShutdownErr) {
+          json(res, 200, resourcesTemplatesListAfterShutdownErr);
+          return;
+        }
+        const completionCompleteAfterShutdownErr = mcpCompletionCompleteAfterShutdownError(parsed);
+        if (completionCompleteAfterShutdownErr) {
+          json(res, 200, completionCompleteAfterShutdownErr);
+          return;
+        }
+        const loggingSetLevelAfterShutdownErr = mcpLoggingSetLevelAfterShutdownError(parsed);
+        if (loggingSetLevelAfterShutdownErr) {
+          json(res, 200, loggingSetLevelAfterShutdownErr);
+          return;
+        }
+        const rootsListAfterShutdownErr = mcpRootsListAfterShutdownError(parsed);
+        if (rootsListAfterShutdownErr) {
+          json(res, 200, rootsListAfterShutdownErr);
+          return;
+        }
+        const samplingCreateMessageAfterShutdownErr = mcpSamplingCreateMessageAfterShutdownError(parsed);
+        if (samplingCreateMessageAfterShutdownErr) {
+          json(res, 200, samplingCreateMessageAfterShutdownErr);
+          return;
+        }
+        const resourcesSubscribeAfterShutdownErr = mcpResourcesSubscribeAfterShutdownError(parsed);
+        if (resourcesSubscribeAfterShutdownErr) {
+          json(res, 200, resourcesSubscribeAfterShutdownErr);
+          return;
+        }
+        const resourcesUnsubscribeAfterShutdownErr = mcpResourcesUnsubscribeAfterShutdownError(parsed);
+        if (resourcesUnsubscribeAfterShutdownErr) {
+          json(res, 200, resourcesUnsubscribeAfterShutdownErr);
+          return;
+        }
+        const elicitationCreateAfterShutdownErr = mcpElicitationCreateAfterShutdownError(parsed);
+        if (elicitationCreateAfterShutdownErr) {
+          json(res, 200, elicitationCreateAfterShutdownErr);
+          return;
+        }
+        const cancelledAfterShutdownErr = mcpNotificationsCancelledAfterShutdownError(parsed);
+        if (cancelledAfterShutdownErr) {
+          json(res, 200, cancelledAfterShutdownErr);
+          return;
+        }
+        const shutdownAfterShutdownErr = mcpShutdownAfterShutdownError(parsed);
+        if (shutdownAfterShutdownErr) {
+          json(res, 200, shutdownAfterShutdownErr);
+          return;
+        }
+        const progressAfterShutdownErr = mcpNotificationsProgressAfterShutdownError(parsed);
+        if (progressAfterShutdownErr) {
+          json(res, 200, progressAfterShutdownErr);
+          return;
+        }
+        const duplicateInitErr = mcpDuplicateInitializeError(parsed);
+        if (duplicateInitErr) {
+          json(res, 200, duplicateInitErr);
+          return;
+        }
       }
       const mcp = createWikiMcpServer({ ...opts, hostId, hub });
       const transport = new StreamableHTTPServerTransport({
@@ -600,6 +891,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     port: cfg.port,
     vaultDir: cfg.vaultDir,
     tokenMap,
+    tokenMapPath: cfg.tokenMapPath,
     gate,
     putObject: s3Adapter.putObject,
     getObject: s3Adapter.getObject,

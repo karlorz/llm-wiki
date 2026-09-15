@@ -29,6 +29,42 @@ describe("HTTP surface", () => {
     ).toThrow(/fail closed/);
   });
 
+  it("GET /events and /mcp/events without or unknown bearer are 401", async () => {
+    const vault = await makeTempVault();
+    const token = "test-token";
+    const hash = createHash("sha256").update(token, "utf8").digest("hex");
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const server = await startMcpHttpServer({
+      bind: "127.0.0.1",
+      port: 0,
+      vaultDir: vault,
+      tokenMap: new Map([[hash, "macos-dev"]]),
+      gate,
+      putObject: async () => undefined,
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      for (const path of ["/events", "/mcp/events"]) {
+        const none = await fetch(`http://127.0.0.1:${port}${path}`);
+        expect(none.status, path).toBe(401);
+        expect(none.headers.get("www-authenticate")).toBe("Bearer");
+        const unknown = await fetch(`http://127.0.0.1:${port}${path}`, {
+          headers: { Authorization: "Bearer unknown-not-in-token-map" },
+        });
+        expect(unknown.status, path).toBe(401);
+      }
+      const ok = await fetch(`http://127.0.0.1:${port}/mcp/events`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
+      });
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("content-type")).toMatch(/text\/event-stream/);
+      await ok.body?.cancel();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
   it("returns 401 WWW-Authenticate Bearer without a token", async () => {
     const vault = await makeTempVault();
     const token = "test-token";
