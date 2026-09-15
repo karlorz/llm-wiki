@@ -286,7 +286,7 @@ export async function handleWikiStatus(
     runCopyStatusCommand({
       vault: ctx.vaultDir,
       home: process.env.HOME ?? "",
-      s3Ok: ctx.s3Ok,
+      s3Ok: ctx.s3Ok ?? true,
     }),
   ]);
   const base = result.result.ok ? result.result.data : { humanHint: "status failed" };
