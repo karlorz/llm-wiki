@@ -356,6 +356,8 @@ test_existing_handoff_skips_pull_and_backs_off_notification() {
   printf 'remote\n' > "$root/remote-work/remote.md"
   git_commit "$root/remote-work" "remote advance"
   git -C "$root/remote-work" push origin main >/dev/null
+  local target
+  target="$(git -C "$root/remote-work" rev-parse HEAD)"
 
   cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
   cp "$(cd "$(dirname "$SOURCE_SCRIPT")" && pwd)/lib/git-operation-journal.sh" \
@@ -379,7 +381,8 @@ STUB
 
   # shellcheck source=/dev/null
   . "$script_dir/lib/git-operation-journal.sh"
-  vault_sync_op_begin "$vault" "op-pending" "main" "$head" "$head" "lock:test" "test" "hash"
+  # Live unresolved handoff: target is still ahead of HEAD (failed pull).
+  vault_sync_op_begin "$vault" "op-pending" "main" "$head" "$target" "lock:test" "test" "hash"
   vault_sync_op_mark_review_required "$vault" "op-pending" "semantic-conflict"
 
   env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
@@ -513,7 +516,7 @@ STUB
 
   # shellcheck source=/dev/null
   . "$script_dir/lib/git-operation-journal.sh"
-  vault_sync_op_begin "$vault" "op-p2g" "main" "$head" "$head" "lock:test" "test" "hash"
+  vault_sync_op_begin "$vault" "op-p2g" "main" "$head" "$(git -C "$root/remote-work" rev-parse HEAD)" "lock:test" "test" "hash"
   vault_sync_op_mark_review_required "$vault" "op-p2g" "semantic-conflict"
 
   mkdir -p "$home/cache/wiki-fetch"
@@ -614,7 +617,7 @@ STUB
 
   # shellcheck source=/dev/null
   . "$script_dir/lib/git-operation-journal.sh"
-  vault_sync_op_begin "$vault" "op-p2h" "main" "$head" "$head" "lock:test" "test" "hash"
+  vault_sync_op_begin "$vault" "op-p2h" "main" "$head" "$(git -C "$root/remote-work" rev-parse HEAD)" "lock:test" "test" "hash"
   vault_sync_op_mark_review_required "$vault" "op-p2h" "semantic-conflict"
 
   mkdir -p "$home/cache/wiki-fetch"
@@ -712,7 +715,7 @@ STUB
 
   # shellcheck source=/dev/null
   . "$script_dir/lib/git-operation-journal.sh"
-  vault_sync_op_begin "$vault" "op-p2i" "main" "$head" "$head" "lock:test" "test" "hash"
+  vault_sync_op_begin "$vault" "op-p2i" "main" "$head" "$(git -C "$root/remote-work" rev-parse HEAD)" "lock:test" "test" "hash"
   vault_sync_op_mark_review_required "$vault" "op-p2i" "semantic-conflict"
 
   mkdir -p "$home/cache/wiki-fetch"
@@ -753,10 +756,86 @@ STUB
   rm -rf "$root"
 }
 
+test_stale_handoff_with_dirty_wip_does_not_skip_pull() {
+  local root home remote vault script_dir notify_log helper_state head
+  root="$(mktemp -d)"
+  home="$root/home"
+  remote="$root/origin.git"
+  vault="$root/wiki"
+  script_dir="$root/scripts"
+  notify_log="$root/notify.log"
+  helper_state="$root/helper-state"
+
+  git init --bare "$remote" >/dev/null
+  mkdir -p "$vault" "$script_dir/lib"
+  git -C "$vault" init >/dev/null
+  git -C "$vault" branch -M main
+  git -C "$vault" remote add origin "$remote"
+  printf 'base\n' > "$vault/note.md"
+  git_commit "$vault" init
+  git -C "$vault" push -u origin main >/dev/null
+  head="$(git -C "$vault" rev-parse HEAD)"
+
+  git clone --branch main "$remote" "$root/remote-work" >/dev/null
+  printf 'remote\n' > "$root/remote-work/remote.md"
+  git_commit "$root/remote-work" "remote advance"
+  git -C "$root/remote-work" push origin main >/dev/null
+
+  printf 'live-ahead\n' > "$vault/untracked-event.md"
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  cp "$(cd "$(dirname "$SOURCE_SCRIPT")" && pwd)/lib/git-operation-journal.sh" \
+    "$script_dir/lib/git-operation-journal.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"; }
+STUB
+  cat > "$script_dir/lib/lockfile.sh" <<'STUB'
+lockfile_acquire() { return 0; }
+STUB
+  cat > "$script_dir/wiki-pull-with-auto-resolve.sh" <<'STUB'
+#!/bin/bash
+printf 'called' > "$HELPER_STATE_FILE"
+exit 0
+STUB
+  chmod +x "$script_dir/wiki-pull-with-auto-resolve.sh"
+
+  # shellcheck source=/dev/null
+  . "$script_dir/lib/git-operation-journal.sh"
+  vault_sync_op_begin "$vault" "op-stale" "main" "$head" "$head" "lock:test" "test" "hash"
+  vault_sync_op_mark_review_required "$vault" "op-stale" "inventory-verify-failed"
+
+  mkdir -p "$home/cache/wiki-fetch"
+  printf '0' > "$home/cache/wiki-fetch/last-behind"
+  printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
+
+  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+    WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 NOTIFY_LOG="$notify_log" \
+    HELPER_STATE_FILE="$helper_state" "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+
+  local log
+  log="$home/logs/wiki-fetch.log"
+  assert_contains "stale handoff is superseded despite dirty WIP" \
+    "$(cat "$log" 2>/dev/null || true)" "superseded stale review-required"
+  assert_eq "stale handoff does not skip pull helper" "$(cat "$helper_state" 2>/dev/null || true)" "called"
+  if [ -f "$vault/untracked-event.md" ]; then
+    printf "PASS: dirty live-ahead file preserved\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: dirty live-ahead file should remain\n"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
 test_p2_no_handoff_no_pause
 test_p2_handoff_present_reminder_backoff
 test_p2_handoff_persists_writes_pause_marker
 test_p2_disable_env_var_bypasses_hard_pause
+test_stale_handoff_with_dirty_wip_does_not_skip_pull
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1
