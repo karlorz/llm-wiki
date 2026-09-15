@@ -17,6 +17,8 @@ export interface PlaneRecord {
   age_hours?: number;
   reachable?: boolean;
   blocked_reason?: string;
+  dirty?: number;
+  untracked?: number;
   detail?: string;
 }
 
@@ -44,6 +46,8 @@ export interface LocalGitProbe {
   head?: string;
   behind?: number;
   blockedReason?: string;
+  dirty?: number;
+  untracked?: number;
   unknown?: boolean;
   detail?: string;
 }
@@ -73,49 +77,70 @@ function githubRecord(p: GithubProbe): PlaneRecord {
   return rec;
 }
 
+function withDirty(rec: PlaneRecord, p: LocalGitProbe): PlaneRecord {
+  if (p.dirty !== undefined) rec.dirty = p.dirty;
+  if (p.untracked !== undefined) rec.untracked = p.untracked;
+  return rec;
+}
+
 function localRecord(p: LocalGitProbe, githubOid?: string): PlaneRecord {
   if (p.blockedReason) {
-    return {
-      state: "blocked",
-      oid: p.head,
-      behind: p.behind,
-      blocked_reason: p.blockedReason,
-      detail: p.detail ?? p.blockedReason,
-    };
+    return withDirty(
+      {
+        state: "blocked",
+        oid: p.head,
+        behind: p.behind,
+        blocked_reason: p.blockedReason,
+        detail: p.detail ?? p.blockedReason,
+      },
+      p,
+    );
   }
   if (p.head && githubOid && p.head === githubOid && (p.behind === undefined || p.behind === 0)) {
-    return {
-      state: "ok",
-      oid: p.head,
-      behind: p.behind,
-      detail: p.detail ?? "HEAD matches GitHub",
-    };
+    return withDirty(
+      {
+        state: "ok",
+        oid: p.head,
+        behind: p.behind,
+        detail: p.detail ?? "HEAD matches GitHub",
+      },
+      p,
+    );
   }
   if (p.behind !== undefined && p.behind > 0) {
-    return {
-      state: "stale",
-      oid: p.head,
-      behind: p.behind,
-      detail: p.detail ?? `behind origin/main by ${p.behind}`,
-    };
+    return withDirty(
+      {
+        state: "stale",
+        oid: p.head,
+        behind: p.behind,
+        detail: p.detail ?? `behind origin/main by ${p.behind}`,
+      },
+      p,
+    );
   }
   if (p.head && githubOid && p.head !== githubOid) {
-    return {
-      state: "stale",
-      oid: p.head,
-      behind: p.behind,
-      detail: p.detail ?? "HEAD differs from GitHub",
-    };
+    return withDirty(
+      {
+        state: "stale",
+        oid: p.head,
+        behind: p.behind,
+        detail: p.detail ?? "HEAD differs from GitHub",
+      },
+      p,
+    );
   }
   if (p.head) {
-    return {
-      state: "ok",
-      oid: p.head,
-      behind: p.behind,
-      detail: p.detail ?? "HEAD present",
-    };
+    return withDirty(
+      {
+        state: "ok",
+        oid: p.head,
+        behind: p.behind,
+        detail: p.detail ?? "HEAD present",
+      },
+      p,
+    );
   }
-  return { state: "unknown", detail: p.detail ?? "leaf clone unmeasured" };
+  return withDirty({ state: "unknown", detail: p.detail ?? "leaf clone unmeasured" }, p);
 }
 
 function formatPlane(name: string, rec: PlaneRecord): string {
@@ -123,8 +148,10 @@ function formatPlane(name: string, rec: PlaneRecord): string {
   if (rec.oid) parts.push(`oid=${rec.oid.slice(0, 12)}`);
   if (rec.behind !== undefined) parts.push(`behind=${rec.behind}`);
   if (rec.age_hours !== undefined) parts.push(`age_hours=${rec.age_hours}`);
+  if (rec.dirty !== undefined) parts.push(`dirty=${rec.dirty}`);
+  if (rec.untracked !== undefined) parts.push(`untracked=${rec.untracked}`);
   if (rec.blocked_reason) parts.push(rec.blocked_reason);
-  if (rec.detail) parts.push(rec.detail);
+  if (rec.detail && rec.detail !== rec.blocked_reason) parts.push(rec.detail);
   return parts.join(" ");
 }
 

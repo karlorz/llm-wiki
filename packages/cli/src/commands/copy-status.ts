@@ -8,6 +8,7 @@ import {
   resolveWikiS3Remote,
   REMOTE_PROBE_TIMEOUT_MS,
 } from "../utils/remote-health.js";
+import { measureDirtyVolume } from "../utils/vault-write-gates.js";
 import {
   runCopyStatus as runCopyStatusCore,
   type CopyStatus,
@@ -69,11 +70,20 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
       const blockedReason = review
         ? `review-required:${review.opId}`
         : undefined;
+      const dirty = measureDirtyVolume(input.vault);
+      const dirtyCount = dirty.is_git_repo ? dirty.expanded_files : undefined;
+      const untrackedCount = dirty.is_git_repo ? dirty.untracked : undefined;
+      const dirtyHint =
+        dirtyCount && dirtyCount > 0
+          ? `dirty=${dirtyCount} untracked=${untrackedCount ?? 0} live-ahead of GitHub; do not git add`
+          : undefined;
       return {
         head,
         behind: Number.isFinite(behind) ? behind : undefined,
         blockedReason,
-        detail: blockedReason,
+        dirty: dirtyCount,
+        untracked: untrackedCount,
+        detail: dirtyHint ?? blockedReason,
       };
     },
   };

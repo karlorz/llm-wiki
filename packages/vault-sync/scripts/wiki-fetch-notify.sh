@@ -72,7 +72,17 @@ log() {
 }
 
 handle_existing_handoff() {
-  local blocker reason op identity previous_identity notified_at now
+  local blocker reason op identity previous_identity notified_at now before after
+  # Same altitude as managed-write preflight: a review-required whose target_oid
+  # is already in HEAD is obsolete. Preserve dirty live-ahead WIP; only real
+  # unresolved handoffs (target still ahead / sequencer / unmerged) skip pull.
+  before="$(vault_sync_op_find_review_required "$WIKI_DIR" 2>/dev/null || true)"
+  if vault_sync_op_supersede_stale_review_required "$WIKI_DIR" "wiki-fetch-notify" 2>/dev/null; then
+    after="$(vault_sync_op_find_review_required "$WIKI_DIR" 2>/dev/null || true)"
+    if [ -n "$before" ] && [ -z "$after" ]; then
+      log "OK superseded stale review-required handoff(s); fetch pull may proceed"
+    fi
+  fi
   blocker="$(vault_sync_op_preflight_blocker "$WIKI_DIR" 2>/dev/null || true)"
   [ -n "$blocker" ] || { rm -f "$HANDOFF_STATE_FILE" "$FETCH_HARD_PAUSE_COUNTER_FILE" 2>/dev/null || true; return 1; }
 

@@ -33,6 +33,29 @@ describe("composeCopyStatus", () => {
     expect(out.local_git.behind).toBe(12);
     expect(out.humanHint).toContain("github: ok");
     expect(out.humanHint).toContain("local_git: blocked");
+    expect(out.humanHint).not.toMatch(/review-required:.*review-required:/);
+  });
+
+  it("reports local dirty counts without collapsing live or GitHub", () => {
+    const out = composeCopyStatus({
+      live: { reachable: true },
+      github: { oid: "bb26229bef6e" },
+      local: {
+        head: "9d95108311cc",
+        behind: 12,
+        blockedReason: "review-required:pull-test",
+        dirty: 922,
+        untracked: 902,
+        detail: "dirty=922 untracked=902 live-ahead of GitHub; do not git add",
+      },
+    });
+    expect(out.github.state).toBe("ok");
+    expect(out.local_git.state).toBe("blocked");
+    expect(out.local_git.dirty).toBe(922);
+    expect(out.local_git.untracked).toBe(902);
+    expect(out.humanHint).toContain("dirty=922");
+    expect(out.humanHint).toContain("do not git add");
+    expect(out.humanHint).not.toMatch(/review-required:pull-test review-required:pull-test/);
   });
 
   it("keeps unknown distinct from stale", () => {
