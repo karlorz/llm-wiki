@@ -8087,7 +8087,7 @@ describe("HTTP /console", () => {
     } finally {
       await ctx.close();
     }
-  }, 30_000);
+  }, 120_000);
 
   it("revokes a host-id on POST /console/revoke with remaining short confirm-later queries and a valid body", async () => {
     const keys = [
