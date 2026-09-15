@@ -113,22 +113,21 @@ REPAIR_SCRIPT="${WIKI_GIT_REPAIR_SCRIPT:-$SCRIPT_DIR/wiki-git-repair-v3.sh}"
 MAX_S3_ONLY_NOTES="${WIKI_SNAPSHOT_MAX_S3_ONLY_NOTES:-200}"
 MAX_TOMBSTONE_PRUNES="${WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES:-10}"
 
-# rclone exclude leaves leftover non-promotable files in the worktree.
-# `git add -A` would promote them (live 0.10.90 leak). Pathspecs match
-# snapshot_non_promotable_path. Already-tracked ledger history is left as-is.
+# rclone leaves non-promotable and ignored files in the worktree. Passing the
+# ignored directory names as negative pathspecs still makes `git add` exit 1,
+# so build an exact NUL-delimited inventory of tracked/untracked/deleted paths
+# and retain only the Git-promotion class. Already-tracked ledger history is
+# left as-is until the attended branch-tip cleanup stages its deletions.
+snapshot_promotable_pathspecs() {
+    local rel_path
+    while IFS= read -r -d '' rel_path; do
+        snapshot_non_promotable_path "$rel_path" || printf '%s\0' "$rel_path"
+    done < <(git ls-files --cached --others --deleted --exclude-standard -z)
+}
+
 snapshot_git_add_promotable() {
-    git add --all -- . \
-        ':!.skillwiki' \
-        ':!.claude' \
-        ':!.obsidian' \
-        ':!.antigravitycli' \
-        ':!.playwright-cli' \
-        ':!.superpowers' \
-        ':!.snapshots' \
-        ':!.drafts' \
-        ':!tmp' \
-        ':!logs' \
-        ':!meta/log-events'
+    snapshot_promotable_pathspecs \
+        | git add --all --pathspec-from-file=- --pathspec-file-nul
 }
 
 snapshot_ledger_free_git_required() {

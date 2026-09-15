@@ -1663,6 +1663,11 @@ test_snapshot_does_not_commit_leftover_untracked_log_events() {
 
   mkdir -p "$git_dir/meta/log-events/2026-09-14"
   printf '{}\n' > "$git_dir/meta/log-events/2026-09-14/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"
+  printf '.drafts/\n.superpowers/\ntmp/\n' >> "$git_dir/.gitignore"
+  mkdir -p "$git_dir/.drafts" "$git_dir/.superpowers" "$git_dir/tmp"
+  printf 'ignored draft\n' > "$git_dir/.drafts/local.md"
+  printf 'ignored scratch\n' > "$git_dir/.superpowers/local.md"
+  printf 'ignored temp\n' > "$git_dir/tmp/local.md"
 
   SNAPSHOT_TEST_ROOT="$root" \
     WIKI_GIT_WORKTREE="$git_dir" \
@@ -1679,11 +1684,12 @@ test_snapshot_does_not_commit_leftover_untracked_log_events() {
   if [ "$rc" -eq 0 ] \
       && git -C "$git_dir" cat-file -e HEAD:new-note.md \
       && [ "$tracked_events" -eq 0 ] \
+      && ! git -C "$git_dir" ls-tree -r --name-only HEAD -- .drafts .superpowers tmp | grep -q . \
       && grep -q 'classified inventory left 1 untracked event-ledger path' "$log_file"; then
-    printf 'PASS: snapshot does not commit leftover untracked log-events\n'
+    printf 'PASS: snapshot stages promotable paths while ignoring scratch and log-events\n'
     PASS=$((PASS + 1))
   else
-    printf 'FAIL: leftover log-events leaked into snapshot (rc=%s tracked=%s log=%s)\n' \
+    printf 'FAIL: promotable-only staging failed (rc=%s tracked=%s log=%s)\n' \
       "$rc" "$tracked_events" "$(tr '\n' ' ' < "$log_file" 2>/dev/null)"
     FAIL=$((FAIL + 1))
   fi
