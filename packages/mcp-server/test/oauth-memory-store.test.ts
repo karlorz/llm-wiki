@@ -18,3 +18,18 @@ describe("InMemoryOAuthStore.consumeAuthCode", () => {
     expect(await store.consumeAuthCode("expired-hash")).toBeNull();
   });
 });
+
+describe("InMemoryOAuthStore.getAccessToken", () => {
+  it("missing and expired tokens return null", async () => {
+    const store = new InMemoryOAuthStore();
+    expect(await store.getAccessToken("missing-hash")).toBeNull();
+
+    await store.saveAccessToken({
+      tokenHash: "expired-hash",
+      clientId: "c1",
+      writerId: "writer-test",
+      expiresAt: Date.now() - 1,
+    });
+    expect(await store.getAccessToken("expired-hash")).toBeNull();
+  });
+});
