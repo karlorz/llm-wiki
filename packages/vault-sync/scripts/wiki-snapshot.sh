@@ -108,6 +108,7 @@ RCLONE_LOG="/tmp/rclone-${DATE}.log"
 SNAPSHOT_DIRECT_S3_NOT_GIT_COUNT=0
 SNAPSHOT_REMOTE_INVENTORY_READY=0
 PROJECTION_STATE_DIR=""
+SNAPSHOT_S3_LOG_EVENTS=""
 PROJECTION_EXPECTED_INDEX_SHA256=""
 PROJECTION_EXPECTED_LOG_SHA256=""
 SNAPSHOT_BASE_OID=""
@@ -117,6 +118,9 @@ SNAPSHOT_GIT_COMMON_DIR=""
 cleanup_projection_state() {
     if [ -n "$PROJECTION_STATE_DIR" ] && [ -d "$PROJECTION_STATE_DIR" ]; then
         rm -rf "$PROJECTION_STATE_DIR"
+    fi
+    if [ -n "$SNAPSHOT_S3_LOG_EVENTS" ] && [ -d "$SNAPSHOT_S3_LOG_EVENTS" ]; then
+        rm -rf "$SNAPSHOT_S3_LOG_EVENTS"
     fi
 }
 trap cleanup_projection_state EXIT
@@ -460,6 +464,25 @@ validate_projection_parity_config() {
     return 0
 }
 
+# Direct-S3 log-event inventory shared by freeze and semantic preview so
+# FUSE dir cache vs wiki-git find cannot disagree on the event set.
+snapshot_capture_direct_s3_log_events() {
+    if [ -z "$CLOUD_REMOTE" ]; then
+        log "ERROR: CLOUD_REMOTE unset; cannot capture S3 log-events"
+        return 1
+    fi
+    SNAPSHOT_S3_LOG_EVENTS="$(mktemp -d)" || {
+        log "ERROR: could not create temp dir for S3 log-events"
+        return 1
+    }
+    if ! rclone copy "${CLOUD_REMOTE%/}/meta/log-events" "$SNAPSHOT_S3_LOG_EVENTS" 2>>"$LOG_FILE"; then
+        log "ERROR: rclone copy of S3 meta/log-events failed"
+        return 1
+    fi
+    log "OK captured S3 log-events at $SNAPSHOT_S3_LOG_EVENTS"
+    return 0
+}
+
 snapshot_freeze_projection_expectations() {
     if [ "${WIKI_SNAPSHOT_TEST_SKIP_PROJECTION_PARITY:-0}" = "1" ] \
         && [ -n "${SNAPSHOT_TEST_ROOT:-}" ]; then
@@ -472,10 +495,12 @@ snapshot_freeze_projection_expectations() {
         return 1
     fi
 
-    PROJECTION_STATE_DIR="$(mktemp -d)" || {
-        log "ERROR: could not create private projection parity state"
-        return 1
-    }
+    if [ -z "$PROJECTION_STATE_DIR" ] || [ ! -d "$PROJECTION_STATE_DIR" ]; then
+        PROJECTION_STATE_DIR="$(mktemp -d)" || {
+            log "ERROR: could not create private projection parity state"
+            return 1
+        }
+    fi
     if ! cp "$WIKI_DIR/index.md" "$PROJECTION_STATE_DIR/expected-index.md" \
         || ! cp "$WIKI_DIR/log.md" "$PROJECTION_STATE_DIR/expected-log.md"; then
         log "ERROR: could not freeze live projection bytes"
@@ -521,6 +546,9 @@ snapshot_projection_log_is_store_ahead() {
 snapshot_wait_for_direct_projection_parity() {
     if [ -z "$PROJECTION_STATE_DIR" ]; then
         # Test-only skip path above. Production always has frozen state.
+        return 0
+    fi
+    if [ ! -f "$PROJECTION_STATE_DIR/expected-index.md" ] || [ ! -f "$PROJECTION_STATE_DIR/expected-log.md" ]; then
         return 0
     fi
 
@@ -655,7 +683,11 @@ snapshot_verify_semantic_projection_preview() {
         return 0
     fi
     local preview="$PROJECTION_STATE_DIR/worktree-preview.json"
-    if ! "$SKILLWIKI_BIN" projections materialize "$SNAPSHOT_WORKTREE" >"$preview" 2>>"$LOG_FILE"; then
+    local -a preview_args=("projections" "materialize" "$SNAPSHOT_WORKTREE")
+    if [ -n "${SNAPSHOT_S3_LOG_EVENTS:-}" ] && [ -d "$SNAPSHOT_S3_LOG_EVENTS" ]; then
+        preview_args+=(--events-from "$SNAPSHOT_S3_LOG_EVENTS")
+    fi
+    if ! "$SKILLWIKI_BIN" "${preview_args[@]}" >"$preview" 2>>"$LOG_FILE"; then
         log "ERROR: projection semantic preview failed"
         return 1
     fi
@@ -867,8 +899,13 @@ if command -v "$SKILLWIKI_BIN" >/dev/null 2>&1; then
             ;;
     esac
     proj_out="$(mktemp)"
+    if ! snapshot_capture_direct_s3_log_events; then
+        log "FAIL S3 log-events capture; snapshot promotion refused"
+        exit 1
+    fi
     if ! "$SKILLWIKI_BIN" projections materialize "$WIKI_DIR" --write \
-        --converge-vault "$SNAPSHOT_WORKTREE" >"$proj_out" 2>&1; then
+        --converge-vault "$SNAPSHOT_WORKTREE" \
+        --events-from "$SNAPSHOT_S3_LOG_EVENTS" >"$proj_out" 2>&1; then
         cat "$proj_out" >>"$LOG_FILE" 2>/dev/null || true
         snapshot_inhibit_record_failure "$(snapshot_parse_operation_id "$proj_out")"
         rm -f "$proj_out"

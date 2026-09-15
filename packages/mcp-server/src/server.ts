@@ -257,7 +257,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     "wiki_status",
     {
       description:
-        "Vault health snapshot plus daemon reconcile and S3 connectivity. Optional host_id must match the authenticated writer; unknown or missing host identity fail closed.",
+        "Vault health snapshot plus daemon reconcile, S3 connectivity, and plane-tagged copy status (live vs GitHub vs local_git). Optional host_id must match the authenticated writer; unknown or missing host identity fail closed.",
       inputSchema: z.object({
         host_id: z.string().optional(),
       }),

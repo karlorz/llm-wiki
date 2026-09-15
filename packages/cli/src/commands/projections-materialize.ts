@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { ExitCode, err, ok, type Result } from "@skillwiki/shared";
 import { atomicWriteText, type AtomicWriteOutput } from "../utils/atomic-write.js";
@@ -16,6 +16,8 @@ export interface ProjectionsMaterializeInput {
   vault: string;
   write: boolean;
   hostId?: string;
+  /** Directory of day folders (S3 log-events copy). When set, freeze/preview ignore vault find. */
+  eventsFrom?: string;
 }
 
 export interface ProjectionsMaterializeOutput {
@@ -43,9 +45,19 @@ export async function runProjectionsMaterialize(
   const auth = resolveProjectionAuthority(fleet);
   if (!auth.ok) return { exitCode: ExitCode.PREFLIGHT_FAILED, result: auth };
 
+  if (input.eventsFrom && !existsSync(input.eventsFrom)) {
+    return {
+      exitCode: ExitCode.PREFLIGHT_FAILED,
+      result: err("PREFLIGHT_FAILED", {
+        reason: "events-from-missing",
+        events_from: input.eventsFrom,
+      }),
+    };
+  }
+
   const indexProj = await renderRootIndex({ vault: input.vault });
   if (!indexProj.ok) return { exitCode: ExitCode.SCHEME_REJECTED, result: indexProj };
-  const events = await readLogEvents(input.vault);
+  const events = await readLogEvents(input.vault, { eventsRoot: input.eventsFrom });
   if (!events.ok) return { exitCode: ExitCode.SCHEME_REJECTED, result: events };
   const logText = renderLogProjection(events.data);
 

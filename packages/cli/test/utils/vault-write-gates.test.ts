@@ -47,6 +47,7 @@ describe("HYGIENE_COMMANDS registry coverage", () => {
     "health",
     "lint",
     "status",
+    "copy-status",
     "path",
   ] as const;
 
@@ -104,6 +105,7 @@ describe("HYGIENE_COMMANDS registry coverage", () => {
 
   it("snapshot: HYGIENE_COMMANDS is exactly the reviewed set (add/remove fails on purpose)", () => {
     expect([...HYGIENE_COMMANDS].sort()).toEqual([
+      "copy-status",
       "doctor",
       "fleet context",
       "fleet health",

@@ -120,8 +120,11 @@ export async function writeLogEvent(
   }
 }
 
-export async function readLogEvents(vault: string): Promise<Result<SkillwikiLogEventV1[]>> {
-  const root = join(vault, "meta", "log-events");
+export async function readLogEvents(
+  vault: string,
+  opts?: { eventsRoot?: string },
+): Promise<Result<SkillwikiLogEventV1[]>> {
+  const root = opts?.eventsRoot ?? join(vault, "meta", "log-events");
   let days: string[];
   try {
     days = (await readdir(root, { withFileTypes: true }))

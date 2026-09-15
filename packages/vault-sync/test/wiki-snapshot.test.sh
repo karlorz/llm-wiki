@@ -76,6 +76,8 @@ assert_contains "snapshot resolves linked worktrees through git" "rev-parse --is
 assert_contains "snapshot freezes convergence receipt" "snapshot_freeze_git_receipt"
 assert_contains "snapshot rechecks convergence receipt before staging" "snapshot_verify_git_receipt"
 assert_contains "snapshot refreshes origin for final proof" "final snapshot proof"
+assert_contains "snapshot captures S3 log-events for freeze/preview" "snapshot_capture_direct_s3_log_events"
+assert_contains "snapshot freeze uses --events-from" "--events-from"
 
 test_snapshot_dry_run_warns_on_direct_s3_note_not_in_git() {
   local root
@@ -98,6 +100,7 @@ STUB
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 if [ "$1" = "lsf" ]; then
   printf 'SCHEMA.md\n'
   printf 'index.md\n'
@@ -169,6 +172,7 @@ STUB
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 if [ "$1" = "lsf" ]; then
   printf 'SCHEMA.md\n'
   printf 'index.md\n'
@@ -268,6 +272,7 @@ STUB
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 if [ "$1" = "lsf" ]; then
   printf 'SCHEMA.md\n'
   printf 'index.md\n'
@@ -354,6 +359,7 @@ STUB
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 if [ "$1" = "lsf" ]; then
   printf 'SCHEMA.md\n'
   printf 'index.md\n'
@@ -432,6 +438,7 @@ STUB
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 if [ "$1" = "lsf" ]; then
   printf 'SCHEMA.md\n'
   printf 'index.md\n'
@@ -516,6 +523,7 @@ STUB
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 if [ "$1" = "lsf" ]; then
   printf 'SCHEMA.md\n'
   printf 'index.md\n'
@@ -615,6 +623,7 @@ STUB
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 # Fail first sync so we only prove ordering/args, not full snapshot success.
 exit 1
 STUB
@@ -631,7 +640,7 @@ STUB
 
   assert_file_contains "dual-path projection targets live vault with converge-vault" \
     "$root/skillwiki.calls" \
-    "projections materialize $root/wiki --write --converge-vault $git_dir"
+    "projections materialize $root/wiki --write --converge-vault $git_dir --events-from"
   if ! grep -q 'log migrate-legacy' "$root/skillwiki.calls"; then
     printf "PASS: dual-path default skips legacy migration\n"
     PASS=$((PASS + 1))
@@ -685,6 +694,8 @@ exit 0
 STUB
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
+# Allow S3 log-events capture; fail later rclone so we only prove ordering/args.
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 exit 1
 STUB
   chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/skillwiki" "$bin_dir/rclone"
@@ -726,7 +737,7 @@ STUB
     "log migrate-legacy $root/wiki --write --converge-vault $git_dir"
   assert_file_contains "projection still uses dual-path after migration" \
     "$root/skillwiki.calls" \
-    "projections materialize $root/wiki --write --converge-vault $git_dir"
+    "projections materialize $root/wiki --write --converge-vault $git_dir --events-from"
   # Migration must appear before projection in the call log.
   local mig_line proj_line
   mig_line="$(grep -n 'log migrate-legacy' "$root/skillwiki.calls" | head -1 | cut -d: -f1)"
@@ -812,6 +823,11 @@ cmd="$1"
 shift || true
 printf '%s %s\n' "$cmd" "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
 case "$cmd" in
+  copy)
+    dest="${!#}"
+    mkdir -p "$dest"
+    exit 0
+    ;;
   lsf)
     if printf '%s\n' "$*" | grep -q -- '--recursive'; then
       if [ "${RCLONE_INVENTORY_FAIL:-0}" = "1" ]; then
@@ -1114,6 +1130,7 @@ STUB
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 cmd="$1"
 if [ "$cmd" = "lsf" ]; then
   printf 'SCHEMA.md\nindex.md\nlog.md\n'
@@ -1515,6 +1532,7 @@ test_snapshot_does_not_emit_completion_record_on_failure() {
   # any completion record could be emitted.
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 if [ "$1" = "lsf" ]; then
   printf 'SCHEMA.md\nindex.md\nlog.md\n'
   exit 0
@@ -1582,6 +1600,7 @@ STUB
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
 printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 if [ "$1" = "lsf" ]; then
   printf 'SCHEMA.md\nindex.md\nlog.md\n'
   exit 0
@@ -1853,6 +1872,7 @@ test_raw_dedup_guard_blocks_commit() {
 
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 if [ "$1" = "sync" ]; then
   src="$2"
   dst="$3"
@@ -1951,6 +1971,7 @@ test_conflict_marker_guard_blocks_commit() {
 
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 if [ "$1" = "sync" ]; then
   src="$2"
   dst="$3"
@@ -2041,6 +2062,7 @@ test_conflict_marker_guard_allows_standalone_equals() {
 
   cat > "$bin_dir/rclone" <<'STUB'
 #!/bin/bash
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
 if [ "$1" = "sync" ]; then
   src="$2"
   dst="$3"

@@ -1,0 +1,154 @@
+/**
+ * VaultCopyStatus — one interface for the three vault copies.
+ *
+ * live:     S3/MCP (HTTP MCP writes)
+ * github:   sg01 wiki-snapshot HEAD
+ * local_git: leaf clone (wiki-fetch), including why pull skipped
+ *
+ * Callers must not collapse these planes. humanHint always names all three.
+ */
+
+export type PlaneState = "ok" | "stale" | "unknown" | "blocked";
+
+export interface PlaneRecord {
+  state: PlaneState;
+  oid?: string;
+  behind?: number;
+  age_hours?: number;
+  reachable?: boolean;
+  blocked_reason?: string;
+  detail?: string;
+}
+
+export interface CopyStatus {
+  live: PlaneRecord;
+  github: PlaneRecord;
+  local_git: PlaneRecord;
+  humanHint: string;
+}
+
+export interface LiveProbe {
+  reachable?: boolean;
+  unknown?: boolean;
+  detail?: string;
+}
+
+export interface GithubProbe {
+  oid?: string;
+  ageHours?: number;
+  unknown?: boolean;
+  detail?: string;
+}
+
+export interface LocalGitProbe {
+  head?: string;
+  behind?: number;
+  blockedReason?: string;
+  unknown?: boolean;
+  detail?: string;
+}
+
+export interface CopyStatusDeps {
+  probeLive(): Promise<LiveProbe> | LiveProbe;
+  probeGithub(): Promise<GithubProbe> | GithubProbe;
+  probeLocalGit(): Promise<LocalGitProbe> | LocalGitProbe;
+}
+
+function liveRecord(p: LiveProbe): PlaneRecord {
+  if (p.unknown || p.reachable === undefined) {
+    return { state: "unknown", reachable: p.reachable, detail: p.detail ?? "S3/MCP unmeasured" };
+  }
+  if (p.reachable) {
+    return { state: "ok", reachable: true, detail: p.detail ?? "S3 reachable" };
+  }
+  return { state: "unknown", reachable: false, detail: p.detail ?? "S3 unreachable" };
+}
+
+function githubRecord(p: GithubProbe): PlaneRecord {
+  if (p.unknown || !p.oid) {
+    return { state: "unknown", age_hours: p.ageHours, detail: p.detail ?? "GitHub HEAD unmeasured" };
+  }
+  const rec: PlaneRecord = { state: "ok", oid: p.oid, detail: p.detail ?? "ls-remote origin main" };
+  if (p.ageHours !== undefined) rec.age_hours = p.ageHours;
+  return rec;
+}
+
+function localRecord(p: LocalGitProbe, githubOid?: string): PlaneRecord {
+  if (p.blockedReason) {
+    return {
+      state: "blocked",
+      oid: p.head,
+      behind: p.behind,
+      blocked_reason: p.blockedReason,
+      detail: p.detail ?? p.blockedReason,
+    };
+  }
+  if (p.head && githubOid && p.head === githubOid && (p.behind === undefined || p.behind === 0)) {
+    return {
+      state: "ok",
+      oid: p.head,
+      behind: p.behind,
+      detail: p.detail ?? "HEAD matches GitHub",
+    };
+  }
+  if (p.behind !== undefined && p.behind > 0) {
+    return {
+      state: "stale",
+      oid: p.head,
+      behind: p.behind,
+      detail: p.detail ?? `behind origin/main by ${p.behind}`,
+    };
+  }
+  if (p.head && githubOid && p.head !== githubOid) {
+    return {
+      state: "stale",
+      oid: p.head,
+      behind: p.behind,
+      detail: p.detail ?? "HEAD differs from GitHub",
+    };
+  }
+  if (p.head) {
+    return {
+      state: "ok",
+      oid: p.head,
+      behind: p.behind,
+      detail: p.detail ?? "HEAD present",
+    };
+  }
+  return { state: "unknown", detail: p.detail ?? "leaf clone unmeasured" };
+}
+
+function formatPlane(name: string, rec: PlaneRecord): string {
+  const parts = [`${name}: ${rec.state}`];
+  if (rec.oid) parts.push(`oid=${rec.oid.slice(0, 12)}`);
+  if (rec.behind !== undefined) parts.push(`behind=${rec.behind}`);
+  if (rec.age_hours !== undefined) parts.push(`age_hours=${rec.age_hours}`);
+  if (rec.blocked_reason) parts.push(rec.blocked_reason);
+  if (rec.detail) parts.push(rec.detail);
+  return parts.join(" ");
+}
+
+export function composeCopyStatus(input: {
+  live: LiveProbe;
+  github: GithubProbe;
+  local: LocalGitProbe;
+}): CopyStatus {
+  const live = liveRecord(input.live);
+  const github = githubRecord(input.github);
+  const local_git = localRecord(input.local, input.github.oid);
+  const humanHint = [
+    formatPlane("live", live),
+    formatPlane("github", github),
+    formatPlane("local_git", local_git),
+  ].join("\n");
+  return { live, github, local_git, humanHint };
+}
+
+export async function runCopyStatus(deps: CopyStatusDeps): Promise<CopyStatus> {
+  const [live, github, local] = await Promise.all([
+    deps.probeLive(),
+    deps.probeGithub(),
+    deps.probeLocalGit(),
+  ]);
+  return composeCopyStatus({ live, github, local });
+}
