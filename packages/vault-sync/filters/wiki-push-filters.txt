@@ -6,6 +6,7 @@
 #   .claude/settings.local.json                 → machine-local config
 #
 # Coordination exclusions:
+#   .WIKI_GIT_FROZEN                            → host-local frozen-leaf authority marker
 #   .skillwiki/sync.lock                        → wiki-sync v0.6.0 advisory lock
 #   .skillwiki/managed-write.lock               → transient managed-write owner lock
 #   .skillwiki/graph.json                       → local-only graph cache
@@ -38,6 +39,7 @@
 - .conflict*
 
 # Push-specific additions (DO NOT add to bisync-filters; bisync needs different semantics):
+- /.WIKI_GIT_FROZEN
 - .obsidian/plugins/remotely-save/data.json
 - .claude/settings.local.json
 - .skillwiki/sync.lock

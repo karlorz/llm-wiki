@@ -94,6 +94,7 @@ test_push_filter_transports_event_ledger_to_s3_plane() {
   mkdir -p "$source/$(dirname "$event_path")" "$destination"
   printf '{}\n' > "$source/$event_path"
   printf '# derived log\n' > "$source/log.md"
+  printf 'frozen\n' > "$source/.WIKI_GIT_FROZEN"
 
   rclone copy "$source" "$destination" --filter-from "$FILTER_UNDER_TEST" >/dev/null 2>&1
   local rc=$?
@@ -105,6 +106,10 @@ test_push_filter_transports_event_ledger_to_s3_plane() {
   assert_eq \
     "push filter still excludes root log projection" \
     "$(test -e "$destination/log.md" && printf present || printf absent)" \
+    "absent"
+  assert_eq \
+    "push filter excludes host-local frozen-leaf marker" \
+    "$(test -e "$destination/.WIKI_GIT_FROZEN" && printf present || printf absent)" \
     "absent"
   rm -rf "$root"
 }

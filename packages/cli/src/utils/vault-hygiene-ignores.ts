@@ -34,6 +34,7 @@ export const VAULT_HYGIENE_GENERATED_COMMIT_PATHS = VAULT_HYGIENE_GITIGNORE_PATT
 );
 
 export const VAULT_SYNC_FILTER_REQUIRED_EXCLUDES = [
+  "/.WIKI_GIT_FROZEN",
   "remotely-save/data.json",
   ".skillwiki/sync.lock",
   ".skillwiki/managed-write.lock",
