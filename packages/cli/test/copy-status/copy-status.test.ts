@@ -11,9 +11,11 @@ describe("composeCopyStatus", () => {
     expect(out.live.state).toBe("ok");
     expect(out.github.state).toBe("ok");
     expect(out.local_git.state).toBe("ok");
+    expect(out.live_drift.state).toBe("unknown");
     expect(out.humanHint).toMatch(/^live: /m);
     expect(out.humanHint).toMatch(/^github: /m);
     expect(out.humanHint).toMatch(/^local_git: /m);
+    expect(out.humanHint).toMatch(/^live_drift: /m);
     expect(out.humanHint).not.toMatch(/^git log/i);
   });
 
@@ -92,7 +94,22 @@ describe("composeCopyStatus", () => {
     expect(out.live.state).toBe("unknown");
     expect(out.github.state).toBe("unknown");
     expect(out.local_git.state).toBe("unknown");
+    expect(out.live_drift.state).toBe("unknown");
     expect(out.humanHint).not.toContain("stale");
+  });
+
+  it("reports authoritative live drift separately from clean projection git", () => {
+    const out = composeCopyStatus({
+      live: { reachable: true },
+      github: { oid: "aaaaaaaaaaaa" },
+      local: { head: "aaaaaaaaaaaa", behind: 0, dirty: 0, untracked: 0 },
+      liveDrift: { content: 3, ledger: 768, detail: "authoritative live data ahead of GitHub" },
+    });
+    expect(out.local_git.state).toBe("ok");
+    expect(out.local_git.content_untracked).toBeUndefined();
+    expect(out.live_drift).toMatchObject({ state: "drifted", content: 3, ledger: 768 });
+    expect(out.humanHint).toContain("live_drift: drifted content=3 ledger=768");
+    expect(out.humanHint).not.toContain("local_git: ok ledger_untracked=768");
   });
 
   it("marks local_git stale when behind GitHub without a journal block", () => {
@@ -113,9 +130,20 @@ describe("runCopyStatus", () => {
       probeGithub: () => ({ oid: "deadbeefdead" }),
       probeLocalGit: () => ({ head: "cafebabecafe", behind: 1 }),
     });
-    expect(out.humanHint.split("\n")).toHaveLength(3);
+    expect(out.humanHint.split("\n")).toHaveLength(4);
     expect(out.live.state).toBe("ok");
     expect(out.github.oid).toBe("deadbeefdead");
     expect(out.local_git.state).toBe("stale");
+    expect(out.live_drift.state).toBe("unknown");
+  });
+
+  it("uses the optional live-drift adapter", async () => {
+    const out = await runCopyStatus({
+      probeLive: () => ({ reachable: true }),
+      probeGithub: () => ({ oid: "deadbeefdead" }),
+      probeLocalGit: () => ({ head: "deadbeefdead", behind: 0 }),
+      probeLiveDrift: () => ({ content: 1, ledger: 2 }),
+    });
+    expect(out.live_drift).toEqual({ state: "drifted", content: 1, ledger: 2 });
   });
 });

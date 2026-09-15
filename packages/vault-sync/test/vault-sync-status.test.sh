@@ -802,6 +802,118 @@ test_reachability_local_vault_on_clean_git_vault() {
   assert_eq "reachability local vault on clean git vault" "$status" "pass"
 }
 
+test_reachability_uses_configured_fetch_projection_for_git_state() {
+  local home="$TEST_ROOT/home-reach-projection"
+  local projection="$home/wiki-fetch"
+  prepare_home "$home"
+  prepare_vault_clean "$home"
+  mkdir -p "$projection"
+  printf '# Schema\n' > "$projection/SCHEMA.md"
+  git -C "$projection" init -q
+  git -C "$projection" config user.email "t@t"
+  git -C "$projection" config user.name "t"
+  git -C "$projection" add -A
+  git -C "$projection" commit -q -m init
+  mkdir -p "$home/.skillwiki"
+  printf '%s\n' "vault_sync.fetch_projection=$projection" >> "$home/.skillwiki/.env"
+
+  local json status detail
+  json="$(HOME="$home" WIKI_PATH="$home/wiki" run_status_local_json)"
+  status="$(check_status "$json" "reachability_local_vault")"
+  detail="$(check_detail "$json" "reachability_local_vault")"
+
+  assert_eq "configured fetch projection supplies local Git health" "$status" "pass"
+  if printf '%s' "$detail" | grep -Fq -- "$projection"; then
+    printf "PASS: %s\n" "local Git health identifies the fetch projection"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: %s — detail '%s' omits projection '%s'\n" \
+      "local Git health identifies the fetch projection" "$detail" "$projection"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+test_reachability_reports_invalid_fetch_projection_states() {
+  local home_missing="$TEST_ROOT/home-reach-projection-missing"
+  prepare_home "$home_missing"
+  prepare_vault_clean "$home_missing"
+  mkdir -p "$home_missing/.skillwiki"
+  printf '%s\n' "vault_sync.fetch_projection=$home_missing/wiki-fetch" >> "$home_missing/.skillwiki/.env"
+  local missing_json missing_status missing_detail
+  missing_json="$(HOME="$home_missing" WIKI_PATH="$home_missing/wiki" run_status_local_json)"
+  missing_status="$(check_status "$missing_json" "reachability_local_vault")"
+  missing_detail="$(check_detail "$missing_json" "reachability_local_vault")"
+  assert_eq "missing fetch projection warns" "$missing_status" "warn"
+  if printf '%s' "$missing_detail" | grep -Fq 'not a Git repository'; then
+    printf "PASS: %s\n" "missing fetch projection detail is explicit"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: %s — %s\n" "missing fetch projection detail is explicit" "$missing_detail"
+    FAIL=$((FAIL + 1))
+  fi
+
+  local home_equal="$TEST_ROOT/home-reach-projection-equal"
+  prepare_home "$home_equal"
+  prepare_vault_clean "$home_equal"
+  git -C "$home_equal/wiki" init -q
+  mkdir -p "$home_equal/.skillwiki"
+  printf '%s\n' "vault_sync.fetch_projection=$home_equal/wiki" >> "$home_equal/.skillwiki/.env"
+  local equal_json equal_status equal_detail
+  equal_json="$(HOME="$home_equal" WIKI_PATH="$home_equal/wiki" run_status_local_json)"
+  equal_status="$(check_status "$equal_json" "reachability_local_vault")"
+  equal_detail="$(check_detail "$equal_json" "reachability_local_vault")"
+  assert_eq "fetch projection equal to live vault warns" "$equal_status" "warn"
+  if printf '%s' "$equal_detail" | grep -Fq 'equals live vault'; then
+    printf "PASS: %s\n" "equal fetch projection detail is explicit"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: %s — %s\n" "equal fetch projection detail is explicit" "$equal_detail"
+    FAIL=$((FAIL + 1))
+  fi
+
+  local home_non_git="$TEST_ROOT/home-reach-projection-non-git"
+  prepare_home "$home_non_git"
+  prepare_vault_clean "$home_non_git"
+  mkdir -p "$home_non_git/wiki-fetch" "$home_non_git/.skillwiki"
+  printf '%s\n' "vault_sync.fetch_projection=$home_non_git/wiki-fetch" >> "$home_non_git/.skillwiki/.env"
+  local non_git_json non_git_status
+  non_git_json="$(HOME="$home_non_git" WIKI_PATH="$home_non_git/wiki" run_status_local_json)"
+  non_git_status="$(check_status "$non_git_json" "reachability_local_vault")"
+  assert_eq "non-Git fetch projection warns" "$non_git_status" "warn"
+
+  local home_relative="$TEST_ROOT/home-reach-projection-relative"
+  prepare_home "$home_relative"
+  prepare_vault_clean "$home_relative"
+  mkdir -p "$home_relative/.skillwiki"
+  printf '%s\n' "vault_sync.fetch_projection=wiki-fetch" >> "$home_relative/.skillwiki/.env"
+  local relative_json relative_detail
+  relative_json="$(HOME="$home_relative" WIKI_PATH="$home_relative/wiki" run_status_local_json)"
+  relative_detail="$(check_detail "$relative_json" "reachability_local_vault")"
+  if printf '%s' "$relative_detail" | grep -Fq 'must be absolute'; then
+    printf "PASS: %s\n" "relative fetch projection detail is explicit"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: %s — %s\n" "relative fetch projection detail is explicit" "$relative_detail"
+    FAIL=$((FAIL + 1))
+  fi
+
+  local home_nested="$TEST_ROOT/home-reach-projection-nested"
+  prepare_home "$home_nested"
+  prepare_vault_clean "$home_nested"
+  mkdir -p "$home_nested/wiki/fetch/.git" "$home_nested/.skillwiki"
+  printf '%s\n' "vault_sync.fetch_projection=$home_nested/wiki/fetch" >> "$home_nested/.skillwiki/.env"
+  local nested_json nested_detail
+  nested_json="$(HOME="$home_nested" WIKI_PATH="$home_nested/wiki" run_status_local_json)"
+  nested_detail="$(check_detail "$nested_json" "reachability_local_vault")"
+  if printf '%s' "$nested_detail" | grep -Fq 'must not be nested'; then
+    printf "PASS: %s\n" "nested fetch projection detail is explicit"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: %s — %s\n" "nested fetch projection detail is explicit" "$nested_detail"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 test_local_status_ignores_ambient_remote() {
   local home="$TEST_ROOT/home-reach-ambient-remote"
   local stub="$TEST_ROOT/stub-reach-ambient-remote"
@@ -1338,6 +1450,8 @@ test_conflict_markers_error_on_conflict_block
 test_conflict_markers_pass_on_standalone_separator
 
 test_reachability_local_vault_on_clean_git_vault
+test_reachability_uses_configured_fetch_projection_for_git_state
+test_reachability_reports_invalid_fetch_projection_states
 test_local_status_ignores_ambient_remote
 test_reachability_snapshotter_not_checked_by_default
 test_s3_reachability_skips_when_remote_is_unconfigured

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseDotenvText, type DotenvMap } from "./dotenv.js";
 
-function readSkillWikiConfig(path: string): DotenvMap {
+export function readSkillWikiConfig(path: string): DotenvMap {
   try {
     return parseDotenvText(readFileSync(path, "utf8"));
   } catch {

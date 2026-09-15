@@ -1690,10 +1690,118 @@ test_snapshot_does_not_commit_leftover_untracked_log_events() {
   rm -rf "$root"
 }
 
+test_snapshot_ledger_free_gate_blocks_push_from_tracked_ledger_head() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir log_file lock_file origin_dir before_origin after_origin
+  setup="$(setup_completion_record_fixture "$root" pushed)"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
+  lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
+  origin_dir="$root/origin.git"
+
+  mkdir -p "$git_dir/meta/log-events/2026-09-15"
+  printf '{}\n' > "$git_dir/meta/log-events/2026-09-15/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json"
+  git -C "$git_dir" add meta/log-events/2026-09-15/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.json
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m 'tracked ledger fixture' >/dev/null
+  git -C "$git_dir" push origin main >/dev/null
+  before_origin="$(git --git-dir="$origin_dir" rev-parse refs/heads/main)"
+
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    WIKI_SNAPSHOT_REQUIRE_LEDGER_FREE_GIT=1 \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+  local rc=$?
+  after_origin="$(git --git-dir="$origin_dir" rev-parse refs/heads/main)"
+
+  if [ "$rc" -ne 0 ] \
+      && [ "$before_origin" = "$after_origin" ] \
+      && grep -q 'ledger-free Git gate failed' "$log_file" \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$log_file"; then
+    printf 'PASS: ledger-free Git gate blocks push from tracked ledger HEAD\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: ledger-free Git gate did not block tracked ledger HEAD (rc=%s before=%s after=%s log=%s)\n' \
+      "$rc" "$before_origin" "$after_origin" "$(tr '\n' ' ' < "$log_file" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_ledger_free_gate_blocks_remote_ledger_introduced_during_pull() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir log_file lock_file origin_dir publisher real_git
+  local publisher_oid after_origin
+  setup="$(setup_completion_record_fixture "$root" pushed)"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
+  lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
+  origin_dir="$root/origin.git"
+  publisher="$root/publisher"
+  real_git="$(command -v git)"
+
+  "$real_git" clone -q "$origin_dir" "$publisher"
+  "$real_git" -C "$publisher" config user.name test
+  "$real_git" -C "$publisher" config user.email test@test
+  mkdir -p "$publisher/meta/log-events/2026-09-15"
+  printf '{}\n' > "$publisher/meta/log-events/2026-09-15/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.json"
+  "$real_git" -C "$publisher" add meta/log-events/2026-09-15/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.json
+  "$real_git" -C "$publisher" commit -qm 'remote ledger advance'
+  publisher_oid="$("$real_git" -C "$publisher" rev-parse HEAD)"
+
+  cat > "$bin_dir/git" <<'STUB'
+#!/bin/bash
+if [ "${1:-}" = "pull" ] && [ ! -e "$LEDGER_PUSH_STATE" ]; then
+  : > "$LEDGER_PUSH_STATE"
+  "$REAL_GIT_BIN" -C "$LEDGER_PUBLISHER" push -q origin main || exit 1
+fi
+exec "$REAL_GIT_BIN" "$@"
+STUB
+  chmod +x "$bin_dir/git"
+
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    WIKI_SNAPSHOT_REQUIRE_LEDGER_FREE_GIT=1 \
+    LEDGER_PUSH_STATE="$root/ledger-pushed" \
+    LEDGER_PUBLISHER="$publisher" \
+    REAL_GIT_BIN="$real_git" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+  local rc=$?
+  after_origin="$("$real_git" --git-dir="$origin_dir" rev-parse refs/heads/main)"
+
+  if [ "$rc" -ne 0 ] \
+      && [ "$after_origin" = "$publisher_oid" ] \
+      && grep -q 'ledger-free Git gate failed (after pull/rebase/repair)' "$log_file" \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$log_file"; then
+    printf 'PASS: ledger-free Git gate blocks remote ledger introduced during pull\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: ledger-free Git gate missed remote pull advance (rc=%s publisher=%s origin=%s log=%s)\n' \
+      "$rc" "$publisher_oid" "$after_origin" "$(tr '\n' ' ' < "$log_file" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
 test_snapshot_emits_canonical_completion_record_on_pushed_success
 test_snapshot_emits_canonical_completion_record_on_no_change_success
 test_snapshot_does_not_emit_completion_record_on_failure
 test_snapshot_does_not_commit_leftover_untracked_log_events
+test_snapshot_ledger_free_gate_blocks_push_from_tracked_ledger_head
+test_snapshot_ledger_free_gate_blocks_remote_ledger_introduced_during_pull
 
 # ── Same-opid inhibit (snapshot-health-honesty C3) ────────────
 # uname-stubbed so these run on macOS. HOME is isolated so inhibit state

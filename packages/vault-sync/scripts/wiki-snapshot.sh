@@ -69,12 +69,24 @@ elif [ -f "$SCRIPT_DIR/../../scripts/lib/runtime-manifest.sh" ]; then
     source "$SCRIPT_DIR/../../scripts/lib/runtime-manifest.sh"
 fi
 
+if [ -f "$SCRIPT_DIR/lib/git-promotion-policy.sh" ]; then
+    source "$SCRIPT_DIR/lib/git-promotion-policy.sh"
+elif [ -f "$SCRIPT_DIR/scripts/lib/git-promotion-policy.sh" ]; then
+    source "$SCRIPT_DIR/scripts/lib/git-promotion-policy.sh"
+elif [ -f "$SCRIPT_DIR/../../scripts/lib/git-promotion-policy.sh" ]; then
+    source "$SCRIPT_DIR/../../scripts/lib/git-promotion-policy.sh"
+fi
+
 if ! command -v vault_sync_scan_conflict_markers >/dev/null 2>&1; then
     echo "[wiki-snapshot] ERROR: conflict-marker helper unavailable; refusing to run." >&2
     exit 1
 fi
 if ! command -v vault_sync_sha256 >/dev/null 2>&1; then
     echo "[wiki-snapshot] ERROR: SHA-256 helper unavailable; refusing to run." >&2
+    exit 1
+fi
+if ! command -v snapshot_non_promotable_path >/dev/null 2>&1; then
+    echo "[wiki-snapshot] ERROR: Git promotion policy helper unavailable; refusing to run." >&2
     exit 1
 fi
 
@@ -101,26 +113,6 @@ REPAIR_SCRIPT="${WIKI_GIT_REPAIR_SCRIPT:-$SCRIPT_DIR/wiki-git-repair-v3.sh}"
 MAX_S3_ONLY_NOTES="${WIKI_SNAPSHOT_MAX_S3_ONLY_NOTES:-200}"
 MAX_TOMBSTONE_PRUNES="${WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES:-10}"
 
-# Classified inventory: event ledger + local scratch are not GitHub-promotable notes.
-# Cap and rclone must share this class. Do not raise MAX_S3_ONLY_NOTES instead.
-# meta/log-events stay S3-authoritative; snapshot copies them separately for --events-from.
-snapshot_non_promotable_path() {
-    local p="${1#./}"
-    case "$p" in
-        .skillwiki/*|.claude/*|.obsidian/*|.antigravitycli/*|.playwright-cli/*|.superpowers/*|.snapshots/*|.git/*|.drafts/*)
-            return 0 ;;
-        tmp/*|logs|logs/*|meta/log-events|meta/log-events/*)
-            return 0 ;;
-        raw/._.DS_Store|._.DS_Store)
-            return 0 ;;
-        ._*)
-            return 0 ;;
-        .conflict*|*.conflict-*)
-            return 0 ;;
-    esac
-    return 1
-}
-
 # rclone exclude leaves leftover non-promotable files in the worktree.
 # `git add -A` would promote them (live 0.10.90 leak). Pathspecs match
 # snapshot_non_promotable_path. Already-tracked ledger history is left as-is.
@@ -137,6 +129,28 @@ snapshot_git_add_promotable() {
         ':!tmp' \
         ':!logs' \
         ':!meta/log-events'
+}
+
+snapshot_ledger_free_git_required() {
+    case "$(printf '%s' "${WIKI_SNAPSHOT_REQUIRE_LEDGER_FREE_GIT:-0}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+snapshot_assert_ledger_free_git() {
+    local context="${1:-snapshot gate}"
+
+    snapshot_ledger_free_git_required || return 0
+    if git -C "$SNAPSHOT_WORKTREE" ls-files -- meta/log-events 2>/dev/null | grep -q .; then
+        log "ERROR: ledger-free Git gate failed ($context); meta/log-events remains in index or HEAD"
+        return 1
+    fi
+    if git -C "$SNAPSHOT_WORKTREE" ls-tree -r --name-only HEAD -- meta/log-events 2>/dev/null | grep -q .; then
+        log "ERROR: ledger-free Git gate failed ($context); meta/log-events remains in index or HEAD"
+        return 1
+    fi
+    return 0
 }
 
 PROJECTION_PARITY_TIMEOUT_SECONDS="${WIKI_SNAPSHOT_PROJECTION_PARITY_TIMEOUT_SECONDS:-120}"
@@ -906,6 +920,9 @@ if [ "$(git -C "$SNAPSHOT_WORKTREE" rev-parse --is-inside-work-tree 2>/dev/null)
 fi
 
 refresh_git_baseline
+if ! snapshot_assert_ledger_free_git "after baseline refresh"; then
+    exit 1
+fi
 
 # Dual-path requires distinct live mutation vs Git convergence roots.
 # Same-path would materialize projections then immediately rclone-overwrite them.
@@ -1263,6 +1280,9 @@ if [ "$needs_repair" = true ]; then
         log "ERROR: could not refresh snapshot transaction receipt after repair"
         exit 1
     fi
+    if ! snapshot_assert_ledger_free_git "after initial repair"; then
+        exit 1
+    fi
 fi
 
 if ! raw_dedup_guard; then
@@ -1276,6 +1296,9 @@ fi
 # Check for changes
 if [ -z "$(git status --porcelain)" ]; then
     log "No changes to commit"
+    if ! snapshot_assert_ledger_free_git "before no-change completion"; then
+        exit 1
+    fi
     if ! snapshot_verify_git_receipt; then
         log "ERROR: snapshot transaction changed before no-change proof"
         exit 1
@@ -1353,12 +1376,19 @@ if [ "$PULL_SUCCESS" = false ]; then
     fi
 fi
 
+if ! snapshot_assert_ledger_free_git "after pull/rebase/repair"; then
+    exit 1
+fi
+
 # Push (with retry)
 echo "Pushing to origin..."
 PUSH_RETRIES=3
 PUSH_SUCCESS=false
 
 for i in $(seq 1 $PUSH_RETRIES); do
+    if ! snapshot_assert_ledger_free_git "immediately before push attempt $i"; then
+        exit 1
+    fi
     if git push origin "$DEFAULT_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
         PUSH_SUCCESS=true
         break

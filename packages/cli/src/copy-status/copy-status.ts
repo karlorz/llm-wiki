@@ -1,11 +1,11 @@
 /**
- * VaultCopyStatus — one interface for the three vault copies.
+ * VaultCopyStatus — one interface for the three vault copies plus live drift.
  *
  * live:     S3/MCP (HTTP MCP writes)
  * github:   sg01 wiki-snapshot HEAD
  * local_git: leaf clone (wiki-fetch), including why pull skipped
  *
- * Callers must not collapse these planes. humanHint always names all three.
+ * Callers must not collapse these planes. humanHint always names all four.
  */
 
 export type PlaneState = "ok" | "stale" | "unknown" | "blocked";
@@ -28,7 +28,24 @@ export interface CopyStatus {
   live: PlaneRecord;
   github: PlaneRecord;
   local_git: PlaneRecord;
+  live_drift: LiveDriftRecord;
   humanHint: string;
+}
+
+export type LiveDriftState = "clean" | "drifted" | "unknown";
+
+export interface LiveDriftRecord {
+  state: LiveDriftState;
+  content?: number;
+  ledger?: number;
+  detail?: string;
+}
+
+export interface LiveDriftProbe {
+  content?: number;
+  ledger?: number;
+  unknown?: boolean;
+  detail?: string;
 }
 
 export interface LiveProbe {
@@ -60,6 +77,7 @@ export interface CopyStatusDeps {
   probeLive(): Promise<LiveProbe> | LiveProbe;
   probeGithub(): Promise<GithubProbe> | GithubProbe;
   probeLocalGit(): Promise<LocalGitProbe> | LocalGitProbe;
+  probeLiveDrift?(): Promise<LiveDriftProbe> | LiveDriftProbe;
 }
 
 function liveRecord(p: LiveProbe): PlaneRecord {
@@ -149,6 +167,29 @@ function localRecord(p: LocalGitProbe, githubOid?: string): PlaneRecord {
   return withDirty({ state: "unknown", detail: p.detail ?? "leaf clone unmeasured" }, p);
 }
 
+function liveDriftRecord(p: LiveDriftProbe | undefined): LiveDriftRecord {
+  if (!p || p.unknown || (p.content === undefined && p.ledger === undefined)) {
+    return { state: "unknown", detail: p?.detail ?? "live drift unmeasured" };
+  }
+  const content = p.content ?? 0;
+  const ledger = p.ledger ?? 0;
+  const rec: LiveDriftRecord = {
+    state: content > 0 || ledger > 0 ? "drifted" : "clean",
+  };
+  if (p.content !== undefined) rec.content = content;
+  if (p.ledger !== undefined) rec.ledger = ledger;
+  if (p.detail) rec.detail = p.detail;
+  return rec;
+}
+
+function formatLiveDrift(rec: LiveDriftRecord): string {
+  const parts = [`live_drift: ${rec.state}`];
+  if (rec.content !== undefined) parts.push(`content=${rec.content}`);
+  if (rec.ledger !== undefined) parts.push(`ledger=${rec.ledger}`);
+  if (rec.detail) parts.push(rec.detail);
+  return parts.join(" ");
+}
+
 function formatPlane(name: string, rec: PlaneRecord): string {
   const parts = [`${name}: ${rec.state}`];
   if (rec.oid) parts.push(`oid=${rec.oid.slice(0, 12)}`);
@@ -167,23 +208,27 @@ export function composeCopyStatus(input: {
   live: LiveProbe;
   github: GithubProbe;
   local: LocalGitProbe;
+  liveDrift?: LiveDriftProbe;
 }): CopyStatus {
   const live = liveRecord(input.live);
   const github = githubRecord(input.github);
   const local_git = localRecord(input.local, input.github.oid);
+  const live_drift = liveDriftRecord(input.liveDrift);
   const humanHint = [
     formatPlane("live", live),
     formatPlane("github", github),
     formatPlane("local_git", local_git),
+    formatLiveDrift(live_drift),
   ].join("\n");
-  return { live, github, local_git, humanHint };
+  return { live, github, local_git, live_drift, humanHint };
 }
 
 export async function runCopyStatus(deps: CopyStatusDeps): Promise<CopyStatus> {
-  const [live, github, local] = await Promise.all([
+  const [live, github, local, liveDrift] = await Promise.all([
     deps.probeLive(),
     deps.probeGithub(),
     deps.probeLocalGit(),
+    deps.probeLiveDrift?.(),
   ]);
-  return composeCopyStatus({ live, github, local });
+  return composeCopyStatus({ live, github, local, liveDrift });
 }

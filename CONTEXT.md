@@ -127,13 +127,33 @@ _Avoid_: inventing a Doubao writer_id on a failed query, silently defaulting emp
 Immutable `skillwiki-log-event/v1` JSON under `meta/log-events/`. Backend operation records on the live S3 vault, not Layer-2 wiki notes.
 _Avoid_: user content, notes, treating `log.md` as the SSOT
 
+**Authoritative S3 ownership**:
+The live vault paths transported to S3 by leaf `wiki-push`. This includes `meta/log-events/**`; Git ignore and Git promotion rules do not decide S3 durability.
+_Avoid_: reusing snapshot excludes or Git presentation rules as S3 deletion/omission rules
+
+**Markdown inventory**:
+The `.md` files returned by `scanVault()`, after Git-standard ignore handling for a Git-backed root. Event JSON is read separately by `readLogEvents()` and is never part of `VaultScan`.
+_Avoid_: adding ledger JSON to `VaultScan`, treating `git check-ignore` as an S3 ownership predicate
+
 **Promotable note**:
 A vault path the snapshot 200-cap treats as GitHub-bound user content.
 _Avoid_: counting event-ledger JSON as notes
 
 **Classified inventory**:
-One path class shared by the snapshot cap, rclone excludes, and snapshot `git add`. Event ledger and local scratch are non-promotable; user pages remain promotable.
-_Avoid_: raising the 200-cap, `git add -A` of leftover event-ledger JSON
+The snapshot-side Git promotion class shared by its 200-cap, S3-to-Git rclone excludes, and pathspec-scoped `git add`. Event ledger and local scratch are non-promotable; user pages remain promotable.
+_Avoid_: raising the 200-cap, `git add -A` of leftover event-ledger JSON, applying this class to leaf S3 push
+
+**Fetch projection**:
+An independent sibling Git clone selected by `vault_sync.fetch_projection` for leaf fetch, operator Git status, and `copy-status.local_git`. It contains GitHub-promotable content only and is distinct from the authoritative live vault and the snapshotter worktree.
+_Avoid_: linked worktree, reusing `vault_sync.snapshot_worktree`, redirecting MCP/authoring writes into the projection
+
+**Git presentation**:
+The operator-visible Git state of the fetch projection. Projection dirt and authoritative live drift are separate signals; neither determines whether live ledger data is durable in S3.
+_Avoid_: reporting live event JSON as projection Git dirt, hiding all untracked content with `status.showUntrackedFiles=no`
+
+**Path-class predicates**:
+CLI code names the four planes independently: `isS3OwnedPath`, `isMarkdownInventoryPath`, `isGitPromotablePath`, and `isGitPresentationPath`. Snapshot shell uses `scripts/lib/git-promotion-policy.sh`; an executable parity test keeps its Git-promotion decisions aligned with the CLI without reusing that policy for S3 transport.
+_Avoid_: substituting Git-promotion exclusions for S3 ownership, or treating Markdown extension membership as Git-ignore state
 
 **Query text**:
 HTTP `wiki_query.query` must be non-empty after trim. Whitespace-only query fail-closes (`USAGE`). No `results`, no invented `writer_id`, no vault file written.
@@ -166,7 +186,8 @@ An attended decision process that reviews ranked-audit evidence, resolves ambigu
 - Query scope is independent of compact activation and of composer chip bind; default typed never implies work-item search. HTTP scope=work ranks Layer-3 work first. Unknown or empty HTTP scope fail-closes and does not invent a writer_id.
 - Query project is an optional wiki_query filter; unknown or empty project fail-closes and does not invent a writer_id.
 - Query text must be non-empty after trim; whitespace-only HTTP query fail-closes and does not invent a writer_id.
-- Event ledger is classified-inventory non-promotable; promotable notes are GitHub-bound user content; `log.md` is a projection of the event ledger.
+- Authoritative S3 ownership, Markdown inventory, snapshot Git promotion, and Git presentation are separate predicates. Event ledger is S3-owned and Git-non-promotable; promotable notes are GitHub-bound user content; `log.md` is a projection of the event ledger.
+- Fetch projection is the leaf Git presentation/fetch clone; it does not replace the live MCP/S3 vault or the snapshotter's protected worktree.
 - HTTP CAS receipt is the `/mcp` envelope for workitem and page-publish overwrites; it does not change writer identity and does not invent a Doubao writer_id.
 - Status receipt names the authenticated writer and includes fleet identity on success; unknown or missing host identity fail-closes without leaking other fleet hosts.
 - Read receipt sha256 is full-file bytes; tail_bytes is a suffix only; missing and escaped paths fail closed.

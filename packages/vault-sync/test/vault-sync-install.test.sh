@@ -199,6 +199,34 @@ EOF
 
   cat > "$bin_dir/systemctl" <<'EOF'
 #!/bin/sh
+if [ -n "${TEST_SYSTEMCTL_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$TEST_SYSTEMCTL_LOG"
+fi
+case " $* " in
+  *" is-active --quiet wiki-fetch.timer "*)
+    [ "${TEST_SYSTEMCTL_FETCH_ACTIVE:-0}" = "1" ] && exit 0
+    exit 1
+    ;;
+  *" is-active --quiet wiki-fetch.service "*)
+    [ "${TEST_SYSTEMCTL_FETCH_SERVICE_ACTIVE:-0}" = "1" ] && exit 0
+    exit 1
+    ;;
+  *" is-enabled --quiet wiki-fetch.timer "*)
+    [ "${TEST_SYSTEMCTL_FETCH_ENABLED:-0}" = "1" ] && exit 0
+    exit 1
+    ;;
+  *" stop wiki-fetch.timer wiki-fetch.service "*|*" disable wiki-fetch.timer "*)
+    [ "${TEST_SYSTEMCTL_MISSING_FETCH_UNITS:-0}" = "1" ] && exit 5
+    ;;
+esac
+case " $* " in
+  *" enable --now "*)
+    if [ "${TEST_SYSTEMCTL_FAIL_ENABLE:-0}" = "1" ] && printf '%s\n' "$*" | grep -q 'wiki-push.timer'; then
+      echo "simulated systemctl enable failure" >&2
+      exit 1
+    fi
+    ;;
+esac
 exit 0
 EOF
 
@@ -209,6 +237,9 @@ EOF
 
   cat > "$bin_dir/git" <<'EOF'
 #!/bin/sh
+if [ "${TEST_REAL_GIT:-0}" = "1" ]; then
+  exec "${TEST_REAL_GIT_BIN:-/usr/bin/git}" "$@"
+fi
 # Allow rev-parse HEAD for runtime-manifest package_commit.
 if [ "$1" = "-C" ]; then
   shift 2
@@ -313,7 +344,7 @@ run_install() {
 
 assert_contains() {
   local label="$1" file="$2" needle="$3"
-  if grep -Fq "$needle" "$file"; then
+  if grep -Fq -- "$needle" "$file"; then
     printf "PASS: %s\n" "$label"
     PASS=$((PASS + 1))
   else
@@ -326,7 +357,7 @@ assert_contains() {
 
 assert_not_contains() {
   local label="$1" file="$2" needle="$3"
-  if grep -Fq "$needle" "$file"; then
+  if grep -Fq -- "$needle" "$file"; then
     printf "FAIL: %s — unexpected '%s'\n" "$label" "$needle"
     printf "%s\n" "--- output ---"
     cat "$file"
@@ -401,6 +432,33 @@ write_valid_launchd_plist() {
 EOF
 }
 
+make_projection_remote() {
+  local fixture_root="$1"
+  local seed="$fixture_root/seed"
+  local remote="$fixture_root/remote.git"
+
+  mkdir -p "$seed"
+  "$REAL_GIT" -C "$seed" init -q -b main
+  "$REAL_GIT" -C "$seed" config user.name "Vault Sync Test"
+  "$REAL_GIT" -C "$seed" config user.email "vault-sync-test@example.invalid"
+  printf '%s\n' '# Test schema' > "$seed/SCHEMA.md"
+  mkdir -p "$seed/concepts"
+  printf '%s\n' '# Kept note' > "$seed/concepts/kept.md"
+  "$REAL_GIT" -C "$seed" add SCHEMA.md concepts/kept.md
+  "$REAL_GIT" -C "$seed" commit -qm "seed projection"
+  "$REAL_GIT" clone -q --bare "$seed" "$remote"
+  printf '%s\n' "$remote"
+}
+
+REAL_GIT="$(command -v git)"
+
+HELP_OUT="$TEST_ROOT/help.out"
+run_install "$HELP_OUT" --help
+HELP_RC=$?
+assert_exit "help exits 0" "$HELP_RC" 0
+assert_contains "help documents fetch projection option" "$HELP_OUT" "--fetch-projection <absolute-path>"
+assert_contains "help documents fetch projection environment override" "$HELP_OUT" "VS_FETCH_PROJECTION=<absolute-path>"
+
 FUSE_OUT="$TEST_ROOT/fuse-only.out"
 run_install "$FUSE_OUT" --mode fuse-only --service-scope system --vault-path "$TEST_ROOT/wiki" --dry-run
 FUSE_RC=$?
@@ -433,6 +491,295 @@ assert_contains "full install deploys presync helper" "$FULL_OUT" "wiki-sync.sh"
 assert_contains "full install repairs convenience wiki-sync symlink" "$FULL_OUT" "ln -sfn"
 assert_contains "full install targets home bin wiki-sync" "$FULL_OUT" "$TEST_ROOT/home/bin/wiki-sync.sh"
 assert_contains "full leaf install enables push fetch and fuse timers" "$FULL_OUT" "systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer"
+
+FETCH_PROJECTION_DRY_RUN_OUT="$TEST_ROOT/fetch-projection-dry-run.out"
+FETCH_PROJECTION_DRY_RUN_PATH="$TEST_ROOT/wiki-fetch"
+run_install "$FETCH_PROJECTION_DRY_RUN_OUT" \
+  --role leaf \
+  --vault-path "$TEST_ROOT/wiki" \
+  --fetch-projection "$FETCH_PROJECTION_DRY_RUN_PATH" \
+  --dry-run
+FETCH_PROJECTION_DRY_RUN_RC=$?
+assert_exit "fetch projection dry-run exits 0" "$FETCH_PROJECTION_DRY_RUN_RC" 0
+assert_contains "fetch projection dry-run plans validation or bootstrap" "$FETCH_PROJECTION_DRY_RUN_OUT" "Plan: prepare fetch projection at $FETCH_PROJECTION_DRY_RUN_PATH"
+assert_contains "fetch projection dry-run plans config before service activation" "$FETCH_PROJECTION_DRY_RUN_OUT" "set config: vault_sync.fetch_projection=$FETCH_PROJECTION_DRY_RUN_PATH"
+if [ ! -e "$FETCH_PROJECTION_DRY_RUN_PATH" ]; then
+  printf "PASS: %s\n" "fetch projection dry-run creates no target directory"
+  PASS=$((PASS + 1))
+else
+  printf "FAIL: %s\n" "fetch projection dry-run creates no target directory"
+  FAIL=$((FAIL + 1))
+fi
+
+RELATIVE_FETCH_PROJECTION_OUT="$TEST_ROOT/fetch-projection-relative.out"
+run_install "$RELATIVE_FETCH_PROJECTION_OUT" --role leaf --fetch-projection wiki-fetch --dry-run
+RELATIVE_FETCH_PROJECTION_RC=$?
+assert_exit "fetch projection rejects a relative path" "$RELATIVE_FETCH_PROJECTION_RC" 1
+assert_contains "relative fetch projection rejection is explicit" "$RELATIVE_FETCH_PROJECTION_OUT" "fetch projection path must be absolute"
+
+SAME_FETCH_PROJECTION_OUT="$TEST_ROOT/fetch-projection-same.out"
+run_install "$SAME_FETCH_PROJECTION_OUT" \
+  --role leaf \
+  --vault-path "$TEST_ROOT/wiki" \
+  --fetch-projection "$TEST_ROOT/wiki" \
+  --dry-run
+SAME_FETCH_PROJECTION_RC=$?
+assert_exit "fetch projection rejects the live vault path" "$SAME_FETCH_PROJECTION_RC" 1
+assert_contains "same fetch projection rejection is explicit" "$SAME_FETCH_PROJECTION_OUT" "fetch projection must be distinct from live vault"
+
+mkdir -p "$TEST_ROOT/wiki/nested-projection"
+NESTED_FETCH_PROJECTION_OUT="$TEST_ROOT/fetch-projection-nested.out"
+run_install "$NESTED_FETCH_PROJECTION_OUT" \
+  --role leaf \
+  --vault-path "$TEST_ROOT/wiki" \
+  --fetch-projection "$TEST_ROOT/wiki/nested-projection" \
+  --dry-run
+NESTED_FETCH_PROJECTION_RC=$?
+assert_exit "fetch projection rejects a path inside the live vault" "$NESTED_FETCH_PROJECTION_RC" 1
+assert_contains "nested fetch projection rejection is explicit" "$NESTED_FETCH_PROJECTION_OUT" "fetch projection and live vault must not be nested"
+
+LIVE_INSIDE_PROJECTION_OUT="$TEST_ROOT/live-inside-projection.out"
+run_install "$LIVE_INSIDE_PROJECTION_OUT" \
+  --role leaf \
+  --vault-path "$TEST_ROOT/projection-parent/live" \
+  --fetch-projection "$TEST_ROOT/projection-parent" \
+  --dry-run
+LIVE_INSIDE_PROJECTION_RC=$?
+assert_exit "fetch projection rejects a live vault nested inside it" "$LIVE_INSIDE_PROJECTION_RC" 1
+assert_contains "reverse nesting rejection is explicit" "$LIVE_INSIDE_PROJECTION_OUT" "fetch projection and live vault must not be nested"
+
+SNAPSHOTTER_FETCH_PROJECTION_OUT="$TEST_ROOT/snapshotter-fetch-projection.out"
+run_install "$SNAPSHOTTER_FETCH_PROJECTION_OUT" \
+  --role snapshotter \
+  --service-scope system \
+  --fetch-projection "$TEST_ROOT/wiki-fetch" \
+  --dry-run
+SNAPSHOTTER_FETCH_PROJECTION_RC=$?
+assert_exit "snapshotter role rejects a fetch projection" "$SNAPSHOTTER_FETCH_PROJECTION_RC" 1
+assert_contains "snapshotter fetch projection rejection is explicit" "$SNAPSHOTTER_FETCH_PROJECTION_OUT" "fetch projection is supported only for full leaf installs"
+
+PROJECTION_FIXTURE_ROOT="$TEST_ROOT/projection-fixture"
+PROJECTION_REMOTE="$(make_projection_remote "$PROJECTION_FIXTURE_ROOT")"
+PROJECTION_LIVE="$TEST_ROOT/projection-live"
+PROJECTION_TARGET="$TEST_ROOT/projection-git"
+"$REAL_GIT" clone -q "$PROJECTION_REMOTE" "$PROJECTION_LIVE"
+PROJECTION_INSTALL_OUT="$TEST_ROOT/projection-install.out"
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$REAL_GIT" \
+run_install "$PROJECTION_INSTALL_OUT" \
+  --role leaf \
+  --vault-path "$PROJECTION_LIVE" \
+  --fetch-projection "$PROJECTION_TARGET" \
+  --execute
+PROJECTION_INSTALL_RC=$?
+assert_exit "missing fetch projection is bootstrapped from the live origin" "$PROJECTION_INSTALL_RC" 0
+if [ -d "$PROJECTION_TARGET/.git" ]; then
+  printf "PASS: %s\n" "fetch projection bootstrap creates an independent clone"
+  PASS=$((PASS + 1))
+else
+  printf "FAIL: %s\n" "fetch projection bootstrap creates an independent clone"
+  FAIL=$((FAIL + 1))
+fi
+assert_contains "fetch projection bootstrap keeps promotable content" "$PROJECTION_TARGET/concepts/kept.md" "# Kept note"
+assert_contains "fetch projection bootstrap persists config" "$TEST_ROOT/home/.skillwiki/.env" "vault_sync.fetch_projection=$PROJECTION_TARGET"
+assert_contains "fetch projection bootstrap reports validation" "$PROJECTION_INSTALL_OUT" "Validated fetch projection: $PROJECTION_TARGET"
+"$REAL_GIT" -C "$PROJECTION_TARGET" add -A
+assert_eq \
+  "git add -A in projection cannot stage event ledger paths" \
+  "$("$REAL_GIT" -C "$PROJECTION_TARGET" diff --cached --name-only -- meta/log-events)" \
+  ""
+
+FRESH_PROJECTION_TARGET="$TEST_ROOT/projection-fresh-git"
+FRESH_PROJECTION_OUT="$TEST_ROOT/projection-fresh-install.out"
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$REAL_GIT" \
+TEST_SYSTEMCTL_MISSING_FETCH_UNITS=1 \
+run_install "$FRESH_PROJECTION_OUT" \
+  --role leaf \
+  --vault-path "$PROJECTION_LIVE" \
+  --fetch-projection "$FRESH_PROJECTION_TARGET" \
+  --execute
+FRESH_PROJECTION_RC=$?
+assert_exit "fresh Linux projection install tolerates absent old fetch units" "$FRESH_PROJECTION_RC" 0
+
+SNAPSHOT_COLLISION_PATH="$TEST_ROOT/snapshot-projection"
+mkdir -p "$TEST_ROOT/home/.skillwiki"
+printf '%s\n' "vault_sync.snapshot_worktree=$SNAPSHOT_COLLISION_PATH" >> "$TEST_ROOT/home/.skillwiki/.env"
+SNAPSHOT_COLLISION_OUT="$TEST_ROOT/fetch-snapshot-collision.out"
+run_install "$SNAPSHOT_COLLISION_OUT" \
+  --role leaf \
+  --vault-path "$PROJECTION_LIVE" \
+  --fetch-projection "$SNAPSHOT_COLLISION_PATH" \
+  --dry-run
+SNAPSHOT_COLLISION_RC=$?
+assert_exit "fetch projection rejects the configured snapshot worktree" "$SNAPSHOT_COLLISION_RC" 1
+assert_contains "snapshot worktree collision rejection is explicit" "$SNAPSHOT_COLLISION_OUT" "fetch projection must not reuse vault_sync.snapshot_worktree"
+
+ROLLBACK_FIXTURE_ROOT="$TEST_ROOT/projection-rollback-fixture"
+ROLLBACK_REMOTE="$(make_projection_remote "$ROLLBACK_FIXTURE_ROOT")"
+ROLLBACK_LIVE="$TEST_ROOT/projection-rollback-live"
+ROLLBACK_TARGET="$TEST_ROOT/projection-rollback-git"
+"$REAL_GIT" clone -q "$ROLLBACK_REMOTE" "$ROLLBACK_LIVE"
+ROLLBACK_INSTALL_OUT="$TEST_ROOT/projection-rollback-install.out"
+ROLLBACK_SYSTEMCTL_LOG="$TEST_ROOT/projection-rollback-systemctl.log"
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$REAL_GIT" \
+TEST_SYSTEMCTL_FAIL_ENABLE=1 \
+TEST_SYSTEMCTL_FETCH_ACTIVE=1 \
+TEST_SYSTEMCTL_FETCH_ENABLED=1 \
+TEST_SYSTEMCTL_LOG="$ROLLBACK_SYSTEMCTL_LOG" \
+run_install "$ROLLBACK_INSTALL_OUT" \
+  --role leaf \
+  --vault-path "$ROLLBACK_LIVE" \
+  --fetch-projection "$ROLLBACK_TARGET" \
+  --execute
+ROLLBACK_INSTALL_RC=$?
+assert_exit "service activation failure fails projection install" "$ROLLBACK_INSTALL_RC" 1
+if [ ! -e "$ROLLBACK_TARGET" ]; then
+  printf "PASS: %s\n" "failed install rolls back a newly created projection"
+  PASS=$((PASS + 1))
+else
+  printf "FAIL: %s\n" "failed install rolls back a newly created projection"
+  FAIL=$((FAIL + 1))
+fi
+assert_contains "failed install restores prior fetch projection config" "$TEST_ROOT/home/.skillwiki/.env" "vault_sync.fetch_projection=$FRESH_PROJECTION_TARGET"
+assert_not_contains "failed install removes attempted fetch projection config" "$TEST_ROOT/home/.skillwiki/.env" "vault_sync.fetch_projection=$ROLLBACK_TARGET"
+assert_contains "projection migration stops the prior fetch timer" "$ROLLBACK_SYSTEMCTL_LOG" "--user stop wiki-fetch.timer wiki-fetch.service"
+assert_contains "failed projection migration restores the prior fetch timer" "$ROLLBACK_SYSTEMCTL_LOG" "--user enable --now wiki-fetch.timer"
+assert_order "projection migration stops fetch before validating the clone" "$ROLLBACK_INSTALL_OUT" "Stopped existing fetch service before projection migration" "Validated fetch projection: $ROLLBACK_TARGET"
+assert_order "projection migration acquires the managed-write lock before validating the clone" "$ROLLBACK_INSTALL_OUT" "Acquired live-vault managed-write lock for fetch projection migration" "Validated fetch projection: $ROLLBACK_TARGET"
+
+INACTIVE_ROLLBACK_TARGET="$TEST_ROOT/projection-enabled-inactive-git"
+INACTIVE_ROLLBACK_OUT="$TEST_ROOT/projection-enabled-inactive-install.out"
+INACTIVE_ROLLBACK_SYSTEMCTL_LOG="$TEST_ROOT/projection-enabled-inactive-systemctl.log"
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$REAL_GIT" \
+TEST_SYSTEMCTL_FAIL_ENABLE=1 \
+TEST_SYSTEMCTL_FETCH_ACTIVE=0 \
+TEST_SYSTEMCTL_FETCH_ENABLED=1 \
+TEST_SYSTEMCTL_LOG="$INACTIVE_ROLLBACK_SYSTEMCTL_LOG" \
+run_install "$INACTIVE_ROLLBACK_OUT" \
+  --role leaf \
+  --vault-path "$PROJECTION_LIVE" \
+  --fetch-projection "$INACTIVE_ROLLBACK_TARGET" \
+  --execute
+INACTIVE_ROLLBACK_RC=$?
+assert_exit "activation failure still fails for an enabled inactive prior timer" "$INACTIVE_ROLLBACK_RC" 1
+assert_contains "rollback re-enables an originally enabled inactive timer" "$INACTIVE_ROLLBACK_SYSTEMCTL_LOG" "--user enable wiki-fetch.timer"
+assert_not_contains "rollback does not start an originally inactive timer" "$INACTIVE_ROLLBACK_SYSTEMCTL_LOG" "--user enable --now wiki-fetch.timer"
+
+LOCKED_FIXTURE_ROOT="$TEST_ROOT/projection-locked-fixture"
+LOCKED_REMOTE="$(make_projection_remote "$LOCKED_FIXTURE_ROOT")"
+LOCKED_LIVE="$TEST_ROOT/projection-locked-live"
+LOCKED_TARGET="$TEST_ROOT/projection-locked-git"
+"$REAL_GIT" clone -q "$LOCKED_REMOTE" "$LOCKED_LIVE"
+LOCKED_GIT_DIR="$($REAL_GIT -C "$LOCKED_LIVE" rev-parse --absolute-git-dir)"
+mkdir -p "$LOCKED_GIT_DIR/vault-sync"
+printf '{"pid":%s,"owner_hostname":"test","owner_token":"busy","command":"existing-operation"}\n' "$$" > "$LOCKED_GIT_DIR/vault-sync/managed-write.lock"
+LOCKED_INSTALL_OUT="$TEST_ROOT/projection-locked-install.out"
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$REAL_GIT" \
+run_install "$LOCKED_INSTALL_OUT" \
+  --role leaf \
+  --vault-path "$LOCKED_LIVE" \
+  --fetch-projection "$LOCKED_TARGET" \
+  --execute
+LOCKED_INSTALL_RC=$?
+assert_exit "projection migration fails closed on a live managed-write lock" "$LOCKED_INSTALL_RC" 1
+assert_contains "projection lock contention is explicit" "$LOCKED_INSTALL_OUT" "could not acquire live-vault managed-write lock for fetch projection migration"
+if [ ! -e "$LOCKED_TARGET" ]; then
+  printf "PASS: %s\n" "lock contention aborts before creating the projection"
+  PASS=$((PASS + 1))
+else
+  printf "FAIL: %s\n" "lock contention aborts before creating the projection"
+  FAIL=$((FAIL + 1))
+fi
+
+MAC_LOCKED_PRESENT="$TEST_ROOT/projection-macos-locked.present"
+MAC_LOCKED_LOG="$TEST_ROOT/projection-macos-locked.launchctl.log"
+MAC_LOCKED_OUT="$TEST_ROOT/projection-macos-locked-install.out"
+MAC_FETCH_PLIST="$TEST_ROOT/home/Library/LaunchAgents/com.karlchow.wiki-fetch.plist"
+printf '%s\n' "com.karlchow.wiki-fetch" > "$MAC_LOCKED_PRESENT"
+write_valid_launchd_plist "$MAC_FETCH_PLIST" "com.karlchow.wiki-fetch" "pre-migration fetch"
+TEST_UNAME_S=Darwin \
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$REAL_GIT" \
+TEST_LAUNCHCTL_PRESENT_FILE="$MAC_LOCKED_PRESENT" \
+TEST_LAUNCHCTL_LOG="$MAC_LOCKED_LOG" \
+run_install "$MAC_LOCKED_OUT" \
+  --role leaf \
+  --vault-path "$LOCKED_LIVE" \
+  --fetch-projection "$LOCKED_TARGET" \
+  --execute
+MAC_LOCKED_RC=$?
+assert_exit "macOS projection migration also fails closed on the live lock" "$MAC_LOCKED_RC" 1
+assert_contains "macOS projection migration stops the old fetch agent before lock acquisition" "$MAC_LOCKED_LOG" "bootout gui/$UID/com.karlchow.wiki-fetch"
+assert_contains "macOS lock failure restores the old fetch agent" "$MAC_LOCKED_LOG" "bootstrap gui/$UID $MAC_FETCH_PLIST"
+assert_not_contains "macOS rollback preserves the prior launchd enable state" "$MAC_LOCKED_LOG" "enable gui/$UID/com.karlchow.wiki-fetch"
+
+DETACHED_LIVE="$TEST_ROOT/projection-live-without-git"
+DETACHED_TARGET="$TEST_ROOT/projection-existing-git"
+mkdir -p "$DETACHED_LIVE"
+"$REAL_GIT" clone -q "$PROJECTION_REMOTE" "$DETACHED_TARGET"
+DETACHED_INSTALL_OUT="$TEST_ROOT/projection-existing-install.out"
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$REAL_GIT" \
+run_install "$DETACHED_INSTALL_OUT" \
+  --role leaf \
+  --vault-path "$DETACHED_LIVE" \
+  --fetch-projection "$DETACHED_TARGET" \
+  --execute
+DETACHED_INSTALL_RC=$?
+assert_exit "existing projection remains installable after live Git quarantine" "$DETACHED_INSTALL_RC" 0
+assert_contains "existing detached projection is validated" "$DETACHED_INSTALL_OUT" "Validated fetch projection: $DETACHED_TARGET"
+
+NON_GIT_TARGET="$TEST_ROOT/projection-non-git"
+mkdir -p "$NON_GIT_TARGET"
+printf '%s\n' 'preserve me' > "$NON_GIT_TARGET/sentinel.txt"
+NON_GIT_INSTALL_OUT="$TEST_ROOT/projection-non-git-install.out"
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$REAL_GIT" \
+run_install "$NON_GIT_INSTALL_OUT" \
+  --role leaf \
+  --vault-path "$PROJECTION_LIVE" \
+  --fetch-projection "$NON_GIT_TARGET" \
+  --execute
+NON_GIT_INSTALL_RC=$?
+assert_exit "existing non-Git projection target is rejected" "$NON_GIT_INSTALL_RC" 1
+assert_contains "non-Git projection rejection is explicit" "$NON_GIT_INSTALL_OUT" "fetch projection is not an independent Git clone"
+assert_contains "non-Git projection target is not overwritten" "$NON_GIT_TARGET/sentinel.txt" "preserve me"
+
+LEDGER_FIXTURE_ROOT="$TEST_ROOT/projection-ledger-fixture"
+LEDGER_REMOTE="$(make_projection_remote "$LEDGER_FIXTURE_ROOT")"
+LEDGER_LIVE="$TEST_ROOT/projection-ledger-live"
+LEDGER_TARGET="$TEST_ROOT/projection-ledger-git"
+"$REAL_GIT" clone -q "$LEDGER_REMOTE" "$LEDGER_LIVE"
+"$REAL_GIT" -C "$LEDGER_LIVE" config user.name "Vault Sync Test"
+"$REAL_GIT" -C "$LEDGER_LIVE" config user.email "vault-sync-test@example.invalid"
+mkdir -p "$LEDGER_LIVE/meta/log-events/2026-09-15"
+printf '%s\n' '{"event_id":"forbidden"}' > "$LEDGER_LIVE/meta/log-events/2026-09-15/forbidden.json"
+"$REAL_GIT" -C "$LEDGER_LIVE" add meta/log-events/2026-09-15/forbidden.json
+"$REAL_GIT" -C "$LEDGER_LIVE" commit -qm "add forbidden ledger path"
+"$REAL_GIT" -C "$LEDGER_LIVE" push -q origin main
+LEDGER_INSTALL_OUT="$TEST_ROOT/projection-ledger-install.out"
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$REAL_GIT" \
+run_install "$LEDGER_INSTALL_OUT" \
+  --role leaf \
+  --vault-path "$LEDGER_LIVE" \
+  --fetch-projection "$LEDGER_TARGET" \
+  --execute
+LEDGER_INSTALL_RC=$?
+assert_exit "projection bootstrap rejects a remote tree containing ledger paths" "$LEDGER_INSTALL_RC" 1
+assert_contains "ledger projection rejection is explicit" "$LEDGER_INSTALL_OUT" "fetch projection contains forbidden meta/log-events paths"
+if [ ! -e "$LEDGER_TARGET" ]; then
+  printf "PASS: %s\n" "failed ledger validation leaves no final projection directory"
+  PASS=$((PASS + 1))
+else
+  printf "FAIL: %s\n" "failed ledger validation leaves no final projection directory"
+  FAIL=$((FAIL + 1))
+fi
+assert_contains "failed ledger validation preserves prior fetch projection config" "$TEST_ROOT/home/.skillwiki/.env" "vault_sync.fetch_projection=$DETACHED_TARGET"
 
 SNAPSHOT_OUT="$TEST_ROOT/snapshotter.out"
 run_install "$SNAPSHOT_OUT" --role snapshotter --service-scope system --dry-run
