@@ -4,6 +4,7 @@ import { runFleetContext } from "../../../cli/src/commands/fleet.js";
 import { runMemoryRecall } from "../../../cli/src/commands/memory.js";
 import { runQuery } from "../../../cli/src/commands/query.js";
 import { runStatus } from "../../../cli/src/commands/status.js";
+import { runCopyStatusCommand } from "../../../cli/src/commands/copy-status.js";
 import { extractFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
 import { resolveWithinVault } from "../allowlist.js";
 import { MCP_INSTRUCTIONS } from "../mcp-instructions.js";
@@ -276,18 +277,29 @@ export async function handleWikiStatus(
   if (input?.host_id !== undefined && fleet.manifest_loaded && fleet.identity_status !== "known") {
     return { ok: false as const, error: "USAGE", message: "unknown host-id" };
   }
-  const result = await runStatus({
-    vault: ctx.vaultDir,
-    home: process.env.HOME ?? "",
-    langEnvValue: process.env.WIKI_LANG,
-  });
+  const [result, copies] = await Promise.all([
+    runStatus({
+      vault: ctx.vaultDir,
+      home: process.env.HOME ?? "",
+      langEnvValue: process.env.WIKI_LANG,
+    }),
+    runCopyStatusCommand({
+      vault: ctx.vaultDir,
+      home: process.env.HOME ?? "",
+      s3Ok: ctx.s3Ok,
+    }),
+  ]);
   const base = result.result.ok ? result.result.data : { humanHint: "status failed" };
+  const copiesData = copies.result.ok ? copies.result.data : undefined;
+  const humanHint = [base.humanHint, copiesData?.humanHint].filter(Boolean).join("\n\n");
   return {
     ok: true as const,
     vault_path: ctx.vaultDir,
     reconcile_ready: ctx.gate.ready,
     s3_ok: ctx.s3Ok ?? true,
-    ...(typeof base === "object" ? base : {}),
+    ...base,
+    ...(copiesData ? { copies: copiesData } : {}),
+    humanHint,
     ...(writerId ? { writer_id: writerId, host_id: writerId } : {}),
     fleet,
   };

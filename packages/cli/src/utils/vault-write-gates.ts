@@ -58,6 +58,7 @@ export const HYGIENE_COMMANDS = new Set([
   "lint",
   "lint --fix",
   "status",
+  "copy-status",
   "path",
   "fleet context",
   "fleet validate",

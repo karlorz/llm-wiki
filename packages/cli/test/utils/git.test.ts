@@ -16,6 +16,11 @@ describe("git helpers", () => {
     expect(result).toMatch(/^git version \d/);
   });
 
+  it("git honors an optional timeout", () => {
+    const result = git(process.cwd(), ["--version"], { timeoutMs: 3000 });
+    expect(result).toMatch(/^git version \d/);
+  });
+
   it("gitStrict returns trimmed stdout on success", () => {
     const result = gitStrict(process.cwd(), ["--version"]);
     expect(result).toMatch(/^git version \d/);

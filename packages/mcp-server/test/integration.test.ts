@@ -38,6 +38,12 @@ describe("integration vs temp vault + mock S3", () => {
     expect(status.writer_id).not.toBe("chatgpt-web");
     expect(status.fleet.identity_status).toBe("unknown");
     expect(status.fleet.manifest_loaded).toBe(false);
+    expect(status.copies?.live).toBeDefined();
+    expect(status.copies?.github).toBeDefined();
+    expect(status.copies?.local_git).toBeDefined();
+    expect(status.humanHint).toMatch(/^live: /m);
+    expect(status.humanHint).toMatch(/^github: /m);
+    expect(status.humanHint).toMatch(/^local_git: /m);
   });
 
   it("status fails closed when no authenticated host is present", async () => {

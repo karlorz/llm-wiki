@@ -63,6 +63,7 @@ import { runSnapshotMaintenanceDryRun, runSnapshotMaintenanceExecute, runProject
 import { getCliSessionId } from "./utils/sync-lock.js";
 import { runBackupSync, runBackupRestore } from "./commands/backup.js";
 import { runStatus } from "./commands/status.js";
+import { runCopyStatusCommand } from "./commands/copy-status.js";
 import { runSeed } from "./commands/seed.js";
 import { runCanvasGenerate } from "./commands/canvas.js";
 import { runQuery } from "./commands/query.js";
@@ -1024,6 +1025,7 @@ projectionsCmd
   .description("preview or write root index.md and log.md as a pair")
   .option("--write", "write projections", false)
   .option("--converge-vault <dir>", "Git vault used for managed pull and base-OID proof")
+  .option("--events-from <dir>", "log-events directory (day folders) instead of vault meta/log-events")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -1032,10 +1034,10 @@ projectionsCmd
       return emitManagedVaultWrite(
         v.vault,
         "projections materialize",
-        () => runProjectionsMaterialize({ vault: v.vault, write: true }),
+        () => runProjectionsMaterialize({ vault: v.vault, write: true, eventsFrom: opts.eventsFrom }),
         { convergenceVault: opts.convergeVault },
       );
-    } else emit(await runProjectionsMaterialize({ vault: v.vault, write: false }), v.vault);
+    } else emit(await runProjectionsMaterialize({ vault: v.vault, write: false, eventsFrom: opts.eventsFrom }), v.vault);
   });
 projectionsCmd
   .command("repair-legacy [vault]")
@@ -1223,6 +1225,19 @@ program
       home: process.env.HOME ?? "",
       langEnvValue: process.env.WIKI_LANG,
     }), v.vault);
+  });
+
+program
+  .command("copy-status [vault]")
+  .description("plane-tagged vault freshness: live S3 vs GitHub snapshot vs leaf clone")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (vault, opts) => {
+    const v = await resolveVaultArg(vault, opts.wiki);
+    if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
+    else emit(await runCopyStatusCommand({
+      vault: v.vault,
+      home: process.env.HOME ?? "",
+    }), v.vault, { postCommit: false });
   });
 
 // archive

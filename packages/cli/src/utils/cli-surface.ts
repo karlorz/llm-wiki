@@ -57,6 +57,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("health").option("--wiki <name>").option("--sync <mode>").option("--no-fail").option("--out <path>").option("--examples <n>");
   program.command("doctor").option("--check-snapshotter").option("--check-mcp");
   program.command("status").option("--wiki <name>");
+  program.command("copy-status").option("--wiki <name>");
   program.command("archive")
     .option("--wiki <name>")
     .option("--cascade")
@@ -241,7 +242,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   indexCmd.command("rebuild").option("--write").option("--wiki <name>");
 
   const projectionsCmd = program.commands.find(c => c.name() === "projections")!;
-  projectionsCmd.command("materialize").option("--write").option("--converge-vault <dir>").option("--wiki <name>");
+  projectionsCmd.command("materialize").option("--write").option("--converge-vault <dir>").option("--events-from <dir>").option("--wiki <name>");
   projectionsCmd.command("repair-legacy").requiredOption("--event-operation-id <id>").option("--write").option("--converge-vault <dir>").option("--wiki <name>");
 
   const syncCmd = program.commands.find(c => c.name() === "sync")!;
