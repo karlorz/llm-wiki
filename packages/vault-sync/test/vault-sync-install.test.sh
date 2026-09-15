@@ -456,8 +456,8 @@ HELP_OUT="$TEST_ROOT/help.out"
 run_install "$HELP_OUT" --help
 HELP_RC=$?
 assert_exit "help exits 0" "$HELP_RC" 0
-assert_contains "help documents fetch projection option" "$HELP_OUT" "--fetch-projection <absolute-path>"
-assert_contains "help documents fetch projection environment override" "$HELP_OUT" "VS_FETCH_PROJECTION=<absolute-path>"
+assert_contains "help documents fetch projection option" "$HELP_OUT" "--fetch-projection <absolute-path|none>"
+assert_contains "help documents fetch projection environment override" "$HELP_OUT" "VS_FETCH_PROJECTION=<absolute-path|none>"
 
 FUSE_OUT="$TEST_ROOT/fuse-only.out"
 run_install "$FUSE_OUT" --mode fuse-only --service-scope system --vault-path "$TEST_ROOT/wiki" --dry-run
@@ -491,6 +491,93 @@ assert_contains "full install deploys presync helper" "$FULL_OUT" "wiki-sync.sh"
 assert_contains "full install repairs convenience wiki-sync symlink" "$FULL_OUT" "ln -sfn"
 assert_contains "full install targets home bin wiki-sync" "$FULL_OUT" "$TEST_ROOT/home/bin/wiki-sync.sh"
 assert_contains "full leaf install enables push fetch and fuse timers" "$FULL_OUT" "systemctl --user enable --now wiki-push.timer wiki-fetch.timer wiki-fuse-refresh.timer"
+assert_contains "full leaf install defaults fetch routing to the live vault" "$FULL_OUT" "set config: vault_sync.fetch_projection=none"
+
+EXPLICIT_ONE_FOLDER_OUT="$TEST_ROOT/fetch-projection-none-dry-run.out"
+run_install "$EXPLICIT_ONE_FOLDER_OUT" --role leaf --fetch-projection none --dry-run
+EXPLICIT_ONE_FOLDER_RC=$?
+assert_exit "explicit one-folder fetch projection dry-run exits 0" "$EXPLICIT_ONE_FOLDER_RC" 0
+assert_contains "explicit one-folder mode persists the none tombstone" "$EXPLICIT_ONE_FOLDER_OUT" "set config: vault_sync.fetch_projection=none"
+
+ONE_FOLDER_LIVE="$TEST_ROOT/one-folder-live"
+ONE_FOLDER_SIBLING="$TEST_ROOT/one-folder-sibling"
+mkdir -p "$ONE_FOLDER_LIVE" "$ONE_FOLDER_SIBLING" "$TEST_ROOT/home/.skillwiki"
+git -C "$ONE_FOLDER_LIVE" init -q
+printf '%s\n' '# One-folder test' > "$ONE_FOLDER_LIVE/SCHEMA.md"
+git -C "$ONE_FOLDER_LIVE" -c user.name=test -c user.email=test@example.com add SCHEMA.md
+git -C "$ONE_FOLDER_LIVE" -c user.name=test -c user.email=test@example.com commit -qm init
+printf '%s\n' "keep" > "$ONE_FOLDER_SIBLING/sentinel"
+printf 'vault_sync.fetch_projection=%s\n' "$ONE_FOLDER_SIBLING" > "$TEST_ROOT/home/.skillwiki/.env"
+ONE_FOLDER_DRY_RUN_OUT="$TEST_ROOT/fetch-projection-one-folder-stale-dry-run.out"
+run_install "$ONE_FOLDER_DRY_RUN_OUT" --role leaf --vault-path "$ONE_FOLDER_LIVE" --dry-run
+ONE_FOLDER_DRY_RUN_RC=$?
+assert_exit "one-folder stale-route dry-run exits 0" "$ONE_FOLDER_DRY_RUN_RC" 0
+assert_not_contains \
+  "one-folder stale-route dry-run does not plan a live-vault lock" \
+  "$ONE_FOLDER_DRY_RUN_OUT" \
+  "acquire live-vault managed-write lock"
+ONE_FOLDER_OUT="$TEST_ROOT/fetch-projection-one-folder-execute.out"
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$(command -v git)" \
+run_install "$ONE_FOLDER_OUT" --role leaf --vault-path "$ONE_FOLDER_LIVE" --execute
+ONE_FOLDER_RC=$?
+assert_exit "one-folder reinstall clears stale sibling routing" "$ONE_FOLDER_RC" 0
+assert_contains "one-folder reinstall persists the none tombstone" "$TEST_ROOT/home/.skillwiki/.env" "vault_sync.fetch_projection=none"
+assert_not_contains "one-folder reinstall removes the stale sibling value" "$TEST_ROOT/home/.skillwiki/.env" "vault_sync.fetch_projection=$ONE_FOLDER_SIBLING"
+assert_file_exists "one-folder reinstall preserves the sibling clone on disk" "$ONE_FOLDER_SIBLING/sentinel"
+
+FRESH_ONE_FOLDER_FAIL_OUT="$TEST_ROOT/fetch-projection-one-folder-fresh-fail.out"
+rm -f "$TEST_ROOT/home/.skillwiki/.env"
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$REAL_GIT" \
+TEST_SYSTEMCTL_FAIL_ENABLE=1 \
+run_install "$FRESH_ONE_FOLDER_FAIL_OUT" \
+  --role leaf \
+  --vault-path "$ONE_FOLDER_LIVE" \
+  --execute
+FRESH_ONE_FOLDER_FAIL_RC=$?
+assert_exit "fresh one-folder activation failure fails install" "$FRESH_ONE_FOLDER_FAIL_RC" 1
+assert_not_contains \
+  "fresh one-folder activation failure removes fetch projection key" \
+  "$TEST_ROOT/home/.skillwiki/.env" \
+  "vault_sync.fetch_projection="
+assert_not_contains \
+  "fresh one-folder failure does not acquire live-vault lock" \
+  "$FRESH_ONE_FOLDER_FAIL_OUT" \
+  "Acquired live-vault managed-write lock for fetch projection migration"
+
+STALE_ONE_FOLDER_FAIL_OUT="$TEST_ROOT/fetch-projection-one-folder-stale-fail.out"
+STALE_ONE_FOLDER_SYSTEMCTL_LOG="$TEST_ROOT/fetch-projection-one-folder-stale-systemctl.log"
+printf 'vault_sync.fetch_projection=%s\n' "$ONE_FOLDER_SIBLING" > "$TEST_ROOT/home/.skillwiki/.env"
+TEST_REAL_GIT=1 \
+TEST_REAL_GIT_BIN="$REAL_GIT" \
+TEST_SYSTEMCTL_FAIL_ENABLE=1 \
+TEST_SYSTEMCTL_FETCH_ACTIVE=1 \
+TEST_SYSTEMCTL_FETCH_ENABLED=1 \
+TEST_SYSTEMCTL_LOG="$STALE_ONE_FOLDER_SYSTEMCTL_LOG" \
+run_install "$STALE_ONE_FOLDER_FAIL_OUT" \
+  --role leaf \
+  --vault-path "$ONE_FOLDER_LIVE" \
+  --execute
+STALE_ONE_FOLDER_FAIL_RC=$?
+assert_exit "stale one-folder activation failure fails install" "$STALE_ONE_FOLDER_FAIL_RC" 1
+assert_contains \
+  "stale one-folder failure restores sibling routing" \
+  "$TEST_ROOT/home/.skillwiki/.env" \
+  "vault_sync.fetch_projection=$ONE_FOLDER_SIBLING"
+assert_file_exists "stale one-folder failure preserves the sibling clone" "$ONE_FOLDER_SIBLING/sentinel"
+assert_contains \
+  "stale one-folder migration stops the prior fetch timer" \
+  "$STALE_ONE_FOLDER_SYSTEMCTL_LOG" \
+  "--user stop wiki-fetch.timer wiki-fetch.service"
+assert_contains \
+  "stale one-folder failure restores the prior fetch timer" \
+  "$STALE_ONE_FOLDER_SYSTEMCTL_LOG" \
+  "--user enable --now wiki-fetch.timer"
+assert_not_contains \
+  "stale one-folder migration does not acquire live-vault lock" \
+  "$STALE_ONE_FOLDER_FAIL_OUT" \
+  "Acquired live-vault managed-write lock for fetch projection migration"
 
 FETCH_PROJECTION_DRY_RUN_OUT="$TEST_ROOT/fetch-projection-dry-run.out"
 FETCH_PROJECTION_DRY_RUN_PATH="$TEST_ROOT/wiki-fetch"

@@ -327,6 +327,14 @@ validate_fetch_projection_clone() {
 prepare_fetch_projection() {
   local live_origin parent base temp_root candidate
 
+  if [ "$ROLE" = "leaf" ] && { [ -z "$FETCH_PROJECTION" ] || [ "$FETCH_PROJECTION" = "none" ]; }; then
+    if ! { [ "${FETCH_PROJECTION_CONFIG_PREVIOUS_PRESENT:-0}" -eq 1 ] && [ "$FETCH_PROJECTION_CONFIG_PREVIOUS_VALUE" = "none" ]; }; then
+      set_vault_config "vault_sync.fetch_projection" "none"
+      FETCH_PROJECTION_CONFIG_WRITTEN=1
+    fi
+    log "Configured one-folder fetch routing: $VAULT_PATH"
+    return 0
+  fi
   [ -n "$FETCH_PROJECTION" ] && [ "$FETCH_PROJECTION" != "none" ] || return 0
   log "Plan: prepare fetch projection at $FETCH_PROJECTION"
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -402,17 +410,9 @@ restore_fetch_service_after_failed_migration() {
 }
 
 begin_fetch_projection_migration() {
-  local blocker=""
+  local blocker="" current_projection="" disabling_projection=0
 
-  [ -n "$FETCH_PROJECTION" ] && [ "$FETCH_PROJECTION" != "none" ] || return 0
-  FETCH_SERVICE_MIGRATION_STARTED=1
-
-  if [ "$DRY_RUN" -eq 1 ]; then
-    log "[dry-run] stop/disable existing fetch service before projection migration"
-    log "[dry-run] acquire live-vault managed-write lock and check operation journal"
-    return 0
-  fi
-
+  [ "$ROLE" = "leaf" ] || return 0
   if env_key_exists_raw "vault_sync.fetch_projection"; then
     FETCH_PROJECTION_CONFIG_PREVIOUS_PRESENT=1
     FETCH_PROJECTION_CONFIG_PREVIOUS_VALUE="$(read_env_key_raw "vault_sync.fetch_projection")"
@@ -420,6 +420,28 @@ begin_fetch_projection_migration() {
     FETCH_PROJECTION_CONFIG_PREVIOUS_PRESENT=0
     FETCH_PROJECTION_CONFIG_PREVIOUS_VALUE=""
   fi
+
+  if [ -z "$FETCH_PROJECTION" ] || [ "$FETCH_PROJECTION" = "none" ]; then
+    if [ "$FETCH_PROJECTION_CONFIG_PREVIOUS_PRESENT" -eq 0 ]; then
+      if [ "$DRY_RUN" -eq 0 ]; then
+        trap 'fetch_projection_install_exit_handler $?' EXIT
+      fi
+      return 0
+    fi
+    current_projection="$FETCH_PROJECTION_CONFIG_PREVIOUS_VALUE"
+    [ -n "$current_projection" ] && [ "$current_projection" != "none" ] || return 0
+    disabling_projection=1
+  fi
+  FETCH_SERVICE_MIGRATION_STARTED=1
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "[dry-run] stop/disable existing fetch service before projection migration"
+    if [ "$disabling_projection" -eq 0 ]; then
+      log "[dry-run] acquire live-vault managed-write lock and check operation journal"
+    fi
+    return 0
+  fi
+
   trap 'fetch_projection_install_exit_handler $?' EXIT
 
   if [ "$VS_OS" = "macos" ]; then
@@ -447,6 +469,10 @@ begin_fetch_projection_migration() {
     fi
   fi
   log "Stopped existing fetch service before projection migration"
+
+  if [ "$disabling_projection" -eq 1 ]; then
+    return 0
+  fi
 
   if [ "$(git -C "$VAULT_PATH" rev-parse --is-inside-work-tree 2>/dev/null || true)" = "true" ]; then
     if blocker="$(vault_sync_op_preflight_blocker "$VAULT_PATH" 2>/dev/null)"; then
@@ -796,9 +822,9 @@ Options:
                                   Same as above
   --vault-path <path>             Target wiki path for FUSE-only mount guard (default: ~/wiki)
   --vault-path=<path>             Same as above
-  --fetch-projection <absolute-path>
-                                  Independent Git clone used by leaf fetch/status
-  --fetch-projection=<absolute-path>
+  --fetch-projection <absolute-path|none>
+                                  Optional leaf fetch clone; none selects live vault
+  --fetch-projection=<absolute-path|none>
                                   Same as above
   --max-dir-cache <duration>      FUSE freshness threshold (default: 15m)
   --max-dir-cache=<duration>      Same as above
@@ -816,7 +842,7 @@ Environment overrides:
   VS_ROLE=leaf|snapshotter
   VS_SERVICE_SCOPE=auto|user|system
   VS_VAULT_PATH=<path>
-  VS_FETCH_PROJECTION=<absolute-path>
+  VS_FETCH_PROJECTION=<absolute-path|none>
   VS_FUSE_MAX_DIR_CACHE=<duration>
   VS_DRY_RUN=1|0
   VS_OVERRIDE_SNAPSHOTTER=1|0

@@ -3,7 +3,7 @@
  *
  * live:     S3/MCP (HTTP MCP writes)
  * github:   sg01 wiki-snapshot HEAD
- * local_git: leaf clone (wiki-fetch), including why pull skipped
+ * local_git: authoritative live-vault Git tree, including why pull skipped
  *
  * Callers must not collapse these planes. humanHint always names all four.
  */
@@ -164,7 +164,7 @@ function localRecord(p: LocalGitProbe, githubOid?: string): PlaneRecord {
       p,
     );
   }
-  return withDirty({ state: "unknown", detail: p.detail ?? "leaf clone unmeasured" }, p);
+  return withDirty({ state: "unknown", detail: p.detail ?? "live-vault Git unmeasured" }, p);
 }
 
 function liveDriftRecord(p: LiveDriftProbe | undefined): LiveDriftRecord {

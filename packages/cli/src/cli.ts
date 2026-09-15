@@ -1229,7 +1229,7 @@ program
 
 program
   .command("copy-status [vault]")
-  .description("plane-tagged vault freshness: live S3 vs GitHub snapshot vs leaf clone")
+  .description("plane-tagged vault freshness: live S3 vs GitHub snapshot vs live-vault Git")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);

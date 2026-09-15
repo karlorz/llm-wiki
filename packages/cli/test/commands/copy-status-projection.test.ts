@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { defaultCopyStatusDeps } from "../../src/commands/copy-status.js";
+import { defaultCopyStatusDeps, runCopyStatusCommand } from "../../src/commands/copy-status.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -17,9 +17,7 @@ function projectionFixture(): { home: string; live: string; projection: string; 
   const origin = join(root, "origin.git");
   const projection = join(root, "wiki-fetch");
   mkdirSync(join(home, ".skillwiki"), { recursive: true });
-  mkdirSync(live, { recursive: true });
   mkdirSync(source, { recursive: true });
-  writeFileSync(join(live, "SCHEMA.md"), "# schema\n");
   git(source, "init", "-b", "main");
   git(source, "config", "user.name", "test");
   git(source, "config", "user.email", "test@example.com");
@@ -27,51 +25,107 @@ function projectionFixture(): { home: string; live: string; projection: string; 
   git(source, "add", "SCHEMA.md");
   git(source, "commit", "-m", "init");
   execFileSync("git", ["clone", "--bare", source, origin]);
+  execFileSync("git", ["clone", origin, live]);
   execFileSync("git", ["clone", origin, projection]);
-  const head = git(projection, "rev-parse", "HEAD");
+  const head = git(live, "rev-parse", "HEAD");
   writeFileSync(join(home, ".skillwiki", ".env"), `vault_sync.fetch_projection=${projection}\n`);
   return { home, live, projection, head };
 }
 
 describe("defaultCopyStatusDeps fetch projection", () => {
-  it("uses the configured projection when the live vault is not a git repository", () => {
+  it("uses live Git planes and visibly ignores a configured sibling projection", async () => {
     const fixture = projectionFixture();
-    const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
-    expect(deps.probeGithub()).toMatchObject({ oid: fixture.head });
-    expect(deps.probeLocalGit()).toMatchObject({ head: fixture.head, behind: 0 });
+    writeFileSync(join(fixture.projection, "projection-only.md"), "projection\n");
+    git(fixture.projection, "add", "projection-only.md");
+    git(fixture.projection, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "projection only");
+    git(fixture.projection, "remote", "set-url", "origin", join(fixture.home, "missing-origin.git"));
+
+    const output = await runCopyStatusCommand({ vault: fixture.live, home: fixture.home, s3Ok: true });
+
+    expect(output.result).toMatchObject({
+      ok: true,
+      data: {
+        github: { oid: fixture.head },
+        local_git: { oid: fixture.head, behind: 0 },
+      },
+    });
+    if (output.result.ok) {
+      expect(output.result.data.humanHint).toContain("configured fetch projection ignored");
+      expect(output.result.data.humanHint).toContain("using live vault");
+    }
   });
 
-  it("fails the git planes closed when an explicit projection is missing", () => {
+  it("reports ignored live-ledger inventory when ordinary Git dirt is zero", () => {
+    const fixture = projectionFixture();
+    writeFileSync(join(fixture.home, ".skillwiki", ".env"), "vault_sync.fetch_projection=none\n");
+    writeFileSync(join(fixture.live, ".git", "info", "exclude"), "meta/log-events/\n");
+    const eventDir = join(fixture.live, "meta", "log-events", "2026-09-16");
+    mkdirSync(eventDir, { recursive: true });
+    writeFileSync(join(eventDir, `${"9".repeat(64)}.json`), "{}\n");
+
+    const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
+
+    expect(deps.probeLocalGit()).toMatchObject({
+      head: fixture.head,
+      dirty: 0,
+      untracked: 0,
+      ledger_untracked: 1,
+    });
+  });
+
+  it("uses live Git planes without a projection warning when the key is absent", async () => {
+    const fixture = projectionFixture();
+    writeFileSync(join(fixture.home, ".skillwiki", ".env"), "WIKI_PATH=/unused\n");
+
+    const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
+
+    const github = await deps.probeGithub();
+    expect(github).toMatchObject({ oid: fixture.head });
+    const local = await deps.probeLocalGit();
+    expect(local).toMatchObject({ head: fixture.head, behind: 0 });
+    expect(local.detail ?? "").not.toContain("fetch projection");
+  });
+
+  it("uses live Git planes with a warning when an explicit projection is missing", () => {
     const fixture = projectionFixture();
     writeFileSync(
       join(fixture.home, ".skillwiki", ".env"),
       `vault_sync.fetch_projection=${join(fixture.home, "missing")}\n`,
     );
     const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
-    expect(deps.probeGithub()).toMatchObject({ unknown: true, detail: "configured fetch projection is not a git repository" });
-    expect(deps.probeLocalGit()).toMatchObject({ unknown: true, detail: "configured fetch projection is not a git repository" });
+    expect(deps.probeGithub()).toMatchObject({ oid: fixture.head });
+    expect(deps.probeLocalGit()).toMatchObject({
+      head: fixture.head,
+      detail: expect.stringContaining("configured fetch projection ignored"),
+    });
   });
 
-  it("fails the git planes closed when the configured projection is the live vault", () => {
+  it("uses live Git planes with a warning when the configured projection is the live vault", () => {
     const fixture = projectionFixture();
     writeFileSync(
       join(fixture.home, ".skillwiki", ".env"),
       `vault_sync.fetch_projection=${fixture.live}\n`,
     );
     const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
-    expect(deps.probeGithub()).toMatchObject({ unknown: true, detail: "configured fetch projection must be distinct from live vault" });
-    expect(deps.probeLocalGit()).toMatchObject({ unknown: true, detail: "configured fetch projection must be distinct from live vault" });
+    expect(deps.probeGithub()).toMatchObject({ oid: fixture.head });
+    expect(deps.probeLocalGit()).toMatchObject({
+      head: fixture.head,
+      detail: expect.stringContaining("configured fetch projection ignored"),
+    });
   });
 
-  it("fails the git planes closed for an explicit relative projection value", () => {
+  it("uses live Git planes with a warning for an explicit relative projection value", () => {
     const fixture = projectionFixture();
     writeFileSync(join(fixture.home, ".skillwiki", ".env"), "vault_sync.fetch_projection=wiki-fetch\n");
     const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
-    expect(deps.probeGithub()).toMatchObject({ unknown: true, detail: "configured fetch projection path must be absolute" });
-    expect(deps.probeLocalGit()).toMatchObject({ unknown: true, detail: "configured fetch projection path must be absolute" });
+    expect(deps.probeGithub()).toMatchObject({ oid: fixture.head });
+    expect(deps.probeLocalGit()).toMatchObject({
+      head: fixture.head,
+      detail: expect.stringContaining("configured fetch projection ignored"),
+    });
   });
 
-  it("fails the git planes closed when the configured projection is nested with the live vault", () => {
+  it("uses live Git planes with a warning when the configured projection is nested with the live vault", () => {
     const fixture = projectionFixture();
     const nested = join(fixture.live, "fetch");
     mkdirSync(nested, { recursive: true });
@@ -79,13 +133,10 @@ describe("defaultCopyStatusDeps fetch projection", () => {
 
     const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
 
-    expect(deps.probeGithub()).toMatchObject({
-      unknown: true,
-      detail: "configured fetch projection and live vault must not be nested",
-    });
+    expect(deps.probeGithub()).toMatchObject({ oid: fixture.head });
     expect(deps.probeLocalGit()).toMatchObject({
-      unknown: true,
-      detail: "configured fetch projection and live vault must not be nested",
+      head: fixture.head,
+      detail: expect.stringContaining("configured fetch projection ignored"),
     });
   });
 
@@ -112,7 +163,13 @@ describe("defaultCopyStatusDeps fetch projection", () => {
 
     const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
     await expect(deps.probeLiveDrift?.()).resolves.toMatchObject({ content: 1, ledger: 1 });
-    expect(deps.probeLocalGit()).toMatchObject({ dirty: 0, untracked: 0 });
+    expect(deps.probeLocalGit()).toMatchObject({
+      dirty: 2,
+      untracked: 2,
+      ledger_untracked: 1,
+      content_untracked: 1,
+      detail: expect.stringContaining("configured fetch projection ignored"),
+    });
   });
 
   it("compares live bytes to projection HEAD rather than projection working-tree edits", async () => {
@@ -120,7 +177,10 @@ describe("defaultCopyStatusDeps fetch projection", () => {
     writeFileSync(join(fixture.projection, "SCHEMA.md"), "# manual projection edit\n");
     const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
     await expect(deps.probeLiveDrift?.()).resolves.toMatchObject({ content: 0, ledger: 0 });
-    expect(deps.probeLocalGit()).toMatchObject({ dirty: 1 });
+    expect(deps.probeLocalGit()).toMatchObject({
+      dirty: 0,
+      detail: expect.stringContaining("configured fetch projection ignored"),
+    });
   });
 
   it("treats matching nested Markdown in projection HEAD as synchronized", async () => {

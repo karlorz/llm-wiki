@@ -144,12 +144,12 @@ The snapshot-side Git promotion class shared by its 200-cap, S3-to-Git rclone ex
 _Avoid_: raising the 200-cap, `git add -A` of leftover event-ledger JSON, applying this class to leaf S3 push
 
 **Fetch projection**:
-An independent sibling Git clone selected by `vault_sync.fetch_projection` for leaf fetch, operator Git status, and `copy-status.local_git`. It contains GitHub-promotable content only and is distinct from the authoritative live vault and the snapshotter worktree.
-_Avoid_: linked worktree, reusing `vault_sync.snapshot_worktree`, redirecting MCP/authoring writes into the projection
+An optional independent sibling Git clone selected by `vault_sync.fetch_projection` for leaf fetch and live-drift comparison. One-folder mode records `none`; operator Git status and `copy-status.local_git` remain scoped to the authoritative live vault.
+_Avoid_: linked worktree, reusing `vault_sync.snapshot_worktree`, treating the projection as the operator surface, redirecting MCP/authoring writes into the projection
 
 **Git presentation**:
-The operator-visible Git state of the fetch projection. Projection dirt and authoritative live drift are separate signals; neither determines whether live ledger data is durable in S3.
-_Avoid_: reporting live event JSON as projection Git dirt, hiding all untracked content with `status.showUntrackedFiles=no`
+The operator-visible Git state of the authoritative live vault. Git dirt, independent live-ledger inventory, and optional projection drift are separate signals; none determines whether live ledger data is durable in S3.
+_Avoid_: using a sibling projection as the operator surface, conflating ignored event receipts with missing S3 data, hiding all untracked content with `status.showUntrackedFiles=no`
 
 **Path-class predicates**:
 CLI code names the four planes independently: `isS3OwnedPath`, `isMarkdownInventoryPath`, `isGitPromotablePath`, and `isGitPresentationPath`. Snapshot shell uses `scripts/lib/git-promotion-policy.sh`; an executable parity test keeps its Git-promotion decisions aligned with the CLI without reusing that policy for S3 transport.
@@ -187,7 +187,7 @@ An attended decision process that reviews ranked-audit evidence, resolves ambigu
 - Query project is an optional wiki_query filter; unknown or empty project fail-closes and does not invent a writer_id.
 - Query text must be non-empty after trim; whitespace-only HTTP query fail-closes and does not invent a writer_id.
 - Authoritative S3 ownership, Markdown inventory, snapshot Git promotion, and Git presentation are separate predicates. Event ledger is S3-owned and Git-non-promotable; promotable notes are GitHub-bound user content; `log.md` is a projection of the event ledger.
-- Fetch projection is the leaf Git presentation/fetch clone; it does not replace the live MCP/S3 vault or the snapshotter's protected worktree.
+- Fetch projection is an optional leaf fetch/live-drift clone; it does not replace the live vault's Git presentation, MCP/S3 authority, or the snapshotter's protected worktree.
 - HTTP CAS receipt is the `/mcp` envelope for workitem and page-publish overwrites; it does not change writer identity and does not invent a Doubao writer_id.
 - Status receipt names the authenticated writer and includes fleet identity on success; unknown or missing host identity fail-closes without leaking other fleet hosts.
 - Read receipt sha256 is full-file bytes; tail_bytes is a suffix only; missing and escaped paths fail closed.

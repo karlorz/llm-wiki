@@ -78,7 +78,7 @@ printf '1' > "$home/cache/wiki-fetch/last-behind"
 printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
 
 HOME="$home" \
-  WIKI_DIR="$vault" \
+  WIKI_PATH="$vault" \
   WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
   NOTIFY_LOG="$notify_log" \
   "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
@@ -141,7 +141,7 @@ STUB
   printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
 
   local env_prefix="PULL_HELPER_STATE=$root/pull-state HOME=$home"
-  env_prefix="$env_prefix WIKI_DIR=$vault"
+  env_prefix="$env_prefix WIKI_PATH=$vault"
   env_prefix="$env_prefix WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1"
   env_prefix="$env_prefix NOTIFY_LOG=$notify_log"
   if [ -n "$pull_env" ]; then
@@ -211,10 +211,10 @@ STUB
   printf '0' > "$home/cache/wiki-fetch/last-behind"
   printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
 
-  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
+  env HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
     WIKI_FETCH_PULL_ON_DELTA=1 NOTIFY_LOG="$notify_log" PULL_COUNT_FILE="$pull_count" \
     "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
-  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
+  env HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
     WIKI_FETCH_PULL_ON_DELTA=1 NOTIFY_LOG="$notify_log" PULL_COUNT_FILE="$pull_count" \
     "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
 
@@ -269,7 +269,7 @@ STUB
   printf '0' > "$home/cache/wiki-fetch/last-behind"
   printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
 
-  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
+  env HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
     WIKI_FETCH_PULL_ON_DELTA=1 NOTIFY_LOG="$notify_log" HELPER_STATE_FILE="$helper_state" \
     "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
 
@@ -323,7 +323,7 @@ STUB
   printf '0' > "$home/cache/wiki-fetch/last-behind"
   printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
 
-  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
+  env HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_STALE_NOTIFY_AFTER_SECONDS=1 \
     WIKI_FETCH_PULL_ON_DELTA=1 NOTIFY_LOG="$notify_log" HELPER_STATE_FILE="$helper_state" \
     "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
 
@@ -385,10 +385,10 @@ STUB
   vault_sync_op_begin "$vault" "op-pending" "main" "$head" "$target" "lock:test" "test" "hash"
   vault_sync_op_mark_review_required "$vault" "op-pending" "semantic-conflict"
 
-  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+  env HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
     WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 NOTIFY_LOG="$notify_log" \
     HELPER_STATE_FILE="$helper_state" "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
-  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+  env HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
     WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 NOTIFY_LOG="$notify_log" \
     HELPER_STATE_FILE="$helper_state" "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
 
@@ -444,7 +444,7 @@ STUB
   printf '0' > "$home/cache/wiki-fetch/last-behind"
   printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
 
-  HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_HANDOFF_HARD_PAUSE=1 \
+  HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_HANDOFF_HARD_PAUSE=1 \
     WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
     "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
 
@@ -524,7 +524,7 @@ STUB
   printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
 
   # First invocation - NOTIFY line.
-  HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+  HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
     WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
     WIKI_FETCH_HANDOFF_HARD_PAUSE=1 WIKI_FETCH_HANDOFF_HARD_PAUSE_CYCLES=12 \
     NOTIFY_LOG="$notify_log" \
@@ -550,7 +550,7 @@ STUB
 
   # Subsequent invocations within the backoff - SKIP PULL reminder-backoff.
   for _ in 1 2 3; do
-    HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+    HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
       WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
       WIKI_FETCH_HANDOFF_HARD_PAUSE=1 WIKI_FETCH_HANDOFF_HARD_PAUSE_CYCLES=12 \
       NOTIFY_LOG="$notify_log" \
@@ -625,7 +625,7 @@ STUB
   printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
 
   # First invocation - NOTIFY.
-  HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+  HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
     WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
     WIKI_FETCH_HANDOFF_HARD_PAUSE=1 WIKI_FETCH_HANDOFF_HARD_PAUSE_CYCLES=3 \
     NOTIFY_LOG="$notify_log" \
@@ -633,7 +633,7 @@ STUB
 
   # Three more reminder-backoff cycles (threshold = 3, so 3 should trigger).
   for _ in 1 2 3; do
-    HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+    HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
       WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
       WIKI_FETCH_HANDOFF_HARD_PAUSE=1 WIKI_FETCH_HANDOFF_HARD_PAUSE_CYCLES=3 \
       NOTIFY_LOG="$notify_log" \
@@ -723,7 +723,7 @@ STUB
   printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
 
   for _ in 1 2 3 4 5; do
-    HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+    HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
       WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 \
       WIKI_FETCH_HANDOFF_HARD_PAUSE=0 \
       NOTIFY_LOG="$notify_log" \
@@ -812,7 +812,7 @@ STUB
   printf '0' > "$home/cache/wiki-fetch/last-behind"
   printf '0' > "$home/cache/wiki-fetch/last-stale-notify"
 
-  env HOME="$home" WIKI_DIR="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
+  env HOME="$home" WIKI_PATH="$vault" WIKI_FETCH_PULL_ON_DELTA=1 \
     WIKI_FETCH_HANDOFF_NOTIFY_AFTER_SECONDS=3600 NOTIFY_LOG="$notify_log" \
     HELPER_STATE_FILE="$helper_state" "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
 
@@ -829,6 +829,71 @@ STUB
     FAIL=$((FAIL + 1))
   fi
   rm -rf "$root"
+}
+
+run_disabled_fetch_projection_case() {
+  local mode="$1"
+  local root home remote source live projection remote_work script_dir notify_log
+  root="$(mktemp -d)"
+  home="$root/home"
+  remote="$root/origin.git"
+  source="$root/source"
+  live="$root/wiki-live"
+  projection="$root/wiki-fetch"
+  remote_work="$root/remote-work"
+  script_dir="$root/scripts"
+  notify_log="$root/notify.log"
+
+  git init --bare "$remote" >/dev/null
+  mkdir -p "$source" "$script_dir/lib" "$home/.skillwiki"
+  git -C "$source" init -b main >/dev/null
+  git -C "$source" remote add origin "$remote"
+  printf 'base\n' > "$source/note.md"
+  git_commit "$source" init
+  git -C "$source" push -u origin main >/dev/null
+  git clone --branch main "$remote" "$live" >/dev/null
+  git clone --branch main "$remote" "$projection" >/dev/null
+  git clone --branch main "$remote" "$remote_work" >/dev/null
+  printf 'remote\n' > "$remote_work/remote.md"
+  git_commit "$remote_work" remote
+  git -C "$remote_work" push origin main >/dev/null
+
+  local live_origin_before projection_origin_before remote_head
+  live_origin_before="$(git -C "$live" rev-parse origin/main)"
+  projection_origin_before="$(git -C "$projection" rev-parse origin/main)"
+  remote_head="$(git -C "$remote_work" rev-parse HEAD)"
+  printf 'WIKI_PATH=%s\n' "$live" > "$home/.skillwiki/.env"
+  if [ "$mode" = "none" ]; then
+    printf 'vault_sync.fetch_projection=none\n' >> "$home/.skillwiki/.env"
+  fi
+
+  cp "$SOURCE_SCRIPT" "$script_dir/wiki-fetch-notify.sh"
+  cp "$(cd "$(dirname "$SOURCE_SCRIPT")" && pwd)/lib/git-operation-journal.sh" "$script_dir/lib/git-operation-journal.sh"
+  chmod +x "$script_dir/wiki-fetch-notify.sh"
+  cat > "$script_dir/lib/platform.sh" <<'STUB'
+platform_detect_os() { VS_OS=test; export VS_OS; }
+platform_cache_dir() { echo "$HOME/cache"; }
+platform_log_dir() { echo "$HOME/logs"; }
+platform_notify() { printf '%s|%s\n' "$1" "$2" >> "$NOTIFY_LOG"; }
+STUB
+  cat > "$script_dir/lib/lockfile.sh" <<'STUB'
+lockfile_acquire() { return 0; }
+STUB
+
+  HOME="$home" WIKI_DIR="$projection" NOTIFY_LOG="$notify_log" \
+    "$script_dir/wiki-fetch-notify.sh" >/dev/null 2>&1
+
+  assert_eq "$mode projection mode fetches the live WIKI_PATH" \
+    "$(git -C "$live" rev-parse origin/main)" "$remote_head"
+  assert_eq "$mode projection mode ignores inherited WIKI_DIR" \
+    "$(git -C "$projection" rev-parse origin/main)" "$projection_origin_before"
+  assert_eq "$mode projection fixture began behind" "$projection_origin_before" "$live_origin_before"
+  rm -rf "$root"
+}
+
+test_disabled_fetch_projection_uses_live_vault() {
+  run_disabled_fetch_projection_case none
+  run_disabled_fetch_projection_case unset
 }
 
 test_configured_fetch_projection_isolates_live_vault() {
@@ -1020,6 +1085,7 @@ test_p2_handoff_present_reminder_backoff
 test_p2_handoff_persists_writes_pause_marker
 test_p2_disable_env_var_bypasses_hard_pause
 test_stale_handoff_with_dirty_wip_does_not_skip_pull
+test_disabled_fetch_projection_uses_live_vault
 test_configured_fetch_projection_isolates_live_vault
 test_same_path_projection_fails_closed
 test_invalid_projection_paths_fail_closed

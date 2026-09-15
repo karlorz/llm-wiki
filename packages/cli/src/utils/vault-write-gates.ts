@@ -105,6 +105,11 @@ export function isEventLedgerPath(rel: string): boolean {
   return n === "meta/log-events" || n.startsWith("meta/log-events/");
 }
 
+/** Count physical files in the live event ledger, including Git-ignored receipts. */
+export function countEventLedgerFiles(vault: string): number {
+  return listFilesRecursive(join(vault, "meta", "log-events")).length;
+}
+
 export interface DirtyVolumeGateInput {
   vault: string;
   /** Expanded dirty-file count threshold; default DEFAULT_DIRTY_VOLUME_THRESHOLD. */

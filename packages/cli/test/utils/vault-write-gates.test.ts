@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CAPTURE_HYGIENE_CONTRACT,
+  countEventLedgerFiles,
   DEFAULT_CAPTURE_BUDGET,
   DEFAULT_DIRTY_VOLUME_THRESHOLD,
   evaluateCaptureBudget,
@@ -259,6 +260,28 @@ describe("M1 dirty volume gate", () => {
     const gate = evaluateDirtyVolumeGate({ vault, threshold: 5, command: "observe" });
     expect(gate.allowed).toBe(true);
     if (gate.allowed) expect(gate.reason).toBe("under_threshold");
+  });
+
+  it("counts ignored event-ledger files independently of the dirty-volume report", () => {
+    const vault = makeGitVault("dirty-ledger-ignored");
+    writeFileSync(join(vault, ".git", "info", "exclude"), "meta/log-events/\n");
+    mkdirSync(join(vault, "meta", "log-events", "2026-09-15"), { recursive: true });
+    for (let i = 0; i < 3; i++) {
+      writeFileSync(
+        join(vault, "meta", "log-events", "2026-09-15", `${"b".repeat(63)}${i}.json`),
+        "{}\n",
+      );
+    }
+
+    const report = measureDirtyVolume(vault);
+
+    expect(report.porcelain_lines).toBe(0);
+    expect(report.expanded_files).toBe(0);
+    expect(report.modified).toBe(0);
+    expect(report.untracked).toBe(0);
+    expect(report.content_files).toBe(0);
+    expect(report.ledger_files).toBe(0);
+    expect(countEventLedgerFiles(vault)).toBe(3);
   });
 });
 

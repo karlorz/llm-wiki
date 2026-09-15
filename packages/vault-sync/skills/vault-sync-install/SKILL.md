@@ -1,7 +1,7 @@
 ---
 name: vault-sync-install
 description: "Install vault-sync: scripts, scheduler, optional Linux FUSE-only mode. Use for install, reinstall, or role switch."
-argument-hint: "[--mode=full|fuse-only] [--role=leaf|snapshotter] [--service-scope=user|system] [--vault-path=<path>] [--fetch-projection=<absolute-path>] [--package-version=<ver>] [--package-commit=<sha>] [--dry-run] [--override-snapshotter]"
+argument-hint: "[--mode=full|fuse-only] [--role=leaf|snapshotter] [--service-scope=user|system] [--vault-path=<path>] [--fetch-projection=<absolute-path>|none] [--package-version=<ver>] [--package-commit=<sha>] [--dry-run] [--override-snapshotter]"
 ---
 
 # vault-sync-install
@@ -26,7 +26,7 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
      - On override: print warning, note that fleet.yaml update is deferred to user.
    - `--service-scope=auto|user|system` for Linux snapshotter or FUSE-only installs. `auto` uses `system` when run as root and `user` otherwise. Full leaf installs stay on user units.
    - `--vault-path=<path>` for the FUSE-only mount guard. Defaults to `~/wiki`.
-   - `--fetch-projection=<absolute-path>` (leaf/full only; env `VS_FETCH_PROJECTION`) provisions or validates an independent sibling Git clone used by fetch and Git status. It must be distinct and non-nested with the live vault and must not reuse `vault_sync.snapshot_worktree`.
+   - `--fetch-projection=<absolute-path>|none` (leaf/full only; env `VS_FETCH_PROJECTION`) optionally provisions or validates an independent sibling Git clone used by fetch. Omitted or `none` selects one-folder mode and persists `vault_sync.fetch_projection=none`, so fetch follows the live vault. An absolute projection must be distinct and non-nested with the live vault and must not reuse `vault_sync.snapshot_worktree`.
    - `--max-dir-cache=<duration>` for the FUSE freshness envelope. Defaults to `15m`.
    - `--package-version=<ver>` / `--package-commit=<sha>` (optional) — set deploy provenance for `runtime-manifest.json`. Equivalent env: `VS_PACKAGE_VERSION`, `VS_PACKAGE_COMMIT`. Metadata only; does not change copied scripts. Required for honest manifests when the package root is rsynced without monorepo `package.json` / git.
 3. **Check prerequisites**:
@@ -35,7 +35,7 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    - macOS: `command -v launchctl` — required.
    - Linux full mode: `systemctl --user` must be available. Fail with hint if not.
    - Linux FUSE-only mode: `systemctl` must be available. User scope requires `systemctl --user`; system scope writes root units under `/etc/systemd/system`.
-4. **Prepare the optional leaf fetch projection** before activating services. Stop the existing fetch loop when present, preserve its active/enabled state, reject unresolved operation journals, and acquire the live vault's managed-write lock before cloning or changing projection config. For a missing target, clone the live vault's `origin/main` into a temporary sibling, verify origin, branch, `SCHEMA.md`, clean status, and zero `meta/log-events/**` paths, then atomically rename it. Existing targets are validated and never overwritten. A failed install restores the prior service state and config, releases the lock, and removes only a clone created by that installer run; it never removes the live vault or an existing projection. A fresh host with no old fetch units proceeds without treating absent units as an error.
+4. **Configure leaf fetch routing** before activating services. Omitted or `none` projection selects one-folder mode by writing `vault_sync.fetch_projection=none`; when this replaces a configured sibling, stop the existing fetch loop and preserve its active/enabled state for rollback. Never delete the sibling. For an absolute projection, stop the existing fetch loop, reject unresolved operation journals, and acquire the live vault's managed-write lock before cloning or changing projection config. For a missing target, clone the live vault's `origin/main` into a temporary sibling, verify origin, branch, `SCHEMA.md`, clean status, and zero `meta/log-events/**` paths, then atomically rename it. Existing targets are validated and never overwritten. A failed install restores the prior service state and config, releases any lock, and removes only a clone created by that installer run; it never removes the live vault or an existing projection. A fresh host with no old fetch units proceeds without treating absent units as an error.
 5. **Deploy scripts**:
    ```
    mkdir -p $(platform_share_dir)/bin
@@ -60,7 +60,7 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    - Linux only: `loginctl enable-linger $USER`. If this fails, surface as a hard error — without it, headless LXC will silently not sync.
 8. **Register in skillwiki config** for full mode:
    ```
-   When `--fetch-projection` is present, persist `vault_sync.fetch_projection=<absolute-path>` before fetch service activation. The fetch service reads this host-local key directly; MCP, authoring, push, and `skillwiki path` remain live-vault scoped.
+   Persist fetch routing before service activation. An absolute `--fetch-projection` writes `vault_sync.fetch_projection=<absolute-path>`. Omitted or `none` writes `vault_sync.fetch_projection=none`, making `WIKI_PATH` / the live vault the fetch target. The fetch service reads this host-local key directly; MCP, authoring, push, `skillwiki path`, and `skillwiki copy-status` remain live-vault scoped.
    skillwiki config set vault_sync.installed true
    skillwiki config set vault_sync.role <role>
    skillwiki config set vault_sync.scheduler <launchd|systemd>
@@ -69,6 +69,7 @@ Install vault-sync on the current host. OS-detecting, idempotent installer that 
    skillwiki config set vault_sync.fuse_refresh_interval 300s   # Linux only
    skillwiki config set vault_sync.fuse_max_dir_cache 15m       # Linux only
    ```
+   Some already-installed npm `skillwiki` 0.10.91 binaries predate this config-key schema and return `INVALID_CONFIG_KEY` for `config get/set vault_sync.fetch_projection`. The installer intentionally falls back to an exact raw `~/.skillwiki/.env` write when that happens. For an attended one-folder migration, use this installer with `--fetch-projection none`; do not delete the sibling clone or require the old CLI to clear the key first.
    Do **not** auto-set `vault_sync.push_enabled=true`. Install remains the full-role path. A fetch-only host is configured after install by setting `vault_sync.push_enabled=false` and leaving wiki-push disabled.
    Snapshotter installs also record `vault_sync.snapshot_script` and the conventional profile path `vault_sync.snapshot_profile=/etc/vault-sync/profiles/<host>-snapshotter.env`.
    The snapshotter profile is the operational authority for its host-local
@@ -180,6 +181,7 @@ Resolve the vault-sync package root before invoking the companion script:
 ```bash
 # monorepo
 bash packages/vault-sync/skills/vault-sync-install/install.sh --role leaf --dry-run
+bash packages/vault-sync/skills/vault-sync-install/install.sh --role leaf --vault-path /absolute/wiki --fetch-projection none --dry-run
 bash packages/vault-sync/skills/vault-sync-install/install.sh --role leaf --vault-path /absolute/wiki --fetch-projection /absolute/wiki-git --dry-run
 # plugin root (cwd = vault-sync plugin package)
 bash skills/vault-sync-install/install.sh --role leaf --dry-run
@@ -207,6 +209,7 @@ bash packages/vault-sync/skills/vault-sync-install/install.sh --mode fuse-only -
 
 # Companion script (headless / CI)
 VS_ROLE=leaf VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
+VS_ROLE=leaf VS_VAULT_PATH=/absolute/wiki VS_FETCH_PROJECTION=none VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 VS_ROLE=leaf VS_VAULT_PATH=/absolute/wiki VS_FETCH_PROJECTION=/absolute/wiki-git VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 VS_ROLE=snapshotter VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 VS_MODE=fuse-only VS_VAULT_PATH=/root/wiki VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh

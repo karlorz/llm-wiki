@@ -18,7 +18,7 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
 
 ## Steps
 
-1. **Resolve the authoritative live vault once** (cwd-independent): `VS_VAULT_PATH` → `WIKI_PATH` → `skillwiki --human path` (absolute only) → `$HOME/wiki`. Conflict/content checks stay on this path. When `vault_sync.fetch_projection` is configured, GitHub and local Git health use that independent clone and fail closed for missing, non-Git, or same-path configuration; otherwise legacy hosts use the live Git root.
+1. **Resolve the authoritative live vault once** (cwd-independent): `VS_VAULT_PATH` → `WIKI_PATH` → `skillwiki --human path` (absolute only) → `$HOME/wiki`. Conflict/content checks stay on this path. The canonical operator Git UI is `skillwiki copy-status`, whose GitHub and local-Git planes always use this live vault. This lower-level status script retains projection-selected reachability rows to diagnose configured fetch infrastructure; do not interpret those rows as the operator Git surface.
 2. **Run vault_sync_* doctor checks** directly (equivalent to `skillwiki doctor --only vault_sync` but available without skillwiki).
    - Reports `vault_sync_conflict_markers` so poisoned Markdown is visible before
      push, pull, or snapshot workflows continue.
@@ -32,7 +32,7 @@ One-shot detailed health report of vault-sync on the current host. Reports sched
 5. **Role-specific checks**:
    - leaf/full hosts: tail last 20 lines of `wiki-push.log` and `wiki-fetch.log`; check `wiki-push-filters.txt`; read `wiki-push-result.state` (durable terminal state, H9) as `vault_sync_last_push_result` — the authoritative last push outcome (OK / refused+reason), since log rotation and P1 cooldown suppression can hide refusals from the log tail.
    - snapshotter hosts: skip leaf push/fetch/filter checks as not applicable; verify the configured `vault_sync.snapshot_script` or packaged `wiki-snapshot.sh` contains `--max-delete`.
-   - leaf Git health details identify whether they came from the configured fetch projection or the legacy live Git root. This is separate from authoritative live-vault conflict/content health.
+   - leaf reachability details identify whether this script probed configured fetch infrastructure or the live Git root. These legacy diagnostic rows are separate from authoritative live-vault conflict/content health and from `skillwiki copy-status.local_git`.
 6. **Runtime proof checks** (read-only; never write markers):
    - `vault_sync_runtime_manifest` — `$(platform_share_dir)/runtime-manifest.json` present and parseable.
    - `vault_sync_runtime_match` — SHA-256 of installed scripts match package sources, and recorded macOS LaunchAgent hashes match the actual deployed plist files.

@@ -8,7 +8,7 @@ import {
   resolveWikiS3Remote,
   REMOTE_PROBE_TIMEOUT_MS,
 } from "../utils/remote-health.js";
-import { measureDirtyVolume } from "../utils/vault-write-gates.js";
+import { countEventLedgerFiles, measureDirtyVolume } from "../utils/vault-write-gates.js";
 import { inspectConfiguredFetchProjection } from "../utils/fetch-projection.js";
 import { measureAuthoritativeLiveDrift } from "../utils/live-drift.js";
 import {
@@ -51,12 +51,14 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
       : nestedWithLive
         ? "configured fetch projection and live vault must not be nested"
         : undefined);
-  const gitVault = configuredProjection ?? input.vault;
+  const gitVault = input.vault;
+  const projectionWarning = selection.configured
+    ? `configured fetch projection ignored for Git status; using live vault${projectionProblem ? ` (${projectionProblem})` : ""}`
+    : undefined;
   const invalidProjectionDetail = projectionProblem ?? "configured fetch projection is not a git repository";
   const gitRootProblem = (): string | undefined => {
-    if (projectionProblem) return projectionProblem;
     if (!existsSync(join(gitVault, ".git"))) {
-      return selection.configured ? invalidProjectionDetail : "vault is not a git repository";
+      return "vault is not a git repository";
     }
     return undefined;
   };
@@ -66,7 +68,7 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
       if (input.s3Ok === false) return { reachable: false, detail: "MCP S3 not ok" };
       const remote = resolveWikiS3Remote({ home: input.home });
       if (!remote) {
-        return { unknown: true, detail: "leaf clone is not the live plane; S3 remote unconfigured" };
+        return { unknown: true, detail: "Git worktree is not the live plane; S3 remote unconfigured" };
       }
       const reach = probeS3Reachability(remote);
       if (reach === "ok") return { reachable: true, detail: "S3 reachable" };
@@ -106,23 +108,24 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
       const dirty = measureDirtyVolume(gitVault);
       const dirtyCount = dirty.is_git_repo ? dirty.expanded_files : undefined;
       const untrackedCount = dirty.is_git_repo ? dirty.untracked : undefined;
-      const ledgerUntracked = dirty.is_git_repo ? dirty.ledger_files : undefined;
+      const ledgerUntracked = dirty.is_git_repo ? countEventLedgerFiles(gitVault) : undefined;
       const contentUntracked = dirty.is_git_repo ? dirty.content_files : undefined;
       const dirtyHint =
-        dirtyCount && dirtyCount > 0
-          ? ledgerUntracked && ledgerUntracked > 0
-            ? `event-ledger live-ahead of GitHub; do not git add`
-            : `live-ahead of GitHub; do not git add`
+        ledgerUntracked && ledgerUntracked > 0
+          ? `event-ledger live-ahead of GitHub; do not git add`
+          : dirtyCount && dirtyCount > 0
+            ? `live-ahead of GitHub; do not git add`
           : undefined;
+      const detail = [dirtyHint, blockedReason, projectionWarning].filter(Boolean).join("; ") || undefined;
       return {
         head,
         behind: Number.isFinite(behind) ? behind : undefined,
         blockedReason,
         dirty: dirtyCount,
         untracked: untrackedCount,
-        ledger_untracked: dirtyCount && dirtyCount > 0 ? ledgerUntracked : undefined,
-        content_untracked: dirtyCount && dirtyCount > 0 ? contentUntracked : undefined,
-        detail: dirtyHint ?? blockedReason,
+        ledger_untracked: ledgerUntracked && ledgerUntracked > 0 ? ledgerUntracked : undefined,
+        content_untracked: contentUntracked && contentUntracked > 0 ? contentUntracked : undefined,
+        detail,
       };
     },
     probeLiveDrift() {
