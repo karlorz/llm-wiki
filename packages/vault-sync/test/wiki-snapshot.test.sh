@@ -64,6 +64,7 @@ fi
 assert_contains "snapshot preserves max-delete guard" "--max-delete 10"
 assert_contains "snapshot rclone excludes superpowers" 'exclude ".superpowers/'
 assert_contains "snapshot rclone excludes log-events" 'exclude "meta/log-events/'
+assert_contains "snapshot git add skips leftover log-events" "snapshot_git_add_promotable()"
 assert_contains "snapshot rclone excludes drafts" 'exclude ".drafts/'
 assert_contains "snapshot S3-not-git ignores superpowers" ".superpowers/"
 assert_contains "snapshot classified inventory ignores log-events" "meta/log-events/*"
@@ -1650,9 +1651,49 @@ STUB
   rm -rf "$root"
 }
 
+test_snapshot_does_not_commit_leftover_untracked_log_events() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir log_file lock_file
+  setup="$(setup_completion_record_fixture "$root" pushed)"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  log_file="$(printf '%s\n' "$setup" | sed -n '3p')"
+  lock_file="$(printf '%s\n' "$setup" | sed -n '4p')"
+
+  mkdir -p "$git_dir/meta/log-events/2026-09-14"
+  printf '{}\n' > "$git_dir/meta/log-events/2026-09-14/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"
+
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$log_file" \
+    WIKI_SNAPSHOT_LOCK="$lock_file" \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >/dev/null 2>&1
+  local rc=$?
+  local tracked_events
+  tracked_events="$(git -C "$git_dir" ls-tree -r --name-only HEAD | grep -c 'meta/log-events' || true)"
+
+  if [ "$rc" -eq 0 ] \
+      && git -C "$git_dir" cat-file -e HEAD:new-note.md \
+      && [ "$tracked_events" -eq 0 ] \
+      && grep -q 'classified inventory left 1 untracked event-ledger path' "$log_file"; then
+    printf 'PASS: snapshot does not commit leftover untracked log-events\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: leftover log-events leaked into snapshot (rc=%s tracked=%s log=%s)\n' \
+      "$rc" "$tracked_events" "$(tr '\n' ' ' < "$log_file" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
 test_snapshot_emits_canonical_completion_record_on_pushed_success
 test_snapshot_emits_canonical_completion_record_on_no_change_success
 test_snapshot_does_not_emit_completion_record_on_failure
+test_snapshot_does_not_commit_leftover_untracked_log_events
 
 # ── Same-opid inhibit (snapshot-health-honesty C3) ────────────
 # uname-stubbed so these run on macOS. HOME is isolated so inhibit state

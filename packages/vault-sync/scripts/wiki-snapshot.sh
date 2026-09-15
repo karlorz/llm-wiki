@@ -120,6 +120,25 @@ snapshot_non_promotable_path() {
     esac
     return 1
 }
+
+# rclone exclude leaves leftover non-promotable files in the worktree.
+# `git add -A` would promote them (live 0.10.90 leak). Pathspecs match
+# snapshot_non_promotable_path. Already-tracked ledger history is left as-is.
+snapshot_git_add_promotable() {
+    git add --all -- . \
+        ':!.skillwiki' \
+        ':!.claude' \
+        ':!.obsidian' \
+        ':!.antigravitycli' \
+        ':!.playwright-cli' \
+        ':!.superpowers' \
+        ':!.snapshots' \
+        ':!.drafts' \
+        ':!tmp' \
+        ':!logs' \
+        ':!meta/log-events'
+}
+
 PROJECTION_PARITY_TIMEOUT_SECONDS="${WIKI_SNAPSHOT_PROJECTION_PARITY_TIMEOUT_SECONDS:-120}"
 PROJECTION_PARITY_POLL_SECONDS="${WIKI_SNAPSHOT_PROJECTION_PARITY_POLL_SECONDS:-2}"
 PROJECTION_READ_TIMEOUT_SECONDS="${WIKI_SNAPSHOT_PROJECTION_READ_TIMEOUT_SECONDS:-15}"
@@ -1286,9 +1305,13 @@ fi
 
 # Commit
 echo "Committing changes..."
-if ! git add -A; then
+if ! snapshot_git_add_promotable; then
     log "ERROR: git add failed"
     exit 1
+fi
+ledger_leftover="$(git ls-files -o --exclude-standard -- meta/log-events | wc -l | tr -d ' ')"
+if [ "${ledger_leftover:-0}" -gt 0 ]; then
+    log "WARN: classified inventory left $ledger_leftover untracked event-ledger path(s) unstaged"
 fi
 
 if ! git commit -m "Snapshot $DATE"; then
@@ -1322,7 +1345,7 @@ if [ "$PULL_SUCCESS" = false ]; then
         if ! raw_dedup_guard || ! conflict_marker_guard; then
             exit 1
         fi
-        git add -A || true
+        snapshot_git_add_promotable || true
         git commit -m "Snapshot $DATE (post-repair)" || true
     else
         log "ERROR: Repair failed after pull failure"

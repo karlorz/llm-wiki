@@ -132,8 +132,8 @@ A vault path the snapshot 200-cap treats as GitHub-bound user content.
 _Avoid_: counting event-ledger JSON as notes
 
 **Classified inventory**:
-One path class shared by the snapshot cap and rclone excludes. Event ledger and local scratch are non-promotable; user pages remain promotable.
-_Avoid_: raising the 200-cap, `git add` of live-ahead events
+One path class shared by the snapshot cap, rclone excludes, and snapshot `git add`. Event ledger and local scratch are non-promotable; user pages remain promotable.
+_Avoid_: raising the 200-cap, `git add -A` of leftover event-ledger JSON
 
 **Query text**:
 HTTP `wiki_query.query` must be non-empty after trim. Whitespace-only query fail-closes (`USAGE`). No `results`, no invented `writer_id`, no vault file written.
