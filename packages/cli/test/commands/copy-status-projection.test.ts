@@ -27,6 +27,10 @@ function projectionFixture(): { home: string; live: string; projection: string; 
   execFileSync("git", ["clone", "--bare", source, origin]);
   execFileSync("git", ["clone", origin, live]);
   execFileSync("git", ["clone", origin, projection]);
+  git(live, "config", "user.name", "test");
+  git(live, "config", "user.email", "test@example.com");
+  git(projection, "config", "user.name", "test");
+  git(projection, "config", "user.email", "test@example.com");
   const head = git(live, "rev-parse", "HEAD");
   writeFileSync(join(home, ".skillwiki", ".env"), `vault_sync.fetch_projection=${projection}\n`);
   return { home, live, projection, head };
@@ -189,8 +193,8 @@ describe("defaultCopyStatusDeps fetch projection", () => {
     mkdirSync(join(fixture.projection, "concepts"), { recursive: true });
     writeFileSync(join(fixture.live, "concepts", "shared.md"), "# shared\n");
     writeFileSync(join(fixture.projection, "concepts", "shared.md"), "# shared\n");
-    execFileSync("git", ["add", "concepts/shared.md"], { cwd: fixture.projection });
-    execFileSync("git", ["commit", "-m", "nested"], { cwd: fixture.projection });
+    git(fixture.projection, "add", "concepts/shared.md");
+    git(fixture.projection, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "nested");
 
     const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
 
@@ -201,8 +205,8 @@ describe("defaultCopyStatusDeps fetch projection", () => {
     const fixture = projectionFixture();
     mkdirSync(join(fixture.projection, "concepts"), { recursive: true });
     writeFileSync(join(fixture.projection, "concepts", "removed-live.md"), "# projection only\n");
-    execFileSync("git", ["add", "concepts/removed-live.md"], { cwd: fixture.projection });
-    execFileSync("git", ["commit", "-m", "projection-only"], { cwd: fixture.projection });
+    git(fixture.projection, "add", "concepts/removed-live.md");
+    git(fixture.projection, "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "projection-only");
 
     const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
 
