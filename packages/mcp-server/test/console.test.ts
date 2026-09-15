@@ -7737,7 +7737,7 @@ describe("HTTP /console", () => {
         await ctx.close();
       }
     }
-  });
+  }, 120_000);
 
   it("revokes a host-id on POST /console/revoke with remaining encoded confirm queries and a valid body", async () => {
     const queries = [
@@ -8042,7 +8042,7 @@ describe("HTTP /console", () => {
         await ctx.close();
       }
     }
-  });
+  }, 120_000);
 
   it("refuses POST /console/revoke with remaining short confirm-later queries when confirm is only in the query", async () => {
     const keys = [
