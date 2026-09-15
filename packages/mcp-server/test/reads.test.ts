@@ -20,8 +20,7 @@ describe("wiki_read_page fail-closed", () => {
       { path: "concepts/does-not-exist.md" },
     );
     expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("expected failure");
-    expect(result.error).toBe("FILE_NOT_FOUND");
+    if (result.ok || result.error !== "FILE_NOT_FOUND") throw new Error("expected FILE_NOT_FOUND");
     expect(result.path).toBe("concepts/does-not-exist.md");
     expect((result as { markdown?: string }).markdown).toBeUndefined();
     expect((result as { writer_id?: string }).writer_id).toBeUndefined();

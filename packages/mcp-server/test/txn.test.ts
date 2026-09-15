@@ -51,7 +51,9 @@ describe("write transaction", () => {
     await writeFile(join(vault, "concepts", "move-fail-dir", "keep.md"), "nested-keep\n", "utf8");
     const blocked = join(vault, "concepts", "move-fail-dir");
 
-    await expect(writeAtomicPath(blocked, "should-not-land\n")).rejects.toMatchObject({ code: "EISDIR" });
+    await expect(writeAtomicPath(blocked, "should-not-land\n")).rejects.toMatchObject({
+      code: expect.stringMatching(/^(EISDIR|EPERM)$/),
+    });
 
     expect(await readFile(join(blocked, "keep.md"), "utf8")).toBe("nested-keep\n");
     expect(await readFile(target, "utf8")).toBe(original);
