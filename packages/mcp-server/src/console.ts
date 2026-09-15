@@ -2,6 +2,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TokenMap } from "./auth.js";
 import { replaceTokenMap } from "./auth.js";
+import { appendAudit } from "./audit.js";
+import type { ClientEntry, OAuthStore, RefreshTokenEntry } from "./oauth-store.js";
 import {
   HOST_ID_RE,
   type AppendHostHashError,
@@ -163,6 +165,10 @@ export interface ConsolePageModel {
   tokenMap: TokenMap;
   audit: ReturnType<typeof pageAudit>;
   devices: DeviceRow[];
+  oauth?: {
+    clients: ClientEntry[];
+    grants: RefreshTokenEntry[];
+  };
   onceBearer?: string;
   onceHostId?: string;
   error?: string;
@@ -191,7 +197,7 @@ export function renderConsolePage(model: ConsolePageModel): string {
       : model.devices
           .map(
             (d) => `<tr>
-  <td><code class="clip" translate="no" title="${esc(d.hostId)}">${esc(d.hostId)}</code>${d.mapped ? "" : ' <span class="muted">Unmapped</span>'}</td>
+  <td><code class="clip" translate="no" title="${esc(d.hostId)}">${esc(d.hostId)}</code>${d.mapped ? "" : (model.oauth ? ' <a href="#oauth-access" class="muted">Unmapped</a>' : ' <span class="muted">Unmapped</span>')}</td>
   <td>${timeCell(d.firstSeen)}</td>
   <td>${timeCell(d.lastActive)}</td>
   <td>${d.mapped ? revokeForm(d.hostId) : ""}</td>
@@ -327,7 +333,7 @@ export function renderConsolePage(model: ConsolePageModel): string {
       <thead><tr><th>Host-id</th><th>Fingerprint</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${keysBody}</tbody>
     </table>
-
+${renderOAuthSection(model.oauth)}
     <h2>Fleet hosts</h2>
     <div class="callout">Each host-id is one machine. Last active is the last audit row from that writer. Revoke removes the bearer. It does not log the machine out of SSH.</div>
     <table>
@@ -372,6 +378,80 @@ export function renderConsolePage(model: ConsolePageModel): string {
 `;
 }
 
+function renderOAuthSection(oauth: ConsolePageModel["oauth"]): string {
+  if (!oauth) return "";
+
+  const clientsBody =
+    oauth.clients.length === 0
+      ? `<tr><td colspan="4">No OAuth clients registered.</td></tr>`
+      : oauth.clients
+          .map((c) => {
+            const name = c.clientName || c.clientId;
+            const activeGrants = oauth.grants.filter((g) => g.clientId === c.clientId).length;
+            return `<tr>
+  <td><code class="clip" translate="no" title="${esc(name)}">${esc(name)}</code></td>
+  <td class="num">${c.redirectUris.length}</td>
+  <td class="num">${activeGrants}</td>
+  <td>${revokeClientForm(c, oauth.grants)}</td>
+</tr>`;
+          })
+          .join("\n");
+
+  const grantsBody =
+    oauth.grants.length === 0
+      ? `<tr><td colspan="5">No active OAuth grants.</td></tr>`
+      : oauth.grants
+          .map((g) => {
+            const expIso = new Date(g.expiresAt).toISOString();
+            return `<tr>
+  <td><code class="clip" translate="no" title="${esc(g.writerId)}">${esc(g.writerId)}</code></td>
+  <td><code translate="no">${esc(fingerprint(g.tokenHash))}</code></td>
+  <td>${g.scope ? `<code class="clip" translate="no">${esc(g.scope)}</code>` : ""}</td>
+  <td>${timeCell(expIso)}</td>
+  <td>${revokeGrantForm(g)}</td>
+</tr>`;
+          })
+          .join("\n");
+
+  return `
+    <h2 id="oauth-access">OAuth access</h2>
+    <div class="callout">Registered clients and active refresh grants. Revoking a client cascade-revokes all its active grants. Revoking a grant terminates the refresh session.</div>
+    <table>
+      <thead><tr><th>Registered clients</th><th>Redirect URIs</th><th>Active grants</th><th>Actions</th></tr></thead>
+      <tbody>${clientsBody}</tbody>
+    </table>
+
+    <table style="margin-top: 1rem;">
+      <thead><tr><th>Active grants</th><th>Fingerprint</th><th>Scope</th><th>Expires</th><th>Actions</th></tr></thead>
+      <tbody>${grantsBody}</tbody>
+    </table>
+`;
+}
+
+function revokeClientForm(client: ClientEntry, grants: RefreshTokenEntry[]): string {
+  const clientGrants = grants.filter((g) => g.clientId === client.clientId);
+  const count = clientGrants.length;
+  const writerIds = Array.from(new Set(clientGrants.map((g) => g.writerId))).sort();
+  const writersStr = writerIds.length > 0 ? writerIds.join(", ") : "none";
+  const name = client.clientName || client.clientId;
+  const msg = `Revoke client ${name}? This invalidates ${count} active grant(s) for writer(s) ${writersStr}. The connector must re-authorize.`;
+  return `<form method="post" action="/console/oauth/revoke-client" onsubmit="return confirm('${esc(msg)}')">
+  <input type="hidden" name="client_id" value="${esc(client.clientId)}">
+  <input type="hidden" name="confirm" value="1">
+  <button type="submit" class="danger" aria-label="Revoke client ${esc(name)}">Revoke client</button>
+</form>`;
+}
+
+function revokeGrantForm(grant: RefreshTokenEntry): string {
+  const fp = fingerprint(grant.tokenHash);
+  const msg = `Revoke grant ${fp} for ${grant.writerId}?`;
+  return `<form method="post" action="/console/oauth/revoke-grant" onsubmit="return confirm('${esc(msg)}')">
+  <input type="hidden" name="token_fingerprint" value="${esc(fp)}">
+  <input type="hidden" name="confirm" value="1">
+  <button type="submit" class="danger" aria-label="Revoke grant ${esc(fp)}">Revoke grant</button>
+</form>`;
+}
+
 function revokeForm(hostId: string): string {
   return `<form method="post" action="/console/revoke" onsubmit="return confirm('Revoke ${esc(hostId)}?')">
   <input type="hidden" name="host_id" value="${esc(hostId)}">
@@ -384,6 +464,32 @@ export interface ConsoleHandlerOpts {
   tokenMap: TokenMap;
   tokenMapPath?: string;
   auditFile?: string;
+  oauthStore?: OAuthStore;
+  appendAuditRow?: (row: Omit<AuditRow, "ts">) => void;
+}
+
+async function buildModel(
+  opts: ConsoleHandlerOpts,
+  page: number,
+  extra: Partial<ConsolePageModel> = {},
+): Promise<ConsolePageModel> {
+  const loaded = readAuditLog(opts.auditFile);
+  let oauth: ConsolePageModel["oauth"] | undefined;
+  if (opts.oauthStore) {
+    const [clients, grants] = await Promise.all([
+      opts.oauthStore.listClients(),
+      opts.oauthStore.listRefreshTokens(),
+    ]);
+    oauth = { clients, grants };
+  }
+  return {
+    tokenMap: opts.tokenMap,
+    audit: pageAudit(loaded.rows, page),
+    devices: devicesFromAudit(loaded.rows, opts.tokenMap),
+    oauth,
+    ...extra,
+    auditError: extra.auditError ?? loaded.error,
+  };
 }
 
 function html(res: ServerResponse, status: number, body: string): void {
@@ -410,17 +516,6 @@ function persistMap(path: string, yamlText: string, map: TokenMap): void {
   replaceTokenMap(map, yamlText);
 }
 
-function buildModel(opts: ConsoleHandlerOpts, page: number, extra: Partial<ConsolePageModel> = {}): ConsolePageModel {
-  const loaded = readAuditLog(opts.auditFile);
-  return {
-    tokenMap: opts.tokenMap,
-    audit: pageAudit(loaded.rows, page),
-    devices: devicesFromAudit(loaded.rows, opts.tokenMap),
-    ...extra,
-    auditError: extra.auditError ?? loaded.error,
-  };
-}
-
 async function readForm(req: IncomingMessage): Promise<URLSearchParams> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -436,14 +531,20 @@ export async function handleConsoleRequest(
   const path = url.pathname.replace(/\/$/, "") || "/";
   const page = Number(url.searchParams.get("page") ?? "1");
 
-  if (req.method === "GET" && (path === "/console/issue" || path === "/console/revoke")) {
+  if (
+    req.method === "GET" &&
+    (path === "/console/issue" ||
+      path === "/console/revoke" ||
+      path === "/console/oauth/revoke-grant" ||
+      path === "/console/oauth/revoke-client")
+  ) {
     res.writeHead(302, { Location: "/console" });
     res.end();
     return;
   }
 
   if (req.method === "GET" && (path === "/console" || url.pathname === "/console/")) {
-    html(res, 200, renderConsolePage(buildModel(opts, page)));
+    html(res, 200, renderConsolePage(await buildModel(opts, page)));
     return;
   }
 
@@ -451,21 +552,21 @@ export async function handleConsoleRequest(
     const form = await readForm(req);
     const hostId = (form.get("host_id") ?? "").trim();
     if (!HOST_ID_RE.test(hostId) || !opts.tokenMapPath) {
-      html(res, 400, renderConsolePage(buildModel(opts, 1, { error: "Invalid host-id." })));
+      html(res, 400, renderConsolePage(await buildModel(opts, 1, { error: "Invalid host-id." })));
       return;
     }
     const yamlText = readMapFile(opts.tokenMapPath);
     const generated = generateHostBearer();
     const appended = appendHostHash(yamlText, generated.hashHex, hostId);
     if ("error" in appended) {
-      html(res, 400, renderConsolePage(buildModel(opts, 1, { error: ISSUE_ERROR_COPY[appended.error] })));
+      html(res, 400, renderConsolePage(await buildModel(opts, 1, { error: ISSUE_ERROR_COPY[appended.error] })));
       return;
     }
     persistMap(opts.tokenMapPath, appended.yaml, opts.tokenMap);
     html(
       res,
       200,
-      renderConsolePage(buildModel(opts, 1, { onceBearer: generated.raw, onceHostId: hostId })),
+      renderConsolePage(await buildModel(opts, 1, { onceBearer: generated.raw, onceHostId: hostId })),
     );
     return;
   }
@@ -475,19 +576,111 @@ export async function handleConsoleRequest(
     const hostId = (form.get("host_id") ?? "").trim();
     const confirm = form.get("confirm");
     if (confirm !== "1" || !HOST_ID_RE.test(hostId) || !opts.tokenMapPath) {
-      html(res, 400, renderConsolePage(buildModel(opts, 1, { error: "Revoke requires confirmation." })));
+      html(res, 400, renderConsolePage(await buildModel(opts, 1, { error: "Revoke requires confirmation." })));
       return;
     }
     const yamlText = readMapFile(opts.tokenMapPath);
     const removed = removeHostId(yamlText, hostId);
     if ("error" in removed) {
-      html(res, 400, renderConsolePage(buildModel(opts, 1, { error: "Host-id not found." })));
+      html(res, 400, renderConsolePage(await buildModel(opts, 1, { error: "Host-id not found." })));
       return;
     }
     persistMap(opts.tokenMapPath, removed.yaml, opts.tokenMap);
-    html(res, 200, renderConsolePage(buildModel(opts, 1)));
+    html(res, 200, renderConsolePage(await buildModel(opts, 1)));
     return;
   }
 
-  html(res, 404, renderConsolePage(buildModel(opts, 1, { error: "Not found." })));
+  if (req.method === "POST" && path === "/console/oauth/revoke-grant") {
+    if (!opts.oauthStore) {
+      res.writeHead(302, { Location: "/console" });
+      res.end();
+      return;
+    }
+    const started = Date.now();
+    const form = await readForm(req);
+    const tokenHashParam = (form.get("token_hash") ?? "").trim();
+    const tokenFpParam = (form.get("token_fingerprint") ?? "").trim();
+    const confirm = form.get("confirm");
+
+    if (confirm !== "1" || (!tokenHashParam && !tokenFpParam)) {
+      res.writeHead(302, { Location: "/console" });
+      res.end();
+      return;
+    }
+
+    let targetHash = tokenHashParam;
+    let fp = tokenFpParam || (tokenHashParam ? fingerprint(tokenHashParam) : "");
+
+    if (!targetHash && tokenFpParam) {
+      // Find matching token hash by fingerprint
+      const activeGrants = await opts.oauthStore.listRefreshTokens();
+      const match = activeGrants.find((g) => fingerprint(g.tokenHash) === tokenFpParam);
+      if (match) {
+        targetHash = match.tokenHash;
+        fp = fingerprint(match.tokenHash);
+      }
+    }
+
+    const ok = targetHash ? await opts.oauthStore.revokeRefreshToken(targetHash) : false;
+    const row: Omit<AuditRow, "ts"> = {
+      host_id: "operator",
+      tool: "console.oauth_revoke",
+      path: `oauth-grant:${fp || "••••????"}`,
+      ok,
+      ms: Date.now() - started,
+    };
+    if (opts.appendAuditRow) {
+      opts.appendAuditRow(row);
+    } else {
+      appendAudit(opts.auditFile, row);
+    }
+
+    res.writeHead(302, { Location: "/console" });
+    res.end();
+    return;
+  }
+
+  if (req.method === "POST" && path === "/console/oauth/revoke-client") {
+    if (!opts.oauthStore) {
+      res.writeHead(302, { Location: "/console" });
+      res.end();
+      return;
+    }
+    const started = Date.now();
+    const form = await readForm(req);
+    const clientId = (form.get("client_id") ?? "").trim();
+    const confirm = form.get("confirm");
+
+    if (confirm !== "1" || !clientId) {
+      res.writeHead(302, { Location: "/console" });
+      res.end();
+      return;
+    }
+
+    // Check if client exists to determine ok
+    const existing = await opts.oauthStore.getClient(clientId);
+    const ok = existing !== null;
+    if (ok) {
+      await opts.oauthStore.revokeClient(clientId);
+    }
+
+    const row: Omit<AuditRow, "ts"> = {
+      host_id: "operator",
+      tool: "console.oauth_revoke",
+      path: `oauth-client:${clientId}`,
+      ok,
+      ms: Date.now() - started,
+    };
+    if (opts.appendAuditRow) {
+      opts.appendAuditRow(row);
+    } else {
+      appendAudit(opts.auditFile, row);
+    }
+
+    res.writeHead(302, { Location: "/console" });
+    res.end();
+    return;
+  }
+
+  html(res, 404, renderConsolePage(await buildModel(opts, 1, { error: "Not found." })));
 }

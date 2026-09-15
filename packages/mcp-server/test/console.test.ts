@@ -17,6 +17,7 @@ import {
   parseAuditLines,
   readAuditLog,
 } from "../src/console.js";
+import { InMemoryOAuthStore, type OAuthStore } from "../src/oauth-store.js";
 import { ReconcileGate } from "../src/reconcile.js";
 import { startMcpHttpServer } from "../src/server.js";
 import * as tokenMapMod from "../src/token-map.js";
@@ -26,6 +27,7 @@ async function startConsole(opts: {
   tokenMapYaml: string;
   auditLines?: string[];
   auditFileIsDir?: boolean;
+  oauthStore?: OAuthStore;
 }): Promise<{
   port: number;
   close: () => Promise<void>;
@@ -54,6 +56,14 @@ async function startConsole(opts: {
     auditFile,
     gate,
     putObject: async () => undefined,
+    oauth: opts.oauthStore
+      ? {
+          enabled: true,
+          passwordHash: "dummy-hash",
+          writers: [{ client_id: "*", writer_id: "oauth-user" }],
+          store: opts.oauthStore,
+        }
+      : undefined,
   });
   const { port } = server.address() as AddressInfo;
   return {
@@ -12601,5 +12611,332 @@ describe("HTTP /console", () => {
     } finally {
       await ctx.close();
     }
+  });
+
+  describe("OAuth access section", () => {
+    it("hides the OAuth access section when no OAuth store is wired", async () => {
+      const ctx = await startConsole({ tokenMapYaml: "" });
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console`);
+        const html = await res.text();
+        expect(html).not.toContain("OAuth access");
+        expect(html).not.toContain("id=\"oauth-access\"");
+        expect(html).not.toContain("Registered clients");
+        expect(html).not.toContain("Active grants");
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("renders empty tables when OAuth store is wired but empty", async () => {
+      const store = new InMemoryOAuthStore();
+      const ctx = await startConsole({ tokenMapYaml: "", oauthStore: store });
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console`);
+        const html = await res.text();
+        expect(html).toContain('<h2 id="oauth-access">OAuth access</h2>');
+        expect(html).toContain("No OAuth clients registered.");
+        expect(html).toContain("No active OAuth grants.");
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("renders registered clients and active grants with correct confirmation copy and links", async () => {
+      const store = new InMemoryOAuthStore();
+      await store.saveClient({
+        clientId: "client-abc",
+        clientName: "Claude Desktop",
+        clientSecret: "super-secret-12345",
+        redirectUris: ["http://localhost:3000/callback", "http://localhost:3001/callback"],
+      });
+      const tokenHash = hashToken("rt-secret-token-xyz");
+      await store.saveRefreshToken({
+        tokenHash,
+        clientId: "client-abc",
+        writerId: "claude-user",
+        expiresAt: Date.now() + 86400_000,
+        scope: "read write",
+      });
+
+      const auditRow = JSON.stringify({
+        ts: new Date().toISOString(),
+        host_id: "oauth-device",
+        tool: "wiki_context",
+        ok: true,
+        ms: 12,
+      });
+
+      const ctx = await startConsole({
+        tokenMapYaml: "",
+        auditLines: [auditRow],
+        oauthStore: store,
+      });
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console`);
+        const html = await res.text();
+
+        // Check section and client table
+        expect(html).toContain('<h2 id="oauth-access">OAuth access</h2>');
+        expect(html).toContain("Claude Desktop");
+        expect(html).toContain('<td class="num">2</td>'); // 2 redirect URIs
+        expect(html).toContain('<td class="num">1</td>'); // 1 active grant
+
+        // Revoke client confirmation copy cascade
+        expect(html).toContain(
+          "Revoke client Claude Desktop? This invalidates 1 active grant(s) for writer(s) claude-user. The connector must re-authorize.",
+        );
+
+        // Check active grant table
+        expect(html).toContain("claude-user");
+        expect(html).toContain(`••••${tokenHash.slice(-4)}`);
+        expect(html).toContain("read write");
+        expect(html).toContain(`Revoke grant ••••${tokenHash.slice(-4)} for claude-user?`);
+
+        // Unmapped fleet host links to #oauth-access
+        expect(html).toContain('<a href="#oauth-access" class="muted">Unmapped</a>');
+
+        // Security: NO secrets or full hash exposed
+        expect(html).not.toContain("super-secret-12345");
+        expect(html).not.toContain("rt-secret-token-xyz");
+        expect(html).not.toContain(tokenHash);
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("falls back to clientId if clientName is missing", async () => {
+      const store = new InMemoryOAuthStore();
+      await store.saveClient({
+        clientId: "raw-client-id",
+        redirectUris: ["http://localhost:3000/callback"],
+      });
+      const ctx = await startConsole({ tokenMapYaml: "", oauthStore: store });
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console`);
+        const html = await res.text();
+        expect(html).toContain("raw-client-id");
+        expect(html).toContain(
+          "Revoke client raw-client-id? This invalidates 0 active grant(s) for writer(s) none. The connector must re-authorize.",
+        );
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("revokes an active grant on POST /console/oauth/revoke-grant and appends audit row", async () => {
+      const store = new InMemoryOAuthStore();
+      const tokenHash = hashToken("rt-test-revoke");
+      await store.saveRefreshToken({
+        tokenHash,
+        clientId: "client-abc",
+        writerId: "operator-user",
+        expiresAt: Date.now() + 86400_000,
+      });
+
+      const ctx = await startConsole({ tokenMapYaml: "", oauthStore: store });
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console/oauth/revoke-grant`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `token_fingerprint=${encodeURIComponent(`••••${tokenHash.slice(-4)}`)}&confirm=1`,
+          redirect: "manual",
+        });
+        expect(res.status).toBe(302);
+        expect(res.headers.get("location")).toBe("/console");
+
+        // Grant should be revoked in store
+        const remaining = await store.listRefreshTokens();
+        expect(remaining).toHaveLength(0);
+
+        // Audit log must contain the revocation row
+        const auditContent = readFileSync(ctx.auditFile, "utf8");
+        const rows = parseAuditLines(auditContent);
+        const revokeRow = rows.find((r) => r.tool === "console.oauth_revoke");
+        expect(revokeRow).toBeDefined();
+        expect(revokeRow?.host_id).toBe("operator");
+        expect(revokeRow?.path).toBe(`oauth-grant:••••${tokenHash.slice(-4)}`);
+        expect(revokeRow?.ok).toBe(true);
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("revokes a client and cascades to all its grants on POST /console/oauth/revoke-client and appends audit row", async () => {
+      const store = new InMemoryOAuthStore();
+      await store.saveClient({
+        clientId: "client-to-revoke",
+        clientName: "App To Revoke",
+        redirectUris: ["http://localhost/cb"],
+      });
+      await store.saveClient({
+        clientId: "client-to-keep",
+        clientName: "App To Keep",
+        redirectUris: ["http://localhost/cb"],
+      });
+
+      const hash1 = hashToken("tok-1");
+      const hash2 = hashToken("tok-2");
+      const hashKeep = hashToken("tok-keep");
+
+      await store.saveRefreshToken({
+        tokenHash: hash1,
+        clientId: "client-to-revoke",
+        writerId: "user-1",
+        expiresAt: Date.now() + 86400_000,
+      });
+      await store.saveRefreshToken({
+        tokenHash: hash2,
+        clientId: "client-to-revoke",
+        writerId: "user-2",
+        expiresAt: Date.now() + 86400_000,
+      });
+      await store.saveRefreshToken({
+        tokenHash: hashKeep,
+        clientId: "client-to-keep",
+        writerId: "user-keep",
+        expiresAt: Date.now() + 86400_000,
+      });
+
+      const ctx = await startConsole({ tokenMapYaml: "", oauthStore: store });
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console/oauth/revoke-client`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `client_id=client-to-revoke&confirm=1`,
+          redirect: "manual",
+        });
+        expect(res.status).toBe(302);
+        expect(res.headers.get("location")).toBe("/console");
+
+        // client-to-revoke gone, client-to-keep remains
+        const clients = await store.listClients();
+        expect(clients.map((c) => c.clientId)).toEqual(["client-to-keep"]);
+
+        // grants for revoked client gone, client-to-keep grants remain
+        const grants = await store.listRefreshTokens();
+        expect(grants.map((g) => g.tokenHash)).toEqual([hashKeep]);
+
+        // Audit row check
+        const auditContent = readFileSync(ctx.auditFile, "utf8");
+        const rows = parseAuditLines(auditContent);
+        const revokeRow = rows.find((r) => r.tool === "console.oauth_revoke");
+        expect(revokeRow).toBeDefined();
+        expect(revokeRow?.host_id).toBe("operator");
+        expect(revokeRow?.path).toBe("oauth-client:client-to-revoke");
+        expect(revokeRow?.ok).toBe(true);
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("appends ok:false audit row when revoking non-existent grant or client", async () => {
+      const store = new InMemoryOAuthStore();
+      const ctx = await startConsole({ tokenMapYaml: "", oauthStore: store });
+      try {
+        // Non-existent grant
+        const fakeHash = hashToken("non-existent-grant");
+        const res1 = await fetch(`http://127.0.0.1:${ctx.port}/console/oauth/revoke-grant`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `token_fingerprint=${encodeURIComponent(`••••${fakeHash.slice(-4)}`)}&confirm=1`,
+          redirect: "manual",
+        });
+        expect(res1.status).toBe(302);
+
+        // Non-existent client
+        const res2 = await fetch(`http://127.0.0.1:${ctx.port}/console/oauth/revoke-client`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `client_id=fake-client&confirm=1`,
+          redirect: "manual",
+        });
+        expect(res2.status).toBe(302);
+
+        const auditContent = readFileSync(ctx.auditFile, "utf8");
+        const rows = parseAuditLines(auditContent).filter((r) => r.tool === "console.oauth_revoke");
+        expect(rows).toHaveLength(2);
+        expect(rows[0].ok).toBe(false);
+        expect(rows[0].path).toBe(`oauth-grant:••••${fakeHash.slice(-4)}`);
+        expect(rows[1].ok).toBe(false);
+        expect(rows[1].path).toBe("oauth-client:fake-client");
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("refuses GET requests on OAuth mutation routes with 302 redirect", async () => {
+      const store = new InMemoryOAuthStore();
+      const ctx = await startConsole({ tokenMapYaml: "", oauthStore: store });
+      try {
+        for (const path of ["/console/oauth/revoke-grant", "/console/oauth/revoke-client"]) {
+          const res = await fetch(`http://127.0.0.1:${ctx.port}${path}`, { redirect: "manual" });
+          expect(res.status, path).toBe(302);
+          expect(res.headers.get("location"), path).toBe("/console");
+        }
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("does not mutate or audit OAuth routes when the form confirmation is invalid", async () => {
+      const store = new InMemoryOAuthStore();
+      const tokenHash = hashToken("invalid-confirmation");
+      await store.saveRefreshToken({
+        tokenHash,
+        clientId: "client-abc",
+        writerId: "operator-user",
+        expiresAt: Date.now() + 86400_000,
+      });
+      const ctx = await startConsole({ tokenMapYaml: "", oauthStore: store });
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console/oauth/revoke-grant`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "confirm=0&token_fingerprint=%E2%80%A2%E2%80%A2%E2%80%A21234",
+          redirect: "manual",
+        });
+        expect(res.status).toBe(302);
+        expect(await store.listRefreshTokens()).toHaveLength(1);
+        expect(readFileSync(ctx.auditFile, "utf8")).toBe("");
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("refuses POST to OAuth revoke routes from a public Host header", async () => {
+      const store = new InMemoryOAuthStore();
+      const ctx = await startConsole({ tokenMapYaml: "", oauthStore: store });
+      try {
+        for (const path of ["/console/oauth/revoke-grant", "/console/oauth/revoke-client"]) {
+          const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+            const req = httpRequest(
+              {
+                host: "127.0.0.1",
+                port: ctx.port,
+                method: "POST",
+                path,
+                headers: {
+                  Host: "wiki.karldigi.dev",
+                  "Content-Type": "application/x-www-form-urlencoded",
+                  "Content-Length": Buffer.byteLength("confirm=1"),
+                },
+              },
+              (res) => {
+                const chunks: Buffer[] = [];
+                res.on("data", (c) => chunks.push(c));
+                res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+              },
+            );
+            req.on("error", reject);
+            req.end("confirm=1");
+          });
+          expect(status, path).toBe(404);
+          expect(body, path).toContain("not_found");
+        }
+      } finally {
+        await ctx.close();
+      }
+    });
   });
 });

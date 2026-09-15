@@ -46,6 +46,11 @@ export interface OAuthStore {
 
   saveRefreshToken(token: RefreshTokenEntry): Promise<void>;
   consumeRefreshToken(tokenHash: string): Promise<RefreshTokenEntry | null>;
+
+  listClients(): Promise<ClientEntry[]>;
+  listRefreshTokens(): Promise<RefreshTokenEntry[]>;
+  revokeRefreshToken(tokenHash: string): Promise<boolean>;
+  revokeClient(clientId: string): Promise<{ grantsRemoved: number }>;
 }
 
 export class InMemoryOAuthStore implements OAuthStore {
@@ -98,6 +103,49 @@ export class InMemoryOAuthStore implements OAuthStore {
     this.refreshTokens.delete(tokenHash);
     if (Date.now() > entry.expiresAt) return null;
     return entry;
+  }
+
+  async listClients(): Promise<ClientEntry[]> {
+    return Array.from(this.clients.values()).map((c) => ({ ...c }));
+  }
+
+  async listRefreshTokens(): Promise<RefreshTokenEntry[]> {
+    const now = Date.now();
+    const result: RefreshTokenEntry[] = [];
+    for (const [hash, entry] of this.refreshTokens.entries()) {
+      if (entry.expiresAt <= now) {
+        this.refreshTokens.delete(hash);
+      } else {
+        result.push({ ...entry });
+      }
+    }
+    return result;
+  }
+
+  async revokeRefreshToken(tokenHash: string): Promise<boolean> {
+    return this.refreshTokens.delete(tokenHash);
+  }
+
+  async revokeClient(clientId: string): Promise<{ grantsRemoved: number }> {
+    this.clients.delete(clientId);
+    for (const [codeHash, code] of this.authCodes.entries()) {
+      if (code.clientId === clientId) {
+        this.authCodes.delete(codeHash);
+      }
+    }
+    for (const [tokenHash, at] of this.accessTokens.entries()) {
+      if (at.clientId === clientId) {
+        this.accessTokens.delete(tokenHash);
+      }
+    }
+    let grantsRemoved = 0;
+    for (const [tokenHash, rt] of this.refreshTokens.entries()) {
+      if (rt.clientId === clientId) {
+        this.refreshTokens.delete(tokenHash);
+        grantsRemoved++;
+      }
+    }
+    return { grantsRemoved };
   }
 }
 
@@ -209,5 +257,71 @@ export class FileOAuthStore implements OAuthStore {
     });
     if (Date.now() > entry.expiresAt) return null;
     return entry;
+  }
+
+  async listClients(): Promise<ClientEntry[]> {
+    return Object.values(this.state.clients).map((c) => ({ ...c }));
+  }
+
+  async listRefreshTokens(): Promise<RefreshTokenEntry[]> {
+    const now = Date.now();
+    const result: RefreshTokenEntry[] = [];
+    const expiredHashes: string[] = [];
+
+    for (const [hash, entry] of Object.entries(this.state.refreshTokens)) {
+      if (entry.expiresAt <= now) {
+        expiredHashes.push(hash);
+      } else {
+        result.push({ ...entry });
+      }
+    }
+
+    if (expiredHashes.length > 0) {
+      this.commit(() => {
+        for (const hash of expiredHashes) {
+          delete this.state.refreshTokens[hash];
+        }
+      });
+    }
+
+    return result;
+  }
+
+  async revokeRefreshToken(tokenHash: string): Promise<boolean> {
+    if (!this.state.refreshTokens[tokenHash]) {
+      return false;
+    }
+    this.commit(() => {
+      delete this.state.refreshTokens[tokenHash];
+    });
+    return true;
+  }
+
+  async revokeClient(clientId: string): Promise<{ grantsRemoved: number }> {
+    let grantsRemoved = 0;
+    this.commit(() => {
+      delete this.state.clients[clientId];
+
+      for (const [codeHash, code] of Object.entries(this.state.authCodes)) {
+        if (code.clientId === clientId) {
+          delete this.state.authCodes[codeHash];
+        }
+      }
+
+      for (const [tokenHash, at] of Object.entries(this.state.accessTokens)) {
+        if (at.clientId === clientId) {
+          delete this.state.accessTokens[tokenHash];
+        }
+      }
+
+      for (const [tokenHash, rt] of Object.entries(this.state.refreshTokens)) {
+        if (rt.clientId === clientId) {
+          delete this.state.refreshTokens[tokenHash];
+          grantsRemoved++;
+        }
+      }
+    });
+
+    return { grantsRemoved };
   }
 }

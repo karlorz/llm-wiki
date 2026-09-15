@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from "./auth.js";
 import { handleConsoleRequest, isConsolePath, isConsoleRequestAllowed } from "./console.js";
+import { appendAudit } from "./audit.js";
 import { loadConfig, type McpDaemonConfig } from "./config.js";
 import {
   mcpCompletionCompleteAfterShutdownError,
@@ -582,6 +583,8 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         tokenMap: opts.tokenMap,
         tokenMapPath: opts.tokenMapPath,
         auditFile: opts.auditFile,
+        oauthStore,
+        appendAuditRow: (row) => appendAudit(opts.auditFile, row),
       });
       return;
     }
