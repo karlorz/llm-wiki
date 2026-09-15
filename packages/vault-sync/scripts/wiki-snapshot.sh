@@ -100,6 +100,26 @@ CLOUD_REMOTE="${CLOUD_REMOTE:-cloud:cloud/wiki}"
 REPAIR_SCRIPT="${WIKI_GIT_REPAIR_SCRIPT:-$SCRIPT_DIR/wiki-git-repair-v3.sh}"
 MAX_S3_ONLY_NOTES="${WIKI_SNAPSHOT_MAX_S3_ONLY_NOTES:-200}"
 MAX_TOMBSTONE_PRUNES="${WIKI_SNAPSHOT_MAX_TOMBSTONE_PRUNES:-10}"
+
+# Classified inventory: event ledger + local scratch are not GitHub-promotable notes.
+# Cap and rclone must share this class. Do not raise MAX_S3_ONLY_NOTES instead.
+# meta/log-events stay S3-authoritative; snapshot copies them separately for --events-from.
+snapshot_non_promotable_path() {
+    local p="${1#./}"
+    case "$p" in
+        .skillwiki/*|.claude/*|.obsidian/*|.antigravitycli/*|.playwright-cli/*|.superpowers/*|.snapshots/*|.git/*|.drafts/*)
+            return 0 ;;
+        tmp/*|logs|logs/*|meta/log-events|meta/log-events/*)
+            return 0 ;;
+        raw/._.DS_Store|._.DS_Store)
+            return 0 ;;
+        ._*)
+            return 0 ;;
+        .conflict*|*.conflict-*)
+            return 0 ;;
+    esac
+    return 1
+}
 PROJECTION_PARITY_TIMEOUT_SECONDS="${WIKI_SNAPSHOT_PROJECTION_PARITY_TIMEOUT_SECONDS:-120}"
 PROJECTION_PARITY_POLL_SECONDS="${WIKI_SNAPSHOT_PROJECTION_PARITY_POLL_SECONDS:-2}"
 PROJECTION_READ_TIMEOUT_SECONDS="${WIKI_SNAPSHOT_PROJECTION_READ_TIMEOUT_SECONDS:-15}"
@@ -185,7 +205,14 @@ snapshot_direct_s3_preflight() {
     fi
     SNAPSHOT_REMOTE_INVENTORY_READY=1
 
-    grep -vE '^(\.skillwiki/|\.claude/|\.obsidian/|\.antigravitycli/|\.playwright-cli/|\.superpowers/|raw/\._\.DS_Store$|\._\.DS_Store$)' "$direct_paths" | LC_ALL=C sort -u > "$direct_notes" || true
+    : > "$direct_notes"
+    while IFS= read -r snapshot_inv_path || [ -n "$snapshot_inv_path" ]; do
+        [ -n "$snapshot_inv_path" ] || continue
+        if snapshot_non_promotable_path "$snapshot_inv_path"; then
+            continue
+        fi
+        printf '%s\n' "$snapshot_inv_path"
+    done < "$direct_paths" | LC_ALL=C sort -u > "$direct_notes" || true
     (
         cd "$SNAPSHOT_WORKTREE" || exit 1
         if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
@@ -939,6 +966,11 @@ RCLONE_OPTS=(
     --exclude ".antigravitycli/**"
     --exclude ".playwright-cli/**"
     --exclude ".superpowers/**"
+    --exclude ".drafts/**"
+    --exclude "tmp/**"
+    --exclude "logs"
+    --exclude "logs/**"
+    --exclude "meta/log-events/**"
     --exclude "._*"
     --exclude ".conflict*"
     --exclude "*.conflict-*"

@@ -63,7 +63,10 @@ fi
 
 assert_contains "snapshot preserves max-delete guard" "--max-delete 10"
 assert_contains "snapshot rclone excludes superpowers" 'exclude ".superpowers/'
+assert_contains "snapshot rclone excludes log-events" 'exclude "meta/log-events/'
+assert_contains "snapshot rclone excludes drafts" 'exclude ".drafts/'
 assert_contains "snapshot S3-not-git ignores superpowers" ".superpowers/"
+assert_contains "snapshot classified inventory ignores log-events" "meta/log-events/*"
 assert_contains "snapshot has raw dedup guard function" "raw_dedup_guard()"
 assert_contains "snapshot calls raw dedup guard before commit" "if ! raw_dedup_guard; then"
 assert_contains "snapshot has conflict marker guard function" "conflict_marker_guard()"
@@ -491,6 +494,90 @@ STUB
 }
 
 test_snapshot_live_blocks_when_direct_s3_note_count_exceeds_limit
+
+test_snapshot_live_ignores_log_events_in_s3_only_cap() {
+  local root
+  root="$(mktemp -d)"
+  make_live_vault_fixture "$root"
+  local git_dir="$root/wiki-git"
+  local bin_dir="$root/bin"
+  mkdir -p "$git_dir/raw/transcripts" "$bin_dir"
+  : > "$root/rclone.calls"
+  printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
+  printf '# Index\n' > "$git_dir/index.md"
+
+  git -C "$git_dir" init >/dev/null
+  git -C "$git_dir" branch -M main
+  git -C "$git_dir" add -A >/dev/null
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m init >/dev/null
+
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  cat > "$bin_dir/flock" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+if [ "$1" = "copy" ]; then dest="${!#}"; mkdir -p "$dest"; exit 0; fi
+if [ "$1" = "lsf" ]; then
+  printf 'SCHEMA.md\n'
+  printf 'index.md\n'
+  printf 'meta/log-events/2026-09-14/%s.json\n' "$(printf 'a%.0s' {1..64})"
+  printf 'tmp/scratch.md\n'
+  printf '.drafts/wip.md\n'
+  printf 'raw/transcripts/new.md\n'
+  exit 0
+fi
+if [ "$1" = "sync" ]; then
+  printf 'unexpected sync\n'
+  exit 0
+fi
+exit 99
+STUB
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+if [ "$1" = "projections" ] && [ "$2" = "materialize" ]; then exit 0; fi
+if [ "$1" = "log" ] && [ "$2" = "migrate-legacy" ]; then exit 0; fi
+exit 0
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/rclone" "$bin_dir/skillwiki"
+
+  local out_file="$root/out.txt"
+  SNAPSHOT_TEST_ROOT="$root" \
+    WIKI_GIT_WORKTREE="$git_dir" \
+    WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOCK="$root/wiki-snapshot.lock" \
+    WIKI_SNAPSHOT_LOG="$root/wiki-snapshot.log" \
+    WIKI_SNAPSHOT_MAX_S3_ONLY_NOTES=1 \
+    CLOUD_REMOTE="stub:cloud/wiki" \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >"$out_file" 2>&1
+  local rc=$?
+
+  if grep -q 'direct-S3-not-git warning' "$out_file" \
+      && grep -q 'raw/transcripts/new.md' "$out_file" \
+      && ! grep -q 'direct-S3-not-git: meta/log-events/' "$out_file" \
+      && grep -q '^sync ' "$root/rclone.calls" \
+      && grep -q 'exclude meta/log-events/' "$root/rclone.calls"; then
+    printf "PASS: snapshot live ignores log-events in S3-only cap\n"
+    PASS=$((PASS + 1))
+  else
+    printf "FAIL: snapshot live counted log-events toward S3-only cap (rc=%s output=%s log=%s calls=%s)\n" \
+      "$rc" \
+      "$(tr '\n' ' ' < "$out_file" 2>/dev/null)" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)" \
+      "$(tr '\n' ';' < "$root/rclone.calls" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+
+  rm -rf "$root"
+}
+
+test_snapshot_live_ignores_log_events_in_s3_only_cap
 
 test_snapshot_live_allows_when_override_env_set() {
   local root

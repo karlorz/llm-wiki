@@ -123,6 +123,18 @@ _Avoid_: treating typed ranking as a work-item search, inventing a fourth scope,
 Optional HTTP `wiki_query.project` must be a vault slug that exists under `projects/`. Omit it to query the whole vault. Unknown project, empty project, and whitespace project fail closed (`USAGE`). Failure omits `writer_id` and `results` and writes no vault file.
 _Avoid_: inventing a Doubao writer_id on a failed query, silently defaulting empty project
 
+**Event ledger**:
+Immutable `skillwiki-log-event/v1` JSON under `meta/log-events/`. Backend operation records on the live S3 vault, not Layer-2 wiki notes.
+_Avoid_: user content, notes, treating `log.md` as the SSOT
+
+**Promotable note**:
+A vault path the snapshot 200-cap treats as GitHub-bound user content.
+_Avoid_: counting event-ledger JSON as notes
+
+**Classified inventory**:
+One path class shared by the snapshot cap and rclone excludes. Event ledger and local scratch are non-promotable; user pages remain promotable.
+_Avoid_: raising the 200-cap, `git add` of live-ahead events
+
 **Query text**:
 HTTP `wiki_query.query` must be non-empty after trim. Whitespace-only query fail-closes (`USAGE`). No `results`, no invented `writer_id`, no vault file written.
 _Avoid_: treating spaces as a ranked query, inventing a Doubao writer_id
@@ -154,6 +166,7 @@ An attended decision process that reviews ranked-audit evidence, resolves ambigu
 - Query scope is independent of compact activation and of composer chip bind; default typed never implies work-item search. HTTP scope=work ranks Layer-3 work first. Unknown or empty HTTP scope fail-closes and does not invent a writer_id.
 - Query project is an optional wiki_query filter; unknown or empty project fail-closes and does not invent a writer_id.
 - Query text must be non-empty after trim; whitespace-only HTTP query fail-closes and does not invent a writer_id.
+- Event ledger is classified-inventory non-promotable; promotable notes are GitHub-bound user content; `log.md` is a projection of the event ledger.
 - HTTP CAS receipt is the `/mcp` envelope for workitem and page-publish overwrites; it does not change writer identity and does not invent a Doubao writer_id.
 - Status receipt names the authenticated writer and includes fleet identity on success; unknown or missing host identity fail-closes without leaking other fleet hosts.
 - Read receipt sha256 is full-file bytes; tail_bytes is a suffix only; missing and escaped paths fail closed.

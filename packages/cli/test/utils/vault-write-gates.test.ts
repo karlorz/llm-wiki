@@ -240,6 +240,26 @@ describe("M1 dirty volume gate", () => {
     expect(report.buckets.some((b) => b.bucket === "index.md")).toBe(true);
     expect(report.buckets.some((b) => b.bucket === "ndex.md")).toBe(false);
   });
+
+  it("classifies event-ledger files separately and excludes them from the content gate", () => {
+    const vault = makeGitVault("dirty-ledger");
+    mkdirSync(join(vault, "meta", "log-events", "2026-09-14"), { recursive: true });
+    for (let i = 0; i < 8; i++) {
+      writeFileSync(
+        join(vault, "meta", "log-events", "2026-09-14", `${"a".repeat(63)}${i}.json`),
+        "{}\n",
+      );
+    }
+    writeFileSync(join(vault, "note.md"), "user\n");
+    const report = measureDirtyVolume(vault);
+    expect(report.ledger_files).toBe(8);
+    expect(report.content_files).toBe(1);
+    expect(report.expanded_files).toBe(9);
+
+    const gate = evaluateDirtyVolumeGate({ vault, threshold: 5, command: "observe" });
+    expect(gate.allowed).toBe(true);
+    if (gate.allowed) expect(gate.reason).toBe("under_threshold");
+  });
 });
 
 describe("M2 mission cycle / diminishing returns gate", () => {

@@ -58,6 +58,31 @@ describe("composeCopyStatus", () => {
     expect(out.humanHint).not.toMatch(/review-required:pull-test review-required:pull-test/);
   });
 
+  it("splits event-ledger dirty from promotable content without collapsing planes", () => {
+    const out = composeCopyStatus({
+      live: { reachable: true },
+      github: { oid: "bb26229bef6e" },
+      local: {
+        head: "bb26229bef6e",
+        behind: 0,
+        dirty: 809,
+        untracked: 809,
+        ledger_untracked: 768,
+        content_untracked: 41,
+        detail: "event-ledger live-ahead of GitHub; do not git add",
+      },
+    });
+    expect(out.github.state).toBe("ok");
+    expect(out.local_git.state).toBe("ok");
+    expect(out.local_git.ledger_untracked).toBe(768);
+    expect(out.local_git.content_untracked).toBe(41);
+    expect(out.humanHint).toContain("ledger_untracked=768");
+    expect(out.humanHint).toContain("content_untracked=41");
+    expect(out.humanHint).toContain("do not git add");
+    expect(out.humanHint).not.toMatch(/dirty=809 dirty=809/);
+    expect(out.humanHint).not.toMatch(/ledger_untracked=768 untracked=809/);
+  });
+
   it("keeps unknown distinct from stale", () => {
     const out = composeCopyStatus({
       live: { unknown: true },

@@ -87,12 +87,22 @@ export interface DirtyBucket {
 export interface DirtyVolumeReport {
   porcelain_lines: number;
   expanded_files: number;
+  /** Promotable dirty files (excludes the event ledger). */
+  content_files: number;
+  /** Immutable `meta/log-events/**` dirty/untracked files. */
+  ledger_files: number;
   modified: number;
   untracked: number;
   buckets: DirtyBucket[];
   threshold: number;
   over_threshold: boolean;
   is_git_repo: boolean;
+}
+
+/** Event ledger lives on S3; it is not GitHub-promotable user content. */
+export function isEventLedgerPath(rel: string): boolean {
+  const n = rel.replace(/\\/g, "/").replace(/^\.\//, "");
+  return n === "meta/log-events" || n.startsWith("meta/log-events/");
 }
 
 export interface DirtyVolumeGateInput {
@@ -129,6 +139,8 @@ export function measureDirtyVolume(vault: string): DirtyVolumeReport {
   const empty = (extra: Partial<DirtyVolumeReport> = {}): DirtyVolumeReport => ({
     porcelain_lines: 0,
     expanded_files: 0,
+    content_files: 0,
+    ledger_files: 0,
     modified: 0,
     untracked: 0,
     buckets: [],
@@ -164,7 +176,14 @@ export function measureDirtyVolume(vault: string): DirtyVolumeReport {
   let modified = 0;
   let untracked = 0;
   let expanded = 0;
+  let contentFiles = 0;
+  let ledgerFiles = 0;
   const bucketMap = new Map<string, number>();
+
+  const classify = (rel: string, n: number) => {
+    if (isEventLedgerPath(rel)) ledgerFiles += n;
+    else contentFiles += n;
+  };
 
   const addBucket = (rel: string, n: number) => {
     const top = rel.split(/[/\\]/)[0] || ".";
@@ -191,14 +210,19 @@ export function measureDirtyVolume(vault: string): DirtyVolumeReport {
         const files = listFilesRecursive(abs);
         expanded += files.length;
         addBucket(rel, files.length);
+        for (const file of files) {
+          classify(relative(vault, file).replace(/\\/g, "/"), 1);
+        }
       } else {
         expanded += 1;
         addBucket(rel, 1);
+        classify(rel, 1);
       }
     } else {
       modified += 1;
       expanded += 1;
       addBucket(rel, 1);
+      classify(rel, 1);
     }
   }
 
@@ -209,6 +233,8 @@ export function measureDirtyVolume(vault: string): DirtyVolumeReport {
   return {
     porcelain_lines: lines.length,
     expanded_files: expanded,
+    content_files: contentFiles,
+    ledger_files: ledgerFiles,
     modified,
     untracked,
     buckets,
@@ -247,7 +273,7 @@ export function evaluateDirtyVolumeGate(input: DirtyVolumeGateInput): DirtyVolum
   const threshold = input.threshold ?? DEFAULT_DIRTY_VOLUME_THRESHOLD;
   const report = measureDirtyVolume(input.vault);
   report.threshold = threshold;
-  report.over_threshold = report.is_git_repo && report.expanded_files > threshold;
+  report.over_threshold = report.is_git_repo && report.content_files > threshold;
 
   if (input.skip) {
     return { allowed: true, reason: "skipped", report };
@@ -272,9 +298,9 @@ export function evaluateDirtyVolumeGate(input: DirtyVolumeGateInput): DirtyVolum
     code: GateError.VAULT_DIRTY_BACKLOG,
     report,
     humanHint:
-      `Vault dirty volume ${report.expanded_files} exceeds threshold ${threshold} ` +
-      `(porcelain ${report.porcelain_lines}; buckets: ${top || "none"}). ` +
-      `Triage/commit keep-set before more non-hygiene writes. Hygiene commands still allowed.`,
+      `Vault content dirty volume ${report.content_files} exceeds threshold ${threshold} ` +
+      `(event-ledger ${report.ledger_files} excluded; porcelain ${report.porcelain_lines}; buckets: ${top || "none"}). ` +
+      `Triage/commit keep-set before more non-hygiene writes. Do not git add meta/log-events. Hygiene commands still allowed.`,
   };
 }
 

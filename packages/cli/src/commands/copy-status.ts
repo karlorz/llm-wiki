@@ -73,9 +73,13 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
       const dirty = measureDirtyVolume(input.vault);
       const dirtyCount = dirty.is_git_repo ? dirty.expanded_files : undefined;
       const untrackedCount = dirty.is_git_repo ? dirty.untracked : undefined;
+      const ledgerUntracked = dirty.is_git_repo ? dirty.ledger_files : undefined;
+      const contentUntracked = dirty.is_git_repo ? dirty.content_files : undefined;
       const dirtyHint =
         dirtyCount && dirtyCount > 0
-          ? `dirty=${dirtyCount} untracked=${untrackedCount ?? 0} live-ahead of GitHub; do not git add`
+          ? ledgerUntracked && ledgerUntracked > 0
+            ? `event-ledger live-ahead of GitHub; do not git add`
+            : `live-ahead of GitHub; do not git add`
           : undefined;
       return {
         head,
@@ -83,6 +87,8 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
         blockedReason,
         dirty: dirtyCount,
         untracked: untrackedCount,
+        ledger_untracked: dirtyCount && dirtyCount > 0 ? ledgerUntracked : undefined,
+        content_untracked: dirtyCount && dirtyCount > 0 ? contentUntracked : undefined,
         detail: dirtyHint ?? blockedReason,
       };
     },

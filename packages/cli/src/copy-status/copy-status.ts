@@ -19,6 +19,8 @@ export interface PlaneRecord {
   blocked_reason?: string;
   dirty?: number;
   untracked?: number;
+  ledger_untracked?: number;
+  content_untracked?: number;
   detail?: string;
 }
 
@@ -48,6 +50,8 @@ export interface LocalGitProbe {
   blockedReason?: string;
   dirty?: number;
   untracked?: number;
+  ledger_untracked?: number;
+  content_untracked?: number;
   unknown?: boolean;
   detail?: string;
 }
@@ -80,6 +84,8 @@ function githubRecord(p: GithubProbe): PlaneRecord {
 function withDirty(rec: PlaneRecord, p: LocalGitProbe): PlaneRecord {
   if (p.dirty !== undefined) rec.dirty = p.dirty;
   if (p.untracked !== undefined) rec.untracked = p.untracked;
+  if (p.ledger_untracked !== undefined) rec.ledger_untracked = p.ledger_untracked;
+  if (p.content_untracked !== undefined) rec.content_untracked = p.content_untracked;
   return rec;
 }
 
@@ -148,8 +154,10 @@ function formatPlane(name: string, rec: PlaneRecord): string {
   if (rec.oid) parts.push(`oid=${rec.oid.slice(0, 12)}`);
   if (rec.behind !== undefined) parts.push(`behind=${rec.behind}`);
   if (rec.age_hours !== undefined) parts.push(`age_hours=${rec.age_hours}`);
-  if (rec.dirty !== undefined) parts.push(`dirty=${rec.dirty}`);
-  if (rec.untracked !== undefined) parts.push(`untracked=${rec.untracked}`);
+  if (rec.ledger_untracked !== undefined) parts.push(`ledger_untracked=${rec.ledger_untracked}`);
+  if (rec.content_untracked !== undefined) parts.push(`content_untracked=${rec.content_untracked}`);
+  if (rec.ledger_untracked === undefined && rec.dirty !== undefined) parts.push(`dirty=${rec.dirty}`);
+  if (rec.ledger_untracked === undefined && rec.untracked !== undefined) parts.push(`untracked=${rec.untracked}`);
   if (rec.blocked_reason) parts.push(rec.blocked_reason);
   if (rec.detail && rec.detail !== rec.blocked_reason) parts.push(rec.detail);
   return parts.join(" ");
