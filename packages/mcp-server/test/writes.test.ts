@@ -1,7 +1,7 @@
 import { access, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { normalizeCaptureProject, renderCaptureMarkdown, slugify, wikiCapture, wikiLogAppend, type CaptureKind } from "../src/tools/writes.js";
+import { normalizeCaptureProject, renderCaptureMarkdown, slugify, vaultHasProject, wikiCapture, wikiLogAppend, type CaptureKind } from "../src/tools/writes.js";
 import { handleWikiReadPage, MAX_READ_PAGE_BYTES } from "../src/tools/reads.js";
 import { ReconcileGate } from "../src/reconcile.js";
 import { S3PutError, sha256Bytes } from "../src/txn.js";
@@ -26,6 +26,11 @@ describe("wiki_capture validation", () => {
     expect(normalizeCaptureProject("")).toBeNull();
     expect(normalizeCaptureProject("   ")).toBeNull();
     expect(normalizeCaptureProject("Not A Slug")).toBeNull();
+  });
+
+  it("missing projects/<slug> directory returns false", async () => {
+    const vault = await makeTempVault();
+    expect(vaultHasProject(vault, "does-not-exist")).toBe(false);
   });
 
   it("renders ad-hoc capture frontmatter that the raw schema accepts", () => {
