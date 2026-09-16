@@ -191,9 +191,14 @@ export function renderOperatorLoginSection(
   const statusBadge = configured
     ? `<span class="muted ok">Configured</span>`
     : `<span class="muted">Unset</span>`;
-  const dedicatedLink = !opts.dedicated
-    ? `<p class="muted"><a href="/console/operator-login">Open dedicated page</a></p>`
-    : "";
+  if (!opts.dedicated) {
+    // Slim row on /console: status plus link only. The form lives on the dedicated page.
+    return `
+    <div class="row-head">
+      <h2>Operator login ${statusBadge}</h2>
+      <p class="muted"><a href="/console/operator-login">Open dedicated page</a></p>
+    </div>`;
+  }
 
   return `
     <div class="row-head">
@@ -207,8 +212,7 @@ export function renderOperatorLoginSection(
         <button type="submit">Set password</button>
       </form>
     </div>
-    <div class="callout">Save the same value in the host Keychain. Daemon stores a hash only. Grants stay until OAuth access revoke.</div>
-    ${dedicatedLink}`;
+    <div class="callout">Save the same value in the host Keychain. Daemon stores a hash only. Grants stay until OAuth access revoke.</div>`;
 }
 
 export function renderConsolePage(model: ConsolePageModel): string {

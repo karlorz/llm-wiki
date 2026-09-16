@@ -12961,7 +12961,7 @@ describe("HTTP /console", () => {
   });
 
   describe("Operator login (layout A + set-password)", () => {
-    it("renders Operator login section in layout A on GET /console with status Unset when live hash absent", async () => {
+    it("renders a slim Operator login row on GET /console with status Unset when live hash absent", async () => {
       const stateDir = await mkdtemp(join(tmpdir(), "sw-state-"));
       const ctx = await startConsole({
         tokenMapYaml: "",
@@ -12977,19 +12977,18 @@ describe("HTTP /console", () => {
         expect(html).toContain("<h2>Operator login ");
         expect(html).toContain("Unset");
         expect(html).not.toContain("Configured");
-        expect(html).toContain('action="/console/oauth/set-password"');
-        expect(html).toContain('name="password"');
-        expect(html).toContain('name="password_confirm"');
-        expect(html).toContain('name="confirm" value="1"');
-        expect(html).toContain("Set password");
-        expect(html).toContain("Save the same value in the host Keychain. Daemon stores a hash only. Grants stay until OAuth access revoke.");
         expect(html).toContain('<a href="/console/operator-login">');
+        // Slim row: the set form lives only on the dedicated page.
+        expect(html).not.toContain('action="/console/oauth/set-password"');
+        expect(html).not.toContain('name="password"');
+        expect(html).not.toContain('name="password_confirm"');
+        expect(html).not.toContain("Set password");
       } finally {
         await ctx.close();
       }
     });
 
-    it("renders Operator login section in layout A on GET /console with status Configured when live hash present", async () => {
+    it("renders a slim Operator login row on GET /console with status Configured when live hash present", async () => {
       const stateDir = await mkdtemp(join(tmpdir(), "sw-state-"));
       const dummyHash = "scrypt$16384$8$1$c2FsdA$urlsafe$aGFzaA";
       const ctx = await startConsole({
@@ -13007,6 +13006,8 @@ describe("HTTP /console", () => {
         expect(html).toContain("<h2>Operator login ");
         expect(html).toContain("Configured");
         expect(html).not.toContain(dummyHash);
+        expect(html).toContain('<a href="/console/operator-login">');
+        expect(html).not.toContain('action="/console/oauth/set-password"');
       } finally {
         await ctx.close();
       }
