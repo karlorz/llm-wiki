@@ -13012,6 +13012,29 @@ describe("HTTP /console", () => {
       }
     });
 
+    it("keeps the header nav identical on /console and /console/operator-login", async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), "sw-state-"));
+      const ctx = await startConsole({
+        tokenMapYaml: "",
+        oauth: {
+          enabled: true,
+          stateDir,
+        },
+      });
+      try {
+        for (const path of ["/console", "/console/operator-login"]) {
+          const res = await fetch(`http://127.0.0.1:${ctx.port}${path}`);
+          expect(res.status, path).toBe(200);
+          const html = await res.text();
+          expect(html, path).toContain('href="/console"');
+          expect(html, path).toContain('href="/console/operator-login"');
+          expect(html, path).toContain('aria-current="page"');
+        }
+      } finally {
+        await ctx.close();
+      }
+    });
+
     it("serves 200 HTML on GET /console/operator-login and /console/operator-login/", async () => {
       const stateDir = await mkdtemp(join(tmpdir(), "sw-state-"));
       const ctx = await startConsole({

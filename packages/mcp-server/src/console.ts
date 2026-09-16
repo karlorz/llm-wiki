@@ -352,6 +352,7 @@ export function renderConsolePage(model: ConsolePageModel): string {
     <span class="brand">SkillWiki</span>
     <a href="https://github.com/karlorz/llm-wiki">Docs</a>
     <a class="active" href="/console" aria-current="page">Console</a>
+    <a href="/console/operator-login">Operator login</a>
   </header>
   <main id="main">
     ${err}
