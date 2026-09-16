@@ -1,6 +1,7 @@
 import yaml from "js-yaml";
 import { DEFAULT_RCLONE_COPY_TIMEOUT_MS } from "./reconcile.js";
 import type { OAuthConfig, OAuthWriterMapping } from "./oauth.js";
+import { readPasswordHashFile } from "./oauth-password-file.js";
 
 export interface McpDaemonConfig {
   vaultDir: string;
@@ -115,10 +116,12 @@ function parseOAuthConfig(
       ? enabledEnv === "true" || enabledEnv === "1"
       : Boolean(fileOAuth?.enabled);
 
-  const passwordHash =
-    env.SKILLWIKI_MCP_OAUTH_PASSWORD_HASH ?? fileOAuth?.password_hash;
   const issuer = env.SKILLWIKI_MCP_OAUTH_ISSUER ?? fileOAuth?.issuer;
   const stateDir = env.SKILLWIKI_MCP_OAUTH_STATE_DIR ?? fileOAuth?.state_dir;
+
+  const fileHash = stateDir ? readPasswordHashFile(stateDir) : undefined;
+  const passwordHash =
+    fileHash ?? env.SKILLWIKI_MCP_OAUTH_PASSWORD_HASH ?? fileOAuth?.password_hash;
 
   let writers = fileOAuth?.writers;
   if (env.SKILLWIKI_MCP_OAUTH_WRITERS) {
