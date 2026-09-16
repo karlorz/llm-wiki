@@ -4,6 +4,9 @@ import type { TokenMap } from "./auth.js";
 import { replaceTokenMap } from "./auth.js";
 import { appendAudit } from "./audit.js";
 import type { ClientEntry, OAuthStore, RefreshTokenEntry } from "./oauth-store.js";
+import type { OAuthConfig } from "./oauth.js";
+import { hashPassword } from "./oauth.js";
+import { writePasswordHashFile } from "./oauth-password-file.js";
 import {
   HOST_ID_RE,
   type AppendHostHashError,
@@ -169,10 +172,43 @@ export interface ConsolePageModel {
     clients: ClientEntry[];
     grants: RefreshTokenEntry[];
   };
+  operatorLogin?: {
+    configured: boolean;
+  };
+  notice?: string;
   onceBearer?: string;
   onceHostId?: string;
   error?: string;
   auditError?: string;
+}
+
+export function renderOperatorLoginSection(
+  operatorLogin: ConsolePageModel["operatorLogin"],
+  opts: { dedicated?: boolean } = {},
+): string {
+  if (!operatorLogin) return "";
+  const configured = operatorLogin.configured;
+  const statusBadge = configured
+    ? `<span class="muted ok">Configured</span>`
+    : `<span class="muted">Unset</span>`;
+  const dedicatedLink = !opts.dedicated
+    ? `<p class="muted"><a href="/console/operator-login">Open dedicated page</a></p>`
+    : "";
+
+  return `
+    <div class="row-head">
+      <h2>Operator login ${statusBadge}</h2>
+      <form class="issue-form" method="post" action="/console/oauth/set-password">
+        <label for="password">New password</label>
+        <input id="password" type="password" name="password" required autocomplete="new-password">
+        <label for="password_confirm">Confirm</label>
+        <input id="password_confirm" type="password" name="password_confirm" required autocomplete="new-password">
+        <input type="hidden" name="confirm" value="1">
+        <button type="submit">Set password</button>
+      </form>
+    </div>
+    <div class="callout">Save the same value in the host Keychain. Daemon stores a hash only. Grants stay until OAuth access revoke.</div>
+    ${dedicatedLink}`;
 }
 
 export function renderConsolePage(model: ConsolePageModel): string {
@@ -316,6 +352,7 @@ export function renderConsolePage(model: ConsolePageModel): string {
     <span class="brand">SkillWiki</span>
     <a href="https://github.com/karlorz/llm-wiki">Docs</a>
     <a class="active" href="/console" aria-current="page">Console</a>
+    <a href="/console/operator-login">Operator login</a>
   </header>
   <main id="main">
     ${err}
@@ -333,6 +370,7 @@ export function renderConsolePage(model: ConsolePageModel): string {
       <thead><tr><th>Host-id</th><th>Fingerprint</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${keysBody}</tbody>
     </table>
+${renderOperatorLoginSection(model.operatorLogin)}
 ${renderOAuthSection(model.oauth)}
     <h2>Fleet hosts</h2>
     <div class="callout">Each host-id is one machine. Last active is the last audit row from that writer. Revoke removes the bearer. It does not log the machine out of SSH.</div>
@@ -373,6 +411,75 @@ ${renderOAuthSection(model.oauth)}
       });
     })();
   </script>
+</body>
+</html>
+`;
+}
+
+export function renderOperatorLoginPage(model: ConsolePageModel): string {
+  const err = model.error ? `<p class="bad" role="alert">${esc(model.error)}</p>` : "";
+  const notice = model.notice ? `<p class="ok" role="status">${esc(model.notice)}</p>` : "";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>SkillWiki console - Operator login</title>
+  <style>
+    :root {
+      --background: oklch(0.16 0.01 260);
+      --foreground: oklch(0.95 0.01 260);
+      --card: oklch(0.2 0.01 260);
+      --card-foreground: oklch(0.95 0.01 260);
+      --primary: oklch(0.75 0.12 250);
+      --destructive: oklch(0.65 0.18 25);
+      --accent: oklch(0.28 0.02 260);
+      --muted-foreground: oklch(0.7 0.02 260);
+      --border: oklch(0.32 0.015 260);
+      --ring: oklch(0.75 0.12 250);
+      --ok: oklch(0.72 0.15 145);
+      --bad: oklch(0.65 0.18 25);
+    }
+    * { box-sizing: border-box; }
+    html { scrollbar-gutter: stable; }
+    body { margin: 0; font: 14px/1.45 ui-sans-serif, system-ui, sans-serif; background: var(--background); color: var(--foreground); }
+    a { color: var(--primary); }
+    a:focus-visible, button:focus-visible, input:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+    .skip { position: absolute; left: -999px; }
+    .skip:focus { left: 1rem; top: 1rem; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }
+    header { display: flex; gap: 1.5rem; align-items: center; padding: 0.75rem 1.5rem; border-bottom: 1px solid var(--border); }
+    header .brand { font-weight: 700; }
+    header a.active { background: var(--accent); color: var(--foreground); padding: 0.2rem 0.5rem; border-radius: 0.375rem; text-decoration: none; }
+    main { max-width: 80rem; margin: 0 auto; padding: 1.5rem; }
+    h2 { font-size: 1.125rem; margin: 1.75rem 0 0.5rem; }
+    .row-head { display: flex; flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+    .issue-form { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .muted { color: var(--muted-foreground); font-size: 0.75rem; }
+    .callout { background: var(--card); color: var(--muted-foreground); border-radius: 0.5rem; padding: 0.75rem 1rem; font-size: 0.875rem; margin: 0.5rem 0 0.75rem; }
+    .ok { color: var(--ok); }
+    .bad { color: var(--bad); }
+    button, input { transition: none !important; animation: none !important; }
+    button { background: var(--primary); color: var(--background); border: 0; border-radius: 999px; min-height: 2.25rem; padding: 0.35rem 0.85rem; cursor: pointer; }
+    input { background: var(--card); color: var(--foreground); border: 1px solid var(--border); border-radius: 0.375rem; padding: 0.35rem 0.5rem; }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to main</a>
+  <h1 class="visually-hidden">SkillWiki console - Operator login</h1>
+  <header>
+    <span class="brand">SkillWiki</span>
+    <a href="https://github.com/karlorz/llm-wiki">Docs</a>
+    <a href="/console">Console</a>
+    <a class="active" href="/console/operator-login" aria-current="page">Operator login</a>
+  </header>
+  <main id="main">
+    ${err}
+    ${notice}
+    ${renderOperatorLoginSection(model.operatorLogin, { dedicated: true })}
+  </main>
 </body>
 </html>
 `;
@@ -464,6 +571,7 @@ export interface ConsoleHandlerOpts {
   tokenMap: TokenMap;
   tokenMapPath?: string;
   auditFile?: string;
+  oauth?: OAuthConfig;
   oauthStore?: OAuthStore;
   appendAuditRow?: (row: Omit<AuditRow, "ts">) => void;
 }
@@ -482,11 +590,16 @@ async function buildModel(
     ]);
     oauth = { clients, grants };
   }
+  const operatorLogin = opts.oauth?.enabled
+    ? { configured: Boolean(opts.oauth.passwordHash) }
+    : undefined;
+
   return {
     tokenMap: opts.tokenMap,
     audit: pageAudit(loaded.rows, page),
     devices: devicesFromAudit(loaded.rows, opts.tokenMap),
     oauth,
+    operatorLogin,
     ...extra,
     auditError: extra.auditError ?? loaded.error,
   };
@@ -540,6 +653,17 @@ export async function handleConsoleRequest(
   ) {
     res.writeHead(302, { Location: "/console" });
     res.end();
+    return;
+  }
+
+  if (req.method === "GET" && path === "/console/oauth/set-password") {
+    res.writeHead(302, { Location: "/console/operator-login" });
+    res.end();
+    return;
+  }
+
+  if (req.method === "GET" && (path === "/console/operator-login" || url.pathname === "/console/operator-login/")) {
+    html(res, 200, renderOperatorLoginPage(await buildModel(opts, 1)));
     return;
   }
 
@@ -679,6 +803,65 @@ export async function handleConsoleRequest(
 
     res.writeHead(302, { Location: "/console" });
     res.end();
+    return;
+  }
+
+  if (req.method === "POST" && path === "/console/oauth/set-password") {
+    const started = Date.now();
+    const form = await readForm(req);
+    const password = form.get("password") ?? "";
+    const passwordConfirm = form.get("password_confirm") ?? "";
+    const confirm = form.get("confirm");
+
+    const isWhitespaceOnly = password.length > 0 && password.trim().length === 0;
+    const isValid =
+      opts.oauth !== undefined &&
+      opts.oauth.stateDir !== undefined &&
+      password.length > 0 &&
+      !isWhitespaceOnly &&
+      password === passwordConfirm &&
+      confirm === "1";
+
+    if (!isValid || !opts.oauth || !opts.oauth.stateDir) {
+      const errorMsg =
+        opts.oauth?.stateDir === undefined
+          ? "State directory not configured."
+          : password.length === 0 || isWhitespaceOnly
+            ? "Password cannot be empty."
+            : password !== passwordConfirm
+              ? "Passwords do not match."
+              : "Confirmation required.";
+
+      html(res, 400, renderOperatorLoginPage(await buildModel(opts, 1, { error: errorMsg })));
+      return;
+    }
+
+    const stateDir = opts.oauth.stateDir;
+    const oauthConfig = opts.oauth;
+    const encodedHash = hashPassword(password);
+    try {
+      writePasswordHashFile(stateDir, encodedHash);
+    } catch (err: unknown) {
+      html(res, 500, renderOperatorLoginPage(await buildModel(opts, 1, { error: "Failed to persist password hash." })));
+      return;
+    }
+
+    oauthConfig.passwordHash = encodedHash;
+
+    const row: Omit<AuditRow, "ts"> = {
+      host_id: "operator",
+      tool: "console.oauth_set_password",
+      path: "oauth-operator-login",
+      ok: true,
+      ms: Date.now() - started,
+    };
+    if (opts.appendAuditRow) {
+      opts.appendAuditRow(row);
+    } else {
+      appendAudit(opts.auditFile, row);
+    }
+
+    html(res, 200, renderOperatorLoginPage(await buildModel(opts, 1, { notice: "Password set." })));
     return;
   }
 

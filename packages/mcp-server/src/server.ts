@@ -583,6 +583,7 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         tokenMap: opts.tokenMap,
         tokenMapPath: opts.tokenMapPath,
         auditFile: opts.auditFile,
+        oauth: opts.oauth,
         oauthStore,
         appendAuditRow: (row) => appendAudit(opts.auditFile, row),
       });
