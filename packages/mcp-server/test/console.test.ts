@@ -28,11 +28,19 @@ async function startConsole(opts: {
   auditLines?: string[];
   auditFileIsDir?: boolean;
   oauthStore?: OAuthStore;
+  oauth?: {
+    enabled?: boolean;
+    passwordHash?: string;
+    stateDir?: string;
+    store?: OAuthStore;
+  };
 }): Promise<{
   port: number;
   close: () => Promise<void>;
   tokenMapPath: string;
   auditFile: string;
+  stateDir?: string;
+  oauthConfig?: import("../src/oauth.js").OAuthConfig;
 }> {
   const root = await mkdtemp(join(tmpdir(), "skillwiki-mcp-console-"));
   const tokenMapPath = join(root, "tokens.yaml");
@@ -47,6 +55,23 @@ async function startConsole(opts: {
   const gate = new ReconcileGate(async () => undefined);
   await gate.runFirst();
   const tokenMap = parseTokenMap(opts.tokenMapYaml);
+  const oauthConfig: import("../src/oauth.js").OAuthConfig | undefined = opts.oauth
+    ? {
+        enabled: opts.oauth.enabled ?? true,
+        passwordHash: opts.oauth.passwordHash,
+        stateDir: opts.oauth.stateDir,
+        writers: [{ client_id: "*", writer_id: "oauth-user" }],
+        store: opts.oauth.store,
+      }
+    : opts.oauthStore
+      ? {
+          enabled: true,
+          passwordHash: "dummy-hash",
+          writers: [{ client_id: "*", writer_id: "oauth-user" }],
+          store: opts.oauthStore,
+        }
+      : undefined;
+
   const server = await startMcpHttpServer({
     bind: "127.0.0.1",
     port: 0,
@@ -56,20 +81,15 @@ async function startConsole(opts: {
     auditFile,
     gate,
     putObject: async () => undefined,
-    oauth: opts.oauthStore
-      ? {
-          enabled: true,
-          passwordHash: "dummy-hash",
-          writers: [{ client_id: "*", writer_id: "oauth-user" }],
-          store: opts.oauthStore,
-        }
-      : undefined,
+    oauth: oauthConfig,
   });
   const { port } = server.address() as AddressInfo;
   return {
     port,
     tokenMapPath,
     auditFile,
+    stateDir: opts.oauth?.stateDir,
+    oauthConfig,
     close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
   };
 }
@@ -12933,6 +12953,298 @@ describe("HTTP /console", () => {
           });
           expect(status, path).toBe(404);
           expect(body, path).toContain("not_found");
+        }
+      } finally {
+        await ctx.close();
+      }
+    });
+  });
+
+  describe("Operator login (layout A + set-password)", () => {
+    it("renders Operator login section in layout A on GET /console with status Unset when live hash absent", async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), "sw-state-"));
+      const ctx = await startConsole({
+        tokenMapYaml: "",
+        oauth: {
+          enabled: true,
+          stateDir,
+        },
+      });
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console`);
+        expect(res.status).toBe(200);
+        const html = await res.text();
+        expect(html).toContain("<h2>Operator login ");
+        expect(html).toContain("Unset");
+        expect(html).not.toContain("Configured");
+        expect(html).toContain('action="/console/oauth/set-password"');
+        expect(html).toContain('name="password"');
+        expect(html).toContain('name="password_confirm"');
+        expect(html).toContain('name="confirm" value="1"');
+        expect(html).toContain("Set password");
+        expect(html).toContain("Save the same value in the host Keychain. Daemon stores a hash only. Grants stay until OAuth access revoke.");
+        expect(html).toContain('<a href="/console/operator-login">');
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("renders Operator login section in layout A on GET /console with status Configured when live hash present", async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), "sw-state-"));
+      const dummyHash = "scrypt$16384$8$1$c2FsdA$urlsafe$aGFzaA";
+      const ctx = await startConsole({
+        tokenMapYaml: "",
+        oauth: {
+          enabled: true,
+          passwordHash: dummyHash,
+          stateDir,
+        },
+      });
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console`);
+        expect(res.status).toBe(200);
+        const html = await res.text();
+        expect(html).toContain("<h2>Operator login ");
+        expect(html).toContain("Configured");
+        expect(html).not.toContain(dummyHash);
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("serves 200 HTML on GET /console/operator-login and /console/operator-login/", async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), "sw-state-"));
+      const ctx = await startConsole({
+        tokenMapYaml: "",
+        oauth: {
+          enabled: true,
+          stateDir,
+        },
+      });
+      try {
+        for (const path of ["/console/operator-login", "/console/operator-login/"]) {
+          const res = await fetch(`http://127.0.0.1:${ctx.port}${path}`);
+          expect(res.status, path).toBe(200);
+          expect(res.headers.get("content-type")).toMatch(/text\/html/);
+          const html = await res.text();
+          expect(html).toContain("<h2>Operator login ");
+          expect(html).toContain("Unset");
+          expect(html).toContain('action="/console/oauth/set-password"');
+          expect(html).toContain('name="password"');
+          expect(html).toContain('name="password_confirm"');
+          expect(html).toContain('name="confirm" value="1"');
+          expect(html).toContain("Set password");
+          expect(html).toContain("Save the same value in the host Keychain. Daemon stores a hash only. Grants stay until OAuth access revoke.");
+        }
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("redirects GET /console/oauth/set-password with 302 to /console/operator-login", async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), "sw-state-"));
+      const ctx = await startConsole({
+        tokenMapYaml: "",
+        oauth: {
+          enabled: true,
+          stateDir,
+        },
+      });
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console/oauth/set-password`, {
+          redirect: "manual",
+        });
+        expect(res.status).toBe(302);
+        expect(res.headers.get("location")).toBe("/console/operator-login");
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("POST /console/oauth/set-password sets password, persists file, updates live hash, records audit", async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), "sw-state-"));
+      const ctx = await startConsole({
+        tokenMapYaml: "",
+        oauth: {
+          enabled: true,
+          stateDir,
+        },
+      });
+      try {
+        const body = new URLSearchParams({
+          password: "my-operator-secret",
+          password_confirm: "my-operator-secret",
+          confirm: "1",
+        }).toString();
+
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console/oauth/set-password`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body,
+        });
+        expect(res.status).toBe(200);
+        const html = await res.text();
+        expect(html).toContain("Password set.");
+        expect(html).toContain("Configured");
+        expect(html).not.toContain("my-operator-secret");
+
+        // Verify file persisted
+        const savedHash = readFileSync(join(stateDir, "password.hash"), "utf8").trim();
+        expect(savedHash).toMatch(/^scrypt\$/);
+        expect(html).not.toContain(savedHash);
+
+        // Verify live hash updated on oauthConfig
+        expect(ctx.oauthConfig?.passwordHash).toBe(savedHash);
+
+        // Verify audit log
+        const auditContent = readFileSync(ctx.auditFile, "utf8");
+        const auditRows = auditContent.trim().split("\n").map((l) => JSON.parse(l));
+        const setRow = auditRows.find((r) => r.tool === "console.oauth_set_password");
+        expect(setRow).toBeDefined();
+        expect(setRow.host_id).toBe("operator");
+        expect(setRow.ok).toBe(true);
+        expect(setRow.ms).toBeGreaterThanOrEqual(0);
+        // No secrets in audit
+        expect(JSON.stringify(setRow)).not.toContain("my-operator-secret");
+        expect(JSON.stringify(setRow)).not.toContain(savedHash);
+
+        // Verify authorize now works with new password without server restart
+        const authRes = await fetch(`http://127.0.0.1:${ctx.port}/authorize`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_id: "test-client",
+            password: "my-operator-secret",
+            response_type: "code",
+            redirect_uri: "http://localhost/cb",
+          }).toString(),
+          redirect: "manual",
+        });
+        // Non-empty password verified! If password was wrong it would be 401
+        expect(authRes.status).not.toBe(401);
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("refuses 400 and leaves file and live hash unchanged on validation failures", async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), "sw-state-"));
+      const initialHash = "scrypt$16384$8$1$c2FsdA$urlsafe$aW5pdGlhbA";
+      await writeFile(join(stateDir, "password.hash"), `${initialHash}\n`, "utf8");
+
+      const ctx = await startConsole({
+        tokenMapYaml: "",
+        oauth: {
+          enabled: true,
+          passwordHash: initialHash,
+          stateDir,
+        },
+      });
+      try {
+        const testCases = [
+          // empty password
+          { body: "password=&password_confirm=&confirm=1" },
+          // whitespace-only
+          { body: "password=   &password_confirm=   &confirm=1" },
+          // mismatch
+          { body: "password=abc&password_confirm=def&confirm=1" },
+          // missing confirm=1
+          { body: "password=abc&password_confirm=abc" },
+          { body: "password=abc&password_confirm=abc&confirm=0" },
+          // query confirm=1 without body confirm
+          { path: "/console/oauth/set-password?confirm=1", body: "password=abc&password_confirm=abc" },
+        ];
+
+        for (const tc of testCases) {
+          const path = tc.path ?? "/console/oauth/set-password";
+          const res = await fetch(`http://127.0.0.1:${ctx.port}${path}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: tc.body,
+          });
+          expect(res.status, JSON.stringify(tc)).toBe(400);
+
+          // File unchanged
+          expect(readFileSync(join(stateDir, "password.hash"), "utf8").trim()).toBe(initialHash);
+          // Live hash unchanged
+          expect(ctx.oauthConfig?.passwordHash).toBe(initialHash);
+        }
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("refuses 400 when stateDir is missing (injected store without stateDir)", async () => {
+      const store = new InMemoryOAuthStore();
+      const initialHash = "scrypt$16384$8$1$c2FsdA$urlsafe$aW5pdGlhbA";
+      const ctx = await startConsole({
+        tokenMapYaml: "",
+        oauth: {
+          enabled: true,
+          passwordHash: initialHash,
+          store,
+          // no stateDir
+        },
+      });
+      try {
+        const res = await fetch(`http://127.0.0.1:${ctx.port}/console/oauth/set-password`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "password=newsecret&password_confirm=newsecret&confirm=1",
+        });
+        expect(res.status).toBe(400);
+        expect(ctx.oauthConfig?.passwordHash).toBe(initialHash);
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("returns 404 from public Host header on GET /console/operator-login and POST/GET /console/oauth/set-password", async () => {
+      const stateDir = await mkdtemp(join(tmpdir(), "sw-state-"));
+      const ctx = await startConsole({
+        tokenMapYaml: "",
+        oauth: {
+          enabled: true,
+          stateDir,
+        },
+      });
+      try {
+        const paths = [
+          { method: "GET", path: "/console/operator-login" },
+          { method: "GET", path: "/console/oauth/set-password" },
+          { method: "POST", path: "/console/oauth/set-password", body: "confirm=1" },
+        ];
+
+        for (const tc of paths) {
+          const { status, body } = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+            const req = httpRequest(
+              {
+                host: "127.0.0.1",
+                port: ctx.port,
+                method: tc.method,
+                path: tc.path,
+                headers: {
+                  Host: "wiki.karldigi.dev",
+                  ...(tc.body
+                    ? {
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Content-Length": Buffer.byteLength(tc.body),
+                      }
+                    : {}),
+                },
+              },
+              (res) => {
+                const chunks: Buffer[] = [];
+                res.on("data", (c) => chunks.push(c));
+                res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+              },
+            );
+            req.on("error", reject);
+            if (tc.body) req.write(tc.body);
+            req.end();
+          });
+          expect(status, `${tc.method} ${tc.path}`).toBe(404);
+          expect(body, `${tc.method} ${tc.path}`).toContain("not_found");
         }
       } finally {
         await ctx.close();
