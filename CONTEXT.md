@@ -35,6 +35,10 @@ _Avoid_: API key, plugin token, session token
 An operator action that creates a host-id bearer, shows the raw value once, and does not write client config files. Surfaces: metal CLI `skillwiki mcp-auth issue-host`, or the loopback `/console` Issue form over an SSH tunnel. Same token-map hash rules.
 _Avoid_: auto-provision, first-run wizard, doctor apply, public Caddy `/console`
 
+**Operator password**:
+The shared secret that authorizes a new OAuth `/authorize`. The daemon stores a scrypt hash only. After a console set, that hash lives in a dedicated file that outranks env and YAML. The operator may keep the plaintext in a host Keychain. It is not a writer identity.
+_Avoid_: API key, connector password, OAuth client secret, host-id bearer
+
 **Full MCP read/write**:
 Live HTTP MCP tools include capture, work-item write, and page publish. A local vault mirror is optional for reads.
 _Avoid_: captures-only, local git writer
@@ -182,6 +186,7 @@ An attended decision process that reviews ranked-audit evidence, resolves ambigu
 - HTTP MCP writer is orthogonal to fetch-only leaf vs push-enabled leaf.
 - vault_sync.push_enabled selects the vault-sync job profile on an installed leaf.
 - Operator console mutates the same token-map and reads the same audit JSONL as CLI `mcp-auth`; it is attended issuance over SSH, not a second writer identity.
+- Operator password is not a writer identity. It only authorizes a new OAuth grant. Console Set password writes the hash file and does not revoke grants or write a host Keychain.
 - Composer chip bind is Doubao project attachment; it is not HTTP MCP compact activation and does not change writer identity.
 - Query scope is independent of compact activation and of composer chip bind; default typed never implies work-item search. HTTP scope=work ranks Layer-3 work first. Unknown or empty HTTP scope fail-closes and does not invent a writer_id.
 - Query project is an optional wiki_query filter; unknown or empty project fail-closes and does not invent a writer_id.
