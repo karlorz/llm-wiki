@@ -12,6 +12,8 @@ import { createHash } from "node:crypto";
  * - Prose-like values that merely LOOK like tokens (dotted/alphanumeric
  *   hyphenated compounds such as gpt-5.6-luna-max or pure lowercase
  *   compounds, and session:// URL captures) are filtered (G1/G3).
+ * - Descriptive prose/status sentinel words after "password"/"passwd" labels
+ *   (e.g. "generated", "configured", "required") are filtered.
  * - Already-redacted markers and synthetic placeholders are ignored.
  */
 export type SensitiveKind =
@@ -103,7 +105,7 @@ const MATCHERS: Matcher[] = [
   },
   {
     kind: "password",
-    re: /\b(?:password|passwd)["']?\s*[:=]\s*["']?([^\s`"']{8,})["']?/gi,
+    re: /\b(?:password|passwd)["']?\s*[:=]\s*[`"']?([^\s`"']{8,})[`"']?/gi,
     valueGroup: 1,
   },
   {
@@ -134,6 +136,15 @@ function isSyntheticPlaceholder(value: string): boolean {
   return REDACTED_RE.test(value) || SYNTHETIC_RE.test(value.trim());
 }
 
+function isInsideRedactedMarker(text: string, start: number, end: number): boolean {
+  for (const marker of text.matchAll(new RegExp(REDACTED_RE.source, "gi"))) {
+    const markerStart = marker.index ?? 0;
+    const markerEnd = markerStart + marker[0].length;
+    if (start >= markerStart && end <= markerEnd) return true;
+  }
+  return false;
+}
+
 /**
  * Token-only value filters (G1/G3/G4).
  * G1: session://… captures as //… under the token matcher.
@@ -152,6 +163,29 @@ function isNonSecretTokenCapture(value: string): boolean {
   return false;
 }
 
+/**
+ * Password-only prose/status sentinel filter.
+ * Prose status descriptions following "password:" or "passwd:" labels such as
+ * "Operator password: generated on sg01, shown once, never stored." capture
+ * descriptive English prose words rather than credentials.
+ */
+const PASSWORD_PROSE_SENTINELS = new Set([
+  "generated",
+  "configured",
+  "required",
+  "optional",
+  "provided",
+  "disabled",
+  "enabled",
+  "undefined",
+  "unspecified",
+  "unknown",
+]);
+
+function isNonSecretPasswordCapture(value: string): boolean {
+  return PASSWORD_PROSE_SENTINELS.has(value.toLowerCase());
+}
+
 function collectMatches(text: string): Match[] {
   const matches: Match[] = [];
   for (const matcher of MATCHERS) {
@@ -159,11 +193,12 @@ function collectMatches(text: string): Match[] {
     for (const m of text.matchAll(matcher.re)) {
       const whole = m[0]!;
       const start = m.index ?? 0;
-      if (REDACTED_RE.test(whole)) continue;
+      if (REDACTED_RE.test(whole) || isInsideRedactedMarker(text, start, start + whole.length)) continue;
 
       const value = matcher.valueGroup ? m[matcher.valueGroup] : whole;
       if (isSyntheticPlaceholder(value)) continue;
       if (matcher.kind === "token" && isNonSecretTokenCapture(value)) continue;
+      if (matcher.kind === "password" && isNonSecretPasswordCapture(value)) continue;
 
       const valueOffset = whole.lastIndexOf(value);
       const valueStart = start + Math.max(0, valueOffset);

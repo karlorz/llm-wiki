@@ -226,5 +226,51 @@ describe("sensitive-content", () => {
       expect(transcriptRedact.changed).toBe(false);
       expect(transcriptRedact.text).toBe(transcriptLine);
     });
+
+    it("ignores prose status sentinels following password: label (password FP)", () => {
+      const text = "Operator password: generated on sg01, shown once, never stored.\n";
+      expect(scanSensitiveContent(text)).toEqual([]);
+      const result = redactSensitiveContent(text);
+      expect(result.changed).toBe(false);
+      expect(result.text).toBe(text);
+    });
+
+    it("still captures real and plausible bare and quoted password assignments", () => {
+      const barePasswd = "passwd: superSecretP@ss1\n";
+      const quotedPass = 'password: "generated-pw-12345"\n';
+      const markdownPass = "Operator password: `temporary-admin-12345`\n";
+      const bareComplex = "Operator password: generated_pass_98765\n";
+
+      const bareFindings = scanSensitiveContent(barePasswd);
+      const quotedFindings = scanSensitiveContent(quotedPass);
+      const markdownFindings = scanSensitiveContent(markdownPass);
+      const complexFindings = scanSensitiveContent(bareComplex);
+
+      expect(bareFindings).toHaveLength(1);
+      expect(bareFindings[0]!.kind).toBe("password");
+      expect(quotedFindings).toHaveLength(1);
+      expect(quotedFindings[0]!.kind).toBe("password");
+      expect(markdownFindings).toHaveLength(1);
+      expect(markdownFindings[0]!.kind).toBe("password");
+      expect(complexFindings).toHaveLength(1);
+      expect(complexFindings[0]!.kind).toBe("password");
+
+      expect(JSON.stringify(bareFindings)).not.toContain("superSecretP@ss1");
+      expect(JSON.stringify(quotedFindings)).not.toContain("generated-pw-12345");
+      expect(JSON.stringify(markdownFindings)).not.toContain("temporary-admin-12345");
+      expect(JSON.stringify(complexFindings)).not.toContain("generated_pass_98765");
+    });
+
+    it("does not rescan labels nested inside redaction markers", () => {
+      const text = [
+        "All checks pass: [REDACTED:password:0123456789ab] verify clean.",
+        "Status: [REDACTED:token:abcdef012345]",
+      ].join("\n");
+
+      expect(scanSensitiveContent(text)).toEqual([]);
+      const result = redactSensitiveContent(text);
+      expect(result.changed).toBe(false);
+      expect(result.text).toBe(text);
+    });
   });
 });
