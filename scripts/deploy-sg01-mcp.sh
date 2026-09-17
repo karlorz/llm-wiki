@@ -98,7 +98,9 @@ FAILED="/opt/llm-wiki-failed-$STAMP"
 SWAPPED=false
 cleanup() {
   rm -f "$ARCHIVE"
-  [ -d "$STAGE" ] && rm -rf "$STAGE"
+  if [ -d "$STAGE" ]; then
+    rm -rf "$STAGE"
+  fi
 }
 rollback() {
   rc=$?

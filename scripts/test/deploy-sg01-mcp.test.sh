@@ -24,6 +24,9 @@ grep -q 'failed after swap' "$SCRIPT" || fail "post-swap rollback path"
 grep -q 'failed before swap' "$SCRIPT" || fail "pre-swap leaves live bundle untouched"
 grep -q 'systemctl is-failed' "$SCRIPT" || fail "fast failed-unit detection"
 grep -q 'trap rollback ERR INT TERM HUP' "$SCRIPT" || fail "interruption rollback traps"
+if grep -Fq '[ -d "$STAGE" ] && rm -rf "$STAGE"' "$SCRIPT"; then
+  fail "cleanup must not report failure after the stage directory is atomically moved"
+fi
 pass "health gate and guarded rollback are present"
 
 grep -q 'grep -Eo.*opt/llm-wiki' "$SCRIPT" || fail "runtime path extraction"
