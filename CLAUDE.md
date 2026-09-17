@@ -17,6 +17,7 @@
 - [Managed-write lock reclaim runbook](packages/vault-sync/docs/managed-write-lock-reclaim-runbook.md)
 - [Credential rotation & env sanitization runbook](packages/vault-sync/docs/credential-rotation-runbook.md)
 - [Remote E2E host profiles](scripts/hosts/README.md)
+- [sg01 HTTP MCP deployment](docs/sg01-mcp-deployment.md)
 
 ## Wiki Vault — `{WIKI_PATH}`
 

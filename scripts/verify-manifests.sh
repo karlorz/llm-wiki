@@ -59,6 +59,15 @@ else
   echo "✓ No case-only tracked path collisions"
 fi
 
+# ---- 0c. sg01 MCP deployment contract ----
+
+if ! bash "$REPO_ROOT/scripts/test/deploy-sg01-mcp.test.sh"; then
+  echo "✗ sg01 MCP deployment contract failed" >&2
+  ERRORS=$((ERRORS + 1))
+else
+  echo "✓ sg01 MCP deployment contract passed"
+fi
+
 # ---- 1. Version consistency across all 18 manifests ----
 
 CLI_VER=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
