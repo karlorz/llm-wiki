@@ -44,11 +44,11 @@ Live HTTP MCP tools include capture, work-item write, and page publish. A local 
 _Avoid_: captures-only, local git writer
 
 **Fetch-only leaf**:
-`vault_sync.installed=true`, role leaf, `vault_sync.push_enabled=false`. wiki-fetch is required; wiki-push is not part of the host profile.
+`vault_sync.installed=true`, role leaf, `vault_sync.push_enabled=false`. wiki-fetch is required; wiki-push is not part of the host profile. macos-dev stays here.
 _Avoid_: HTTP MCP leaf, MCP-healthy host, disabled-push heuristic
 
 **Push-enabled leaf**:
-`vault_sync.installed=true`, role leaf, `vault_sync.push_enabled` true or absent. wiki-push remains required. macos-dev stays here.
+`vault_sync.installed=true`, role leaf, `vault_sync.push_enabled` true or absent. wiki-push remains required for hosts that intentionally retain direct vault push authority.
 _Avoid_: treating every HTTP MCP host as fetch-only
 
 **HTTP MCP writer**:
