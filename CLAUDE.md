@@ -35,6 +35,7 @@
 - [Vault Git authority]({WIKI_PATH}/projects/llm-wiki/architecture/2026-06-08-vault-sync-git-authority.md)
 - [Vault delete and archive protocol]({WIKI_PATH}/projects/llm-wiki/architecture/2026-06-10-vault-sync-delete-archive-protocol.md)
 - [Agent memory architecture]({WIKI_PATH}/projects/llm-wiki/architecture/2026-06-19-agent-memory-architecture.md)
+- [Agent-memory research writer on sg01 HTTP MCP]({WIKI_PATH}/projects/llm-wiki/architecture/2026-09-17-research-mcp-on-sg01.md) - retire sg02 git satellite; Markdown-only MCP publish; `fleet.yaml` satellite-off is operator yaml
 - [Cross-harness SkillWiki context injection]({WIKI_PATH}/projects/llm-wiki/architecture/decisions/2026-08-04-skillwiki-context-injection-3.md) - activation file, ADRs 1-8, glossary, `install:activation`
 - [Vault-sync exit-honesty & convergence refactor]({WIKI_PATH}/projects/llm-wiki/architecture/2026-08-13-vault-sync-exit-honesty-refactor.md) - 2026-08-13 S3 push outage, M1-M6, 5 decisions
 

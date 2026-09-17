@@ -137,3 +137,38 @@ describe("sg02 systemd rollout artifacts", () => {
     expect(readme).not.toMatch(/(gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,})/);
   });
 });
+
+describe("sg01 HTTP MCP research siblings", () => {
+  it("ships a research service that stages locally and publishes only through MCP", () => {
+    const service = readPackageFile("service-units/systemd/skillwiki-research.service");
+    const timer = readPackageFile("service-units/systemd/skillwiki-research.timer");
+
+    expect(service).toContain("User=skillwiki-research");
+    expect(service).toContain("WorkingDirectory=/opt/llm-wiki");
+    expect(service).toContain("EnvironmentFile=/etc/skillwiki-research/env");
+    expect(service).toContain("Environment=AGENT_MEMORY_TRENDS_MCP_WRITER_ID=sg01-research");
+    expect(service).toContain("StateDirectory=skillwiki-research");
+    expect(service).toContain("--vault /var/lib/skillwiki-research/staging-vault");
+    expect(service).toContain("daily --generate-only --mcp-publish --synthesis-fallback none");
+    expect(service).not.toContain("skillwiki-maintenance");
+    expect(service).not.toContain("self-update-apply");
+    expect(service).not.toMatch(/git (commit|push)/);
+    expect(timer).toContain("OnCalendar=*-*-* 00:10:00 Asia/Hong_Kong");
+    expect(timer).toContain("Unit=skillwiki-research.service");
+  });
+
+  it("ships a read-only source-vault session-brief publisher", () => {
+    const service = readPackageFile("service-units/systemd/skillwiki-session-brief.service");
+    const timer = readPackageFile("service-units/systemd/skillwiki-session-brief.timer");
+
+    expect(service).toContain("User=skillwiki-research");
+    expect(service).toContain("EnvironmentFile=/etc/skillwiki-research/env");
+    expect(service).toContain("AGENT_MEMORY_TRENDS_SOURCE_VAULT=/opt/skillwiki-mcp/vault");
+    expect(service).toContain("session-brief-mcp");
+    expect(service).toContain("ReadOnlyPaths=/opt/skillwiki-mcp/vault");
+    expect(service).not.toContain("--write");
+    expect(service).not.toContain("skillwiki-maintenance");
+    expect(timer).toContain("OnCalendar=*-*-* 01:05:00 Asia/Hong_Kong");
+    expect(timer).toContain("Unit=skillwiki-session-brief.service");
+  });
+});

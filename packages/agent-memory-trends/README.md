@@ -308,9 +308,48 @@ If all collected candidates are suppressed by fresh digest/task/work duplicate
 signals, changing Codex/Claude permission flags will not exercise providers; the
 collector must surface at least one non-suppressed candidate.
 
+## sg01 HTTP MCP research profile
+
+The protected sg01 host uses the HTTP MCP write plane, not the legacy vault Git
+publisher. `daily --generate-only --mcp-publish --synthesis-fallback none`
+generates into `/var/lib/skillwiki-research/staging-vault`, publishes only the
+query digest and proposal captures through MCP, retains `.skillwiki/**` and
+`raw/articles/**` as host-local run evidence, and rejects `index.md`, yaml, and
+undeclared raw paths. `session-brief-mcp` reads the MCP working copy without
+`--write` and CAS-publishes only `meta/latest-session-brief.md`.
+
+Tracked unit templates are:
+
+- `service-units/systemd/skillwiki-research.service` and `.timer`
+- `service-units/systemd/skillwiki-session-brief.service` and `.timer`
+
+They run as `skillwiki-research` from `/opt/llm-wiki`, use
+`/etc/skillwiki-research/env`, and require
+`AGENT_MEMORY_TRENDS_MCP_WRITER_ID=sg01-research`. The operator must create the
+environment file with mode `0600`, install/authenticate `gh`, provision the
+research source config, and issue the `sg01-research` host-id bearer from a
+metal TTY. Never copy another host's bearer or auto-write MCP client config.
+
+Before enabling either timer, verify the unit environment reports SkillWiki
+0.10.93 and 9 MCP tools. Disable the three sg02 agent-memory timers only after
+a digest publication or quiet-run receipt verifies `writer_id=sg01-research`.
+There is intentionally no sg01 self-update-apply unit and no
+`skillwiki-maintenance` write transaction.
+
 ## Runtime Host
 
-The nightly writer runs on `sg02` as the dedicated non-root Unix user `agent-memory`. Do not run the writer on `sg01`; `sg01` remains protected snapshotter infrastructure.
+The nightly writer now runs on `sg01` as the dedicated non-root Unix user
+`skillwiki-research`. The protected host remains the HTTP MCP backend and
+snapshotter: research and session-brief processes may read the MCP working copy
+and host-local staging state, but all vault mutations go through HTTP MCP and
+only the snapshotter promotes S3 state to GitHub. The sg01 profile does not run
+vault Git commit/push, `skillwiki-maintenance`, Claude fallback, or
+`self-update-apply`.
+
+The older sg02 units remain tracked only as rollback/reference artifacts until
+the attended cutover is proven. `scripts/install-sg02.sh` is a legacy installer;
+do not use it for new deployments and do not re-enable its timers after the
+`sg01-research` receipt gate has passed.
 
 Tracked rollout files:
 
@@ -322,17 +361,25 @@ Tracked rollout files:
 - `service-units/systemd/agent-memory-self-update.timer`
 - `scripts/install-sg02.sh`
 
-The systemd service is a system-level unit under `/etc/systemd/system`, runs with `User=agent-memory`, reads `/home/agent-memory/.config/agent-memory-trends/env`, and executes `/home/agent-memory/.local/bin/agent-memory-trends-daily`. The daily wrapper calls the guarded `@skillwiki/maintenance` runner in `--mode daily`, which performs vault preflight, runs `agent-memory-trends daily --generate-only` inside the maintenance write transaction, and pushes the maintenance-owned commit to `origin/main` instead of using the legacy direct publisher path.
+Those legacy services are system-level units under `/etc/systemd/system`, run
+with `User=agent-memory`, and call the guarded maintenance runner. They describe
+the retired satellite Git-writer topology and are not the sg01 installation
+path.
 
 The daily timer runs at `00:10` Asia/Hong_Kong with `RandomizedDelaySec=300`, `Persistent=true`, and `AccuracySec=60s`. A dedicated session-brief refresh timer runs at `01:05` Asia/Hong_Kong, and the self-update timer runs every four hours at minute 20. Concurrent maintenance runs now wait on the maintenance lock instead of failing: a run that finds the lock held waits up to `SKILLWIKI_MAINTENANCE_LOCK_WAIT_MS` (default 15 minutes) and then proceeds.
 
-## Install on sg02
+## Legacy install on sg02
+
+This section documents the superseded satellite deployment for rollback and
+forensics. The canonical deployment is the sg01 HTTP MCP profile above. Do not
+run `install-sg02.sh --enable` for a new installation.
 
 ### Pre-flight Checklist
 
-Before running the installer, verify these prerequisites on `sg02`:
+Before restoring the legacy installer during an explicitly approved rollback,
+verify these prerequisites on `sg02`:
 
-1. Target host is `sg02` or another non-production Linux host with systemd and root access; never run this writer on `sg01`.
+1. Target host is `sg02` or another non-production Linux host with systemd and root access; never run this legacy installer on `sg01`.
 2. Node.js 20 or newer and npm are installed for workspace builds and wrapper execution.
 3. `git`, `ssh`, and `rsync` are installed; the vault checkout can fetch and push `origin main`.
 4. GitHub CLI (`gh`) is installed and can authenticate as the `agent-memory` Unix user before live runs.
@@ -490,9 +537,13 @@ The workflow must preserve these constraints:
 - `AGENT_MEMORY_TRENDS_HEARTBEAT_URL` belongs only in `/home/agent-memory/.config/agent-memory-trends/env`.
 - Publisher validation must reject out-of-allowlist changes, raw rewrites, symlinks, executable generated files, oversized files, secret-like content, manifest mismatches, too many task captures, and too many web sources.
 - Publisher validation must reject direct agent-written transcript captures that are not marked as TypeScript-rendered.
-- The systemd timer must invoke the guarded maintenance runner; use the direct package `daily` command only for manual debugging.
-- The heartbeat fires only after a successful push when the legacy direct publisher path is intentionally run manually.
-- `sg01` is read-only for this workflow.
+- The sg01 timers invoke only the package MCP publication paths; they never run
+  the maintenance Git write transaction.
+- The heartbeat fires only after a successful push when the legacy direct
+  publisher path is intentionally run manually.
+- `sg01` is protected, but it is the HTTP MCP write backend for this workflow;
+  research units must not mutate its Git snapshot worktree or write vault pages
+  directly.
 
 ## Periodic Review
 

@@ -32,7 +32,7 @@ HOST_ENV=scripts/hosts/sg02.env bash scripts/e2e-plugin.sh   # full branch only 
 
 1. `READONLY_VERIFY=true` ⇒ `INSTALL_ALLOWED=false` AND `DESTRUCTIVE_ALLOWED=false`
 2. `HOST_ROLE=snapshotter` requires the host to be the only one with that role in `fleet.yaml`
-3. Hosts with `maintenance.skillwiki_satellite.enabled=true` in `fleet.yaml` must keep `VAULT_PATH` equal to `maintenance.skillwiki_satellite.vault_path`
+3. Hosts with `maintenance.skillwiki_satellite.enabled=true` in `fleet.yaml` must keep `VAULT_PATH` equal to `maintenance.skillwiki_satellite.vault_path`. The sg02 satellite git writer is being retired (vault ADR `2026-09-17-research-mcp-on-sg01`); after cutover that host should have `enabled: false` or no satellite block. Do not add a git-mutating satellite on sg01.
 
 Run `bash scripts/verify-manifests.sh` before remote E2E work. It includes
 `scripts/verify-host-env-fleet.js`, which checks these committed host profiles

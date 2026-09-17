@@ -18,6 +18,11 @@ import { maybeSendHeartbeat } from "./heartbeat.js";
 import { buildAgentInput, writeAgentInput, type AgentInput, type AllowedOutputs } from "./input.js";
 import { materializeOperationalRunManifest, publishGeneratedChanges } from "./publish.js";
 import { materializePreviewRun } from "./preview.js";
+import {
+  createHttpMcpToolCaller,
+  publishGeneratedOutputsToMcp,
+  publishSinglePageToMcp,
+} from "./mcp-publish.js";
 import type { SynthesisTelemetry } from "./synthesis.js";
 import {
   createClaudeSynthesisRunner,
@@ -40,8 +45,17 @@ import {
   type Result,
 } from "./types.js";
 
-const COMMANDS = new Set<AgentMemoryTrendsCommand>(["doctor", "diagnose", "collect", "daily", "discover", "publish", "version"]);
-const USAGE_TEXT = "Usage: agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
+const COMMANDS = new Set<AgentMemoryTrendsCommand>([
+  "doctor",
+  "diagnose",
+  "collect",
+  "daily",
+  "discover",
+  "publish",
+  "session-brief-mcp",
+  "version",
+]);
+const USAGE_TEXT = "Usage: agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|session-brief-mcp|version> [--dry-run] [--generate-only] [--mcp-publish] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
 const SESSION_BRIEF_FILES = [
@@ -123,7 +137,11 @@ export async function runAgentMemoryTrendsCli(
     if (command === "daily") {
       const generateOnly = options.flags.has("generate-only") && !dryRun;
       const previewOnly = generateOnly && options.flags.has("preview-only");
-      const result = await runDaily(options, context, dryRun, generateOnly, previewOnly);
+      const mcpPublish = options.flags.has("mcp-publish");
+      if (mcpPublish && (!generateOnly || previewOnly)) {
+        return errorRun(err("USAGE", "--mcp-publish on daily requires --generate-only and cannot be combined with --preview-only"));
+      }
+      const result = await runDaily(options, context, dryRun, generateOnly, previewOnly, mcpPublish);
       if (!result.ok) return errorRun(result);
       return okRun(
         command,
@@ -136,6 +154,12 @@ export async function runAgentMemoryTrendsCli(
 
     if (command === "discover") {
       const result = await runDiscover(options, context, dryRun);
+      if (!result.ok) return errorRun(result);
+      return okRun(command, dryRun, generatedAt, result.data.mutations, result.data.humanHint);
+    }
+
+    if (command === "session-brief-mcp") {
+      const result = await runSessionBriefMcp(options, context, dryRun);
       if (!result.ok) return errorRun(result);
       return okRun(command, dryRun, generatedAt, result.data.mutations, result.data.humanHint);
     }
@@ -1138,7 +1162,8 @@ async function runDaily(
   context: AgentMemoryTrendsContext,
   dryRun: boolean,
   generateOnly: boolean,
-  previewOnly: boolean
+  previewOnly: boolean,
+  mcpPublish: boolean
 ): Promise<Result<{ mutations: string[]; selectedCandidateCount: number }>> {
   const startedAt = formatInstant(context.now);
   if (!dryRun && !generateOnly && !previewOnly) {
@@ -1177,7 +1202,7 @@ async function runDaily(
   }
 
   if (isQuietRunInput(collected.data.input)) {
-    return runQuietDaily(options, context, dryRun, generateOnly, collected.data, startedAt);
+    return runQuietDaily(options, context, dryRun, generateOnly, mcpPublish, collected.data, startedAt);
   }
 
   const tmpDir = join(tmpdir(), "agent-memory-trends");
@@ -1264,6 +1289,14 @@ async function runDaily(
       );
       changedFiles = materialized.data.changedFiles;
       mutations.push(...changedFiles);
+      if (mcpPublish) {
+        const remote = await runMcpPublish(options, context);
+        if (!remote.ok) {
+          writeFailureState(collected.data.options, context, startedAt, classifyFailure(remote.error), synthesisTelemetry);
+          return remote;
+        }
+        mutations.push(...remote.data.publishedPaths);
+      }
       return ok({
         mutations,
         selectedCandidateCount: collected.data.input.selectedCandidates.length,
@@ -1311,6 +1344,7 @@ async function runQuietDaily(
   context: AgentMemoryTrendsContext,
   dryRun: boolean,
   generateOnly: boolean,
+  mcpPublish: boolean,
   collected: CollectedInput,
   startedAt: string
 ): Promise<Result<{ mutations: string[]; selectedCandidateCount: number }>> {
@@ -1337,6 +1371,14 @@ async function runQuietDaily(
 
   const mutations = [collected.inputPath];
   if (dryRun || generateOnly) {
+    if (generateOnly && mcpPublish) {
+      const remote = await runMcpPublish(options, context);
+      if (!remote.ok) {
+        writeFailureState(collected.options, context, startedAt, classifyFailure(remote.error));
+        return remote;
+      }
+      mutations.push(...remote.data.publishedPaths);
+    }
     return ok({
       mutations: [...mutations, ...changedFiles],
       selectedCandidateCount: 0,
@@ -1728,6 +1770,20 @@ async function runPublish(
     });
   }
 
+  if (options.flags.has("mcp-publish")) {
+    const remote = await runMcpPublish(options, context);
+    if (!remote.ok) return remote;
+    return ok({
+      mutations: remote.data.publishedPaths,
+      heartbeat: {
+        status: "skipped",
+        reason: remote.data.quietRun
+          ? `quiet-run MCP receipt from ${remote.data.writerId}`
+          : `HTTP MCP publish receipt from ${remote.data.writerId}`,
+      },
+    });
+  }
+
   const existingRawPaths = context.listTrackedRawPaths
     ? await context.listTrackedRawPaths(resolved.vault)
     : await listTrackedRawPaths(resolved.vault, context);
@@ -1755,6 +1811,105 @@ async function runPublish(
   return ok({
     mutations: published.data.changedFiles,
     heartbeat: heartbeatResult.data,
+  });
+}
+
+async function runSessionBriefMcp(
+  options: ParsedCliOptions,
+  context: AgentMemoryTrendsContext,
+  dryRun: boolean
+): Promise<Result<{ mutations: string[]; humanHint: string }>> {
+  const resolved = resolveRunOptions(options, context);
+  const sourceVault =
+    options.values.get("source-vault") ??
+    context.env.AGENT_MEMORY_TRENDS_SOURCE_VAULT ??
+    "/opt/skillwiki-mcp/vault";
+  const runCommand = context.runCommand ?? createCommandRunner();
+  const rendered = await runCommand(
+    "skillwiki",
+    ["session-brief", sourceVault, "--project", resolved.project],
+    { cwd: resolved.repo, env: context.env }
+  );
+  if (rendered.exitCode !== 0) {
+    return err("SESSION_BRIEF_FAILED", { stdout: rendered.stdout, stderr: rendered.stderr });
+  }
+
+  let payload: {
+    ok?: boolean;
+    data?: { brief?: unknown; generated_at?: unknown; word_count?: unknown; project?: unknown };
+  };
+  try {
+    payload = JSON.parse(rendered.stdout) as typeof payload;
+  } catch (error) {
+    return err("SESSION_BRIEF_FAILED", error instanceof Error ? error.message : String(error));
+  }
+  const brief = payload.data?.brief;
+  const generatedAt = payload.data?.generated_at;
+  if (payload.ok !== true || typeof brief !== "string" || typeof generatedAt !== "string") {
+    return err("SESSION_BRIEF_FAILED", "skillwiki session-brief returned an invalid receipt");
+  }
+
+  const today = generatedAt.slice(0, 10);
+  const content = [
+    "---",
+    "title: Latest Session Brief",
+    `created: ${today}`,
+    `updated: ${today}`,
+    "type: meta",
+    "tags: [meta, session-brief]",
+    "confidence: high",
+    "generated_by: skillwiki session-brief",
+    `generated_at: ${generatedAt}`,
+    "generated_kind: session-brief",
+    `project_hint: \"[[${resolved.project}]]\"`,
+    "---",
+    "",
+    brief.trimEnd(),
+    "",
+  ].join("\n");
+
+  if (dryRun) {
+    return ok({
+      mutations: [],
+      humanHint: `session-brief-mcp: dry-run rendered ${String(payload.data?.word_count ?? "unknown")} word(s)`,
+    });
+  }
+
+  const token = context.env.SKILLWIKI_MCP_TOKEN;
+  if (!token) return err("MCP_AUTH_MISSING", "SKILLWIKI_MCP_TOKEN is required for session-brief-mcp");
+  const callTool = createHttpMcpToolCaller({
+    url: context.env.SKILLWIKI_MCP_URL ?? "https://wiki.karldigi.dev/mcp",
+    token,
+  });
+  const published = await publishSinglePageToMcp({
+    callTool,
+    path: "meta/latest-session-brief.md",
+    content,
+    expectedWriterId: context.env.AGENT_MEMORY_TRENDS_MCP_WRITER_ID,
+  });
+  if (!published.ok) return published;
+  return ok({
+    mutations: [published.data.path],
+    humanHint: `session-brief-mcp: published by ${published.data.writerId}`,
+  });
+}
+
+async function runMcpPublish(options: ParsedCliOptions, context: AgentMemoryTrendsContext) {
+  const resolved = resolveRunOptions(options, context);
+  const token = context.env.SKILLWIKI_MCP_TOKEN;
+  if (!token) return err("MCP_AUTH_MISSING", "SKILLWIKI_MCP_TOKEN is required for --mcp-publish");
+  const callTool = createHttpMcpToolCaller({
+    url: context.env.SKILLWIKI_MCP_URL ?? "https://wiki.karldigi.dev/mcp",
+    token,
+  });
+  const publisher = context.publishGeneratedOutputsToMcp ?? publishGeneratedOutputsToMcp;
+  return publisher({
+    vault: resolved.vault,
+    runDate: resolved.runDate,
+    manifestPath: resolved.manifestPath,
+    project: resolved.project,
+    callTool,
+    expectedWriterId: context.env.AGENT_MEMORY_TRENDS_MCP_WRITER_ID,
   });
 }
 

@@ -413,7 +413,7 @@ describe("agent-memory-trends CLI", () => {
     if (result.result.ok) throw new Error("expected usage error");
     expect(result.result.error).toBe("USAGE");
     expect(result.result.detail).toEqual({
-      message: "Usage: agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|version> [--dry-run] [--generate-only] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]",
+      message: "Usage: agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|session-brief-mcp|version> [--dry-run] [--generate-only] [--mcp-publish] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]",
     });
   });
 
@@ -429,6 +429,46 @@ describe("agent-memory-trends CLI", () => {
     if (!result.result.ok) throw new Error("expected ok");
     expect(result.result.data.command).toBe(command);
     expect(result.result.data.dryRun).toBe(true);
+  });
+
+  it("renders session-brief-mcp read-only during dry-run", async () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const result = await runAgentMemoryTrendsCli(
+      ["session-brief-mcp", "--dry-run", "--source-vault", "/mcp-vault", "--repo", "/repo", "--project", "llm-wiki"],
+      {
+        cwd: "/repo",
+        env: {},
+        now: new Date("2026-09-17T00:00:00Z"),
+        runCommand: async (command, args) => {
+          calls.push({ command, args });
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                project: "llm-wiki",
+                brief: "# Session Brief\n\nRead-only generated brief.",
+                word_count: 5,
+                generated_at: "2026-09-17T00:00:00Z",
+              },
+            }),
+            stderr: "",
+          };
+        },
+      }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected session brief dry-run success");
+    expect(result.result.data.mutations).toEqual([]);
+    expect(result.result.data.humanHint).toContain("dry-run rendered 5 word(s)");
+    expect(calls).toEqual([
+      {
+        command: "skillwiki",
+        args: ["session-brief", "/mcp-vault", "--project", "llm-wiki"],
+      },
+    ]);
   });
 
   it("preflights rollout dependencies in doctor and keeps output structured", async () => {

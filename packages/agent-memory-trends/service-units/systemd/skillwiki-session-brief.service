@@ -1,0 +1,28 @@
+[Unit]
+Description=Publish the SkillWiki session brief through HTTP MCP
+Documentation=file:/opt/llm-wiki/packages/agent-memory-trends/README.md
+After=network-online.target skillwiki-mcp.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=skillwiki-research
+Group=skillwiki-research
+WorkingDirectory=/opt/llm-wiki
+Environment=HOME=/var/lib/skillwiki-research
+Environment=AGENT_MEMORY_TRENDS_MCP_WRITER_ID=sg01-research
+Environment=AGENT_MEMORY_TRENDS_SOURCE_VAULT=/opt/skillwiki-mcp/vault
+EnvironmentFile=/etc/skillwiki-research/env
+StateDirectory=skillwiki-research
+StateDirectoryMode=0700
+ExecStart=/usr/bin/node /opt/llm-wiki/packages/agent-memory-trends/dist/cli.js session-brief-mcp --repo /opt/llm-wiki --project llm-wiki
+RuntimeMaxSec=900
+Nice=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/skillwiki-mcp/vault
+ReadWritePaths=/var/lib/skillwiki-research
+

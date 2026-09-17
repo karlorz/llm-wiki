@@ -13,6 +13,10 @@ import type { PublishGeneratedChangesInput, PublishGeneratedChangesOutput } from
 import type { AgentMemoryTrendRunState, WriteRunStateOutput } from "./run-state.js";
 import type { SynthesisRunner } from "./synthesis.js";
 import type { RenderProposalCapturesInput, RenderProposalCapturesOutput } from "./captures.js";
+import type {
+  PublishGeneratedOutputsToMcpInput,
+  PublishGeneratedOutputsToMcpOutput,
+} from "./mcp-publish.js";
 
 export interface OkResult<T> {
   ok: true;
@@ -35,7 +39,16 @@ export function err(error: string, detail?: unknown): ErrResult {
   return detail === undefined ? { ok: false, error } : { ok: false, error, detail };
 }
 
-export type AgentMemoryTrendsCommand = "doctor" | "diagnose" | "collect" | "daily" | "discover" | "publish" | "help" | "version";
+export type AgentMemoryTrendsCommand =
+  | "doctor"
+  | "diagnose"
+  | "collect"
+  | "daily"
+  | "discover"
+  | "publish"
+  | "session-brief-mcp"
+  | "help"
+  | "version";
 
 export interface RefreshSessionBriefInput {
   vault: string;
@@ -96,6 +109,9 @@ export interface AgentMemoryTrendsContext {
   renderProposalCaptures?: (input: RenderProposalCapturesInput) => Result<RenderProposalCapturesOutput>;
   refreshSessionBrief?: (input: RefreshSessionBriefInput) => Promise<Result<RefreshSessionBriefOutput>>;
   publishGeneratedChanges?: (input: PublishGeneratedChangesInput) => Promise<Result<PublishGeneratedChangesOutput>>;
+  publishGeneratedOutputsToMcp?: (
+    input: PublishGeneratedOutputsToMcpInput
+  ) => Promise<Result<PublishGeneratedOutputsToMcpOutput>>;
   listTrackedRawPaths?: (vault: string) => Promise<Result<string[]>>;
   maybeSendHeartbeat?: (input: MaybeSendHeartbeatInput) => Promise<Result<HeartbeatResult>>;
   writeRunState?: (vault: string, state: AgentMemoryTrendRunState) => Result<WriteRunStateOutput>;

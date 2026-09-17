@@ -26,6 +26,12 @@ Safety invariants:
 - Only the declared writer jobs may mutate the vault, and later writers are skipped once one commit succeeds or fails.
 - Dedicated single-writer profiles such as `session-brief-refresh` may push their committed writer output immediately.
 - Protected hosts must reject mutating profiles.
+- sg01 research/session-brief HTTP MCP units are **not** this package. They
+  are MCP clients (`writer_id` `sg01-research`) per vault ADR
+  `projects/llm-wiki/architecture/2026-09-17-research-mcp-on-sg01.md`. Do not
+  add a git-mutating satellite profile on sg01 to “keep” agent-memory-trends.
+  The sg02 `skillwiki_satellite` git jobs are being retired; `install-sg02.sh`
+  is legacy after cutover.
 - `healthFindingsAreAdvisory` is a profile-level exit policy, not a health
   tooling change: on `unattended-daily`, a successfully executed and parsed
   health report with blocking findings maps to `warn` so pre-existing vault
