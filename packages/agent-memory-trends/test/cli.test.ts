@@ -1887,6 +1887,53 @@ describe("agent-memory-trends CLI", () => {
     expect(latest).toEqual(manifest);
   });
 
+  it("skips host synthesis for generate-only --synthesis-fallback none when codex is absent", async () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-skip-synth-"));
+    mkdirSync(join(vault, ".skillwiki", "agent-memory-trends"), { recursive: true });
+    mkdirSync(join(vault, "queries"), { recursive: true });
+    mkdirSync(join(vault, "raw", "articles"), { recursive: true });
+    const runDate = "2026-06-11";
+    const digestPath = `queries/${runDate}-agent-memory-trends-digest.md`;
+    const result = await runAgentMemoryTrendsCli(
+      ["daily", "--generate-only", "--mcp-publish", "--synthesis-fallback", "none", "--vault", vault, "--repo", "/repo", "--config", "/config.yaml"],
+      {
+        cwd: "/repo",
+        env: {
+          PATH: "/tmp/agent-memory-trends-no-codex",
+          SKILLWIKI_MCP_TOKEN: "test-token",
+          AGENT_MEMORY_TRENDS_MCP_WRITER_ID: "sg01-research",
+        },
+        now: new Date("2026-06-11T00:10:00+08:00"),
+        readFile: () => CONFIG,
+        collectGithubCandidates: async () => ({
+          ok: true,
+          data: {
+            rateLimit: { resources: { core: { remaining: 5000, limit: 5000, reset: 1 }, search: { remaining: 30, limit: 30, reset: 1 } } },
+            apiCallsUsed: 12,
+            rawCandidateCount: 1,
+            selectedCandidates: [selectedCandidate()],
+            runSummary: { rawCandidateCount: 1, selectedCandidateCount: 1, apiCallsUsed: 12 },
+            laneDiagnostics: [],
+          },
+        }),
+        collectDuplicateSignals: () => ({ ok: true, data: { existingTasks: [], activeWork: [], recentDigests: [], parseErrors: [] } }),
+        writeAgentInput: () => ({
+          ok: true,
+          data: { path: join(vault, ".skillwiki", "agent-memory-trends", `${runDate}-input.json`) },
+        }),
+        publishGeneratedOutputsToMcp: async () => ({
+          ok: true,
+          data: { publishedPaths: [digestPath], hostLocalPaths: [], writerId: "sg01-research", quietRun: false },
+        }),
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected skip-synthesis success");
+    expect(result.result.data.humanHint).toContain("daily: ok (generate-only)");
+    expect(existsSync(join(vault, digestPath))).toBe(true);
+  });
+
   it("writes a deterministic daily preview without invoking synthesis", async () => {
     const calls: string[] = [];
     const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-preview-"));

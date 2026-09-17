@@ -1205,6 +1205,37 @@ async function runDaily(
     return runQuietDaily(options, context, dryRun, generateOnly, mcpPublish, collected.data, startedAt);
   }
 
+  const skipHostSynthesis =
+    generateOnly &&
+    !context.runSynthesis &&
+    resolveSynthesisRuntimeOptions(options.values, context.env).fallback === "none" &&
+    !commandAvailable("codex", context.env);
+  if (skipHostSynthesis) {
+    const preview = materializePreviewRun({
+      vault: collected.data.options.vault,
+      runDate: collected.data.options.runDate,
+      inputPath: `.skillwiki/agent-memory-trends/${collected.data.options.runDate}-input.json`,
+      input: collected.data.input,
+    });
+    if (!preview.ok) {
+      writeFailureState(collected.data.options, context, startedAt, "validation");
+      return preview;
+    }
+    const mutations = [collected.data.inputPath, ...preview.data.changedFiles];
+    if (mcpPublish && !dryRun) {
+      const remote = await runMcpPublish(options, context);
+      if (!remote.ok) {
+        writeFailureState(collected.data.options, context, startedAt, classifyFailure(remote.error));
+        return remote;
+      }
+      mutations.push(...remote.data.publishedPaths);
+    }
+    return ok({
+      mutations,
+      selectedCandidateCount: collected.data.input.selectedCandidates.length,
+    });
+  }
+
   const tmpDir = join(tmpdir(), "agent-memory-trends");
   mkdirSync(tmpDir, { recursive: true });
   const synthesisInput = {
