@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# RETIRED DEPLOYMENT: sg02's skillwiki_satellite Git-writer role has been
+# replaced by the sg01 HTTP MCP research/session-brief profile. Keep this
+# installer and its systemd unit files only for rollback/forensics; do not use
+# --enable or re-enable the three timers after the sg01-research receipt gate
+# without a new explicit operator decision.
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -25,7 +30,7 @@ usage() {
   cat <<USAGE
 Usage: bash packages/agent-memory-trends/scripts/install-sg02.sh [--enable] [--user-only]
 
-Prepares sg02 for the private agent-memory-trends nightly writer.
+Legacy rollback/forensics installer for the retired sg02 satellite writer.
 
 Options:
   --user-only  Refresh only user-owned files (wrappers, env, dirs).
@@ -34,7 +39,8 @@ Options:
   --enable     Enable and start agent-memory-trends.timer,
                agent-memory-session-brief-refresh.timer, and
                agent-memory-self-update.timer after installing files.
-               Use only after the manual auth gates and a manual live run pass.
+               Requires a new explicit operator rollback decision; never use
+               merely because the old unit files or clones remain present.
                Requires root; ignored with --user-only.
   --help       Show this help.
 

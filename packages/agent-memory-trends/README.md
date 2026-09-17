@@ -330,10 +330,10 @@ environment file with mode `0600`, install/authenticate `gh`, provision the
 research source config, and issue the `sg01-research` host-id bearer from a
 metal TTY. Never copy another host's bearer or auto-write MCP client config.
 
-Before enabling either timer, verify the unit environment reports SkillWiki
-0.10.93 and 9 MCP tools. Disable the three sg02 agent-memory timers only after
-a digest publication or quiet-run receipt verifies `writer_id=sg01-research`.
-There is intentionally no sg01 self-update-apply unit and no
+Before enabling either sg01 timer, verify the unit environment reports
+SkillWiki 0.10.93 and 9 MCP tools. The `sg01-research` digest publication or
+quiet-run receipt gate has passed, so the three sg02 agent-memory timers must
+remain disabled. There is intentionally no sg01 self-update-apply unit and no
 `skillwiki-maintenance` write transaction.
 
 ## Runtime Host
@@ -346,9 +346,10 @@ only the snapshotter promotes S3 state to GitHub. The sg01 profile does not run
 vault Git commit/push, `skillwiki-maintenance`, Claude fallback, or
 `self-update-apply`.
 
-The older sg02 units remain tracked only as rollback/reference artifacts until
-the attended cutover is proven. `scripts/install-sg02.sh` is a legacy installer;
-do not use it for new deployments and do not re-enable its timers after the
+The sg02 satellite Git-writer role is retired. Its older units remain tracked
+only as rollback/reference artifacts; leaving the unit files installed does not
+authorize enabling them. `scripts/install-sg02.sh` is a legacy installer: do
+not use it for new deployments and do not re-enable its timers after the
 `sg01-research` receipt gate has passed.
 
 Tracked rollout files:
@@ -410,7 +411,10 @@ sudo bash packages/agent-memory-trends/scripts/install-sg02.sh
 
 The installer creates the `agent-memory` user when missing, prepares directories, writes `/home/agent-memory/.config/agent-memory-trends/env.example`, creates `/home/agent-memory/.config/agent-memory-trends/env` if absent, installs the wrapper, copies the service and timer units, and runs `systemctl daemon-reload`.
 
-By default it stops before manual auth gates and does not enable the timers. Use `--enable` only after the manual gates and a manual live run pass:
+By default it stops before manual auth gates and does not enable the timers.
+The retired deployment's historical `--enable` flow below is rollback-only and
+requires an explicit new operator decision; it must not be used merely because
+the old unit files or clones remain present:
 
 ```bash
 sudo bash packages/agent-memory-trends/scripts/install-sg02.sh --enable
@@ -446,7 +450,11 @@ agent-memory-trends workload telemetry: `agent-memory-trends doctor` reports the
 If the latest run was quiet and did not invoke synthesis, record it as "not
 exercised by the latest real run" instead of sending an artificial model prompt.
 
-The nightly runner uses a self-contained `codex exec` invocation with the prompt and input JSON supplied through stdin. It does not require Codex plugins to be installed. Plugin setup is only for manual interactive Codex sessions. Do not enable a production timer or release-path update for this package until an `sg02` dry-run and one controlled live run pass with the current runner build.
+The legacy nightly runner uses a self-contained `codex exec` invocation with
+the prompt and input JSON supplied through stdin. It does not require Codex
+plugins to be installed. Plugin setup is only for manual interactive Codex
+sessions. These notes describe rollback validation, not permission to re-enable
+the retired sg02 timers.
 
 Configure the heartbeat only in the untracked service env file. Do not put secrets in tracked files.
 
@@ -516,11 +524,11 @@ journalctl -u agent-memory-trends.service --no-pager -n 200
 agent-memory-trends doctor
 ```
 
-After the manual live run verifies the guarded maintenance result, digest,
-evidence, TypeScript-rendered task/bug/idea captures if any, run JSON,
-`synthesis_last_real_run` telemetry if synthesis was exercised, suppression
-fields if any, and a clean or intentionally ahead vault state, enable the
-timers.
+For an explicitly approved rollback only, after the manual live run verifies
+the guarded maintenance result, digest, evidence, TypeScript-rendered
+task/bug/idea captures if any, run JSON, `synthesis_last_real_run` telemetry if
+synthesis was exercised, suppression fields if any, and a clean or
+intentionally ahead vault state, the historical timer commands were:
 
 ```bash
 sudo systemctl enable --now agent-memory-trends.timer

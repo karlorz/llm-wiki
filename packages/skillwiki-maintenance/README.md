@@ -30,8 +30,11 @@ Safety invariants:
   are MCP clients (`writer_id` `sg01-research`) per vault ADR
   `projects/llm-wiki/architecture/2026-09-17-research-mcp-on-sg01.md`. Do not
   add a git-mutating satellite profile on sg01 to “keep” agent-memory-trends.
-  The sg02 `skillwiki_satellite` git jobs are being retired; `install-sg02.sh`
-  is legacy after cutover.
+  The sg02 `skillwiki_satellite` git role is retired. Its fleet intent is
+  `enabled: false` with `jobs: []`; until an operator applies that PATH_DENIED
+  YAML change, the work item is authoritative. `install-sg02.sh` is retained
+  only for rollback/forensics and must not re-enable timers after the
+  `sg01-research` receipt gate has passed.
 - `healthFindingsAreAdvisory` is a profile-level exit policy, not a health
   tooling change: on `unattended-daily`, a successfully executed and parsed
   health report with blocking findings maps to `warn` so pre-existing vault
