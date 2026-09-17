@@ -1,5 +1,6 @@
-# Fresh-install / CI template: MCP + hardened single-host SeaweedFS.
-# Not the fleet production shape (that is docker-compose.coolify.yml).
+# Fresh-install / CI smoke template: MCP + hardened single-host SeaweedFS.
+# Not the production fleet shape; production remains native systemd on sg01.
+# The optional later cloud01 path is docker-compose.coolify.yml (MCP only).
 # No host binds, no unauthenticated WebDAV, no compose profiles.
 services:
   seaweed:

@@ -224,12 +224,20 @@ Tier-1 writes (`wiki_capture`, `wiki_log_append`), and fail-closes on S3 put
 errors. GitHub backup stays a sibling `wiki-snapshot` unit — never inside this
 process.
 
-Phase 1 ships the package, Coolify compose files, and image workflow only.
-Dev/test deploy is native systemd on sg01 (`wiki.karldigi.dev/mcp`) in a later
-phase; fleet Coolify consumes `docker-compose.coolify.yml` (MCP only, S3
-endpoint env → existing SeaweedFS). `docker-compose.coolify-bundled.yml` is the
-fresh-install template (MCP + hardened SeaweedFS) and is smoke-booted on every
-release tag.
+Production runs as native systemd on sg01 (`wiki.karldigi.dev/mcp`). Sibling
+systemd units on that host provide the GitHub snapshotter, FUSE refresh, agent
+memory research, and session-brief publication; those responsibilities stay
+outside the MCP daemon.
+
+`docker-compose.coolify.yml` is an optional later deployment path for the MCP
+daemon only, parked for cloud01 pending a short deployment grill. It does not
+include the snapshotter, FUSE, research, or session-brief units, and it is not a
+plan to Dockerize sg01 or macos-dev. `docker-compose.coolify-bundled.yml` remains
+a fresh-install/CI smoke template (MCP + hardened SeaweedFS), not the production
+fleet shape. The operator-only `fleet.yaml` intent that retires the sg02 Git
+satellite is recorded in
+`projects/llm-wiki/work/2026-09-17-sg02-satellite-retire/fleet-satellite-off.md`
+in the SkillWiki vault; the YAML itself is outside the HTTP MCP write allowlist.
 
 Clients use `type: http` with `Authorization: Bearer ${SKILLWIKI_MCP_TOKEN}`.
 The server stores `sha256(token) → host_id` in a token map (hashes only). Token

@@ -1,5 +1,9 @@
-# Fleet Coolify file: MCP daemon only. S3 endpoint env points at the existing
-# home-LAN SeaweedFS. No host binds (Traefik owns ingress). No compose profiles.
+# Optional later Coolify path for the MCP daemon only, parked for cloud01 until
+# its deployment grill. Current production remains native systemd on sg01; do
+# not use this file to Dockerize sg01 or macos-dev. Snapshotter, FUSE,
+# research, and session-brief units are intentionally absent. S3 endpoint env
+# points at the existing home-LAN SeaweedFS. No host binds (Traefik owns
+# ingress). No compose profiles.
 services:
   mcp:
     image: ${MCP_IMAGE:-ghcr.io/karlorz/llm-wiki/mcp-server:latest}

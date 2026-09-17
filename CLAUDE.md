@@ -35,7 +35,7 @@
 - [Vault Git authority]({WIKI_PATH}/projects/llm-wiki/architecture/2026-06-08-vault-sync-git-authority.md)
 - [Vault delete and archive protocol]({WIKI_PATH}/projects/llm-wiki/architecture/2026-06-10-vault-sync-delete-archive-protocol.md)
 - [Agent memory architecture]({WIKI_PATH}/projects/llm-wiki/architecture/2026-06-19-agent-memory-architecture.md)
-- [Agent-memory research writer on sg01 HTTP MCP]({WIKI_PATH}/projects/llm-wiki/architecture/2026-09-17-research-mcp-on-sg01.md) - retire sg02 git satellite; Markdown-only MCP publish; `fleet.yaml` satellite-off is operator yaml
+- [Agent-memory research writer on sg01 HTTP MCP]({WIKI_PATH}/projects/llm-wiki/architecture/2026-09-17-research-mcp-on-sg01.md) - sg01 native systemd remains production; Coolify is an optional later cloud01 path for the MCP daemon only; retire the sg02 git satellite; Markdown-only MCP publish; operator-only [`fleet.yaml` satellite-off intent]({WIKI_PATH}/projects/llm-wiki/work/2026-09-17-sg02-satellite-retire/fleet-satellite-off.md)
 - [Cross-harness SkillWiki context injection]({WIKI_PATH}/projects/llm-wiki/architecture/decisions/2026-08-04-skillwiki-context-injection-3.md) - activation file, ADRs 1-8, glossary, `install:activation`
 - [Vault-sync exit-honesty & convergence refactor]({WIKI_PATH}/projects/llm-wiki/architecture/2026-08-13-vault-sync-exit-honesty-refactor.md) - 2026-08-13 S3 push outage, M1-M6, 5 decisions
 
