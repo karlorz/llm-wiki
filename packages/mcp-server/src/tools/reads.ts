@@ -345,11 +345,27 @@ export async function handleWikiContext(
       } catch {
         // no work directory for this project
       }
-      const activeWork = workEntries
+      const candidateDirs = workEntries
         .filter((e) => e.isDirectory() && !e.name.startsWith("."))
         .map((e) => e.name)
-        .sort((a, b) => b.localeCompare(a))
-        .slice(0, 5);
+        .sort((a, b) => b.localeCompare(a));
+
+      const activeWork: string[] = [];
+      for (const dir of candidateDirs) {
+        try {
+          const specPath = join(workDir, dir, "spec.md");
+          const specContent = await readFile(specPath, "utf8");
+          const fm = extractFrontmatter(specContent);
+          if (!fm.ok) continue;
+          const status = fm.data.status;
+          if (status === "planned" || status === "in-progress") {
+            activeWork.push(dir);
+            if (activeWork.length === 5) break;
+          }
+        } catch {
+          // missing, unreadable, or invalid spec/status fail-closed
+        }
+      }
       return { slug, active_work: activeWork };
     }),
   );

@@ -121,6 +121,11 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       ];
       for (const d of workDirsAlpha) {
         await mkdir(join(alphaWork, d), { recursive: true });
+        await writeFile(
+          join(alphaWork, d, "spec.md"),
+          `---\ntitle: ${d}\nstatus: planned\nproject: "[[alpha]]"\n---\n# ${d}\n`,
+          "utf8",
+        );
       }
 
       // Project 2: beta with 2 work dirs
@@ -129,6 +134,11 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       const workDirsBeta = ["2026-08-10-item-1", "2026-08-20-item-2"];
       for (const d of workDirsBeta) {
         await mkdir(join(betaWork, d), { recursive: true });
+        await writeFile(
+          join(betaWork, d, "spec.md"),
+          `---\ntitle: ${d}\nstatus: in-progress\nproject: "[[beta]]"\n---\n# ${d}\n`,
+          "utf8",
+        );
       }
 
       // Project 3: gamma with no work dir
@@ -530,7 +540,17 @@ describe("C5 compact activation over MCP and wiki_context", () => {
   it("wiki_context HTTP known project filters to that slug only", async () => {
     const ctx = await setupTestServer();
     await mkdir(join(ctx.vault, "projects/alpha/work/2026-09-06-task-f"), { recursive: true });
+    await writeFile(
+      join(ctx.vault, "projects/alpha/work/2026-09-06-task-f/spec.md"),
+      `---\ntitle: Task F\nstatus: planned\nproject: "[[alpha]]"\n---\n# Task F\n`,
+      "utf8",
+    );
     await mkdir(join(ctx.vault, "projects/beta/work/2026-08-20-item-2"), { recursive: true });
+    await writeFile(
+      join(ctx.vault, "projects/beta/work/2026-08-20-item-2/spec.md"),
+      `---\ntitle: Item 2\nstatus: in-progress\nproject: "[[beta]]"\n---\n# Item 2\n`,
+      "utf8",
+    );
     const logBefore = await readFile(join(ctx.vault, "log.md"), "utf8");
     const alphaBefore = await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8");
     try {
@@ -568,6 +588,140 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       expect(sc?.projects?.[0]?.active_work).toEqual(["2026-09-06-task-f"]);
       expect(await readFile(join(ctx.vault, "log.md"), "utf8")).toBe(logBefore);
       expect(await readFile(join(ctx.vault, "concepts/alpha.md"), "utf8")).toBe(alphaBefore);
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("wiki_context filters active_work by spec.md status (planned and in-progress only), handles missing/invalid spec fail-closed, and caps at 5 newest descending", async () => {
+    const ctx = await setupTestServer();
+    try {
+      const projWork = join(ctx.vault, "projects/gamma/work");
+      await mkdir(projWork, { recursive: true });
+
+      // 1. planned
+      await mkdir(join(projWork, "2026-09-01-planned"), { recursive: true });
+      await writeFile(
+        join(projWork, "2026-09-01-planned/spec.md"),
+        `---\ntitle: Planned\nstatus: planned\nproject: "[[gamma]]"\n---\n# Planned\n`,
+        "utf8",
+      );
+
+      // 2. in-progress
+      await mkdir(join(projWork, "2026-09-02-inprogress"), { recursive: true });
+      await writeFile(
+        join(projWork, "2026-09-02-inprogress/spec.md"),
+        `---\ntitle: In Progress\nstatus: in-progress\nproject: "[[gamma]]"\n---\n# In Progress\n`,
+        "utf8",
+      );
+
+      // 3. completed (should be excluded)
+      await mkdir(join(projWork, "2026-09-03-completed"), { recursive: true });
+      await writeFile(
+        join(projWork, "2026-09-03-completed/spec.md"),
+        `---\ntitle: Completed\nstatus: completed\nproject: "[[gamma]]"\n---\n# Completed\n`,
+        "utf8",
+      );
+
+      // 4. abandoned (should be excluded)
+      await mkdir(join(projWork, "2026-09-04-abandoned"), { recursive: true });
+      await writeFile(
+        join(projWork, "2026-09-04-abandoned/spec.md"),
+        `---\ntitle: Abandoned\nstatus: abandoned\nproject: "[[gamma]]"\n---\n# Abandoned\n`,
+        "utf8",
+      );
+
+      // 5. missing spec.md (fail-closed, excluded)
+      await mkdir(join(projWork, "2026-09-05-no-spec"), { recursive: true });
+
+      // 6. invalid frontmatter (fail-closed, excluded)
+      await mkdir(join(projWork, "2026-09-06-bad-frontmatter"), { recursive: true });
+      await writeFile(
+        join(projWork, "2026-09-06-bad-frontmatter/spec.md"),
+        `---\ntitle: Broken: [unclosed\nstatus: planned\n---\n# Bad FM\n`,
+        "utf8",
+      );
+
+      // 7. invalid / unknown status (fail-closed, excluded)
+      await mkdir(join(projWork, "2026-09-07-bad-status"), { recursive: true });
+      await writeFile(
+        join(projWork, "2026-09-07-bad-status/spec.md"),
+        `---\ntitle: Bad Status\nstatus: unknown-status\nproject: "[[gamma]]"\n---\n# Bad Status\n`,
+        "utf8",
+      );
+
+      // 8. unclosed frontmatter delimiters (fail-closed, excluded)
+      await mkdir(join(projWork, "2026-09-08-unclosed-fm"), { recursive: true });
+      await writeFile(
+        join(projWork, "2026-09-08-unclosed-fm/spec.md"),
+        `---\ntitle: No Closing\nstatus: planned\n`,
+        "utf8",
+      );
+
+      // 9-13. additional planned items to test sort order and cap 5
+      await mkdir(join(projWork, "2026-09-10-item-c"), { recursive: true });
+      await writeFile(
+        join(projWork, "2026-09-10-item-c/spec.md"),
+        `---\nstatus: planned\n---\n`,
+        "utf8",
+      );
+      await mkdir(join(projWork, "2026-09-11-item-d"), { recursive: true });
+      await writeFile(
+        join(projWork, "2026-09-11-item-d/spec.md"),
+        `---\nstatus: in-progress\n---\n`,
+        "utf8",
+      );
+      await mkdir(join(projWork, "2026-09-12-item-e"), { recursive: true });
+      await writeFile(
+        join(projWork, "2026-09-12-item-e/spec.md"),
+        `---\nstatus: planned\n---\n`,
+        "utf8",
+      );
+      await mkdir(join(projWork, "2026-09-13-item-f"), { recursive: true });
+      await writeFile(
+        join(projWork, "2026-09-13-item-f/spec.md"),
+        `---\nstatus: in-progress\n---\n`,
+        "utf8",
+      );
+
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 99,
+          method: "tools/call",
+          params: { name: "wiki_context", arguments: { project: "gamma" } },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        result?: {
+          structuredContent?: {
+            ok?: boolean;
+            projects?: Array<{ slug: string; active_work: string[] }>;
+          };
+        };
+      };
+      const sc = body.result?.structuredContent;
+      expect(sc?.ok).toBe(true);
+      expect(sc?.projects?.length).toBe(1);
+      const gamma = sc?.projects?.[0];
+      expect(gamma?.slug).toBe("gamma");
+      // Eligible active items in descending name order:
+      // "2026-09-13-item-f", "2026-09-12-item-e", "2026-09-11-item-d", "2026-09-10-item-c", "2026-09-02-inprogress", "2026-09-01-planned"
+      // Capped at 5 newest descending:
+      expect(gamma?.active_work).toEqual([
+        "2026-09-13-item-f",
+        "2026-09-12-item-e",
+        "2026-09-11-item-d",
+        "2026-09-10-item-c",
+        "2026-09-02-inprogress",
+      ]);
     } finally {
       await ctx.close();
     }
