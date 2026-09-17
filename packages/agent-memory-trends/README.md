@@ -451,10 +451,10 @@ If the latest run was quiet and did not invoke synthesis, record it as "not
 exercised by the latest real run" instead of sending an artificial model prompt.
 
 The legacy nightly runner uses a self-contained `codex exec` invocation with
-the prompt and input JSON supplied through stdin. It does not require Codex
-plugins to be installed. Plugin setup is only for manual interactive Codex
-sessions. These notes describe rollback validation, not permission to re-enable
-the retired sg02 timers.
+the prompt and input JSON supplied through stdin. It does not require Codex plugins
+to be installed. Plugin setup is only for manual interactive Codex sessions.
+These notes describe rollback validation, not permission to re-enable the retired
+sg02 timers.
 
 Configure the heartbeat only in the untracked service env file. Do not put secrets in tracked files.
 

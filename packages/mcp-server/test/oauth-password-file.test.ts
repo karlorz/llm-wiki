@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, statSync, existsSync, readdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   readPasswordHashFile,
@@ -55,8 +55,10 @@ describe("oauth-password-file", () => {
     expect(content).toBe(hash);
 
     const stats = statSync(hashPath);
-    // 0o600: read/write by owner only (0o777 mask for mode)
-    expect(stats.mode & 0o777).toBe(0o600);
+    // Windows does not expose POSIX permission bits through stat.
+    if (platform() !== "win32") {
+      expect(stats.mode & 0o777).toBe(0o600);
+    }
 
     // Atomic write should leave no leftover temp files in directory
     const files = readdirSync(tempDir);

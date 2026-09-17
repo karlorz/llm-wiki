@@ -96,7 +96,7 @@ rclone:
 oauth:
   enabled: true
   password_hash: "${pwhashYaml}"
-  state_dir: "${tempDir}"
+  state_dir: ${JSON.stringify(tempDir)}
 `;
     const cfg = loadConfig(
       {
@@ -121,7 +121,7 @@ rclone:
 oauth:
   enabled: true
   password_hash: "${pwhashYaml}"
-  state_dir: "${tempDir}"
+  state_dir: ${JSON.stringify(tempDir)}
 `;
     // Missing file falls through to env
     const cfgEnv = loadConfig(
@@ -153,7 +153,7 @@ rclone:
 oauth:
   enabled: true
   password_hash: "${pwhashYaml}"
-  state_dir: "${tempDir}"
+  state_dir: ${JSON.stringify(tempDir)}
 `;
     const cfgEnv = loadConfig(
       {
@@ -185,7 +185,7 @@ rclone:
   bucket: cloud/wiki
 oauth:
   enabled: true
-  state_dir: "${stateDirYaml}"
+  state_dir: ${JSON.stringify(stateDirYaml)}
 `;
     const cfg = loadConfig(
       {
