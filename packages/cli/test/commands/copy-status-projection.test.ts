@@ -25,8 +25,11 @@ function projectionFixture(): { home: string; live: string; projection: string; 
   git(source, "add", "SCHEMA.md");
   git(source, "commit", "-m", "init");
   execFileSync("git", ["clone", "--bare", source, origin]);
-  execFileSync("git", ["clone", origin, live]);
-  execFileSync("git", ["clone", origin, projection]);
+  execFileSync("git", ["-c", "core.autocrlf=false", "clone", origin, live]);
+  execFileSync("git", ["-c", "core.autocrlf=false", "clone", origin, projection]);
+  // Windows creates desktop.ini in new directories; keep fixture counts deterministic.
+  writeFileSync(join(live, ".git", "info", "exclude"), "desktop.ini\nThumbs.db\n");
+  writeFileSync(join(projection, ".git", "info", "exclude"), "desktop.ini\nThumbs.db\n");
   git(live, "config", "user.name", "test");
   git(live, "config", "user.email", "test@example.com");
   git(projection, "config", "user.name", "test");
