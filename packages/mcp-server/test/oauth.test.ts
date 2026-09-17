@@ -499,6 +499,48 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
     }
   });
 
+  it("GET /authorize preserves ChatGPT for a legitimately registered ChatGPT client", async () => {
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const store = new InMemoryOAuthStore();
+    await store.saveClient({
+      clientId: "chatgpt-named-client",
+      clientName: "ChatGPT",
+      redirectUris: ["https://chatgpt.com/connector/oauth/callback"],
+    });
+    const server = await startMcpHttpServer({
+      bind: "127.0.0.1",
+      port: 0,
+      vaultDir,
+      tokenMap: new Map(),
+      gate,
+      putObject: async () => undefined,
+      oauth: {
+        enabled: true,
+        passwordHash: "unused",
+        store,
+      },
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const baseUrl = `http://127.0.0.1:${port}`;
+      const qs = new URLSearchParams({
+        response_type: "code",
+        client_id: "chatgpt-named-client",
+        redirect_uri: "https://chatgpt.com/connector/oauth/callback",
+        code_challenge: "test-challenge",
+        code_challenge_method: "S256",
+      });
+      const res = await fetch(`${baseUrl}/authorize?${qs.toString()}`);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("allow ChatGPT to access this vault");
+      expect(html).not.toContain("allow this client to access this vault");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
   it("GET /authorize HTML-escapes a hostile registered client name", async () => {
     const gate = new ReconcileGate(async () => undefined);
     await gate.runFirst();
