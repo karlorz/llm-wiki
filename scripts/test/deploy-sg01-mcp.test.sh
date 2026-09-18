@@ -16,6 +16,7 @@ pass "600-second default readiness gate"
 
 grep -q 'npm run -w @skillwiki/mcp-server build' "$SCRIPT" || fail "MCP runtime build"
 grep -q 'npm run -w @skillwiki/agent-memory-trends build' "$SCRIPT" || fail "agent-memory runtime build"
+grep -Fq 'await import("./packages/mcp-server/dist/server.js")' "$SCRIPT" || fail "MCP bundle import preflight"
 pass "both sg01 runtimes are built"
 
 grep -q 'reconcile_ready.*true' "$SCRIPT" || fail "reconcile-ready health gate"

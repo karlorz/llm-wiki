@@ -134,6 +134,7 @@ npm run -w @skillwiki/agent-memory-trends build
 test -s packages/mcp-server/dist/server.js
 test -s packages/agent-memory-trends/dist/cli.js
 node -e 'const p=require("./packages/mcp-server/package.json"); if (p.version !== process.argv[1]) process.exit(1)' "$VERSION"
+node --input-type=module -e 'await import("./packages/mcp-server/dist/server.js")'
 node packages/agent-memory-trends/dist/cli.js --help >/dev/null
 
 # Fail closed if a production unit does not expose or lacks its deployed entry point.
