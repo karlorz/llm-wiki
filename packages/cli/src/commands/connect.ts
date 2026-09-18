@@ -256,7 +256,7 @@ export async function runConnect(
   let statusOk: boolean | null = null;
   let reconcileReady: boolean | null = null;
   let handshake: string | null = null;
-  let doctorExit = ExitCode.OK;
+  let doctorExit: number = ExitCode.OK;
 
   const checkMcp = input.checkMcp ?? !dryRun;
   if (checkMcp) {
