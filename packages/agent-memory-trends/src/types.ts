@@ -16,6 +16,8 @@ import type { RenderProposalCapturesInput, RenderProposalCapturesOutput } from "
 import type {
   PublishGeneratedOutputsToMcpInput,
   PublishGeneratedOutputsToMcpOutput,
+  PublishSinglePageToMcpInput,
+  PublishSinglePageToMcpOutput,
 } from "./mcp-publish.js";
 
 export interface OkResult<T> {
@@ -112,6 +114,9 @@ export interface AgentMemoryTrendsContext {
   publishGeneratedOutputsToMcp?: (
     input: PublishGeneratedOutputsToMcpInput
   ) => Promise<Result<PublishGeneratedOutputsToMcpOutput>>;
+  publishSinglePageToMcp?: (
+    input: PublishSinglePageToMcpInput
+  ) => Promise<Result<PublishSinglePageToMcpOutput>>;
   listTrackedRawPaths?: (vault: string) => Promise<Result<string[]>>;
   maybeSendHeartbeat?: (input: MaybeSendHeartbeatInput) => Promise<Result<HeartbeatResult>>;
   writeRunState?: (vault: string, state: AgentMemoryTrendRunState) => Result<WriteRunStateOutput>;

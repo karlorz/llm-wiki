@@ -283,6 +283,20 @@ describe("agent-memory-trends duplicate suppression and input generation", () =>
     expect(signals.data.parseErrors).toEqual([]);
   });
 
+  it("keeps collector packets out of recent judged-digest signals", () => {
+    const vault = makeVault();
+    writeFileSync(
+      join(vault, "queries", "2026-06-10-agent-memory-trends-packet.md"),
+      "---\ntitle: Collector Packet\ntype: query\n---\n\nMentions https://github.com/acme/packet-only.\n",
+      "utf8"
+    );
+    const signals = collectDuplicateSignals(vault, "llm-wiki");
+    expect(signals.ok).toBe(true);
+    if (!signals.ok) throw new Error("expected duplicate signals");
+    expect(signals.data.recentDigests.every((digest) => digest.path.endsWith("-agent-memory-trends-digest.md"))).toBe(true);
+    expect(signals.data.recentDigests.some((digest) => digest.path.includes("-packet.md"))).toBe(false);
+  });
+
   it("writes dated Codex input JSON with selected candidates, duplicate suppressions, and allowed outputs", () => {
     const vault = makeVault();
     const selectedCandidates = [
@@ -299,6 +313,7 @@ describe("agent-memory-trends duplicate suppression and input generation", () =>
       selectedCandidates,
       allowedOutputs: {
         evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
+        packetPath: "queries/2026-06-11-agent-memory-trends-packet.md",
         digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
         taskCaptureGlob: "raw/transcripts/2026-06-11-task-*.md",
         manifestPath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
@@ -342,6 +357,7 @@ describe("agent-memory-trends duplicate suppression and input generation", () =>
       },
     });
     expect(json.duplicate_suppressions[0].candidate.full_name).toBe("acme/local-agent-memory");
+    expect(json.allowed_outputs.packet_path).toBe("queries/2026-06-11-agent-memory-trends-packet.md");
     expect(json.allowed_outputs.manifest_path).toBe(".skillwiki/agent-memory-trends/2026-06-11-run.json");
   });
 

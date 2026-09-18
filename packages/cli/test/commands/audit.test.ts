@@ -85,6 +85,27 @@ Archived claim. ^[raw/articles/archived.md]
       expect(r.result.data.sources_consistency.missing_from_sources).toEqual([]);
     }
   });
+
+  it("accepts canonical URL sources when the body cites the same published URL", async () => {
+    const v = mkdtempSync(join(tmpdir(), "audit-vault-url-"));
+    writeFileSync(join(v, "SCHEMA.md"), "# Vault Schema\n");
+    mkdirSync(join(v, "queries"), { recursive: true });
+    const page = join(v, "queries", "packet.md");
+    writeFileSync(page, [
+      "---",
+      "title: Collector packet",
+      "type: query",
+      "sources:",
+      "  - https://github.com/acme/memory#readme",
+      "---",
+      "",
+      "Candidate evidence: https://github.com/acme/memory#readme",
+      "",
+    ].join("\n"));
+    const r = await runAudit({ file: page });
+    expect(r.exitCode).toBe(0);
+    if (r.result.ok) expect(r.result.data.sources_consistency.unused_sources).toEqual([]);
+  });
 });
 
 // --- Compound reference validation tests ---

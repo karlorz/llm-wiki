@@ -17,7 +17,7 @@ import { createGitRunner, createSkillwikiRunner } from "./git.js";
 import { maybeSendHeartbeat } from "./heartbeat.js";
 import { buildAgentInput, writeAgentInput, type AgentInput, type AllowedOutputs } from "./input.js";
 import { materializeOperationalRunManifest, publishGeneratedChanges } from "./publish.js";
-import { materializePreviewRun } from "./preview.js";
+import { materializeCollectorPacketRun } from "./preview.js";
 import {
   createHttpMcpToolCaller,
   publishGeneratedOutputsToMcp,
@@ -55,7 +55,7 @@ const COMMANDS = new Set<AgentMemoryTrendsCommand>([
   "session-brief-mcp",
   "version",
 ]);
-const USAGE_TEXT = "Usage: agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|session-brief-mcp|version> [--dry-run] [--generate-only] [--mcp-publish] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
+const USAGE_TEXT = "Usage: agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|session-brief-mcp|version> [--dry-run] [--generate-only] [--mcp-publish] [--preview-only] [--run-state <path>] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]";
 const DEFAULT_PROJECT = "llm-wiki";
 const DEFAULT_TIMEZONE = "Asia/Hong_Kong";
 const SESSION_BRIEF_FILES = [
@@ -1188,11 +1188,13 @@ async function runDaily(
   }
 
   if (previewOnly) {
-    const preview = materializePreviewRun({
+    const preview = materializeCollectorPacketRun({
       vault: collected.data.options.vault,
       runDate: collected.data.options.runDate,
       inputPath: `.skillwiki/agent-memory-trends/${collected.data.options.runDate}-input.json`,
       input: collected.data.input,
+      startedAt,
+      finishedAt: formatInstant(context.now),
     });
     if (!preview.ok) return preview;
     return ok({
@@ -1205,24 +1207,30 @@ async function runDaily(
     return runQuietDaily(options, context, dryRun, generateOnly, mcpPublish, collected.data, startedAt);
   }
 
-  const skipHostSynthesis =
+  const collectorMode =
     generateOnly &&
-    !context.runSynthesis &&
-    resolveSynthesisRuntimeOptions(options.values, context.env).fallback === "none" &&
-    !commandAvailable("codex", context.env);
-  if (skipHostSynthesis) {
-    const preview = materializePreviewRun({
+    mcpPublish &&
+    resolveSynthesisRuntimeOptions(options.values, context.env).fallback === "none";
+  if (collectorMode) {
+    const preview = materializeCollectorPacketRun({
       vault: collected.data.options.vault,
       runDate: collected.data.options.runDate,
       inputPath: `.skillwiki/agent-memory-trends/${collected.data.options.runDate}-input.json`,
       input: collected.data.input,
+      startedAt,
+      finishedAt: formatInstant(context.now),
     });
     if (!preview.ok) {
       writeFailureState(collected.data.options, context, startedAt, "validation");
       return preview;
     }
+    stampDedupeParseErrors(
+      collected.data.options.vault,
+      collected.data.input.manifestPath,
+      collected.data.dedupeParseErrors
+    );
     const mutations = [collected.data.inputPath, ...preview.data.changedFiles];
-    if (mcpPublish && !dryRun) {
+    if (!dryRun) {
       const remote = await runMcpPublish(options, context);
       if (!remote.ok) {
         writeFailureState(collected.data.options, context, startedAt, classifyFailure(remote.error));
@@ -1855,10 +1863,14 @@ async function runSessionBriefMcp(
     options.values.get("source-vault") ??
     context.env.AGENT_MEMORY_TRENDS_SOURCE_VAULT ??
     "/opt/skillwiki-mcp/vault";
+  const runStatePath =
+    options.values.get("run-state") ??
+    context.env.AGENT_MEMORY_TRENDS_RUN_STATE ??
+    "/var/lib/skillwiki-research/staging-vault/.skillwiki/agent-memory-trends/latest-run.json";
   const runCommand = context.runCommand ?? createCommandRunner();
   const rendered = await runCommand(
     "skillwiki",
-    ["session-brief", sourceVault, "--project", resolved.project],
+    ["session-brief", sourceVault, "--project", resolved.project, "--agent-memory-run-state", runStatePath],
     { cwd: resolved.repo, env: context.env }
   );
   if (rendered.exitCode !== 0) {
@@ -1912,7 +1924,8 @@ async function runSessionBriefMcp(
     url: context.env.SKILLWIKI_MCP_URL ?? "https://wiki.karldigi.dev/mcp",
     token,
   });
-  const published = await publishSinglePageToMcp({
+  const singlePagePublisher = context.publishSinglePageToMcp ?? publishSinglePageToMcp;
+  const published = await singlePagePublisher({
     callTool,
     path: "meta/latest-session-brief.md",
     content,
@@ -1980,6 +1993,7 @@ function buildAllowedOutputs(runDate: string, runId: string): AllowedOutputs {
   const safeRunId = runId.replace(/[^A-Za-z0-9.+-]/g, "-");
   return {
     evidencePath: `raw/articles/${runDate}-agent-memory-trends-evidence-${safeRunId}.md`,
+    packetPath: `queries/${runDate}-agent-memory-trends-packet.md`,
     digestPath: `queries/${runDate}-agent-memory-trends-digest.md`,
     taskCaptureGlob: `raw/transcripts/${runDate}-task-*.md`,
     manifestPath: `.skillwiki/agent-memory-trends/${runDate}-run.json`,
@@ -2211,6 +2225,8 @@ function stampDedupeParseErrors(
     parsed.dedupe_parse_errors = parseErrors;
     const body = JSON.stringify(parsed, null, 2) + "\n";
     writeFileSync(path, body, "utf8");
+    const latestPath = join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json");
+    if (existsSync(latestPath)) writeFileSync(latestPath, body, "utf8");
   } catch {
     // advisory stamp; daily run continues
   }

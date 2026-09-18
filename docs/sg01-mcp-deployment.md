@@ -50,7 +50,18 @@ From macos-dev:
 skillwiki doctor --check-mcp
 ```
 
-Require the handshake to advertise the released version and fourteen tools. On sg01, confirm the MCP service has no restart/error loop, that `skillwiki-backend.target` (and its member units) remains enabled, and that the research/session-brief timers still reference existing runtime files. Observe or attend one normal research and session-brief run before pruning rollback bundles.
+Require the handshake to advertise the released version and fourteen tools. On sg01, confirm the MCP service has no restart/error loop, that `skillwiki-backend.target` (and its member units) remains enabled, and that the research/session-brief timers still reference existing runtime files. The deploy script still restarts only `skillwiki-mcp.service`; it must not auto-start or restart either sibling oneshot.
+
+For an attended post-deploy proof, the operator separately verifies the sibling jobs:
+
+1. Confirm `/opt/llm-wiki/packages/agent-memory-trends/dist/cli.js` and the CLI runtime used by `skillwiki session-brief` exist under the swapped bundle.
+2. Start `skillwiki-research.service` once. Its checked-in command remains `daily --generate-only --mcp-publish --synthesis-fallback none` and must run as deterministic collector-packet mode without Codex or Claude.
+3. Inspect `/var/lib/skillwiki-research/staging-vault/.skillwiki/agent-memory-trends/latest-run.json`. Accept either a non-quiet success with `selected_candidate_count > 0` and a packet readable through `wiki_read_page`, or a quiet success with zero selected and no packet.
+4. Verify collector mode produced no `queries/YYYY-MM-DD-agent-memory-trends-digest.md` and no proposal capture. The packet, when present, must use canonical published URLs rather than host-local `raw/articles/**` citations.
+5. Start `skillwiki-session-brief.service` once, then read `meta/latest-session-brief.md` through MCP. Confirm **Latest Collector Run** links the exact packet or records the quiet receipt, and **Latest Judged Agent Memory Trends** remains digest-only.
+6. Confirm the MCP writer receipt is `sg01-research` and record the two oneshot journal excerpts in the active work-item log.
+
+Do not copy `.skillwiki/**` into the MCP vault, expand the MCP allowlist, install Codex/Claude on sg01, or modify `scripts/deploy-sg01-mcp.sh` to restart sibling jobs.
 
 ## Multi-vault (Identity A)
 

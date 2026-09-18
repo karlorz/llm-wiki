@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  generatedPathCategory,
   isAllowedGeneratedPath,
+  parseRunManifest,
   validateGeneratedChanges,
   type RunManifest,
 } from "../src/allowlist.js";
@@ -44,6 +46,8 @@ describe("agent-memory-trends generated-output allowlist", () => {
     expect(isAllowedGeneratedPath("raw/articles/2026-06-11-agent-memory-trends-evidence.md", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath("raw/articles/2026-06-11-agent-memory-trends-evidence-2026-06-11T14-35-51+08-00.md", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath("queries/2026-06-11-agent-memory-trends-digest.md", "2026-06-11")).toBe(true);
+    expect(isAllowedGeneratedPath("queries/2026-06-11-agent-memory-trends-packet.md", "2026-06-11")).toBe(true);
+    expect(generatedPathCategory("queries/2026-06-11-agent-memory-trends-packet.md", "2026-06-11")).toBe("collector-packet");
     expect(isAllowedGeneratedPath("raw/transcripts/2026-06-11-task-memory.md", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath("raw/transcripts/2026-06-11-bug-memory.md", "2026-06-11")).toBe(true);
     expect(isAllowedGeneratedPath("raw/transcripts/2026-06-11-idea-memory.md", "2026-06-11")).toBe(true);
@@ -54,6 +58,99 @@ describe("agent-memory-trends generated-output allowlist", () => {
     expect(isAllowedGeneratedPath("raw/transcripts/2026-06-10-task-memory.md", "2026-06-11")).toBe(false);
     expect(isAllowedGeneratedPath("raw/articles/existing.md", "2026-06-11")).toBe(false);
     expect(isAllowedGeneratedPath("projects/llm-wiki/work/spec.md", "2026-06-11")).toBe(false);
+  });
+
+  it("accepts exactly one declared packet in collector-packet mode and selects it for audit", () => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
+    const packetPath = "queries/2026-06-11-agent-memory-trends-packet.md";
+    const evidencePath = "raw/articles/2026-06-11-agent-memory-trends-evidence-run-1.md";
+    const runManifest = manifest({
+      mode: "collector-packet",
+      changedFiles: [
+        ".skillwiki/agent-memory-trends/2026-06-11-input.json",
+        ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        ".skillwiki/agent-memory-trends/latest-run.json",
+        packetPath,
+        evidencePath,
+      ],
+      outputs: {
+        packetPath,
+        evidencePath,
+        taskCapturePaths: [],
+        taskCaptureRenderer: "typescript",
+        runStatePath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
+        latestRunPath: ".skillwiki/agent-memory-trends/latest-run.json",
+      },
+    });
+    for (const path of runManifest.changedFiles) writeVaultFile(vault, path, `generated file ${path}\n`);
+
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: runManifest.changedFiles,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 128 * 1024,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(String(result.detail));
+    expect(result.data.typedPagesToValidate).toEqual([packetPath]);
+    expect(result.data.typedPagePathForAudit).toBe(packetPath);
+  });
+
+  it.each([
+    {
+      label: "missing packet",
+      changed: [".skillwiki/agent-memory-trends/2026-06-11-run.json", ".skillwiki/agent-memory-trends/latest-run.json"],
+      outputs: { taskCapturePaths: [] },
+      message: "requires exactly one packet",
+    },
+    {
+      label: "digest",
+      changed: ["queries/2026-06-11-agent-memory-trends-digest.md", ".skillwiki/agent-memory-trends/2026-06-11-run.json"],
+      outputs: { packetPath: "queries/2026-06-11-agent-memory-trends-packet.md", digestPath: "queries/2026-06-11-agent-memory-trends-digest.md", taskCapturePaths: [] },
+      message: "requires zero digests",
+    },
+    {
+      label: "capture",
+      changed: ["queries/2026-06-11-agent-memory-trends-packet.md", "raw/transcripts/2026-06-11-task-review.md", ".skillwiki/agent-memory-trends/2026-06-11-run.json"],
+      outputs: { packetPath: "queries/2026-06-11-agent-memory-trends-packet.md", taskCapturePaths: ["raw/transcripts/2026-06-11-task-review.md"], taskCaptureRenderer: "typescript" },
+      message: "requires zero captures",
+    },
+  ])("rejects collector-packet mode with $label", ({ changed, outputs, message }) => {
+    const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-allowlist-"));
+    const runManifest = manifest({ mode: "collector-packet", changedFiles: changed, outputs });
+    for (const path of changed) writeVaultFile(vault, path, `generated file ${path}\n`);
+    const result = validateGeneratedChanges({
+      vault,
+      runDate: "2026-06-11",
+      changedFiles: changed,
+      manifest: runManifest,
+      existingRawPaths: [],
+      maxFileBytes: 128 * 1024,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(String(result.detail)).toContain(message);
+  });
+
+  it("parses collector mode and packet_path from the operational manifest", () => {
+    const parsed = parseRunManifest(JSON.stringify({
+      run_date: "2026-06-11",
+      status: "success",
+      mode: "collector-packet",
+      changed_files: ["queries/2026-06-11-agent-memory-trends-packet.md"],
+      outputs: { packet_path: "queries/2026-06-11-agent-memory-trends-packet.md" },
+      web_sources: [],
+    }));
+    expect(parsed).toMatchObject({
+      ok: true,
+      data: {
+        mode: "collector-packet",
+        outputs: { packetPath: "queries/2026-06-11-agent-memory-trends-packet.md" },
+      },
+    });
   });
 
   it("accepts run-specific evidence paths when same-day evidence already exists", () => {
@@ -115,7 +212,7 @@ describe("agent-memory-trends generated-output allowlist", () => {
       "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
       "raw/transcripts/2026-06-11-task-local-agent-memory.md",
     ]);
-    expect(result.data.digestPathForAudit).toBe("queries/2026-06-11-agent-memory-trends-digest.md");
+    expect(result.data.typedPagePathForAudit).toBe("queries/2026-06-11-agent-memory-trends-digest.md");
   });
 
   it("accepts quiet successful runs that publish only agent-memory-trends run state", () => {
@@ -147,7 +244,7 @@ describe("agent-memory-trends generated-output allowlist", () => {
     if (!result.ok) throw new Error("expected quiet run-state-only changes to validate");
     expect(result.data.typedPagesToValidate).toEqual([]);
     expect(result.data.rawPagesToValidate).toEqual([]);
-    expect(result.data.digestPathForAudit).toBeUndefined();
+    expect(result.data.typedPagePathForAudit).toBeUndefined();
   });
 
   it("does not apply the generated-file byte cap to existing session-brief support files", () => {
@@ -413,7 +510,7 @@ describe("agent-memory-trends generated-output allowlist", () => {
     if (!result.ok) throw new Error("expected discovery-only changes to validate");
     expect(result.data.typedPagesToValidate).toEqual([]);
     expect(result.data.rawPagesToValidate).toEqual([]);
-    expect(result.data.digestPathForAudit).toBeUndefined();
+    expect(result.data.typedPagePathForAudit).toBeUndefined();
   });
 
   it("requires discovery queue artifacts to be declared in manifest outputs", () => {

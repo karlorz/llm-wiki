@@ -4,6 +4,7 @@ import { err, ok, type Result } from "./types.js";
 
 export interface RunManifestOutputs {
   evidencePath?: string;
+  packetPath?: string;
   digestPath?: string;
   taskCapturePaths?: string[];
   taskCaptureRenderer?: string;
@@ -18,6 +19,7 @@ export interface RunManifestOutputs {
 
 export interface RunManifest {
   runDate: string;
+  mode?: string;
   status?: string;
   changedFiles: string[];
   outputs: RunManifestOutputs;
@@ -36,7 +38,7 @@ export interface ValidateGeneratedChangesInput {
 export interface ValidateGeneratedChangesOutput {
   rawPagesToValidate: string[];
   typedPagesToValidate: string[];
-  digestPathForAudit?: string;
+  typedPagePathForAudit?: string;
 }
 
 const SECRET_PATTERNS = [
@@ -91,6 +93,7 @@ function isValidDiscoveryDateKey(dateKeyValue: string): boolean {
 export function isAllowedGeneratedPath(path: string, runDate: string): boolean {
   return (
     isRunEvidencePath(path, runDate) ||
+    path === `queries/${runDate}-agent-memory-trends-packet.md` ||
     path === `queries/${runDate}-agent-memory-trends-digest.md` ||
     (/^raw\/transcripts\/\d{4}-\d{2}-\d{2}-(task|bug|idea)-[^/]+\.md$/.test(path) &&
       (path.startsWith(`raw/transcripts/${runDate}-task-`) ||
@@ -107,6 +110,7 @@ export function isAllowedGeneratedPath(path: string, runDate: string): boolean {
 
 export function generatedPathCategory(path: string, runDate: string): string {
   if (isRunEvidencePath(path, runDate)) return "evidence";
+  if (path === `queries/${runDate}-agent-memory-trends-packet.md`) return "collector-packet";
   if (path === `queries/${runDate}-agent-memory-trends-digest.md`) return "digest";
   const captureMatch = path.match(/^raw\/transcripts\/\d{4}-\d{2}-\d{2}-(task|bug|idea)-[^/]+\.md$/);
   if (captureMatch) return `${captureMatch[1]}-capture`;
@@ -159,7 +163,18 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
   if ((input.manifest.webSources ?? []).length > 15) issues.push("expected max 15 web sources");
 
   const digestPaths = changedFiles.filter((path) => path === `queries/${input.runDate}-agent-memory-trends-digest.md`);
-  if (
+  const packetPaths = changedFiles.filter((path) => path === `queries/${input.runDate}-agent-memory-trends-packet.md`);
+  if (input.manifest.mode === "collector-packet") {
+    if (packetPaths.length !== 1) issues.push("collector-packet mode requires exactly one packet");
+    if (digestPaths.length !== 0) issues.push("collector-packet mode requires zero digests");
+    if (taskCaptures.length !== 0) issues.push("collector-packet mode requires zero captures");
+    if (input.manifest.outputs.packetPath !== packetPaths[0]) {
+      issues.push("collector-packet mode requires outputs.packet_path to match the changed packet");
+    }
+    if (input.manifest.outputs.digestPath) {
+      issues.push("collector-packet mode must not declare outputs.digest_path");
+    }
+  } else if (
     digestPaths.length !== 1 &&
     !isQuietRunStateOnlyChangeSet(changedFiles, input.runDate) &&
     !isDiscoveryOnlyChangeSet(changedFiles)
@@ -169,6 +184,7 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
 
   const outputPaths = new Set([
     input.manifest.outputs.evidencePath,
+    input.manifest.outputs.packetPath,
     input.manifest.outputs.digestPath,
     ...(input.manifest.outputs.taskCapturePaths ?? []),
     input.manifest.outputs.sessionBriefPath,
@@ -200,7 +216,10 @@ export function validateGeneratedChanges(input: ValidateGeneratedChangesInput): 
   return ok({
     rawPagesToValidate: changedFiles.filter(isRawPath),
     typedPagesToValidate: changedFiles.filter(isTypedPagePath).sort(compareTypedPageValidationOrder),
-    digestPathForAudit: input.manifest.outputs.digestPath,
+    typedPagePathForAudit:
+      input.manifest.mode === "collector-packet"
+        ? input.manifest.outputs.packetPath
+        : input.manifest.outputs.digestPath,
   });
 }
 
@@ -210,10 +229,12 @@ export function parseRunManifest(text: string): Result<RunManifest> {
     const outputs = asRecord(raw.outputs ?? {}, "outputs");
     return ok({
       runDate: stringField(raw.run_date ?? raw.runDate),
+      mode: stringField(raw.mode) || undefined,
       status: stringField(raw.status),
       changedFiles: stringArray(raw.changed_files ?? raw.changedFiles),
       outputs: {
         evidencePath: stringField(outputs.evidence_path ?? outputs.evidencePath),
+        packetPath: stringField(outputs.packet_path ?? outputs.packetPath),
         digestPath: stringField(outputs.digest_path ?? outputs.digestPath),
         taskCapturePaths: stringArray(outputs.task_capture_paths ?? outputs.taskCapturePaths),
         taskCaptureRenderer: stringField(outputs.task_capture_renderer ?? outputs.taskCaptureRenderer),

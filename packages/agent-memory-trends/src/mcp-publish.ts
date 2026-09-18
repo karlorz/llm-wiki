@@ -55,7 +55,15 @@ export interface PublishSinglePageToMcpOutput {
   writerId: string;
 }
 
+export interface PublishSinglePageToMcpInput {
+  callTool: McpToolCaller;
+  path: string;
+  content: string;
+  expectedWriterId?: string;
+}
+
 const DIGEST_RE = /^queries\/\d{4}-\d{2}-\d{2}-agent-memory-trends-digest\.md$/;
+export const PACKET_RE = /^queries\/\d{4}-\d{2}-\d{2}-agent-memory-trends-packet\.md$/;
 const CAPTURE_RE = /^raw\/transcripts\/\d{4}-\d{2}-\d{2}-(task|idea|bug|note)-[a-z0-9-]+\.md$/;
 const SESSION_BRIEF_PATH = "meta/latest-session-brief.md";
 
@@ -81,8 +89,34 @@ export function planMcpPublication(input: PlanMcpPublicationInput): Result<McpPu
   const hostLocalPaths: string[] = [];
   const capturePaths = new Set(parsed.data.outputs.taskCapturePaths ?? []);
   const changedFiles = [...new Set(parsed.data.changedFiles)].sort((left, right) => left.localeCompare(right));
+  const collectorMode = parsed.data.mode === "collector-packet";
+
+  if (collectorMode) {
+    const packetPath = parsed.data.outputs.packetPath;
+    const expectedPacketPath = `queries/${input.runDate}-agent-memory-trends-packet.md`;
+    const packetPaths = changedFiles.filter((path) => PACKET_RE.test(path));
+    const digestPaths = changedFiles.filter((path) => DIGEST_RE.test(path));
+    if (packetPath !== expectedPacketPath || packetPaths.length !== 1 || packetPaths[0] !== packetPath) {
+      return err("MANIFEST_INVALID", "collector-packet mode requires exactly one declared packet_path");
+    }
+    if (digestPaths.length > 0 || parsed.data.outputs.digestPath) {
+      return err("PATH_DENIED", "collector-packet mode cannot publish or declare a digest");
+    }
+    if (capturePaths.size > 0) {
+      return err("PATH_DENIED", "collector-packet mode cannot publish captures");
+    }
+  }
 
   for (const path of changedFiles) {
+    if (collectorMode && path === parsed.data.outputs.packetPath) {
+      const body = readVaultFile(read, input.vault, path);
+      if (!body.ok) return body;
+      actions.push({ tool: "wiki_page_publish", path, content: body.data });
+      continue;
+    }
+    if (collectorMode && CAPTURE_RE.test(path)) {
+      return err("PATH_DENIED", `${path} is forbidden in collector-packet mode`);
+    }
     if (path === parsed.data.outputs.digestPath && DIGEST_RE.test(path)) {
       const body = readVaultFile(read, input.vault, path);
       if (!body.ok) return body;
@@ -156,12 +190,9 @@ export async function publishGeneratedOutputsToMcp(
   });
 }
 
-export async function publishSinglePageToMcp(input: {
-  callTool: McpToolCaller;
-  path: string;
-  content: string;
-  expectedWriterId?: string;
-}): Promise<Result<PublishSinglePageToMcpOutput>> {
+export async function publishSinglePageToMcp(
+  input: PublishSinglePageToMcpInput
+): Promise<Result<PublishSinglePageToMcpOutput>> {
   const published = await publishPageWithCas(input.callTool, input.path, input.content);
   if (!published.ok) return published;
   const status = await input.callTool("wiki_status", {});

@@ -59,7 +59,8 @@ describe("agent-neutral synthesis proposal contract", () => {
         recentDigests: [],
         allowedOutputs: {
           evidencePath: "raw/articles/2026-06-11-agent-memory-trends-evidence.md",
-          digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
+        packetPath: "queries/2026-06-11-agent-memory-trends-packet.md",
+        digestPath: "queries/2026-06-11-agent-memory-trends-digest.md",
           taskCaptureGlob: "raw/transcripts/2026-06-11-task-*.md",
           manifestPath: ".skillwiki/agent-memory-trends/2026-06-11-run.json",
         },

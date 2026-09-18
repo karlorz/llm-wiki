@@ -164,7 +164,9 @@ describe("sg01 HTTP MCP research siblings", () => {
     expect(service).toContain("User=skillwiki-research");
     expect(service).toContain("EnvironmentFile=/etc/skillwiki-research/env");
     expect(service).toContain("AGENT_MEMORY_TRENDS_SOURCE_VAULT=/opt/skillwiki-mcp/vault");
+    expect(service).toContain("AGENT_MEMORY_TRENDS_RUN_STATE=/var/lib/skillwiki-research/staging-vault/.skillwiki/agent-memory-trends/latest-run.json");
     expect(service).toContain("session-brief-mcp");
+    expect(service).toContain("ProtectSystem=strict");
     expect(service).toContain("ReadOnlyPaths=/opt/skillwiki-mcp/vault");
     expect(service).not.toContain("--write");
     expect(service).not.toContain("skillwiki-maintenance");

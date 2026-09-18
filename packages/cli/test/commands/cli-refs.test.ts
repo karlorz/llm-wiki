@@ -188,7 +188,7 @@ describe("validateCliRefs", () => {
   });
 
   it("accepts session-brief command refs", () => {
-    const text = "Run `skillwiki session-brief --project auto --write` to refresh startup memory.";
+    const text = "Run `skillwiki session-brief --project auto --agent-memory-run-state /tmp/latest-run.json --write` to refresh startup memory.";
     expect(validateCliRefs(text, "test.md", surface)).toEqual([]);
   });
 

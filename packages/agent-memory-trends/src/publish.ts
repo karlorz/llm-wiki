@@ -142,8 +142,8 @@ async function validateWithSkillwiki(
   const lint = await runAdvisoryLint(input);
   if (!lint.ok) return lint;
 
-  if (validation.digestPathForAudit) {
-    const audit = await runSkillwiki(input.skillwiki, ["audit", join(input.vault, validation.digestPathForAudit)]);
+  if (validation.typedPagePathForAudit) {
+    const audit = await runSkillwiki(input.skillwiki, ["audit", join(input.vault, validation.typedPagePathForAudit)]);
     if (!audit.ok) return audit;
   }
 

@@ -12,6 +12,7 @@ WorkingDirectory=/opt/llm-wiki
 Environment=HOME=/var/lib/skillwiki-research
 Environment=AGENT_MEMORY_TRENDS_MCP_WRITER_ID=sg01-research
 Environment=AGENT_MEMORY_TRENDS_SOURCE_VAULT=/opt/skillwiki-mcp/vault
+Environment=AGENT_MEMORY_TRENDS_RUN_STATE=/var/lib/skillwiki-research/staging-vault/.skillwiki/agent-memory-trends/latest-run.json
 EnvironmentFile=/etc/skillwiki-research/env
 StateDirectory=skillwiki-research
 StateDirectoryMode=0700
@@ -25,4 +26,3 @@ ProtectSystem=strict
 ProtectHome=true
 ReadOnlyPaths=/opt/skillwiki-mcp/vault
 ReadWritePaths=/var/lib/skillwiki-research
-

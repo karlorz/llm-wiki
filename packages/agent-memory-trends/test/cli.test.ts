@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -413,7 +413,7 @@ describe("agent-memory-trends CLI", () => {
     if (result.result.ok) throw new Error("expected usage error");
     expect(result.result.error).toBe("USAGE");
     expect(result.result.detail).toEqual({
-      message: "Usage: agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|session-brief-mcp|version> [--dry-run] [--generate-only] [--mcp-publish] [--preview-only] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]",
+      message: "Usage: agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|session-brief-mcp|version> [--dry-run] [--generate-only] [--mcp-publish] [--preview-only] [--run-state <path>] [--dedupe-digest-ttl-days <n>] [--synthesis-retries <n>] [--synthesis-fallback <claude|none>] [--synthesis-timeout-ms <ms>] [--help] [--version]",
     });
   });
 
@@ -434,7 +434,7 @@ describe("agent-memory-trends CLI", () => {
   it("renders session-brief-mcp read-only during dry-run", async () => {
     const calls: Array<{ command: string; args: string[] }> = [];
     const result = await runAgentMemoryTrendsCli(
-      ["session-brief-mcp", "--dry-run", "--source-vault", "/mcp-vault", "--repo", "/repo", "--project", "llm-wiki"],
+      ["session-brief-mcp", "--dry-run", "--source-vault", "/mcp-vault", "--run-state", "/run/latest.json", "--repo", "/repo", "--project", "llm-wiki"],
       {
         cwd: "/repo",
         env: {},
@@ -466,9 +466,53 @@ describe("agent-memory-trends CLI", () => {
     expect(calls).toEqual([
       {
         command: "skillwiki",
-        args: ["session-brief", "/mcp-vault", "--project", "llm-wiki"],
+        args: [
+          "session-brief",
+          "/mcp-vault",
+          "--project",
+          "llm-wiki",
+          "--agent-memory-run-state",
+          "/run/latest.json",
+        ],
       },
     ]);
+  });
+
+  it("publishes only meta/latest-session-brief.md in non-dry-run session-brief-mcp mode", async () => {
+    const publications: Array<{ path: string; content: string }> = [];
+    const result = await runAgentMemoryTrendsCli(
+      ["session-brief-mcp", "--source-vault", "/mcp-vault", "--run-state", "/run/latest.json", "--repo", "/repo", "--project", "llm-wiki"],
+      {
+        cwd: "/repo",
+        env: { SKILLWIKI_MCP_TOKEN: "test-token", AGENT_MEMORY_TRENDS_MCP_WRITER_ID: "sg01-research" },
+        now: new Date("2026-09-17T00:00:00Z"),
+        runCommand: async (_command, args) => {
+          expect(args).toEqual(["session-brief", "/mcp-vault", "--project", "llm-wiki", "--agent-memory-run-state", "/run/latest.json"]);
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              ok: true,
+              data: {
+                project: "llm-wiki",
+                brief: "# Session Brief\n\nCollector receipt.",
+                word_count: 4,
+                generated_at: "2026-09-17T00:00:00Z",
+              },
+            }),
+            stderr: "",
+          };
+        },
+        publishSinglePageToMcp: async (input) => {
+          publications.push({ path: input.path, content: input.content });
+          return { ok: true, data: { path: input.path, writerId: "sg01-research" } };
+        },
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    expect(publications).toHaveLength(1);
+    expect(publications[0]?.path).toBe("meta/latest-session-brief.md");
+    expect(publications[0]?.path).not.toContain(".skillwiki");
   });
 
   it("preflights rollout dependencies in doctor and keeps output structured", async () => {
@@ -1887,19 +1931,24 @@ describe("agent-memory-trends CLI", () => {
     expect(latest).toEqual(manifest);
   });
 
-  it("skips host synthesis for generate-only --synthesis-fallback none when codex is absent", async () => {
+  it("uses unconditional collector-packet mode even when codex and an injected synthesis runner are available", async () => {
     const vault = mkdtempSync(join(tmpdir(), "agent-memory-trends-skip-synth-"));
+    const bin = mkdtempSync(join(tmpdir(), "agent-memory-trends-codex-bin-"));
+    const codex = join(bin, "codex");
+    writeFileSync(codex, "#!/bin/sh\nexit 99\n", "utf8");
+    chmodSync(codex, 0o755);
     mkdirSync(join(vault, ".skillwiki", "agent-memory-trends"), { recursive: true });
     mkdirSync(join(vault, "queries"), { recursive: true });
     mkdirSync(join(vault, "raw", "articles"), { recursive: true });
     const runDate = "2026-06-11";
+    const packetPath = `queries/${runDate}-agent-memory-trends-packet.md`;
     const digestPath = `queries/${runDate}-agent-memory-trends-digest.md`;
     const result = await runAgentMemoryTrendsCli(
       ["daily", "--generate-only", "--mcp-publish", "--synthesis-fallback", "none", "--vault", vault, "--repo", "/repo", "--config", "/config.yaml"],
       {
         cwd: "/repo",
         env: {
-          PATH: "/tmp/agent-memory-trends-no-codex",
+          PATH: bin,
           SKILLWIKI_MCP_TOKEN: "test-token",
           AGENT_MEMORY_TRENDS_MCP_WRITER_ID: "sg01-research",
         },
@@ -1921,17 +1970,34 @@ describe("agent-memory-trends CLI", () => {
           ok: true,
           data: { path: join(vault, ".skillwiki", "agent-memory-trends", `${runDate}-input.json`) },
         }),
+        runSynthesis: async () => {
+          throw new Error("collector-packet mode must ignore injected synthesis");
+        },
         publishGeneratedOutputsToMcp: async () => ({
           ok: true,
-          data: { publishedPaths: [digestPath], hostLocalPaths: [], writerId: "sg01-research", quietRun: false },
+          data: { publishedPaths: [packetPath], hostLocalPaths: [], writerId: "sg01-research", quietRun: false },
         }),
       }
     );
     expect(result.exitCode).toBe(0);
     expect(result.result.ok).toBe(true);
-    if (!result.result.ok) throw new Error("expected skip-synthesis success");
+    if (!result.result.ok) throw new Error("expected collector-packet success");
     expect(result.result.data.humanHint).toContain("daily: ok (generate-only)");
-    expect(existsSync(join(vault, digestPath))).toBe(true);
+    expect(existsSync(join(vault, packetPath))).toBe(true);
+    expect(existsSync(join(vault, digestPath))).toBe(false);
+    const packet = readFileSync(join(vault, packetPath), "utf8");
+    expect(packet).toContain("Agent Memory Trends Collector Packet");
+    expect(packet).toContain("contains no proposals");
+    expect(packet).not.toContain("raw/articles/");
+    const manifest = JSON.parse(readFileSync(join(vault, ".skillwiki", "agent-memory-trends", `${runDate}-run.json`), "utf8"));
+    const latest = JSON.parse(readFileSync(join(vault, ".skillwiki", "agent-memory-trends", "latest-run.json"), "utf8"));
+    expect(manifest.mode).toBe("collector-packet");
+    expect(manifest.started_at).toBe("2026-06-10T16:10:00Z");
+    expect(manifest.finished_at).toBe("2026-06-10T16:10:00Z");
+    expect(manifest.outputs.packet_path).toBe(packetPath);
+    expect(manifest.outputs.digest_path).toBeUndefined();
+    expect(manifest.outputs.task_capture_paths).toEqual([]);
+    expect(latest).toEqual(manifest);
   });
 
   it("writes a deterministic daily preview without invoking synthesis", async () => {
@@ -1986,27 +2052,29 @@ describe("agent-memory-trends CLI", () => {
       ".skillwiki/agent-memory-trends/2026-06-11-input.json",
       ".skillwiki/agent-memory-trends/2026-06-11-run.json",
       ".skillwiki/agent-memory-trends/latest-run.json",
-      "queries/2026-06-11-agent-memory-trends-digest.md",
+      "queries/2026-06-11-agent-memory-trends-packet.md",
       "raw/articles/2026-06-11-agent-memory-trends-evidence-2026-06-11T00-10-00+08-00.md",
     ]);
 
-    const digest = readFileSync(join(vault, "queries", "2026-06-11-agent-memory-trends-digest.md"), "utf8");
+    const packet = readFileSync(join(vault, "queries", "2026-06-11-agent-memory-trends-packet.md"), "utf8");
     const evidence = readFileSync(
       join(vault, "raw", "articles", "2026-06-11-agent-memory-trends-evidence-2026-06-11T00-10-00+08-00.md"),
       "utf8"
     );
     const manifest = JSON.parse(readFileSync(join(vault, ".skillwiki", "agent-memory-trends", "2026-06-11-run.json"), "utf8"));
 
-    expect(digest).toContain("Agent Memory Trends Preview - 2026-06-11");
-    expect(digest).toContain("acme/local-agent-memory");
-    expect(digest).toContain("Evidence quality: implementation_surface");
-    expect(digest).toContain("Source inspection: recommended");
-    expect(evidence).toContain("Deterministic preview evidence");
+    expect(packet).toContain("Agent Memory Trends Collector Packet - 2026-06-11");
+    expect(packet).toContain("acme/local-agent-memory");
+    expect(packet).toContain("Evidence quality: implementation_surface");
+    expect(packet).toContain("Source inspection: recommended");
+    expect(packet).not.toContain("raw/articles/");
+    expect(evidence).toContain("Host-local deterministic collector evidence");
     expect(evidence).toContain("https://github.com/acme/local-agent-memory");
     expect(evidence).toContain("Evidence quality: implementation_surface");
     expect(evidence).toContain("Evidence signals: markdown, sync, codex, claude");
-    expect(manifest.mode).toBe("preview-only");
-    expect(manifest.outputs.digest_path).toBe("queries/2026-06-11-agent-memory-trends-digest.md");
+    expect(manifest.mode).toBe("collector-packet");
+    expect(manifest.outputs.packet_path).toBe("queries/2026-06-11-agent-memory-trends-packet.md");
+    expect(manifest.outputs.digest_path).toBeUndefined();
     expect(manifest.outputs.latest_run_path).toBe(".skillwiki/agent-memory-trends/latest-run.json");
   });
 

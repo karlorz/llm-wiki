@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -346,6 +346,111 @@ Review a new memory source candidate.
     );
   }
 
+  function writeExternalRunState(body: Record<string, unknown>): string {
+    const root = join(tmpdir(), `session-brief-run-state-${Date.now()}-${Math.random()}`);
+    mkdirSync(root, { recursive: true });
+    const path = join(root, "latest-run.json");
+    writeFileSync(path, `${JSON.stringify(body, null, 2)}\n`, "utf8");
+    return path;
+  }
+
+  it("uses an explicit external run-state path for a quiet collector receipt", async () => {
+    const vault = await makeVault();
+    rmSync(join(vault, ".skillwiki"), { recursive: true, force: true });
+    const runState = writeExternalRunState({
+      status: "success",
+      run_date: "2026-06-12",
+      selected_candidate_count: 0,
+      finished_at: new Date().toISOString(),
+    });
+    const result = await runSessionBrief({
+      vault,
+      project: "llm-wiki",
+      write: false,
+      agentMemoryRunState: runState,
+    });
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.brief).toContain("Latest Collector Run");
+    expect(result.result.data.brief).toContain("Quiet night — collector succeeded, 0 selected; no packet published");
+    expect(result.result.data.brief).not.toContain("agent-memory-trends: no run in");
+  });
+
+  it("links the exact collector packet while keeping the judged digest separate", async () => {
+    const vault = await makeVault();
+    writeFileSync(
+      join(vault, "queries", "2026-06-12-agent-memory-trends-packet.md"),
+      [
+        "---",
+        "title: Agent Memory Trends Collector Packet",
+        "created: 2026-06-12",
+        "updated: 2026-06-12",
+        "type: query",
+        "---",
+        "",
+        "Unjudged packet candidate.",
+        "",
+      ].join("\n"),
+      "utf8"
+    );
+    const runState = writeExternalRunState({
+      status: "success",
+      run_date: "2026-06-12",
+      selected_candidate_count: 2,
+      finished_at: new Date().toISOString(),
+    });
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: false, agentMemoryRunState: runState });
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    const brief = result.result.data.brief;
+    expect(brief).toContain("[[queries/2026-06-12-agent-memory-trends-packet]]");
+    const judged = brief.split("## Latest Judged Agent Memory Trends")[1]?.split("## Memory Topics")[0] ?? "";
+    expect(judged).toContain("Agent Memory Trends Digest");
+    expect(judged).not.toContain("Collector Packet");
+    expect(judged).not.toContain("2026-06-12-agent-memory-trends-packet.md");
+  });
+
+  it("warns when a successful positive collector run has no matching packet and does not call it quiet", async () => {
+    const vault = await makeVault();
+    const runState = writeExternalRunState({
+      status: "success",
+      run_date: "2026-06-12",
+      selected_candidate_count: 3,
+      finished_at: new Date().toISOString(),
+    });
+    const result = await runSessionBrief({ vault, project: "llm-wiki", write: false, agentMemoryRunState: runState });
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.brief).toContain("collector selected 3 candidate(s) but queries/2026-06-12-agent-memory-trends-packet.md is missing");
+    expect(result.result.data.brief).not.toContain("Quiet night");
+  });
+
+  it("uses external failed and stale collector state for health warnings", async () => {
+    const vault = await makeVault();
+    const failedState = writeExternalRunState({
+      status: "failure",
+      run_date: "2026-06-12",
+      selected_candidate_count: 0,
+      failure_class: "collector",
+      finished_at: new Date().toISOString(),
+    });
+    const failed = await runSessionBrief({ vault, project: "llm-wiki", write: false, agentMemoryRunState: failedState });
+    expect(failed.result.ok).toBe(true);
+    if (!failed.result.ok) throw new Error("expected ok");
+    expect(failed.result.data.brief).toContain("agent-memory-trends: last run failed (collector)");
+
+    const staleState = writeExternalRunState({
+      status: "success",
+      run_date: "2026-06-12",
+      selected_candidate_count: 0,
+      finished_at: new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString(),
+    });
+    const stale = await runSessionBrief({ vault, project: "llm-wiki", write: false, agentMemoryRunState: staleState });
+    expect(stale.result.ok).toBe(true);
+    if (!stale.result.ok) throw new Error("expected ok");
+    expect(stale.result.data.brief).toContain("agent-memory-trends: no run in");
+  });
+
   it("includes satellite failure in Health Warnings when latest-run status is fail", async () => {
     const vault = await makeVault();
     writeLatestRun(vault, {
@@ -383,6 +488,7 @@ Review a new memory source candidate.
     expect(result.result.ok).toBe(true);
     if (!result.result.ok) throw new Error("expected ok");
     expect(result.result.data.brief).not.toContain("agent-memory-trends:");
+    expect(result.result.data.brief).toContain("No collector receipt is available.");
   });
 
   it("omits satellite warning on recent successful run", async () => {

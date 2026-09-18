@@ -6,7 +6,13 @@ import { runLogAppend } from "./log-append.js";
 import { scanVault, readPage, resolveReadOnlyVaultRoot, type VaultPage } from "../utils/vault.js";
 import { appendLastOp } from "../utils/last-op.js";
 import { renderRootIndex, writeRootIndexProjection } from "../utils/index-projection.js";
-import { evaluateSatelliteRunHealth, satelliteLatestRunPath } from "../utils/satellite-run-health.js";
+import {
+  evaluateSatelliteRunHealthState,
+  readSatelliteLatestRunAt,
+  satelliteLatestRunPath,
+  type SatelliteLatestRunWire,
+  type SatelliteRunHealthEvaluation,
+} from "../utils/satellite-run-health.js";
 import { memoryAuthorityTiersRank, type MemoryAuthorityTier } from "../utils/memory-authority.js";
 import { inventorySources } from "../utils/source-lifecycle.js";
 import { collectClaimedTranscripts } from "../utils/transcript-claims.js";
@@ -17,6 +23,7 @@ export interface SessionBriefInput {
   write?: boolean;
   cwd?: string;
   env?: Record<string, string | undefined>;
+  agentMemoryRunState?: string;
 }
 
 export interface SessionBriefItem {
@@ -81,30 +88,39 @@ export async function runSessionBrief(
   const generatedAt = now.toISOString().replace(/\.\d{3}Z$/, "Z");
   const today = generatedAt.slice(0, 10);
   const project = await resolveProject(input);
+  const collectorRunPath = input.agentMemoryRunState ?? satelliteLatestRunPath(input.vault);
+  const collectorRun = readSatelliteLatestRunAt(collectorRunPath);
+  const collectorHealth = evaluateSatelliteRunHealthState(collectorRun, now);
 
   try {
+    const expectedPacketPath =
+      collectorRun?.runDate != null
+        ? `queries/${collectorRun.runDate}-agent-memory-trends-packet.md`
+        : undefined;
+    const packetExists =
+      expectedPacketPath != null &&
+      scan.data.typedKnowledge.some((page) => page.relPath === expectedPacketPath);
     const [
       transcripts,
       workItems,
       digests,
       baseHealthWarnings,
-      satelliteHealth,
       sessionPins,
       memoryTopics,
       pendingSources,
     ] = await Promise.all([
       loadTranscriptInfo(scan.data.raw),
       loadWorkItems(scan.data.workItems),
-      loadTrendDigests(scan.data.typedKnowledge),
+      loadTrendPages(scan.data.typedKnowledge, /^queries\/\d{4}-\d{2}-\d{2}-agent-memory-trends-digest\.md$/),
       loadHealthWarnings(input.vault),
-      loadSatelliteHealth(input.vault),
       loadSessionPins(input.vault, project),
       project ? loadMemoryTopics(input.vault, project) : Promise.resolve([]),
       loadPendingSources(scanRoot, today),
     ]);
+    const collectorReceipt = buildCollectorReceipt(collectorRun, collectorHealth, packetExists);
     const healthWarnings = [
       ...baseHealthWarnings,
-      ...satelliteHealthWarnings(satelliteHealth),
+      ...collectorReceipt.healthWarnings,
     ];
 
     const claimed = collectClaimedTranscripts(
@@ -134,6 +150,7 @@ export async function runSessionBrief(
       unclaimedCaptures,
       pendingSources,
       activeWork,
+      collectorReceipt: collectorReceipt.lines,
       latestDigest,
       projectLogs,
       memoryTopics,
@@ -285,9 +302,9 @@ async function loadWorkItems(workItemPages: VaultPage[]): Promise<PageInfo[]> {
   return out;
 }
 
-async function loadTrendDigests(typedPages: VaultPage[]): Promise<PageInfo[]> {
+async function loadTrendPages(typedPages: VaultPage[], pathPattern: RegExp): Promise<PageInfo[]> {
   const out: PageInfo[] = [];
-  for (const page of typedPages.filter((p) => p.relPath.startsWith("queries/") && p.relPath.includes("agent-memory-trends"))) {
+  for (const page of typedPages.filter((p) => pathPattern.test(p.relPath))) {
     const text = await readPage(page);
     const fm = extractFrontmatter(text);
     if (!fm.ok) continue;
@@ -338,6 +355,7 @@ function renderBrief(input: {
   unclaimedCaptures: PageInfo[];
   pendingSources: PageInfo[];
   activeWork: PageInfo[];
+  collectorReceipt: string[];
   latestDigest: PageInfo[];
   projectLogs: PageInfo[];
   memoryTopics: SessionBriefMemoryTopic[];
@@ -356,7 +374,8 @@ function renderBrief(input: {
   appendSection(lines, "Unclaimed Captures", input.unclaimedCaptures, "No unclaimed task or bug captures found.");
   appendSection(lines, "Recent Pending Sources", input.pendingSources, "No pending articles or papers found.");
   appendSection(lines, "Recent Session Logs", input.project ? input.projectLogs : input.latestLogs, "No recent session logs found.");
-  appendSection(lines, "Latest Agent Memory Trends", input.latestDigest, "No agent memory trends digest found.");
+  appendTextSection(lines, "Latest Collector Run", input.collectorReceipt, "No collector receipt is available.");
+  appendSection(lines, "Latest Judged Agent Memory Trends", input.latestDigest, "No judged agent memory trends digest found.");
   appendMemoryTopicsSection(lines, input.project, input.memoryTopics);
   appendTextSection(lines, "Health Warnings", input.healthWarnings, "No high-level health warnings found.");
 
@@ -421,13 +440,49 @@ function appendTextSection(lines: string[], title: string, items: string[], empt
   lines.push("");
 }
 
-async function loadSatelliteHealth(vaultPath: string): Promise<string | null> {
-  const health = evaluateSatelliteRunHealth(vaultPath, new Date());
-  if (!health.failed && !health.stale) {
-    const runPath = satelliteLatestRunPath(vaultPath);
-    const hasRun = await readIfExists(runPath);
-    if (!hasRun) return null;
+function buildCollectorReceipt(
+  run: SatelliteLatestRunWire | null,
+  health: SatelliteRunHealthEvaluation,
+  packetExists: boolean
+): { lines: string[]; healthWarnings: string[] } {
+  const healthWarning = satelliteHealthWarning(health);
+  const healthWarnings = healthWarning ? [healthWarning] : [];
+  if (!run) return { lines: [], healthWarnings };
+
+  const finished = run.finishedAt ? ` at ${run.finishedAt}` : "";
+  if (health.failed) {
+    return { lines: [`Collector run failed${finished}.`], healthWarnings };
   }
+  if (health.stale) {
+    return { lines: [`Collector receipt is stale${finished}.`], healthWarnings };
+  }
+  if (run.status !== "success" || run.selectedCandidateCount === undefined || !run.runDate) {
+    return { lines: [], healthWarnings };
+  }
+  if (run.selectedCandidateCount === 0) {
+    return {
+      lines: [`${run.runDate} Quiet night — collector succeeded, 0 selected; no packet published${finished}.`],
+      healthWarnings,
+    };
+  }
+
+  const packetPath = `queries/${run.runDate}-agent-memory-trends-packet.md`;
+  if (packetExists) {
+    return {
+      lines: [`${run.runDate} Collector succeeded; ${run.selectedCandidateCount} selected; packet: [[${packetPath.replace(/\.md$/, "")}]]${finished}.`],
+      healthWarnings,
+    };
+  }
+  return {
+    lines: [`${run.runDate} Collector succeeded with ${run.selectedCandidateCount} selected, but the packet is missing${finished}.`],
+    healthWarnings: [
+      ...healthWarnings,
+      `agent-memory-trends: collector selected ${run.selectedCandidateCount} candidate(s) but ${packetPath} is missing`,
+    ],
+  };
+}
+
+function satelliteHealthWarning(health: SatelliteRunHealthEvaluation): string | null {
   if (health.failed) {
     const fc =
       health.failureClass && health.failureClass.length > 0 ? health.failureClass : "unknown";
@@ -444,10 +499,6 @@ async function loadSatelliteHealth(vaultPath: string): Promise<string | null> {
   }
 
   return null;
-}
-
-function satelliteHealthWarnings(warning: string | null): string[] {
-  return warning ? [warning] : [];
 }
 
 async function loadHealthWarnings(vault: string): Promise<string[]> {

@@ -14,6 +14,7 @@ import { err, ok, type Result } from "./types.js";
 
 export interface AllowedOutputs {
   evidencePath: string;
+  packetPath: string;
   digestPath: string;
   taskCaptureGlob: string;
   manifestPath: string;
@@ -131,6 +132,7 @@ export function agentInputToWire(input: AgentInput): Record<string, unknown> {
     })),
     allowed_outputs: {
       evidence_path: input.allowedOutputs.evidencePath,
+      packet_path: input.allowedOutputs.packetPath,
       digest_path: input.allowedOutputs.digestPath,
       task_capture_glob: input.allowedOutputs.taskCaptureGlob,
       manifest_path: input.allowedOutputs.manifestPath,

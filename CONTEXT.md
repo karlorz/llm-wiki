@@ -63,6 +63,22 @@ _Avoid_: treating every HTTP MCP host as fetch-only
 Agent writes go through HTTP MCP. Orthogonal to the vault-sync job profile.
 _Avoid_: HTTP MCP leaf as a doctor profile name
 
+**Collector packet**:
+A nightly typed query page of GitHub trend collector output without judged proposals. sg01 may MCP-publish it after collect/generate. It is not a digest.
+_Avoid_: generate-only preview published as `*-agent-memory-trends-digest.md`
+
+**Judged digest**:
+The synthesis page and proposal captures produced from a collector packet by an off-box SkillWiki client.
+_Avoid_: treating a generate-only preview as judged synthesis
+
+**Off-box client synthesis**:
+Judged analysis by an HTTP MCP consumer (Grok, Claude, Cursor, or other SkillWiki client), not by an agent binary on sg01.
+_Avoid_: installing Codex or Claude on sg01 to restore nightly judgment
+
+**tools=0 HTTP synthesis**:
+Optional later unattended JSON completion (`response_format` `json_schema`, tools omitted). TypeScript writes vault files from the JSON. Function calling is not required.
+_Avoid_: function-calling / tool-loop on sg01 as a substitute for Codex CLI
+
 **vault_sync.push_enabled**:
 Explicit host-profile flag. Absent means true.
 _Avoid_: inferring from timer state, fleet.yaml class, or `--check-mcp` pass
@@ -192,6 +208,7 @@ An attended decision process that reviews ranked-audit evidence, resolves ambigu
 - SkillWiki owns lifecycle truth, validation, evidence shape, and managed vault mutation; orchestration systems consume those contracts.
 - Writer identity is resolved once per HTTP MCP request; host-id bearer and OAuth grant are its two realizations and neither changes what a write may touch.
 - HTTP MCP writer is orthogonal to fetch-only leaf vs push-enabled leaf.
+- Collector packet is sg01 collect/generate output, not judged synthesis. Judged digest is produced by off-box client synthesis. tools=0 HTTP synthesis is a deferred unattended alternative, not the current sg01 path.
 - vault_sync.push_enabled selects the vault-sync job profile on an installed leaf.
 - Operator console mutates the same token-map and reads the same audit JSONL as CLI `mcp-auth`; it is attended issuance over SSH, not a second writer identity.
 - Operator password is not a writer identity. It only authorizes a new OAuth grant. Console Set password writes the hash file and does not revoke grants or write a host Keychain.

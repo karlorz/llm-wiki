@@ -2,13 +2,14 @@
 
 Private `llm-wiki` workspace package for the nightly agent-memory research workflow. It is intentionally not part of the public plugin install path in v1.
 
-The package stages high-signal agent-memory research into the vault. It collects bounded GitHub candidates through `gh api`, prepares an agent-neutral synthesis input, runs a non-interactive synthesis runner when there is a selected research signal, validates generated vault output through the publisher gate, pushes successful changes, and sends a heartbeat only after the push succeeds.
+The package stages high-signal agent-memory research into the vault. It collects bounded GitHub candidates through `gh api` and supports two deliberately separate profiles: the production sg01 collector publishes an unjudged packet through HTTP MCP without invoking an LLM, while an attended off-box or legacy direct-publisher flow may run a synthesis adapter and produce a judged digest plus optional proposals.
 
 ## CLI surface
 
 ```text
-agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|version>
-  [--dry-run] [--generate-only] [--preview-only]
+agent-memory-trends <doctor|diagnose|collect|daily|discover|publish|session-brief-mcp|version>
+  [--dry-run] [--generate-only] [--mcp-publish] [--preview-only]
+  [--run-state <path>]
   [--dedupe-digest-ttl-days <n>]
   [--synthesis-retries <n>]
   [--synthesis-fallback <claude|none>]
@@ -239,7 +240,9 @@ Deferred, not part of this repair:
 
 ## Synthesis Contract
 
-`agent-memory-trends` keeps the shared synthesis boundary agent-client-neutral. The core pipeline depends on `SynthesisRunner`; Codex is the primary live adapter and Claude Code CLI is an optional fallback adapter. Both feed the same downstream publisher contract.
+`agent-memory-trends` keeps the optional judged-synthesis boundary agent-client-neutral. For attended off-box or explicitly restored legacy direct-publisher runs, the core pipeline depends on `SynthesisRunner`; Codex is the primary live adapter and Claude Code CLI is an optional fallback adapter. Both feed the same judged-digest publisher contract.
+
+The production sg01 invocation is different and takes precedence over runner availability: exact flags `daily --generate-only --mcp-publish --synthesis-fallback none` select deterministic collector-packet mode. That mode ignores an injected synthesis runner, never checks or invokes Codex/Claude, writes `queries/YYYY-MM-DD-agent-memory-trends-packet.md` on a non-quiet run, and produces no proposals or judged digest. Ordinary `daily --generate-only` without the full collector flag set remains the judged-synthesis path.
 
 GitHub READMEs are fetched for deterministic scoring, but full README bodies are not sent to the agent prompt. The collector extracts bounded `readme_evidence` items with:
 
@@ -248,7 +251,7 @@ GitHub READMEs are fetched for deterministic scoring, but full README bodies are
 - `supports_claim`
 - `confidence`
 
-When there is a selected research signal, the agent may write the aggregate evidence file, digest, run manifest, and conservative watchlist updates. Quiet duplicate-only runs skip synthesis and publish only agent-memory-trends run state plus heartbeat. The agent must not write `raw/transcripts` captures directly. Instead, it returns structured proposal JSON in the final message captured by `--output-last-message`.
+When the judged-synthesis path has a selected research signal, the agent may write the aggregate evidence file, digest, run manifest, and conservative watchlist updates. Quiet duplicate-only runs skip synthesis and publish only agent-memory-trends run state plus heartbeat. The agent must not write `raw/transcripts` captures directly. Instead, it returns structured proposal JSON in the final message captured by `--output-last-message`.
 
 Proposal fields are `title`, `capture_kind`, `problem`, `requirements_or_questions`, `acceptance`, `evidence`, `affected_surfaces`, and `source_urls`. `capture_kind` is limited to `task`, `bug`, or `idea`; `affected_surfaces` is a small controlled vocabulary owned by `src/synthesis.ts`.
 
@@ -312,11 +315,27 @@ collector must surface at least one non-suppressed candidate.
 
 The protected sg01 host uses the HTTP MCP write plane, not the legacy vault Git
 publisher. `daily --generate-only --mcp-publish --synthesis-fallback none`
-generates into `/var/lib/skillwiki-research/staging-vault`, publishes only the
-query digest and proposal captures through MCP, retains `.skillwiki/**` and
-`raw/articles/**` as host-local run evidence, and rejects `index.md`, yaml, and
-undeclared raw paths. `session-brief-mcp` reads the MCP working copy without
-`--write` and CAS-publishes only `meta/latest-session-brief.md`.
+is unconditional collector-packet mode even if Codex, Claude, or an injected
+runner is available. It generates into
+`/var/lib/skillwiki-research/staging-vault`, CAS-publishes only
+`queries/YYYY-MM-DD-agent-memory-trends-packet.md` on a non-quiet night, and
+creates no digest or proposal captures. Quiet nights publish no packet. Both
+profiles retain `.skillwiki/**` and `raw/articles/**` as host-local run evidence
+and reject `index.md`, yaml, and undeclared raw paths. `session-brief-mcp` reads
+the MCP working copy without `--write`, reads collector state from
+`/var/lib/skillwiki-research/staging-vault/.skillwiki/agent-memory-trends/latest-run.json`,
+and CAS-publishes only `meta/latest-session-brief.md` as the packet/quiet receipt.
+
+### Attended off-box judgement
+
+After a packet is published, an attended SkillWiki HTTP MCP client performs the
+judgement step:
+
+1. Call `wiki_read_page` for `queries/YYYY-MM-DD-agent-memory-trends-packet.md`.
+2. Judge the candidates with the client agent; do not request or cite sg01's host-local `raw/articles/**` evidence.
+3. Call `wiki_read_page` for the target digest if it may already exist, then CAS-publish `queries/YYYY-MM-DD-agent-memory-trends-digest.md` with `wiki_page_publish`.
+4. Optionally call `wiki_capture` for accepted task, bug, or idea proposals.
+5. Keep the collector packet and judged digest distinct: packets are never recent-digest TTL signals and never occupy the session brief's judged-digest slot.
 
 Tracked unit templates are:
 
@@ -330,11 +349,12 @@ environment file with mode `0600`, install/authenticate `gh`, provision the
 research source config, and issue the `sg01-research` host-id bearer from a
 metal TTY. Never copy another host's bearer or auto-write MCP client config.
 
-Before enabling either sg01 timer, verify the unit environment reports
-SkillWiki 0.10.93 and 9 MCP tools. The `sg01-research` digest publication or
-quiet-run receipt gate has passed, so the three sg02 agent-memory timers must
-remain disabled. There is intentionally no sg01 self-update-apply unit and no
-`skillwiki-maintenance` write transaction.
+Before enabling either sg01 timer, verify the deployed SkillWiki HTTP MCP
+release advertises the required 14-tool backend, including `wiki_read_page`,
+`wiki_page_publish`, `wiki_capture`, and `wiki_workitem_write`. The
+`sg01-research` collector-packet or quiet-run receipt gate has passed, so the
+three sg02 agent-memory timers must remain disabled. There is intentionally no
+sg01 self-update-apply unit and no `skillwiki-maintenance` write transaction.
 
 ## Runtime Host
 
@@ -508,9 +528,10 @@ agent-memory-trends daily --generate-only
 ```
 
 For bounded local preview, add `--preview-only`. This skips the synthesis
-agent and writes deterministic evidence, digest, and manifest files from the
-selected candidate input. Use a temporary vault for smoke checks that must not
-touch the real wiki.
+agent and uses the same collector-packet materializer, writing deterministic
+host-local evidence, a packet-named query page, and the collector manifest from
+the selected candidate input. It never creates a digest-named preview. Use a
+temporary vault for smoke checks that must not touch the real wiki.
 
 ```bash
 agent-memory-trends daily --generate-only --preview-only --vault "$tmp_vault"
@@ -555,8 +576,10 @@ The workflow must preserve these constraints:
 
 ## Periodic Review
 
-The nightly pipeline collects and synthesizes GitHub candidates automatically.
-Two attended review cadences complement the automation:
+The nightly sg01 pipeline collects GitHub candidates and publishes a packet or
+quiet receipt automatically; judgement and digest/proposal publication are
+attended off-box work. Two additional attended review cadences complement the
+automation:
 
 ### Weekly: deep-research coverage sweep
 

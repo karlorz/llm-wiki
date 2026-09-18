@@ -4,31 +4,39 @@ import type { AgentInput } from "./input.js";
 import { materializeOperationalRunManifest } from "./publish.js";
 import { err, ok, type Result } from "./types.js";
 
-export interface MaterializePreviewRunInput {
+export interface MaterializeCollectorPacketRunInput {
   vault: string;
   runDate: string;
   inputPath: string;
   input: AgentInput;
+  startedAt: string;
+  finishedAt: string;
 }
 
-export interface MaterializePreviewRunOutput {
+export interface MaterializeCollectorPacketRunOutput {
   changedFiles: string[];
 }
 
-export function materializePreviewRun(input: MaterializePreviewRunInput): Result<MaterializePreviewRunOutput> {
+export function materializeCollectorPacketRun(
+  input: MaterializeCollectorPacketRunInput
+): Result<MaterializeCollectorPacketRunOutput> {
   const changedFiles = [
     input.inputPath,
-    input.input.allowedOutputs.digestPath,
+    input.input.allowedOutputs.packetPath,
     input.input.allowedOutputs.evidencePath,
     input.input.manifestPath,
   ];
 
   try {
-    writeVaultFile(input.vault, input.input.allowedOutputs.evidencePath, renderPreviewEvidence(input.input));
-    writeVaultFile(input.vault, input.input.allowedOutputs.digestPath, renderPreviewDigest(input.input));
-    writeVaultFile(input.vault, input.input.manifestPath, JSON.stringify(previewManifest(input.input, changedFiles), null, 2) + "\n");
+    writeVaultFile(input.vault, input.input.allowedOutputs.evidencePath, renderCollectorEvidence(input.input));
+    writeVaultFile(input.vault, input.input.allowedOutputs.packetPath, renderCollectorPacket(input.input));
+    writeVaultFile(
+      input.vault,
+      input.input.manifestPath,
+      JSON.stringify(collectorManifest(input.input, changedFiles, input.startedAt, input.finishedAt), null, 2) + "\n"
+    );
   } catch (error) {
-    return err("PREVIEW_WRITE_FAILED", error instanceof Error ? error.message : String(error));
+    return err("COLLECTOR_PACKET_WRITE_FAILED", error instanceof Error ? error.message : String(error));
   }
 
   const materialized = materializeOperationalRunManifest({
@@ -47,12 +55,19 @@ function writeVaultFile(vault: string, path: string, body: string): void {
   writeFileSync(fullPath, body, "utf8");
 }
 
-function previewManifest(input: AgentInput, changedFiles: string[]): Record<string, unknown> {
+function collectorManifest(
+  input: AgentInput,
+  changedFiles: string[],
+  startedAt: string,
+  finishedAt: string
+): Record<string, unknown> {
   return {
     run_date: input.runDate,
     run_id: input.runId,
     status: "success",
-    mode: "preview-only",
+    mode: "collector-packet",
+    started_at: startedAt,
+    finished_at: finishedAt,
     selected_candidate_count: input.selectedCandidates.length,
     duplicate_suppression_count: input.duplicateSuppressions.length,
     proposal_count: 0,
@@ -63,7 +78,7 @@ function previewManifest(input: AgentInput, changedFiles: string[]): Record<stri
     changed_files: changedFiles,
     outputs: {
       evidence_path: input.allowedOutputs.evidencePath,
-      digest_path: input.allowedOutputs.digestPath,
+      packet_path: input.allowedOutputs.packetPath,
       run_state_path: input.manifestPath,
       manifest_path: input.manifestPath,
       task_capture_paths: [],
@@ -78,17 +93,17 @@ function previewManifest(input: AgentInput, changedFiles: string[]): Record<stri
   };
 }
 
-function renderPreviewEvidence(input: AgentInput): string {
+function renderCollectorEvidence(input: AgentInput): string {
   return [
     "---",
-    `source_url: ${JSON.stringify(`generated:agent-memory-trends-preview/${input.runId}`)}`,
+    `source_url: ${JSON.stringify(`generated:agent-memory-trends-collector/${input.runId}`)}`,
     `ingested: ${input.runDate}`,
-    "ingested_by: agent-memory-trends-preview",
+    "ingested_by: agent-memory-trends-collector",
     "---",
     "",
-    `# Agent Memory Trends Preview Evidence - ${input.runDate}`,
+    `# Agent Memory Trends Collector Evidence - ${input.runDate}`,
     "",
-    `Deterministic preview evidence for \`${input.project}\` run \`${input.runId}\`.`,
+    `Host-local deterministic collector evidence for \`${input.project}\` run \`${input.runId}\`.`,
     "",
     "This file was generated without invoking the synthesis agent. It uses only selected GitHub candidate metadata and bounded README evidence already present in the collector input.",
     "",
@@ -132,57 +147,61 @@ function renderPreviewEvidenceCandidate(candidate: AgentInput["selectedCandidate
   ];
 }
 
-function renderPreviewDigest(input: AgentInput): string {
-  const evidencePath = input.allowedOutputs.evidencePath;
+function renderCollectorPacket(input: AgentInput): string {
+  const sourceUrls = candidateSourceUrls(input);
   return [
     "---",
-    `title: "Agent Memory Trends Preview - ${input.runDate}"`,
+    `title: "Agent Memory Trends Collector Packet - ${input.runDate}"`,
     `created: ${input.runDate}`,
     `updated: ${input.runDate}`,
     "type: query",
-    `name: agent-memory-trends-preview-${input.runDate}`,
-    "tags: [agent-memory, llm-wiki, trends, github, query, provenance/research, confidence/low, preview]",
+    `name: agent-memory-trends-packet-${input.runDate}`,
+    "tags: [agent-memory, llm-wiki, trends, github, query, provenance/research, confidence/low, collector-packet]",
     "provenance: research",
     "confidence: low",
-    "overview: Deterministic local preview of selected GitHub trend candidates without synthesis-agent proposals.",
+    "overview: Deterministic collector packet of selected GitHub trend candidates for attended off-box judgement.",
     "sources:",
-    `  - "${evidencePath}"`,
+    ...(sourceUrls.length > 0 ? sourceUrls.map((url) => `  - ${JSON.stringify(url)}`) : ["  - https://github.com"]),
     "---",
     "",
-    `# Agent Memory Trends Preview - ${input.runDate}`,
+    `# Agent Memory Trends Collector Packet - ${input.runDate}`,
     "",
-    `> **TL;DR:** Deterministic preview selected ${input.selectedCandidates.length} candidate(s). It did not invoke the synthesis agent and did not create task captures.`,
+    `> **TL;DR:** Deterministic collection selected ${input.selectedCandidates.length} candidate(s). This packet is unjudged, invoked no synthesis runner, contains no proposals, and is intended for attended off-box review.`,
     "",
     "## Selected Candidates",
     "",
-    ...input.selectedCandidates.flatMap((candidate, index) => renderPreviewDigestCandidate(candidate, index + 1)),
+    ...input.selectedCandidates.flatMap((candidate, index) => renderCollectorPacketCandidate(candidate, index + 1)),
     "",
     "## Duplicate Suppression",
     "",
     input.duplicateSuppressions.length > 0
-      ? `${input.duplicateSuppressions.length} candidate(s) were suppressed before preview output.`
-      : "No candidates were suppressed before preview output.",
+      ? input.duplicateSuppressions.flatMap((suppression) => [
+          `- ${suppression.candidate.fullName}`,
+          ...suppression.reasons.map((reason) => `  - ${reason}`),
+        ]).join("\n")
+      : "No candidates were suppressed before packet output.",
     "",
-    "## Preview Limits",
+    "## Packet Limits",
     "",
-    "This preview is deterministic and bounded. It is intended for local development smoke checks of recall/ranking only; production daily synthesis still uses the synthesis runner for proposal judgement.",
-    "",
-    `Source details are listed in the aggregate evidence file.^[${evidencePath}]`,
+    "This packet is deterministic and bounded. It reports collector evidence only; an attended off-box SkillWiki client must judge candidates before publishing a separate digest or proposal captures.",
     "",
   ].join("\n");
 }
 
-function renderPreviewDigestCandidate(candidate: AgentInput["selectedCandidates"][number], index: number): string[] {
+function renderCollectorPacketCandidate(candidate: AgentInput["selectedCandidates"][number], index: number): string[] {
   return [
     `### ${index}. ${candidate.fullName}`,
     "",
     `- Source: ${candidate.canonicalUrl}`,
     `- Score: ${candidate.score.score}`,
+    `- Score components: relevance ${candidate.score.components.relevance}; implementation evidence ${candidate.score.components.implementationEvidence}; authority/momentum ${candidate.score.components.authorityMomentum}; freshness ${candidate.score.components.freshness}; novelty/tracking ${candidate.score.components.noveltyOrTracking}`,
     `- Tracking: ${candidate.score.trackingStatus}`,
     `- Stars/forks: ${candidate.stargazersCount} / ${candidate.forksCount}`,
     `- Lanes: ${candidate.laneIds.join(", ")}`,
+    `- Queries: ${candidate.queryIds.join(", ")}`,
     `- Evidence families: ${candidate.evidenceFamilies.join(", ")}`,
     ...previewEvidenceQualityLines(candidate),
+    ...previewReadmeEvidenceLines(candidate),
     `- Description: ${candidate.description || "(no description)"}`,
     "",
   ];
@@ -193,7 +212,7 @@ function candidateSourceUrls(input: AgentInput): string[] {
 }
 
 function previewSourceUrl(candidate: AgentInput["selectedCandidates"][number]): string {
-  return candidate.readmeEvidence?.[0]?.sourceUrl || `${candidate.canonicalUrl}#readme`;
+  return candidate.readmeEvidence?.[0]?.sourceUrl || candidate.canonicalUrl;
 }
 
 function previewReadmeEvidenceLines(candidate: AgentInput["selectedCandidates"][number]): string[] {

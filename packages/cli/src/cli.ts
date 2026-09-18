@@ -1875,6 +1875,7 @@ program
   .description("render or refresh the bounded startup session brief")
   .option("--project <slug>", "project slug, or auto for deterministic detection", "auto")
   .option("--write", "write meta/latest-session-brief.md and local cache files", false)
+  .option("--agent-memory-run-state <path>", "explicit agent-memory latest-run JSON path")
   .option("--wiki <name>", "wiki profile name")
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
@@ -1886,6 +1887,7 @@ program
         vault: v.vault,
         project: opts.project,
         write: true,
+        agentMemoryRunState: opts.agentMemoryRunState,
         cwd: process.cwd(),
         env: { SKILLWIKI_PROJECT: process.env.SKILLWIKI_PROJECT }
       }),
@@ -1895,6 +1897,7 @@ program
       vault: v.vault,
       project: opts.project,
       write: false,
+      agentMemoryRunState: opts.agentMemoryRunState,
       cwd: process.cwd(),
       env: { SKILLWIKI_PROJECT: process.env.SKILLWIKI_PROJECT }
     }), v.vault, { postCommit: false });
