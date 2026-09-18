@@ -196,14 +196,19 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       expect(sc?.compact_activation?.instructions_sha256).toBe(expectedDigest);
       expect(sc?.compact_activation?.instructions_bytes).toBe(Buffer.byteLength(MCP_INSTRUCTIONS));
 
-      // Verify tools list includes all 9 tools
+      // Verify tools list includes all 14 tools
       expect(sc?.tools).toBeDefined();
       expect(sc?.tools).toContain("wiki_context");
       expect(sc?.tools).toContain("wiki_status");
       expect(sc?.tools).toContain("wiki_query");
       expect(sc?.tools).toContain("wiki_read_page");
       expect(sc?.tools).toContain("wiki_capture");
-      expect(sc?.tools.length).toBe(9);
+      expect(sc?.tools).toContain("wiki_sources_pending");
+      expect(sc?.tools).toContain("wiki_compile_status");
+      expect(sc?.tools).toContain("wiki_reviews");
+      expect(sc?.tools).toContain("wiki_lint_summary");
+      expect(sc?.tools).toContain("wiki_stale");
+      expect(sc?.tools.length).toBe(14);
 
       // Verify projects
       expect(sc?.projects).toBeDefined();

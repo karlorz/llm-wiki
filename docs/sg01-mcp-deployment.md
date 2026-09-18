@@ -21,7 +21,7 @@ The command exports the exact ref, stages it separately under `/opt`, installs l
 - `packages/mcp-server/dist/server.js`
 - `packages/agent-memory-trends/dist/cli.js`
 
-It atomically swaps `/opt/llm-wiki`, restarts only `skillwiki-mcp.service`, and preserves the previous bundle for rollback. It does not alter FUSE, snapshotter, research timers, session-brief timers, credentials, or vault content.
+It atomically swaps `/opt/llm-wiki`, restarts only `skillwiki-mcp.service`, and preserves the previous bundle for rollback. It does not alter FUSE, snapshotter, research timers, session-brief timers, credentials, or vault content. The systemd family target `skillwiki-backend.target` groups the member units on sg01 while restarts remain strictly MCP-only.
 
 ## Readiness gate
 
@@ -50,4 +50,4 @@ From macos-dev:
 skillwiki doctor --check-mcp
 ```
 
-Require the handshake to advertise the released version and nine tools. On sg01, confirm the MCP service has no restart/error loop and that the research/session-brief timers still reference existing runtime files. Observe or attend one normal research and session-brief run before pruning rollback bundles.
+Require the handshake to advertise the released version and fourteen tools. On sg01, confirm the MCP service has no restart/error loop, that `skillwiki-backend.target` (and its member units) remains enabled, and that the research/session-brief timers still reference existing runtime files. Observe or attend one normal research and session-brief run before pruning rollback bundles.

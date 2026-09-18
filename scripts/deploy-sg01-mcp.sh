@@ -67,6 +67,7 @@ sg01 MCP deployment plan
   version: $VERSION
   ready timeout: ${READY_TIMEOUT_SECONDS}s
   builds: @skillwiki/mcp-server, @skillwiki/agent-memory-trends
+  backend target check: skillwiki-backend.target enabled if present
   service restart: skillwiki-mcp.service only
 EOF
 
@@ -146,6 +147,11 @@ for unit in skillwiki-mcp.service skillwiki-research.service skillwiki-session-b
     test -s "$STAGE/$rel"
   done
 done
+
+# If skillwiki-backend.target is installed on the host, require it to be enabled.
+if systemctl cat skillwiki-backend.target >/dev/null 2>&1; then
+  systemctl is-enabled skillwiki-backend.target >/dev/null
+fi
 
 systemctl stop skillwiki-mcp.service
 mv /opt/llm-wiki "$BACKUP"

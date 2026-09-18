@@ -226,7 +226,8 @@ process.
 
 Production runs as native systemd on sg01 (`wiki.karldigi.dev/mcp`). Sibling
 systemd units on that host provide the GitHub snapshotter, FUSE refresh, agent
-memory research, and session-brief publication; those responsibilities stay
+memory research, and session-brief publication, grouped under the
+`skillwiki-backend.target` systemd family target; those responsibilities stay
 outside the MCP daemon.
 
 `docker-compose.coolify.yml` is an optional later deployment path for the MCP

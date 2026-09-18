@@ -5,6 +5,11 @@ import { runMemoryRecall } from "../../../cli/src/commands/memory.js";
 import { runQuery } from "../../../cli/src/commands/query.js";
 import { runStatus } from "../../../cli/src/commands/status.js";
 import { runCopyStatusCommand } from "../../../cli/src/commands/copy-status.js";
+import { runSourcesPending, type SourceScope } from "../../../cli/src/commands/sources.js";
+import { runSourceCompileStatus, runSourceReviews } from "../../../cli/src/commands/source-compile.js";
+import { runLint, type LintSummaryInput } from "../../../cli/src/commands/lint.js";
+import { runStale } from "../../../cli/src/commands/stale.js";
+import type { Result } from "@skillwiki/shared";
 import { extractFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
 import { resolveWithinVault } from "../allowlist.js";
 import { MCP_INSTRUCTIONS } from "../mcp-instructions.js";
@@ -53,6 +58,13 @@ function notReady(): { ok: false; error: "TOOLS_NOT_READY"; message: string } {
 
 function ensureReady(gate: ReconcileGate): { ok: false; error: "TOOLS_NOT_READY"; message: string } | null {
   return gate.ready ? null : notReady();
+}
+
+function flattenReadCommandResult(result: Result<unknown>) {
+  if (!result.ok) {
+    return { ok: false as const, error: result.error, detail: result };
+  }
+  return { ok: true as const, ...(result.data as Record<string, unknown>) };
 }
 
 export async function handleWikiQuery(
@@ -390,4 +402,90 @@ export async function handleWikiContext(
       instructions_bytes: instructionsBuffer.byteLength,
     },
   };
+}
+
+export async function handleWikiSourcesPending(
+  ctx: ReadContext,
+  input: { match?: string; scope?: SourceScope; limit?: number },
+) {
+  const blocked = ensureReady(ctx.gate);
+  if (blocked) return blocked;
+  const result = await runSourcesPending({
+    vault: ctx.vaultDir,
+    match: input.match,
+    scope: input.scope,
+    limit: input.limit,
+    includeIntegrated: false,
+  });
+  return flattenReadCommandResult(result.result);
+}
+
+export async function handleWikiCompileStatus(
+  ctx: ReadContext,
+  _input?: Record<string, unknown>,
+) {
+  const blocked = ensureReady(ctx.gate);
+  if (blocked) return blocked;
+  const result = await runSourceCompileStatus({
+    vault: ctx.vaultDir,
+  });
+  return flattenReadCommandResult(result.result);
+}
+
+export async function handleWikiReviews(
+  ctx: ReadContext,
+  _input?: Record<string, unknown>,
+) {
+  const blocked = ensureReady(ctx.gate);
+  if (blocked) return blocked;
+  const result = await runSourceReviews({
+    vault: ctx.vaultDir,
+  });
+  return flattenReadCommandResult(result.result);
+}
+
+export async function handleWikiLintSummary(
+  ctx: ReadContext,
+  input: Partial<Pick<LintSummaryInput, "only" | "days" | "lines" | "logThreshold" | "examplesLimit">>,
+) {
+  const blocked = ensureReady(ctx.gate);
+  if (blocked) return blocked;
+  const result = await runLint({
+    vault: ctx.vaultDir,
+    days: input.days ?? 90,
+    lines: input.lines ?? 200,
+    logThreshold: input.logThreshold ?? 500,
+    fix: false,
+    summary: true,
+    only: input.only,
+    examplesLimit: input.examplesLimit,
+  });
+  return flattenReadCommandResult(result.result);
+}
+
+export async function handleWikiStale(
+  ctx: ReadContext,
+  input: { days?: number; project?: string },
+) {
+  const blocked = ensureReady(ctx.gate);
+  if (blocked) return blocked;
+  let project: string | undefined;
+  if (input.project !== undefined) {
+    const normalized = normalizeCaptureProject(input.project);
+    if (!normalized) {
+      return { ok: false as const, error: "USAGE", message: "project must be a vault project slug" };
+    }
+    if (!vaultHasProject(ctx.vaultDir, normalized)) {
+      return { ok: false as const, error: "USAGE", message: "unknown project" };
+    }
+    project = normalized;
+  }
+  const result = await runStale({
+    vault: ctx.vaultDir,
+    days: input.days ?? 90,
+    archive: false,
+    apply: false,
+    project,
+  });
+  return flattenReadCommandResult(result.result);
 }

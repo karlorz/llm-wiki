@@ -35,6 +35,11 @@ grep -q 'grep -Eo.*opt/llm-wiki' "$SCRIPT" || fail "runtime path extraction"
 grep -Fq 'test "${#paths[@]}" -gt 0' "$SCRIPT" || fail "runtime path extraction fail-closed"
 pass "systemd runtime path validation fails closed"
 
+grep -q 'skillwiki-backend\.target' "$SCRIPT" || fail "backend target check present"
+grep -q 'systemctl is-enabled skillwiki-backend\.target' "$SCRIPT" || fail "backend target is-enabled check present"
+grep -q 'service restart: skillwiki-mcp\.service only' "$SCRIPT" || fail "restart remains MCP-only"
+pass "backend target validation and single-service restart verified"
+
 grep -q '22,000 objects' "$DOC" || fail "runbook records production object scale"
 grep -q '600 seconds' "$DOC" || fail "runbook records readiness timeout"
 pass "runbook records production readiness evidence"

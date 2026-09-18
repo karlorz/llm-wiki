@@ -1,0 +1,7 @@
+[Unit]
+Description=SkillWiki wiki backend family on sg01
+After=network-online.target
+Wants=skillwiki-mcp.service rclone-wiki.service wiki-fuse-refresh.timer wiki-snapshot.timer skillwiki-research.timer skillwiki-session-brief.timer
+
+[Install]
+WantedBy=multi-user.target

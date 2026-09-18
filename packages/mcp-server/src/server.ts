@@ -59,10 +59,15 @@ import { getIssuer, handleOAuthRequest, type OAuthConfig } from "./oauth.js";
 import { FileOAuthStore, type OAuthStore } from "./oauth-store.js";
 import { rcloneCopyUpdate, ReconcileGate } from "./reconcile.js";
 import {
+  handleWikiCompileStatus,
   handleWikiContext,
+  handleWikiLintSummary,
   handleWikiMemoryRecall,
   handleWikiQuery,
   handleWikiReadPage,
+  handleWikiReviews,
+  handleWikiSourcesPending,
+  handleWikiStale,
   handleWikiStatus,
   MAX_READ_PAGE_BYTES,
 } from "./tools/reads.js";
@@ -93,6 +98,11 @@ const MCP_TOOL_NAMES = [
   "wiki_memory_recall",
   "wiki_status",
   "wiki_context",
+  "wiki_sources_pending",
+  "wiki_compile_status",
+  "wiki_reviews",
+  "wiki_lint_summary",
+  "wiki_stale",
   "wiki_capture",
   "wiki_log_append",
   "wiki_workitem_write",
@@ -183,6 +193,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     path: z.string().optional(),
     currentVersion: z.string().optional(),
   };
+  const genericReadOutputSchema = z.object({ ...failureShape }).passthrough();
 
   server.registerTool(
     "wiki_query",
@@ -320,6 +331,89 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     },
     async (args) => {
       const out = await handleWikiContext(reads, { tools: [...MCP_TOOL_NAMES], project: args.project });
+      return toolResult(out, !out.ok);
+    },
+  );
+
+  server.registerTool(
+    "wiki_sources_pending",
+    {
+      description: "List captured raw articles/papers awaiting typed integration (read-only).",
+      inputSchema: z.object({
+        match: z.string().optional(),
+        scope: z.enum(["articles", "papers", "all"]).optional(),
+        limit: z.number().int().positive().optional(),
+      }),
+      outputSchema: genericReadOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      const out = await handleWikiSourcesPending(reads, args);
+      return toolResult(out, !out.ok);
+    },
+  );
+
+  server.registerTool(
+    "wiki_compile_status",
+    {
+      description: "List compiling and review-open pending compile-turns (read-only).",
+      inputSchema: z.object({}),
+      outputSchema: genericReadOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      const out = await handleWikiCompileStatus(reads, args);
+      return toolResult(out, !out.ok);
+    },
+  );
+
+  server.registerTool(
+    "wiki_reviews",
+    {
+      description: "List open or needs-fix post-compile reviews (read-only).",
+      inputSchema: z.object({}),
+      outputSchema: genericReadOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      const out = await handleWikiReviews(reads, args);
+      return toolResult(out, !out.ok);
+    },
+  );
+
+  server.registerTool(
+    "wiki_lint_summary",
+    {
+      description: "Vault lint bucket summary (read-only, no --fix).",
+      inputSchema: z.object({
+        only: z.string().optional(),
+        days: z.number().int().positive().optional(),
+        lines: z.number().int().positive().optional(),
+        logThreshold: z.number().int().positive().optional(),
+        examplesLimit: z.number().int().nonnegative().optional(),
+      }),
+      outputSchema: genericReadOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      const out = await handleWikiLintSummary(reads, args);
+      return toolResult(out, !out.ok);
+    },
+  );
+
+  server.registerTool(
+    "wiki_stale",
+    {
+      description: "List stale pages, transcripts, and incomplete work items (read-only).",
+      inputSchema: z.object({
+        days: z.number().int().positive().optional(),
+        project: z.string().optional(),
+      }),
+      outputSchema: genericReadOutputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      const out = await handleWikiStale(reads, args);
       return toolResult(out, !out.ok);
     },
   );
