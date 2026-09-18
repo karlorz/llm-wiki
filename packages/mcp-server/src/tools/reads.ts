@@ -17,15 +17,20 @@ import { ReconcileGate } from "../reconcile.js";
 import { sha256Bytes } from "../txn.js";
 import { currentVersion, type GetObject } from "../versions.js";
 import { CAPTURE_KINDS, normalizeCaptureProject, vaultHasProject } from "./writes.js";
+import { DEFAULT_VAULT_ID } from "../vault-id.js";
 
 export const MAX_READ_PAGE_BYTES = 256 * 1024;
 
 export interface ReadContext {
   vaultDir: string;
+  vaultId?: string;
+  defaultVault?: string;
+  allowedVaults?: readonly string[];
   hostId?: string;
   gate: ReconcileGate;
   getObject?: GetObject;
   s3Ok?: boolean;
+  vaultReadiness?: ReadonlyArray<{ vault_id: string; reconcile_ready: boolean; last_error?: string }>;
 }
 
 export type WikiReadPageResult =
@@ -307,6 +312,7 @@ export async function handleWikiStatus(
   return {
     ok: true as const,
     vault_path: ctx.vaultDir,
+    vault_id: ctx.vaultId ?? DEFAULT_VAULT_ID,
     reconcile_ready: ctx.gate.ready,
     s3_ok: ctx.s3Ok ?? true,
     ...base,
@@ -314,6 +320,7 @@ export async function handleWikiStatus(
     humanHint,
     ...(writerId ? { writer_id: writerId, host_id: writerId } : {}),
     fleet,
+    ...(ctx.vaultReadiness ? { vaults: ctx.vaultReadiness } : {}),
   };
 }
 
@@ -393,6 +400,9 @@ export async function handleWikiContext(
     ok: true as const,
     projects: filtered,
     writer_id: ctx.hostId ?? "unknown",
+    vault_id: ctx.vaultId ?? DEFAULT_VAULT_ID,
+    default_vault: ctx.defaultVault ?? ctx.vaultId ?? DEFAULT_VAULT_ID,
+    allowed_vaults: [...(ctx.allowedVaults ?? [ctx.defaultVault ?? ctx.vaultId ?? DEFAULT_VAULT_ID])],
     reconcile_ready: ctx.gate.ready,
     tools: extra?.tools ?? [],
     cas_protocol: "Read canonical sha256 via wiki_read_page, pass base_sha256 in write; on FILE_CHANGED re-read and retry.",

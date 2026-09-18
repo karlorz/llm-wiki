@@ -51,3 +51,18 @@ skillwiki doctor --check-mcp
 ```
 
 Require the handshake to advertise the released version and fourteen tools. On sg01, confirm the MCP service has no restart/error loop, that `skillwiki-backend.target` (and its member units) remains enabled, and that the research/session-brief timers still reference existing runtime files. Observe or attend one normal research and session-brief run before pruning rollback bundles.
+
+## Multi-vault (Identity A)
+
+One HTTP MCP process may serve a default central vault plus explicit extra `vault_id`s (S3 prefixes and unique local roots). Handshake advertises `default_vault` and `allowed_vaults`. Clients keep **one** connector URL and pass optional `vault=` on tools; omit means the authorized default.
+
+Grok Bot **Plugins → Configure** fields:
+
+| Field | Secret? | Role |
+| --- | --- | --- |
+| `SKILLWIKI_MCP_TOKEN` | yes | Host bearer. Never a vault list. |
+| `SKILLWIKI_EXTRA_VAULTS` | no | Comma-separated extra vault ids the client may request. Default central is always on. Does not authorize access. |
+
+Server `allowed_vaults` on the principal is the security boundary. Unknown, disabled, or unauthorized vault ids fail closed before filesystem/S3 I/O. Snapshot, FUSE, research, session-brief, rclone scheduling, and Git promotion stay sibling processes (`skillwiki-backend.target` groups lifecycle only). HTTP MCP still does not grow archive/remove/source-dispose/index/fleet/history mutations.
+
+Do not treat this document as a Slice 6 `wiki-fin` cutover. Production extra-vault provision, Hermes schedule change, and sg01 deploy remain a later attended pass.

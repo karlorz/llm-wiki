@@ -9,7 +9,15 @@ import { z } from "zod";
 import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from "./auth.js";
 import { handleConsoleRequest, isConsolePath, isConsoleRequestAllowed } from "./console.js";
 import { appendAudit } from "./audit.js";
-import { loadConfig, type McpDaemonConfig } from "./config.js";
+import { configVaultRegistry, loadConfig, type McpDaemonConfig } from "./config.js";
+import { MCP_INSTRUCTIONS } from "./mcp-instructions.js";
+import { getIssuer, handleOAuthRequest, resolveWriterVaults, type OAuthConfig } from "./oauth.js";
+import { FileOAuthStore, type OAuthStore } from "./oauth-store.js";
+import { handshakeFor, mcpInstructionsHandshakeTrailer, normalizeGrants, type Principal } from "./principal.js";
+import { rcloneCopyUpdate, ReconcileGate } from "./reconcile.js";
+import { DEFAULT_VAULT_ID } from "./vault-id.js";
+import { singletonVaultInput, buildVaultRegistry, type VaultRegistry } from "./vault-registry.js";
+import { resolveVaultContext, type VaultRuntime } from "./vault-runtime.js";
 import {
   mcpCompletionCompleteAfterShutdownError,
   mcpCompletionCompleteBeforeInitializeError,
@@ -54,10 +62,6 @@ import {
   mcpToolsListBeforeInitializeError,
 } from "./mcp-initialize.js";
 import { ChangedEventHub } from "./events.js";
-import { MCP_INSTRUCTIONS } from "./mcp-instructions.js";
-import { getIssuer, handleOAuthRequest, type OAuthConfig } from "./oauth.js";
-import { FileOAuthStore, type OAuthStore } from "./oauth-store.js";
-import { rcloneCopyUpdate, ReconcileGate } from "./reconcile.js";
 import {
   handleWikiCompileStatus,
   handleWikiContext,
@@ -88,6 +92,8 @@ export interface HttpServerOptions {
   s3Ok?: boolean;
   auditFile?: string;
   oauth?: OAuthConfig;
+  registry?: VaultRegistry;
+  runtimes?: Map<string, VaultRuntime>;
 }
 
 const MAX_MCP_BODY_BYTES = 1048576; // 1 MiB
@@ -164,26 +170,85 @@ function mcpServerPackageVersion(): string {
   ).version;
 }
 
-export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }): McpServer {
+const vaultField = { vault: z.string().optional() };
+
+function ensureVaultState(opts: HttpServerOptions): {
+  registry: VaultRegistry;
+  runtimes: Map<string, VaultRuntime>;
+} {
+  if (opts.registry && opts.runtimes) {
+    return { registry: opts.registry, runtimes: opts.runtimes };
+  }
+  const registry = buildVaultRegistry([
+    singletonVaultInput({
+      vaultId: DEFAULT_VAULT_ID,
+      localRoot: opts.vaultDir,
+      rcloneRemote: "local",
+      rclonePath: "central",
+    }),
+  ]);
+  const runtimes = new Map<string, VaultRuntime>([
+    [
+      DEFAULT_VAULT_ID,
+      {
+        entry: registry.entries.get(DEFAULT_VAULT_ID)!,
+        gate: opts.gate,
+        putObject: opts.putObject,
+        getObject: opts.getObject,
+      },
+    ],
+  ]);
+  return { registry, runtimes };
+}
+
+export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; principal: Principal }): McpServer {
+  const { registry, runtimes } = ensureVaultState(opts);
+  const handshake = handshakeFor(opts.principal, registry);
   const server = new McpServer(
     { name: "skillwiki-mcp", version: mcpServerPackageVersion() },
-    { instructions: MCP_INSTRUCTIONS },
+    { instructions: MCP_INSTRUCTIONS + mcpInstructionsHandshakeTrailer(handshake) },
   );
-  const ctx = {
-    vaultDir: opts.vaultDir,
-    hostId: opts.hostId,
-    gate: opts.gate,
-    putObject: opts.putObject,
-    getObject: opts.getObject,
-    auditFile: opts.auditFile,
-    onCommit: (paths: string[]) => opts.hub?.emitChanged(paths),
-  };
-  const reads = {
-    vaultDir: opts.vaultDir,
-    hostId: opts.hostId,
-    gate: opts.gate,
-    getObject: opts.getObject,
-    s3Ok: opts.s3Ok,
+
+  const bind = (requested: string | undefined) => {
+    const resolved = resolveVaultContext({
+      requested,
+      principal: opts.principal,
+      registry,
+      runtimes,
+    });
+    if (!resolved.ok) return resolved;
+    const authorizedReadiness = [...registry.entries.values()]
+      .filter((entry) => opts.principal.allowedVaults.includes(entry.vaultId))
+      .map((entry) => {
+        const rt = runtimes.get(entry.vaultId);
+        return {
+          vault_id: entry.vaultId,
+          reconcile_ready: rt?.gate.ready ?? false,
+          ...(rt?.gate.lastError ? { last_error: rt.gate.lastError } : {}),
+        };
+      });
+    const reads = {
+      vaultDir: resolved.ctx.vaultDir,
+      vaultId: resolved.ctx.vaultId,
+      defaultVault: opts.principal.defaultVault,
+      allowedVaults: handshake.allowed_vaults,
+      hostId: opts.hostId,
+      gate: resolved.ctx.gate,
+      getObject: resolved.ctx.getObject,
+      s3Ok: opts.s3Ok,
+      vaultReadiness: authorizedReadiness,
+    };
+    const writes = {
+      vaultDir: resolved.ctx.vaultDir,
+      vaultId: resolved.ctx.vaultId,
+      hostId: opts.hostId,
+      gate: resolved.ctx.gate,
+      putObject: resolved.ctx.putObject,
+      getObject: resolved.ctx.getObject,
+      auditFile: opts.auditFile,
+      onCommit: (paths: string[]) => opts.hub?.emitChanged(paths, resolved.ctx.vaultId),
+    };
+    return { ok: true as const, reads, writes };
   };
 
   const failureShape = {
@@ -206,6 +271,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         include_pending: z.boolean().optional(),
         scope: z.enum(["typed", "work", "all"]).optional(),
         project: z.string().optional(),
+        ...vaultField,
       }),
       outputSchema: z.object({
         ...failureShape,
@@ -214,7 +280,9 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       annotations: { readOnlyHint: true },
     },
     async (args) => {
-      const out = await handleWikiQuery(reads, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await handleWikiQuery(selected.reads, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -227,6 +295,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       inputSchema: z.object({
         path: z.string().min(1),
         tail_bytes: z.number().int().min(1).max(MAX_READ_PAGE_BYTES).optional(),
+        ...vaultField,
       }),
       outputSchema: z.object({
         ...failureShape,
@@ -239,7 +308,9 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       annotations: { readOnlyHint: true },
     },
     async (args) => {
-      const out = await handleWikiReadPage(reads, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await handleWikiReadPage(selected.reads, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -252,6 +323,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         project: z.string().min(1),
         topic: z.string().min(1),
         scope: z.enum(["project", "global", "all"]).optional(),
+        ...vaultField,
       }),
       outputSchema: z.object({
         ...failureShape,
@@ -260,7 +332,9 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       annotations: { readOnlyHint: true },
     },
     async (args) => {
-      const out = await handleWikiMemoryRecall(reads, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await handleWikiMemoryRecall(selected.reads, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -272,6 +346,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         "Vault health snapshot plus daemon reconcile, S3 connectivity, and plane-tagged copy status (live vs GitHub vs local_git). Optional host_id must match the authenticated writer; unknown or missing host identity fail closed.",
       inputSchema: z.object({
         host_id: z.string().optional(),
+        ...vaultField,
       }),
       outputSchema: z.object({
         ...failureShape,
@@ -292,7 +367,9 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       annotations: { readOnlyHint: true },
     },
     async (args) => {
-      const out = await handleWikiStatus(reads, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await handleWikiStatus(selected.reads, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -304,6 +381,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         "Compact activation context, active project work-item directories, and writer metadata. Optional project slug filters to one vault project; unknown or empty project fail closed.",
       inputSchema: z.object({
         project: z.string().optional(),
+        ...vaultField,
       }),
       outputSchema: z.object({
         ...failureShape,
@@ -330,7 +408,9 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       annotations: { readOnlyHint: true },
     },
     async (args) => {
-      const out = await handleWikiContext(reads, { tools: [...MCP_TOOL_NAMES], project: args.project });
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await handleWikiContext(selected.reads, { tools: [...MCP_TOOL_NAMES], project: args.project });
       return toolResult(out, !out.ok);
     },
   );
@@ -343,12 +423,15 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         match: z.string().optional(),
         scope: z.enum(["articles", "papers", "all"]).optional(),
         limit: z.number().int().positive().optional(),
+        ...vaultField,
       }),
       outputSchema: genericReadOutputSchema,
       annotations: { readOnlyHint: true },
     },
     async (args) => {
-      const out = await handleWikiSourcesPending(reads, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await handleWikiSourcesPending(selected.reads, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -357,12 +440,16 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     "wiki_compile_status",
     {
       description: "List compiling and review-open pending compile-turns (read-only).",
-      inputSchema: z.object({}),
+      inputSchema: z.object({
+        ...vaultField,
+      }),
       outputSchema: genericReadOutputSchema,
       annotations: { readOnlyHint: true },
     },
     async (args) => {
-      const out = await handleWikiCompileStatus(reads, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await handleWikiCompileStatus(selected.reads, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -371,12 +458,16 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
     "wiki_reviews",
     {
       description: "List open or needs-fix post-compile reviews (read-only).",
-      inputSchema: z.object({}),
+      inputSchema: z.object({
+        ...vaultField,
+      }),
       outputSchema: genericReadOutputSchema,
       annotations: { readOnlyHint: true },
     },
     async (args) => {
-      const out = await handleWikiReviews(reads, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await handleWikiReviews(selected.reads, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -391,12 +482,15 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         lines: z.number().int().positive().optional(),
         logThreshold: z.number().int().positive().optional(),
         examplesLimit: z.number().int().nonnegative().optional(),
+        ...vaultField,
       }),
       outputSchema: genericReadOutputSchema,
       annotations: { readOnlyHint: true },
     },
     async (args) => {
-      const out = await handleWikiLintSummary(reads, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await handleWikiLintSummary(selected.reads, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -408,12 +502,15 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       inputSchema: z.object({
         days: z.number().int().positive().optional(),
         project: z.string().optional(),
+        ...vaultField,
       }),
       outputSchema: genericReadOutputSchema,
       annotations: { readOnlyHint: true },
     },
     async (args) => {
-      const out = await handleWikiStale(reads, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await handleWikiStale(selected.reads, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -428,6 +525,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         title: z.string().min(1),
         content: z.string().min(1),
         agent_note: z.string().optional(),
+        ...vaultField,
       }),
       outputSchema: z.object({
         ...failureShape,
@@ -441,7 +539,9 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       },
     },
     async (args) => {
-      const out = await wikiCapture(ctx, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await wikiCapture(selected.writes, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -454,6 +554,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       inputSchema: z.object({
         content: z.string().min(1),
         operation_id: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+        ...vaultField,
       }),
       outputSchema: z.object({
         ...failureShape,
@@ -473,7 +574,9 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       },
     },
     async (args) => {
-      const out = await wikiLogAppend(ctx, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await wikiLogAppend(selected.writes, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -487,6 +590,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         path: z.string().min(1),
         content: z.string().min(1),
         base_sha256: z.string().optional(),
+        ...vaultField,
       }),
       outputSchema: z.object({
         ...failureShape,
@@ -499,7 +603,9 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       },
     },
     async (args) => {
-      const out = await wikiWorkitemWrite(ctx, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await wikiWorkitemWrite(selected.writes, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -513,6 +619,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
         path: z.string().min(1),
         content: z.string().min(1),
         base_sha256: z.string().optional(),
+        ...vaultField,
       }),
       outputSchema: z.object({
         ...failureShape,
@@ -525,7 +632,9 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string }
       },
     },
     async (args) => {
-      const out = await wikiPagePublish(ctx, args);
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await wikiPagePublish(selected.writes, args);
       return toolResult(out, !out.ok);
     },
   );
@@ -554,12 +663,15 @@ async function streamToBuffer(stream: unknown): Promise<Buffer> {
   throw new Error("unsupported S3 stream body");
 }
 
-export function createS3Adapter(cfg: McpDaemonConfig): S3Adapter {
-  if (!(cfg.s3Endpoint && cfg.s3Bucket && cfg.s3AccessKeyId && cfg.s3SecretAccessKey)) {
+export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: string; prefix?: string; endpoint?: string }): S3Adapter {
+  const endpoint = namespace?.endpoint ?? cfg.s3Endpoint;
+  const bucket = namespace?.bucket ?? cfg.s3Bucket;
+  const prefix = namespace?.prefix ?? cfg.s3Prefix;
+  if (!(endpoint && bucket && cfg.s3AccessKeyId && cfg.s3SecretAccessKey)) {
     throw new Error("S3 endpoint, bucket, and credentials are required; writes fail closed");
   }
   const client = new S3Client({
-    endpoint: cfg.s3Endpoint,
+    endpoint,
     region: cfg.s3Region,
     credentials: {
       accessKeyId: cfg.s3AccessKeyId,
@@ -568,13 +680,13 @@ export function createS3Adapter(cfg: McpDaemonConfig): S3Adapter {
     forcePathStyle: true,
   });
 
-  const resolveKey = (relPath: string) => [cfg.s3Prefix, relPath].filter((p) => p && p.length > 0).join("/");
+  const resolveKey = (relPath: string) => [prefix, relPath].filter((p) => p && p.length > 0).join("/");
 
   const putObject: PutObject = async (relPath, body) => {
     try {
       await client.send(
         new PutObjectCommand({
-          Bucket: cfg.s3Bucket,
+          Bucket: bucket,
           Key: resolveKey(relPath),
           Body: body,
         }),
@@ -589,7 +701,7 @@ export function createS3Adapter(cfg: McpDaemonConfig): S3Adapter {
     try {
       const res = await client.send(
         new GetObjectCommand({
-          Bucket: cfg.s3Bucket,
+          Bucket: bucket,
           Key: resolveKey(relPath),
         }),
       );
@@ -624,6 +736,7 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
   const oauthStore: OAuthStore | undefined = oauthEnabled
     ? opts.oauth?.store ?? (opts.oauth?.stateDir ? new FileOAuthStore(opts.oauth.stateDir) : undefined)
     : undefined;
+  const vaultState = ensureVaultState(opts);
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const host = req.headers.host ?? "127.0.0.1";
@@ -708,9 +821,14 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
     }
 
     const hostId = resolved.writerId;
+    const granted =
+      resolved.source === "host"
+        ? resolved.principal?.allowedVaults
+        : resolveWriterVaults(hostId, opts.oauth?.writers);
+    const principal = normalizeGrants(hostId, granted, vaultState.registry);
 
     if (req.method === "GET" && (path === "/events" || path === "/mcp/events")) {
-      hub.subscribe(res);
+      hub.subscribe(res, { allowedVaults: principal.allowedVaults });
       return;
     }
 
@@ -939,7 +1057,14 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
           return;
         }
       }
-      const mcp = createWikiMcpServer({ ...opts, hostId, hub });
+      const mcp = createWikiMcpServer({
+        ...opts,
+        hostId,
+        principal,
+        hub,
+        registry: vaultState.registry,
+        runtimes: vaultState.runtimes,
+      });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
@@ -973,41 +1098,80 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
   }
   const cfg = loadConfig(env, fileText);
   const tokenMap = loadTokenMap(cfg.tokenMapPath);
-  const gate = new ReconcileGate(() =>
-    rcloneCopyUpdate({
-      remote: cfg.rcloneRemote,
-      bucket: cfg.rcloneBucket,
-      vaultDir: cfg.vaultDir,
-      timeoutMs: cfg.rcloneTimeoutMs,
-    }),
-  );
+  const registry = configVaultRegistry(cfg);
   const hub = new ChangedEventHub({ pingMs: cfg.ssePingMs });
-  const s3Adapter = createS3Adapter(cfg);
+  const runtimes = new Map<string, VaultRuntime>();
+
+  for (const entry of registry.entries.values()) {
+    if (!entry.enabled) continue;
+    const failClosed: { putObject: PutObject; getObject: GetObject } = {
+      putObject: async () => {
+        throw new S3PutError(`S3 unavailable for vault ${entry.vaultId}`);
+      },
+      getObject: async () => {
+        throw new S3PutError(`S3 unavailable for vault ${entry.vaultId}`);
+      },
+    };
+    let adapter: { putObject: PutObject; getObject: GetObject } = failClosed;
+    try {
+      adapter = createS3Adapter(cfg, {
+        bucket: entry.s3Bucket ?? cfg.s3Bucket,
+        prefix: entry.s3Bucket !== undefined ? entry.s3Prefix : (entry.s3Prefix || cfg.s3Prefix),
+        endpoint: entry.s3Endpoint ?? cfg.s3Endpoint,
+      });
+    } catch (error: unknown) {
+      if (entry.isDefault) throw error;
+      console.error(`skillwiki-mcp extra vault ${entry.vaultId} S3 adapter failed; vault stays fail-closed:`, error);
+    }
+    const gate = new ReconcileGate(() =>
+      rcloneCopyUpdate({
+        remote: entry.rcloneRemote,
+        bucket: entry.rclonePath,
+        vaultDir: entry.localRoot,
+        timeoutMs: entry.rcloneTimeoutMs ?? cfg.rcloneTimeoutMs,
+      }),
+    );
+    runtimes.set(entry.vaultId, {
+      entry,
+      gate,
+      putObject: adapter.putObject,
+      getObject: adapter.getObject,
+    });
+  }
+
+  const defaultRt = runtimes.get(registry.defaultVaultId);
+  if (!defaultRt) throw new Error("default vault runtime missing");
 
   const server = await startMcpHttpServer({
     bind: cfg.bind,
     port: cfg.port,
-    vaultDir: cfg.vaultDir,
+    vaultDir: defaultRt.entry.localRoot,
     tokenMap,
     tokenMapPath: cfg.tokenMapPath,
-    gate,
-    putObject: s3Adapter.putObject,
-    getObject: s3Adapter.getObject,
+    gate: defaultRt.gate,
+    putObject: defaultRt.putObject,
+    getObject: defaultRt.getObject,
     hub,
     auditFile: cfg.auditLogPath,
     oauth: cfg.oauth,
+    registry,
+    runtimes,
   });
 
-  void gate.runFirst().catch((error: unknown) => {
-    console.error("skillwiki-mcp reconcile failed:", error);
-  });
-  if (cfg.reconcileIntervalMs > 0) {
-    const timer = setInterval(() => {
-      void gate.runPeriodic().catch((error: unknown) => {
-        console.error("skillwiki-mcp periodic reconcile failed:", error);
-      });
-    }, cfg.reconcileIntervalMs);
-    timer.unref?.();
+  for (const rt of runtimes.values()) {
+    const vaultId = rt.entry.vaultId;
+    void rt.gate.runFirst().catch((error: unknown) => {
+      console.error(`skillwiki-mcp reconcile failed for ${vaultId}:`, error);
+    });
+    const interval = rt.entry.reconcileIntervalMs ?? cfg.reconcileIntervalMs;
+    if (interval > 0) {
+      const timer = setInterval(() => {
+        void rt.gate.runPeriodic().catch((error: unknown) => {
+          console.error(`skillwiki-mcp periodic reconcile failed for ${vaultId}:`, error);
+        });
+      }, interval);
+      timer.unref?.();
+    }
   }
 
   const addr = server.address();

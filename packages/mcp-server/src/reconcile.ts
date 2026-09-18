@@ -22,6 +22,7 @@ export class ToolsNotReadyError extends Error {
 
 export class ReconcileGate {
   ready = false;
+  lastError: string | undefined;
   private first: Promise<void> | undefined;
 
   constructor(private readonly copyInbound: () => Promise<void>) {}
@@ -32,16 +33,29 @@ export class ReconcileGate {
 
   async runFirst(): Promise<void> {
     if (!this.first) {
-      this.first = this.copyInbound().then(() => {
-        this.ready = true;
-      });
+      this.first = this.copyInbound().then(
+        () => {
+          this.ready = true;
+          this.lastError = undefined;
+        },
+        (error: unknown) => {
+          this.lastError = error instanceof Error ? error.message : String(error);
+          throw error;
+        },
+      );
     }
     await this.first;
   }
 
   async runPeriodic(): Promise<void> {
-    await this.copyInbound();
-    this.ready = true;
+    try {
+      await this.copyInbound();
+      this.ready = true;
+      this.lastError = undefined;
+    } catch (error: unknown) {
+      this.lastError = error instanceof Error ? error.message : String(error);
+      throw error;
+    }
   }
 }
 

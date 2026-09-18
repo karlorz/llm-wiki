@@ -42,6 +42,7 @@ export type CaptureKind = (typeof CAPTURE_KINDS)[number];
 
 export interface WriteContext {
   vaultDir: string;
+  vaultId?: string;
   hostId: string;
   gate: ReconcileGate;
   putObject: PutObject;
@@ -146,7 +147,7 @@ async function commitOrFail(
 ): Promise<ToolFailure | null> {
   try {
     await commitWrite(
-      { vaultDir: ctx.vaultDir, putObject: ctx.putObject, onCommit: ctx.onCommit },
+      { vaultDir: ctx.vaultDir, vaultId: ctx.vaultId, putObject: ctx.putObject, onCommit: ctx.onCommit },
       files,
     );
     return null;
@@ -158,6 +159,7 @@ async function commitOrFail(
     const message = error instanceof Error ? error.message : String(error);
     appendAudit(ctx.auditFile, {
       host_id: ctx.hostId,
+      vault_id: ctx.vaultId,
       tool,
       path: files[0]?.relPath,
       ok: false,
@@ -192,6 +194,7 @@ export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promi
   if (sensitive.length > 0) {
     appendAudit(ctx.auditFile, {
       host_id: ctx.hostId,
+      vault_id: ctx.vaultId,
       tool: "wiki_capture",
       ok: false,
       error: "SENSITIVE_CONTENT_DETECTED",
@@ -222,6 +225,7 @@ export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promi
 
   appendAudit(ctx.auditFile, {
     host_id: ctx.hostId,
+    vault_id: ctx.vaultId,
     tool: "wiki_capture",
     path: relPath,
     ok: true,
@@ -337,6 +341,7 @@ export async function wikiLogAppend(
   if (sensitive.length > 0) {
     appendAudit(ctx.auditFile, {
       host_id: ctx.hostId,
+      vault_id: ctx.vaultId,
       tool: "wiki_log_append",
       path: "log.md",
       ok: false,
@@ -381,6 +386,7 @@ export async function wikiLogAppend(
     if (existingEvent.body.toString("utf8") !== eventJson) {
       appendAudit(ctx.auditFile, {
         host_id: ctx.hostId,
+        vault_id: ctx.vaultId,
         tool: "wiki_log_append",
         path: eventPath,
         ok: false,
@@ -404,6 +410,7 @@ export async function wikiLogAppend(
     }
     appendAudit(ctx.auditFile, {
       host_id: ctx.hostId,
+      vault_id: ctx.vaultId,
       tool: "wiki_log_append",
       path: "log.md",
       ok: true,
@@ -432,6 +439,7 @@ export async function wikiLogAppend(
 
   appendAudit(ctx.auditFile, {
     host_id: ctx.hostId,
+    vault_id: ctx.vaultId,
     tool: "wiki_log_append",
     path: "log.md",
     ok: true,
@@ -476,6 +484,7 @@ async function wikiOverwrite(
   if (sensitive.length > 0) {
     appendAudit(ctx.auditFile, {
       host_id: ctx.hostId,
+      vault_id: ctx.vaultId,
       tool,
       path: relPath,
       ok: false,
@@ -487,13 +496,14 @@ async function wikiOverwrite(
 
   try {
     const cas = await commitCasWrite(
-      { vaultDir: ctx.vaultDir, putObject: ctx.putObject, getObject: ctx.getObject, onCommit: ctx.onCommit },
+      { vaultDir: ctx.vaultDir, vaultId: ctx.vaultId, putObject: ctx.putObject, getObject: ctx.getObject, onCommit: ctx.onCommit },
       { relPath, content },
       input.base_sha256,
     );
     if (!cas.ok) {
       appendAudit(ctx.auditFile, {
         host_id: ctx.hostId,
+        vault_id: ctx.vaultId,
         tool,
         path: relPath,
         ok: false,
@@ -513,6 +523,7 @@ async function wikiOverwrite(
     const message = error instanceof Error ? error.message : String(error);
     appendAudit(ctx.auditFile, {
       host_id: ctx.hostId,
+      vault_id: ctx.vaultId,
       tool,
       path: relPath,
       ok: false,
@@ -524,6 +535,7 @@ async function wikiOverwrite(
 
   appendAudit(ctx.auditFile, {
     host_id: ctx.hostId,
+    vault_id: ctx.vaultId,
     tool,
     path: relPath,
     ok: true,

@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, basename } from "node:path";
 import { currentVersion, type GetObject } from "./versions.js";
+import { DEFAULT_VAULT_ID } from "./vault-id.js";
 
 export type PutObject = (relPath: string, body: Buffer) => Promise<void>;
 
@@ -12,6 +13,7 @@ export interface TxnFile {
 
 export interface TxnDeps {
   vaultDir: string;
+  vaultId?: string;
   putObject: PutObject;
   getObject?: GetObject;
   onCommit?: (paths: string[]) => void;
@@ -31,13 +33,17 @@ export function fileChangedError(path: string, currentSha256: string): FileChang
   };
 }
 
-let writeChain: Promise<unknown> = Promise.resolve();
+const writeChains = new Map<string, Promise<unknown>>();
 
-export function withWriteMutex<T>(fn: () => Promise<T>): Promise<T> {
-  const run = writeChain.then(fn, fn);
-  writeChain = run.then(
-    () => undefined,
-    () => undefined,
+export function withWriteMutex<T>(fn: () => Promise<T>, vaultId = DEFAULT_VAULT_ID): Promise<T> {
+  const prior = writeChains.get(vaultId) ?? Promise.resolve();
+  const run = prior.then(fn, fn);
+  writeChains.set(
+    vaultId,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
   );
   return run;
 }
@@ -128,7 +134,7 @@ export async function commitCasWrite(
     }
     await commitUnlocked(deps, [file]);
     return { ok: true as const, paths: [file.relPath] };
-  });
+  }, deps.vaultId);
 }
 
 async function commitUnlocked(deps: TxnDeps, files: TxnFile[]): Promise<{ paths: string[] }> {
@@ -165,5 +171,5 @@ async function commitUnlocked(deps: TxnDeps, files: TxnFile[]): Promise<{ paths:
 }
 
 export async function commitWrite(deps: TxnDeps, files: TxnFile[]): Promise<{ paths: string[] }> {
-  return withWriteMutex(async () => commitUnlocked(deps, files));
+  return withWriteMutex(async () => commitUnlocked(deps, files), deps.vaultId);
 }

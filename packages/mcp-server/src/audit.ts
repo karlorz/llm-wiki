@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 export interface AuditEntry {
   ts: string;
   host_id: string;
+  vault_id?: string;
   tool: string;
   path?: string;
   ok: boolean;

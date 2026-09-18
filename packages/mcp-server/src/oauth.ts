@@ -5,6 +5,7 @@ import type { OAuthStore } from "./oauth-store.js";
 export interface OAuthWriterMapping {
   client_id?: string;
   writer_id: string;
+  allowed_vaults?: string[];
 }
 
 export interface OAuthConfig {
@@ -51,6 +52,16 @@ export function verifyPkce(codeVerifier: string, codeChallenge: string, codeChal
   if (codeChallengeMethod !== "S256") return false;
   const computed = createHash("sha256").update(codeVerifier, "ascii").digest("base64url");
   return computed === codeChallenge;
+}
+
+export function resolveWriterVaults(
+  writerId: string,
+  mappings: OAuthWriterMapping[] | undefined,
+): string[] | undefined {
+  if (!mappings || mappings.length === 0) return undefined;
+  const direct = mappings.find((m) => m.writer_id === writerId && Array.isArray(m.allowed_vaults));
+  if (direct) return direct.allowed_vaults;
+  return undefined;
 }
 
 export function resolveWriterId(clientId: string | undefined, mappings: OAuthWriterMapping[] | undefined): string {

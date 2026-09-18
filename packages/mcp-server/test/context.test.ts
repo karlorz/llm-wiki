@@ -87,9 +87,11 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       expect(instructions, "initialize result must contain instructions").toBeDefined();
       expect(typeof instructions).toBe("string");
 
-      // Verify bounds
+      // Compact activation block stays bounded; handshake trailer is appended at runtime.
+      expect(MCP_INSTRUCTIONS.length).toBeGreaterThan(500);
+      expect(MCP_INSTRUCTIONS.length).toBeLessThanOrEqual(2048);
       expect(instructions!.length).toBeGreaterThan(500);
-      expect(instructions!.length).toBeLessThanOrEqual(2048);
+      expect(instructions!.length).toBeLessThanOrEqual(MCP_INSTRUCTIONS.length + 400);
 
       // Verify essential coverage
       expect(instructions).toContain("Fail-Closed Boundary");
@@ -99,6 +101,15 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       expect(instructions).toContain("task | idea | bug | note");
       expect(instructions).toContain("[REDACTED:<kind>]");
       expect(instructions).toContain("Three-Plane");
+      expect(instructions).toContain("default_vault:");
+      expect(instructions).toContain("allowed_vaults:");
+      expect(instructions).toContain("central");
+      expect(instructions).toContain("default_vault:");
+      expect(instructions).toContain("allowed_vaults:");
+      expect(instructions).toContain("central");
+      expect(MCP_INSTRUCTIONS.length).toBeLessThanOrEqual(2048);
+      expect(instructions!.length).toBeGreaterThan(500);
+      expect(instructions!.length).toBeLessThanOrEqual(MCP_INSTRUCTIONS.length + 400);
     } finally {
       await ctx.close();
     }

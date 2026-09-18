@@ -2,6 +2,13 @@ import yaml from "js-yaml";
 import { DEFAULT_RCLONE_COPY_TIMEOUT_MS } from "./reconcile.js";
 import type { OAuthConfig, OAuthWriterMapping } from "./oauth.js";
 import { readPasswordHashFile } from "./oauth-password-file.js";
+import { DEFAULT_VAULT_ID } from "./vault-id.js";
+import {
+  buildVaultRegistry,
+  singletonVaultInput,
+  type VaultEntryInput,
+  type VaultRegistry,
+} from "./vault-registry.js";
 
 export interface McpDaemonConfig {
   vaultDir: string;
@@ -22,6 +29,8 @@ export interface McpDaemonConfig {
   ssePingMs: number;
   configPath?: string;
   oauth?: OAuthConfig;
+  defaultVaultId: string;
+  extraVaultInputs: VaultEntryInput[];
 }
 
 interface FileConfig {
@@ -48,6 +57,24 @@ interface FileConfig {
     state_dir?: string;
     writers?: OAuthWriterMapping[];
   };
+  default_vault?: string;
+  vaults?: Array<{
+    vault_id?: string;
+    default?: boolean;
+    enabled?: boolean;
+    label?: string;
+    local_root?: string;
+    rclone?: { remote?: string; path?: string; bucket?: string; timeout_ms?: number };
+    s3?: {
+      endpoint?: string;
+      bucket?: string;
+      prefix?: string;
+      region?: string;
+    };
+    reconcile_interval_ms?: number;
+    projection_authority?: string;
+    snapshot_authority?: string;
+  }>;
 }
 
 function asPort(value: unknown, fallback: number): number {
@@ -103,6 +130,95 @@ export function loadConfig(env: NodeJS.Dict<string>, fileText?: string): McpDaem
     ssePingMs: asPort(env.SKILLWIKI_MCP_SSE_PING_MS, asPort(file.sse_ping_ms, 30_000)),
     configPath: env.SKILLWIKI_MCP_CONFIG,
     oauth: parseOAuthConfig(env, file.oauth),
+    defaultVaultId: env.SKILLWIKI_MCP_DEFAULT_VAULT ?? file.default_vault ?? DEFAULT_VAULT_ID,
+    extraVaultInputs: parseExtraVaultInputs(env, file),
+  };
+}
+
+export function configVaultRegistry(cfg: McpDaemonConfig): VaultRegistry {
+  const defaultInput = singletonVaultInput({
+    vaultId: cfg.defaultVaultId,
+    localRoot: cfg.vaultDir,
+    rcloneRemote: cfg.rcloneRemote,
+    rclonePath: cfg.rcloneBucket,
+    s3Endpoint: cfg.s3Endpoint,
+    s3Bucket: cfg.s3Bucket,
+    s3Prefix: cfg.s3Prefix,
+    s3Region: cfg.s3Region,
+    reconcileIntervalMs: cfg.reconcileIntervalMs,
+    rcloneTimeoutMs: cfg.rcloneTimeoutMs,
+  });
+  const extras = cfg.extraVaultInputs.filter((entry) => entry.vaultId !== defaultInput.vaultId);
+  return buildVaultRegistry([defaultInput, ...extras], {
+    central: {
+      localRoot: cfg.vaultDir,
+      rcloneRemote: cfg.rcloneRemote,
+      rclonePath: cfg.rcloneBucket,
+      s3Endpoint: cfg.s3Endpoint,
+      s3Bucket: cfg.s3Bucket,
+      s3Prefix: cfg.s3Prefix,
+    },
+  });
+}
+
+function parseExtraVaultInputs(env: NodeJS.Dict<string>, file: FileConfig): VaultEntryInput[] {
+  if (env.SKILLWIKI_MCP_VAULTS) {
+    try {
+      const parsed = JSON.parse(env.SKILLWIKI_MCP_VAULTS) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.flatMap((item) => vaultEntryFromUnknown(item) ?? []);
+      }
+    } catch {
+      /* ignore malformed env JSON */
+    }
+  }
+  if (!file.vaults) return [];
+  return file.vaults.flatMap((item) => vaultEntryFromUnknown(item) ?? []);
+}
+
+function vaultEntryFromUnknown(item: unknown): VaultEntryInput | undefined {
+  if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+  const rec = item as {
+    vault_id?: unknown;
+    vaultId?: unknown;
+    default?: unknown;
+    enabled?: unknown;
+    label?: unknown;
+    local_root?: unknown;
+    localRoot?: unknown;
+    rclone?: { remote?: unknown; path?: unknown; bucket?: unknown; timeout_ms?: unknown };
+    s3?: { endpoint?: unknown; bucket?: unknown; prefix?: unknown; region?: unknown };
+    reconcile_interval_ms?: unknown;
+    projection_authority?: unknown;
+    snapshot_authority?: unknown;
+  };
+  const vaultId = typeof rec.vault_id === "string" ? rec.vault_id : typeof rec.vaultId === "string" ? rec.vaultId : undefined;
+  const localRoot =
+    typeof rec.local_root === "string" ? rec.local_root : typeof rec.localRoot === "string" ? rec.localRoot : undefined;
+  const rcloneRemote = typeof rec.rclone?.remote === "string" ? rec.rclone.remote : undefined;
+  const rclonePath =
+    typeof rec.rclone?.path === "string"
+      ? rec.rclone.path
+      : typeof rec.rclone?.bucket === "string"
+        ? rec.rclone.bucket
+        : undefined;
+  if (!vaultId || !localRoot || !rcloneRemote || !rclonePath) return undefined;
+  return {
+    vaultId,
+    isDefault: rec.default === true,
+    enabled: rec.enabled !== false,
+    label: typeof rec.label === "string" ? rec.label : undefined,
+    localRoot,
+    rcloneRemote,
+    rclonePath,
+    s3Endpoint: typeof rec.s3?.endpoint === "string" ? rec.s3.endpoint : undefined,
+    s3Bucket: typeof rec.s3?.bucket === "string" ? rec.s3.bucket : undefined,
+    s3Prefix: typeof rec.s3?.prefix === "string" ? rec.s3.prefix : undefined,
+    s3Region: typeof rec.s3?.region === "string" ? rec.s3.region : undefined,
+    reconcileIntervalMs: typeof rec.reconcile_interval_ms === "number" ? rec.reconcile_interval_ms : undefined,
+    rcloneTimeoutMs: typeof rec.rclone?.timeout_ms === "number" ? rec.rclone.timeout_ms : undefined,
+    projectionAuthority: typeof rec.projection_authority === "string" ? rec.projection_authority : undefined,
+    snapshotAuthority: typeof rec.snapshot_authority === "string" ? rec.snapshot_authority : undefined,
   };
 }
 

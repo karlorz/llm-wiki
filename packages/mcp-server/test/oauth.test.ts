@@ -32,7 +32,7 @@ describe("OAuth Writer Resolution (auth.ts)", () => {
     const store = new InMemoryOAuthStore();
     // Even if store has something, host-id takes priority
     const res = await resolveWriter(`Bearer ${token}`, { tokenMap, oauthStore: store });
-    expect(res).toEqual({ writerId: "host-machine-1" });
+    expect(res).toEqual({ writerId: "host-machine-1", source: "host", principal: { writerId: "host-machine-1" } });
   });
 
   it("resolves writer from OAuth store when token not in tokenMap", async () => {
@@ -48,7 +48,7 @@ describe("OAuth Writer Resolution (auth.ts)", () => {
     });
 
     const res = await resolveWriter(`Bearer ${token}`, { tokenMap, oauthStore: store });
-    expect(res).toEqual({ writerId: "chatgpt-web" });
+    expect(res).toEqual({ writerId: "chatgpt-web", source: "oauth" });
   });
 
   it("returns null if token is unknown or expired", async () => {
