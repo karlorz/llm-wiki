@@ -37,6 +37,7 @@ import { runLint } from "./commands/lint.js";
 import { runHealth, type SyncMode } from "./commands/health.js";
 import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "./commands/config.js";
 import { runDoctor } from "./commands/doctor.js";
+import { runConnect, CONNECT_DESCRIPTION } from "./commands/connect.js";
 import { runArchive } from "./commands/archive.js";
 import { runRemove } from "./commands/remove.js";
 import { runDrift } from "./commands/drift.js";
@@ -1210,6 +1211,25 @@ program
     cwd: process.cwd(),
     checkSnapshotter: !!opts.checkSnapshotter,
     checkMcp: !!opts.checkMcp,
+    env: process.env,
+  })));
+
+program
+  .command("connect")
+  .description(CONNECT_DESCRIPTION)
+  .option("--from-file <path>", "chat-attached env file (not Drive / 云盘)")
+  .option("--from-stdin", "read env file from stdin (no echo)")
+  .option("--dry-run", "validate without writing ~/.skillwiki/.env")
+  .option("--force", "overwrite a different existing token")
+  .action(async (opts) => emit(await runConnect({
+    home: process.env.HOME ?? "",
+    fromFile: opts.fromFile,
+    fromStdin: !!opts.fromStdin,
+    dryRun: !!opts.dryRun,
+    force: !!opts.force,
+    checkMcp: !opts.dryRun,
+    currentVersion: pkg.version,
+    env: process.env,
   })));
 
 // status

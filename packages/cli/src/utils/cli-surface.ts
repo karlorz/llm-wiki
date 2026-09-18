@@ -56,6 +56,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("config"); // has subcommands
   program.command("health").option("--wiki <name>").option("--sync <mode>").option("--no-fail").option("--out <path>").option("--examples <n>");
   program.command("doctor").option("--check-snapshotter").option("--check-mcp");
+  program.command("connect").option("--from-file <path>").option("--from-stdin").option("--dry-run").option("--force");
   program.command("status").option("--wiki <name>");
   program.command("copy-status").option("--wiki <name>");
   program.command("archive")

@@ -1,6 +1,12 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
 import { resolveConfiguredSnapshotWorktree } from "../utils/snapshot-worktree.js";
+import {
+  isMcpOnlyLeaf,
+  mcpAuthFromEnv,
+  mergeMcpAuthIntoEnv,
+  redactMcpSecret,
+} from "../utils/mcp-auth-env.js";
 import { existsSync } from "node:fs";
 import { loadFleetManifestAndHost, satelliteGateFromFleetLoad } from "../commands/fleet.js";
 import { DOCTOR_PROBES } from "./probes/index.js";
@@ -42,6 +48,10 @@ export class DoctorRunner {
   ): Promise<{ exitCode: number; result: Result<DoctorOutput> }> {
     const devSourceRun = isDevSourceRun(input.argv);
     const vsConfig = readVaultSyncConfig(input.home);
+    const baseEnv = input.env ?? process.env;
+    const mergedEnv = await mergeMcpAuthIntoEnv(input.home, baseEnv);
+    const auth = mcpAuthFromEnv(mergedEnv);
+    const inputWithEnv: DoctorInput = { ...input, env: mergedEnv };
 
     const resolved = await resolveRuntimePath({
       flag: undefined,
@@ -53,11 +63,16 @@ export class DoctorRunner {
     const gitCheckPath = vsConfig.role === "snapshotter"
       ? (resolveSnapshotGitWorktree(input.home) ?? resolvedPath)
       : resolvedPath;
+    const mcpOnlyLeaf = isMcpOnlyLeaf({
+      resolvedPath,
+      token: auth.token,
+      vaultSyncInstalled: vsConfig.installed,
+    });
 
     const fleetLoad = resolvedPath
       ? await loadFleetManifestAndHost({
           vault: resolvedPath,
-          env: { ...process.env, WIKI_PATH: input.envValue ?? resolvedPath },
+          env: { ...mergedEnv, WIKI_PATH: input.envValue ?? resolvedPath },
           home: input.home,
           cwd: input.cwd,
           osHostname: process.env.HOSTNAME,
@@ -69,7 +84,7 @@ export class DoctorRunner {
     const readOnlyScanRoot = resolvedPath ? doctorReadOnlyScanRoot(resolvedPath) : undefined;
 
     const ctx: DoctorContext = {
-      input,
+      input: inputWithEnv,
       devSourceRun,
       vsConfig,
       resolvedPath,
@@ -78,13 +93,18 @@ export class DoctorRunner {
       fleetLoad,
       readOnlyScanRoot,
       satelliteGate,
+      mcpOnlyLeaf,
     };
 
-    const checks: CheckResult[] = [];
+    const rawChecks: CheckResult[] = [];
     for (const probe of this.probes) {
       const probeChecks = await probe.run(ctx);
-      checks.push(...probeChecks);
+      rawChecks.push(...probeChecks);
     }
+    const checks = rawChecks.map((c) => ({
+      ...c,
+      detail: redactMcpSecret(c.detail, auth.token),
+    }));
 
     const summary = {
       pass: checks.filter(c => c.status === "pass").length,
@@ -110,7 +130,7 @@ export class DoctorRunner {
     if (summary.info > 0) summaryParts.push(`${summary.info} info`);
     summaryParts.push(`${summary.warn} warn`, `${summary.error} error`);
     lines.push(summaryParts.join(" · "));
-    const humanHint = lines.join("\n");
+    const humanHint = redactMcpSecret(lines.join("\n"), auth.token);
 
     return { exitCode, result: ok({ checks, summary, humanHint }) };
   }

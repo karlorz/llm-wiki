@@ -10,7 +10,12 @@ export const CONFIG_KEYS = [
   "BACKUP_ACCESS_KEY_ID", "BACKUP_SECRET_ACCESS_KEY",
 ] as const;
 export type ConfigKey = typeof CONFIG_KEYS[number];
-const _whitelist = new Set<string>(CONFIG_KEYS);
+
+/** Parsed from ~/.skillwiki/.env for HTTP MCP clients; not skillwiki-config settable. */
+export const MCP_AUTH_KEYS = ["SKILLWIKI_MCP_TOKEN", "SKILLWIKI_MCP_URL"] as const;
+export type McpAuthKey = typeof MCP_AUTH_KEYS[number];
+
+const _whitelist = new Set<string>([...CONFIG_KEYS, ...MCP_AUTH_KEYS]);
 
 // Profile key validation: WIKI_{NAME}_PATH or WIKI_{NAME}_LANG where NAME is A-Z0-9_, max 32 chars
 const PROFILE_PATH_RE = /^WIKI_([A-Z][A-Z0-9_]{0,31})_PATH$/;

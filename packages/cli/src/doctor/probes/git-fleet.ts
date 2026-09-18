@@ -15,11 +15,16 @@ import {
   type FleetManifestAndHost,
 } from "../../commands/fleet.js";
 import type { CheckResult, DoctorContext, DoctorProbe } from "../types.js";
-import { check } from "./helpers.js";
+import { check, mcpOnlyOr } from "./helpers.js";
 
-function checkVaultGitRemote(resolvedPath: string | undefined): CheckResult {
+function checkVaultGitRemote(resolvedPath: string | undefined, mcpOnlyLeaf = false): CheckResult {
   if (resolvedPath === undefined) {
-    return check("error", "vault_git_remote", "Vault git remote", "Cannot check — WIKI_PATH not resolved");
+    return mcpOnlyOr(
+      mcpOnlyLeaf,
+      "vault_git_remote",
+      "Vault git remote",
+      check("error", "vault_git_remote", "Vault git remote", "Cannot check — WIKI_PATH not resolved"),
+    );
   }
   if (!existsSync(join(resolvedPath, ".git"))) {
     return check("warn", "vault_git_remote", "Vault git remote", "Vault is not a git repository — sync features unavailable");
@@ -73,9 +78,14 @@ async function checkFleetIdentity(input: {
   return check("warn", "fleet_identity", "Fleet identity", detail);
 }
 
-function checkSyncLastPush(resolvedPath: string | undefined): CheckResult {
+function checkSyncLastPush(resolvedPath: string | undefined, mcpOnlyLeaf = false): CheckResult {
   if (resolvedPath === undefined) {
-    return check("error", "sync_last_push", "Vault sync recency", "Cannot check — WIKI_PATH not resolved");
+    return mcpOnlyOr(
+      mcpOnlyLeaf,
+      "sync_last_push",
+      "Vault sync recency",
+      check("error", "sync_last_push", "Vault sync recency", "Cannot check — WIKI_PATH not resolved"),
+    );
   }
   if (!existsSync(join(resolvedPath, ".git"))) {
     return check("pass", "sync_last_push", "Vault sync recency", "No git repo — sync check skipped");
@@ -286,9 +296,14 @@ function checkVaultGitPullFailures(home: string): CheckResult {
   }
 }
 
-function checkVaultLocalGit(resolvedPath: string | undefined): CheckResult {
+function checkVaultLocalGit(resolvedPath: string | undefined, mcpOnlyLeaf = false): CheckResult {
   if (resolvedPath === undefined) {
-    return check("warn", "vault_local_git", "Vault local git", "Cannot check — WIKI_PATH not resolved");
+    return mcpOnlyOr(
+      mcpOnlyLeaf,
+      "vault_local_git",
+      "Vault local git",
+      check("warn", "vault_local_git", "Vault local git", "Cannot check — WIKI_PATH not resolved"),
+    );
   }
   if (!existsSync(join(resolvedPath, ".git"))) {
     return check("warn", "vault_local_git", "Vault local git", "Not a git repository - sync features unavailable");
@@ -392,7 +407,7 @@ export const gitFleetProbe: DoctorProbe = {
   id: "git_fleet",
   async run(ctx: DoctorContext): Promise<CheckResult[]> {
     return [
-      checkVaultGitRemote(ctx.gitCheckPath),
+      checkVaultGitRemote(ctx.gitCheckPath, ctx.mcpOnlyLeaf),
       await checkFleetIdentity({
         vaultPath: ctx.resolvedPath,
         home: ctx.input.home,
@@ -400,12 +415,12 @@ export const gitFleetProbe: DoctorProbe = {
         envValue: ctx.input.envValue,
         fleetLoad: ctx.fleetLoad,
       }),
-      checkSyncLastPush(ctx.gitCheckPath),
+      checkSyncLastPush(ctx.gitCheckPath, ctx.mcpOnlyLeaf),
       checkVaultGitDirty(ctx.gitCheckPath),
       checkVaultGitAhead(ctx.gitCheckPath),
       checkVaultGitBehind(ctx.gitCheckPath),
       checkVaultGitPullFailures(ctx.input.home),
-      checkVaultLocalGit(ctx.gitCheckPath),
+      checkVaultLocalGit(ctx.gitCheckPath, ctx.mcpOnlyLeaf),
       checkVaultGithubRemote(ctx.gitCheckPath, ctx.input.execProbe),
       checkVaultS3Remote(ctx.input.home, ctx.input.execProbe, ctx.input.env ?? process.env),
       checkVaultSnapshotterReachable(ctx.fleetLoad, ctx.input.checkSnapshotter, ctx.input.execProbe),

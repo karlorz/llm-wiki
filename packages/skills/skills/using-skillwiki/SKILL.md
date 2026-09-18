@@ -1,6 +1,6 @@
 ---
 name: using-skillwiki
-description: Invoke for vault, wiki, or SkillWiki setup. Maps skills, workflow profiles, and vault routing. Skip unrelated coding.
+description: Invoke for vault, wiki, or SkillWiki setup. Maps skills, workflow profiles, and vault routing.
 ---
 *Note: If executing as a background subagent, skip this skill section.*
 
@@ -55,6 +55,7 @@ Invoke a skillwiki skill when the user:
 - Mentions crystallizing a session into a note
 - Talks about project workspaces, ADRs, or distillation
 - Wants to quickly capture an idea, bug, task, or note without interrupting their workflow
+- Needs unknown-agent HTTP MCP connect (CLI + dotenv; no plugin/connector)
 - Wants to archive or clean up old vault pages
 - Wants to hard-delete a vault path without snapshot resurrection (`wiki-remove`)
 - Needs to detect source drift or re-ingest updated content
@@ -193,6 +194,7 @@ If the vault has `.WIKI_GIT_FROZEN`:
 | `wiki-reingest` | Detect drift in raw sources (sha256 comparison) and re-ingest updated content |
 | `wiki-add-task` | Quick-capture ideas, bugs, tasks, notes (captures via wiki_capture on leaf hosts; local raw/transcripts/ only on authoring hosts) |
 | `skillwiki-mcp` | HTTP MCP captures (`wiki_capture` / `wiki_log_append`); never local raw/transcripts on leaf hosts. `wiki_log_append` returns a receipt; verify via `wiki_read_page(event_path)`. Use `wiki_read_page` `tail_bytes` to browse oversized `log.md`. |
+| `skillwiki-connect` | Unknown-agent HTTP MCP first-run: ingest a chat-attached env file with `skillwiki connect --from-file` (never paste-into-chat, never `skillwiki init`, never Drive). |
 | `wiki-adapter-prd` | Map foreign PRD formats (CodeStable, RFC, AIDE, Hermes) into vault pages |
 | `proj-init` | Bootstrap a project workspace (README, requirements, architecture) |
 | `proj-work` | Open or run a work item under a project's work/ directory |
@@ -243,11 +245,11 @@ for code changes.
 
 ## CLI Backbone
 All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, health reporting, and linting. Skills invoke it via Bash for the mechanical parts and use the active agent for the creative parts.
-Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `query`, `vectors rebuild`, `vectors status`, `sources pending`, `sources compile`, `sources review`, `sources reviews`, `sources disposition`, `sources dispose`, `archive`, `remove`, `drift`, `dedup`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `claim`, `claims audit`, `observe`, `canvas generate`, `mcp`, `mcp-auth`.
+Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `connect`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `query`, `vectors rebuild`, `vectors status`, `sources pending`, `sources compile`, `sources review`, `sources reviews`, `sources disposition`, `sources dispose`, `archive`, `remove`, `drift`, `dedup`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `claim`, `claims audit`, `observe`, `canvas generate`, `mcp`, `mcp-auth`.
 Optional read-only MCP (`skillwiki mcp`) exposes pending/compile/review list tools. Do not use MCP for compile claim, publish, or review writes.
 `skillwiki claim` binds a transcript to a work item only through an exact `raw/transcripts/...` path in `source:` / `sources:` / `closes:`. A `--project` that contradicts the capture's explicit project is rejected. `skillwiki stale --project` uses exact normalized slugs, not substring matching. `skillwiki claims audit` is the read-only integrity report for duplicate, malformed, dangling, cross-project, and unbacked claims; it never rewrites captures or work items.
 
-Run `skillwiki health <vault> --out /tmp/skillwiki-health.json --no-fail` for a bounded whole-system report that includes the nonblocking source-lifecycle backlog. Pending captures are informational and do not make health fail. Run `skillwiki lint <vault> --summary` for lint-only bucket counts with capped examples and details commands. Run `skillwiki doctor` to diagnose setup/runtime issues only, including HTTP MCP URL/auth presence and the frozen-leaf write path. Pass `--check-mcp` for a live initialize handshake and pin/tool-list lag; the default doctor path does not contact HTTP MCP. Fetch-only leaves set `vault_sync.push_enabled=false`; doctor must not tell them to run `vault-sync-install` to enable wiki-push. New hosts need an issued host-id bearer from metal `skillwiki mcp-auth issue-host` before handshake can pass. There is no second MCP admin skill. Run `skillwiki config list` to see current configuration.
+Run `skillwiki health <vault> --out /tmp/skillwiki-health.json --no-fail` for a bounded whole-system report that includes the nonblocking source-lifecycle backlog. Pending captures are informational and do not make health fail. Run `skillwiki lint <vault> --summary` for lint-only bucket counts with capped examples and details commands. Run `skillwiki doctor` to diagnose setup/runtime issues only, including HTTP MCP URL/auth presence and the frozen-leaf write path. Pass `--check-mcp` for a live initialize handshake and pin/tool-list lag; the default doctor path does not contact HTTP MCP. Fetch-only leaves set `vault_sync.push_enabled=false`; doctor must not tell them to run `vault-sync-install` to enable wiki-push. New hosts need an issued host-id bearer from metal `skillwiki mcp-auth issue-host` before handshake can pass. Unknown agents (no plugin/connector) ingest the chat-attached env file with `skillwiki connect --from-file` (or `--from-stdin`); do not instruct paste-into-chat. Connector hosts use process env or Configure. There is no second MCP admin skill. Run `skillwiki config list` to see current configuration.
 
 ## Runtime Host Context and Fleet Freshness
 Resolve the active project vault with `skillwiki path` first. Then pass that exact path to `skillwiki --human fleet context <vault>` for host identity and safety guidance. `fleet context` is authoritative for host identity. It overrides stale injected SessionStart context, remembered workspace context, and prior conversation summaries. `fleet context` is local and network-free; it reports `identity_status`, resolver trace, warnings, and the fact that remote freshness was not checked.

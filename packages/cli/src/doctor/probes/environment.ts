@@ -175,6 +175,14 @@ function checkWikiPathSet(ctx: DoctorContext): CheckResult {
   if (ctx.resolvedPath) {
     return check("pass", "wiki_path_set", "WIKI_PATH configured", `Resolved via ${ctx.wikiPathSource ?? "unknown"}: ${ctx.resolvedPath}`);
   }
+  if (ctx.mcpOnlyLeaf) {
+    return check(
+      "info",
+      "wiki_path_set",
+      "WIKI_PATH configured",
+      "MCP-only leaf — no local vault; HTTP MCP handshake is the success gate",
+    );
+  }
   return check("error", "wiki_path_set", "WIKI_PATH configured", "No vault configured. Run `skillwiki init` or pass --vault.");
 }
 

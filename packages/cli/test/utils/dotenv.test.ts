@@ -26,6 +26,23 @@ describe("parseDotenvFile", () => {
     expect(await parseDotenvFile(p)).toEqual({ WIKI_PATH: "/x" });
   });
 
+  it("parses SKILLWIKI_MCP_TOKEN and SKILLWIKI_MCP_URL from dotenv", async () => {
+    const dir = tmp();
+    const p = join(dir, ".env");
+    writeFileSync(p, "SKILLWIKI_MCP_TOKEN=planted-mcp-dotenv-4b8e1c07a9f26d53\nSKILLWIKI_MCP_URL=https://wiki.example/mcp\n");
+    expect(await parseDotenvFile(p)).toEqual({
+      SKILLWIKI_MCP_TOKEN: "planted-mcp-dotenv-4b8e1c07a9f26d53",
+      SKILLWIKI_MCP_URL: "https://wiki.example/mcp",
+    });
+  });
+
+  it("drops empty MCP auth keys", async () => {
+    const dir = tmp();
+    const p = join(dir, ".env");
+    writeFileSync(p, "SKILLWIKI_MCP_TOKEN=\nWIKI_PATH=/x\n");
+    expect(await parseDotenvFile(p)).toEqual({ WIKI_PATH: "/x" });
+  });
+
   it("drops keys not in the whitelist", async () => {
     const dir = tmp();
     const p = join(dir, ".env");

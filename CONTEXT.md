@@ -28,7 +28,7 @@ The audited principal behind every HTTP MCP write. It is realized either by a ho
 _Avoid_: user, account, session, connector
 
 **Host-id bearer**:
-Operator-issued HTTP MCP authentication bound to one host identity; one realization of a writer identity. The client holds it in process environment or host Configure; the vault never stores the raw value.
+Operator-issued HTTP MCP authentication bound to one host identity; one realization of a writer identity. The client holds it in process environment, `~/.skillwiki/.env`, or host Configure; the vault never stores the raw value.
 _Avoid_: API key, plugin token, session token
 
 **Attended issuance**:
@@ -46,6 +46,14 @@ _Avoid_: captures-only, local git writer
 **Fetch-only leaf**:
 `vault_sync.installed=true`, role leaf, `vault_sync.push_enabled=false`. wiki-fetch is required; wiki-push is not part of the host profile. macos-dev stays here.
 _Avoid_: HTTP MCP leaf, MCP-healthy host, disabled-push heuristic
+
+**MCP-only leaf**:
+No local vault, vault-sync not installed, HTTP MCP is the only plane. CLI + `~/.skillwiki/.env` hold URL, host-id, and bearer. Distinct from **fetch-only leaf**.
+_Avoid_: HTTP MCP leaf as a name that collides with fetch-only; treating missing WIKI_PATH as “run skillwiki init”
+
+**Unknown agent**:
+A client with no SkillWiki plugin and no usable HTTP MCP connector (cloud mode, headless VM, or a local-only connector). Uses CLI + dotenv, not OAuth connector identity.
+_Avoid_: new chat tab on an already-provisioned host (not a new host)
 
 **Push-enabled leaf**:
 `vault_sync.installed=true`, role leaf, `vault_sync.push_enabled` true or absent. wiki-push remains required for hosts that intentionally retain direct vault push authority.

@@ -212,7 +212,11 @@ function checkRcloneVersion(
   resolvedPath: string | undefined,
   vaultSyncInstalled: boolean,
   pushEnabled = true,
+  mcpOnlyLeaf = false,
 ): CheckResult {
+  if (mcpOnlyLeaf) {
+    return check("pass", "rclone_version", "rclone version", "MCP-only leaf — rclone not required");
+  }
   const fuse = resolvedPath ? detectFuseMount(resolvedPath) : null;
   if (pushEnabled === false && !fuse) {
     return check("pass", "rclone_version", "rclone version", "push not required — check skipped");
@@ -333,7 +337,7 @@ export const s3MountHealthProbe: DoctorProbe = {
       checkS3MountPerf(ctx.resolvedPath),
       checkS3MountFreshness(ctx.resolvedPath),
       checkRcloneFlagAudit(ctx.resolvedPath),
-      checkRcloneVersion(ctx.resolvedPath, ctx.vsConfig.installed, ctx.vsConfig.pushEnabled !== false),
+      checkRcloneVersion(ctx.resolvedPath, ctx.vsConfig.installed, ctx.vsConfig.pushEnabled !== false, ctx.mcpOnlyLeaf),
       checkWriteTest(ctx.resolvedPath),
       checkVfsCacheHealth(ctx.resolvedPath),
     ];

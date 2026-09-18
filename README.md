@@ -11,7 +11,7 @@ Project-aware Karpathy-style knowledge base for Claude Code skills.
 /plugin install skillwiki@llm-wiki
 ```
 
-The plugin ships 21 skills (`wiki-*`, `proj-*`, `wiki-add-task`, `wiki-adapter-prd`, `wiki-reingest`, `using-skillwiki`, `skillwiki-mcp`). They are namespaced by Claude Code as `llm-wiki:<skill>` (e.g. `llm-wiki:wiki-init`).
+The plugin ships 22 skills (`wiki-*`, `proj-*`, `wiki-add-task`, `wiki-adapter-prd`, `wiki-reingest`, `using-skillwiki`, `skillwiki-mcp`, `skillwiki-connect`). They are namespaced by Claude Code as `llm-wiki:<skill>` (e.g. `llm-wiki:wiki-init`).
 
 ### Option B — npm CLI installer
 
@@ -19,7 +19,7 @@ The plugin ships 21 skills (`wiki-*`, `proj-*`, `wiki-add-task`, `wiki-adapter-p
 npx skillwiki@latest install
 ```
 
-This copies 21 SKILL.md files into `~/.claude/skills/` and writes `.claude/skills/wiki-manifest.json`. Use this when you want the skills available outside a Claude Code plugin context, or to seed `~/.claude/skills/` for tools that scan it directly.
+This copies 22 SKILL.md files into `~/.claude/skills/` and writes `.claude/skills/wiki-manifest.json`. Use this when you want the skills available outside a Claude Code plugin context, or to seed `~/.claude/skills/` for tools that scan it directly.
 
 ### Option C — Antigravity CLI (`agy`)
 
@@ -84,7 +84,7 @@ in Team marketplace and Refresh again.
 | `wiki-*` | `wiki-init`, `wiki-ingest`, `wiki-query`, `wiki-lint`, `wiki-crystallize`, `wiki-audit`, `wiki-archive`, `wiki-reingest`, `wiki-adapter-prd`, `wiki-add-task`, `wiki-sync`, `wiki-canvas`, `wiki-gate-plan-mode`, `wiki-remove`, `wiki-freshness-repair` |
 | `proj-*` | `proj-init`, `proj-work`, `proj-distill`, `proj-decide` |
 | onboarding | `using-skillwiki` |
-| mcp | `skillwiki-mcp` |
+| mcp | `skillwiki-mcp`, `skillwiki-connect` |
 
 A sibling `vault-sync` plugin ships six operational skills (install, status, presync, snapshot, FUSE freshness, uninstall). It is packaged separately from the skillwiki skill set.
 
@@ -131,7 +131,8 @@ node packages/cli/dist/cli.js --help | awk '/^Commands:/{listed=1; next} listed 
 | `claim <transcript>` | Claim a transcript by creating a work item with an exact `source:` path. Rejects `--project` that contradicts the capture's explicit project. |
 | `claims audit [vault]` | Read-only transcript claim-integrity report: duplicates, malformed or dangling refs, project mismatches, and unbacked `work_item` metadata. |
 | `config` | Manage skillwiki configuration and wiki profiles. |
-| `doctor` | Diagnose setup issues (paths, env, plugin, sync health). |
+| `doctor` | Diagnose setup issues (paths, env, plugin, sync health, HTTP MCP). |
+| `connect` | Ingest a chat-attached MCP env file into `~/.skillwiki/.env` (mode 0600). Never init. |
 | `path` | Resolve vault or project paths. |
 | `lang` | Detect vault language from SCHEMA.md. |
 | `pagesize <vault>` | Report page sizes, flag oversized pages. |

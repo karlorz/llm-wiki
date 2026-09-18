@@ -2,19 +2,17 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { CheckResult, DoctorContext, DoctorProbe } from "../types.js";
 import { check } from "./helpers.js";
+import { mcpAuthFromEnv, redactMcpSecret } from "../../utils/mcp-auth-env.js";
 
 export const DEFAULT_MCP_URL = "https://wiki.karldigi.dev/mcp";
-const URL_ENV = "SKILLWIKI_MCP_URL";
-const TOKEN_ENV = "SKILLWIKI_MCP_TOKEN";
 
 function mcpEnv(ctx: DoctorContext): NodeJS.ProcessEnv {
   return ctx.input.env ?? process.env;
 }
 
 function checkMcpUrl(ctx: DoctorContext): CheckResult {
-  const env = mcpEnv(ctx);
-  const override = env[URL_ENV];
-  if (typeof override === "string" && override.trim().length > 0) {
+  const creds = mcpAuthFromEnv(mcpEnv(ctx));
+  if (creds.url) {
     return check("pass", "mcp_url_configured", "HTTP MCP URL", "configured via env override");
   }
   return check(
@@ -26,16 +24,15 @@ function checkMcpUrl(ctx: DoctorContext): CheckResult {
 }
 
 function checkMcpCredential(ctx: DoctorContext): CheckResult {
-  const env = mcpEnv(ctx);
-  const value = env[TOKEN_ENV];
-  if (typeof value === "string" && value.trim().length > 0) {
+  const creds = mcpAuthFromEnv(mcpEnv(ctx));
+  if (creds.token) {
     return check("pass", "mcp_credential_present", "HTTP MCP auth", "present");
   }
   return check(
     "warn",
     "mcp_credential_present",
     "HTTP MCP auth",
-    "not set — set in process env or host Configure (value not shown)",
+    "not set — set in process env, ~/.skillwiki/.env, or host Configure (value not shown)",
   );
 }
 
@@ -77,8 +74,7 @@ function versionLessThan(a: string, b: string): boolean {
 }
 
 function redactSecret(detail: string, secret: string | undefined): string {
-  if (!secret || secret.length === 0 || !detail.includes(secret)) return detail;
-  return detail.split(secret).join("[REDACTED]");
+  return redactMcpSecret(detail, secret);
 }
 
 function handshakeRow(status: CheckResult["status"], detail: string, secret?: string): CheckResult {
@@ -155,11 +151,10 @@ async function checkMcpHandshake(ctx: DoctorContext): Promise<CheckResult> {
   }
 
   const env = mcpEnv(ctx);
-  const url = (typeof env[URL_ENV] === "string" && env[URL_ENV].trim().length > 0)
-    ? env[URL_ENV].trim()
-    : DEFAULT_MCP_URL;
-  const token = typeof env[TOKEN_ENV] === "string" ? env[TOKEN_ENV] : "";
-  if (token.trim().length === 0) {
+  const creds = mcpAuthFromEnv(env);
+  const url = creds.url ?? DEFAULT_MCP_URL;
+  const token = creds.token ?? "";
+  if (token.length === 0) {
     return handshakeRow("error", "auth not set — handshake not attempted (value not shown)");
   }
 

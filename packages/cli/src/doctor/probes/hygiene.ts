@@ -8,11 +8,16 @@ import {
   missingIgnorePatterns,
 } from "../../utils/vault-hygiene-ignores.js";
 import type { CheckResult, DoctorContext, DoctorProbe } from "../types.js";
-import { check } from "./helpers.js";
+import { check, mcpOnlyOr } from "./helpers.js";
 
-function checkDotStoreClean(resolvedPath: string | undefined): CheckResult {
+function checkDotStoreClean(resolvedPath: string | undefined, mcpOnlyLeaf = false): CheckResult {
   if (resolvedPath === undefined) {
-    return check("error", "dsstore_clean", "No .DS_Store in raw/", "Cannot check — WIKI_PATH not resolved");
+    return mcpOnlyOr(
+      mcpOnlyLeaf,
+      "dsstore_clean",
+      "No .DS_Store in raw/",
+      check("error", "dsstore_clean", "No .DS_Store in raw/", "Cannot check — WIKI_PATH not resolved"),
+    );
   }
   const rawDir = join(resolvedPath, "raw");
   if (!existsSync(rawDir)) {
@@ -108,7 +113,7 @@ export const hygieneProbe: DoctorProbe = {
   run(ctx: DoctorContext): CheckResult[] {
     const synced = githubSyncedGitRoot(ctx.gitCheckPath);
     return [
-      checkDotStoreClean(ctx.readOnlyScanRoot),
+      checkDotStoreClean(ctx.readOnlyScanRoot, ctx.mcpOnlyLeaf),
       checkVaultConflictMarkers(ctx.readOnlyScanRoot),
       checkVaultGitignoreHygiene(synced),
       checkTrackedHygieneScratch(synced),

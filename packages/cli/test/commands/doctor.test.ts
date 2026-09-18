@@ -32,6 +32,13 @@ function home(): string {
   return h;
 }
 
+function envNoMcp(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
+  if (!extra.SKILLWIKI_MCP_TOKEN) delete env.SKILLWIKI_MCP_TOKEN;
+  if (!extra.SKILLWIKI_MCP_URL) delete env.SKILLWIKI_MCP_URL;
+  return env;
+}
+
 function homeWithPlugin(version: string): string {
   const h = mkdtempSync(join(tmpdir(), "home-"));
   mkdirSync(join(h, ".skillwiki"), { recursive: true });
@@ -222,11 +229,18 @@ describe("runDoctor", () => {
   it("missing WIKI_PATH gives error for wiki_path_set check", async () => {
     const h = home();
     writeFileSync(join(h, ".skillwiki", ".env"), "# empty\n");
-    const r = await runDoctor({ home: h, envValue: undefined, argv: ["node", "skillwiki", "doctor"], currentVersion: "0.2.0-beta.15" });
+    const r = await runDoctor({
+      home: h,
+      envValue: undefined,
+      argv: ["node", "skillwiki", "doctor"],
+      currentVersion: "0.2.0-beta.15",
+      env: envNoMcp(),
+    });
     expect(r.result.ok).toBe(true);
     if (r.result.ok) {
       const wp = r.result.data.checks.find(c => c.id === "wiki_path_set");
       expect(wp?.status).toBe("error");
+      expect(wp?.detail).toMatch(/skillwiki init/);
       expect(r.exitCode).toBe(29);
     }
   });
@@ -1219,6 +1233,7 @@ describe("runDoctor", () => {
         "vault_sync_snapshot_consecutive_failures",
         "vault_sync_last_fetch_status",
         "vault_sync_filter_present", "vault_sync_snapshot_guard",
+        "vault_sync_pull_helper",
       ];
       for (const id of vsIds) {
         const check = r.result.data.checks.find(c => c.id === id);
@@ -2132,6 +2147,171 @@ hosts:
       for (const c of r.result.data.checks) {
         expect(c.detail, c.id).not.toContain(PLANTED_AUTH);
       }
+    });
+
+    it("reads dotenv-only token and redacts it from doctor output", async () => {
+      const DOTENV_TOKEN = "planted-mcp-dotenv-4b8e1c07a9f26d53";
+      const h = home();
+      writeFileSync(
+        join(h, ".skillwiki", ".env"),
+        `SKILLWIKI_MCP_TOKEN=${DOTENV_TOKEN}\nSKILLWIKI_HOST_ID=unknown-agent-fixture\n`,
+      );
+      const r = await runDoctor({
+        home: h,
+        envValue: undefined,
+        argv: ["node", "skillwiki", "doctor", "--check-mcp"],
+        currentVersion: "0.10.74",
+        checkMcp: true,
+        env: envNoMcp(),
+        mcpFetch: fakeMcpFetch({ version: "0.10.74", tools: WRITE_TOOLS }),
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const cred = r.result.data.checks.find(c => c.id === "mcp_credential_present");
+      expect(cred?.status).toBe("pass");
+      const handshake = r.result.data.checks.find(c => c.id === "mcp_handshake");
+      expect(handshake?.status).toBe("pass");
+      const dumped = JSON.stringify(r.result.data);
+      expect(dumped).not.toContain(DOTENV_TOKEN);
+      expect(r.result.data.humanHint).not.toContain(DOTENV_TOKEN);
+    });
+
+    it("lets process env override dotenv token", async () => {
+      const DOTENV_TOKEN = "planted-mcp-dotenv-4b8e1c07a9f26d53";
+      const OVERRIDE = "planted-mcp-override-9a2c6e18b4d70f15";
+      const h = home();
+      writeFileSync(join(h, ".skillwiki", ".env"), `SKILLWIKI_MCP_TOKEN=${DOTENV_TOKEN}\n`);
+      const seen: string[] = [];
+      const mcpFetch = (async (_input: unknown, init?: RequestInit) => {
+        const auth = new Headers(init?.headers).get("authorization") ?? "";
+        seen.push(auth);
+        const raw = typeof init?.body === "string" ? init.body : "{}";
+        const parsed = JSON.parse(raw) as { id?: unknown; method?: string };
+        if (parsed.method === "initialize") {
+          return jsonRpcResult(parsed.id, {
+            protocolVersion: "2025-11-25",
+            capabilities: { tools: {} },
+            serverInfo: { name: "skillwiki-mcp", version: "0.10.74" },
+          });
+        }
+        if (parsed.method === "tools/list") {
+          return jsonRpcResult(parsed.id, { tools: WRITE_TOOLS.map((name) => ({ name })) });
+        }
+        return new Response("{}", { status: 400 });
+      }) as typeof fetch;
+      const r = await runDoctor({
+        home: h,
+        envValue: undefined,
+        argv: ["node", "skillwiki", "doctor", "--check-mcp"],
+        currentVersion: "0.10.74",
+        checkMcp: true,
+        env: envNoMcp({ SKILLWIKI_MCP_TOKEN: OVERRIDE }),
+        mcpFetch,
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      expect(seen.some((hval) => hval.includes(OVERRIDE))).toBe(true);
+      expect(seen.some((hval) => hval.includes(DOTENV_TOKEN))).toBe(false);
+      const dumped = JSON.stringify(r.result.data);
+      expect(dumped).not.toContain(OVERRIDE);
+      expect(dumped).not.toContain(DOTENV_TOKEN);
+    });
+
+    it("does not treat an empty dotenv token as present", async () => {
+      const h = home();
+      writeFileSync(join(h, ".skillwiki", ".env"), "SKILLWIKI_MCP_TOKEN=\n");
+      const r = await runDoctor({
+        home: h,
+        envValue: undefined,
+        argv: ["node", "skillwiki", "doctor"],
+        currentVersion: "0.10.74",
+        env: envNoMcp(),
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+      const cred = r.result.data.checks.find(c => c.id === "mcp_credential_present");
+      expect(cred?.status).toBe("warn");
+      const wp = r.result.data.checks.find(c => c.id === "wiki_path_set");
+      expect(wp?.status).toBe("error");
+      expect(wp?.detail).toMatch(/skillwiki init/);
+    });
+  });
+
+  describe("MCP-only leaf doctor", () => {
+    const MCP_ONLY_TOKEN = "planted-mcp-only-leaf-6d2a8c41e0b93517";
+
+    it("treats missing WIKI_PATH as info and skips vault-sync/rclone when token is present", async () => {
+      const h = home();
+      writeFileSync(
+        join(h, ".skillwiki", ".env"),
+        `SKILLWIKI_MCP_TOKEN=${MCP_ONLY_TOKEN}\nSKILLWIKI_HOST_ID=unknown-agent-fixture\n`,
+      );
+      const r = await runDoctor({
+        home: h,
+        envValue: undefined,
+        argv: ["node", "skillwiki", "doctor", "--check-mcp"],
+        currentVersion: "0.10.74",
+        checkMcp: true,
+        env: envNoMcp(),
+        mcpFetch: (async (_input: unknown, init?: RequestInit) => {
+          const raw = typeof init?.body === "string" ? init.body : "{}";
+          const parsed = JSON.parse(raw) as { id?: unknown; method?: string };
+          if (parsed.method === "initialize") {
+            return new Response(JSON.stringify({
+              jsonrpc: "2.0",
+              id: parsed.id,
+              result: {
+                protocolVersion: "2025-11-25",
+                capabilities: { tools: {} },
+                serverInfo: { name: "skillwiki-mcp", version: "0.10.74" },
+              },
+            }), { status: 200, headers: { "Content-Type": "application/json" } });
+          }
+          if (parsed.method === "tools/list") {
+            return new Response(JSON.stringify({
+              jsonrpc: "2.0",
+              id: parsed.id,
+              result: {
+                tools: [
+                  "wiki_query", "wiki_memory_recall", "wiki_read_page", "wiki_status",
+                  "wiki_capture", "wiki_log_append", "wiki_page_publish", "wiki_workitem_write",
+                ].map((name) => ({ name })),
+              },
+            }), { status: 200, headers: { "Content-Type": "application/json" } });
+          }
+          return new Response("{}", { status: 400 });
+        }) as typeof fetch,
+      });
+      expect(r.result.ok).toBe(true);
+      if (!r.result.ok) return;
+
+      const wp = r.result.data.checks.find(c => c.id === "wiki_path_set");
+      expect(wp?.status).toBe("info");
+      expect(wp?.detail).not.toMatch(/skillwiki init/);
+
+      for (const id of ["wiki_path_exists", "vault_structure", "obsidian_templates", "vault_git_remote", "sync_last_push", "dsstore_clean"]) {
+        const row = r.result.data.checks.find(c => c.id === id);
+        expect(row?.status, id).toBe("info");
+      }
+
+      const helper = r.result.data.checks.find(c => c.id === "vault_sync_pull_helper");
+      expect(helper?.status).toBe("pass");
+      expect(helper?.detail).toMatch(/not installed/);
+
+      const rclone = r.result.data.checks.find(c => c.id === "rclone_version");
+      expect(rclone?.status).toBe("pass");
+      expect(rclone?.detail.toLowerCase()).toMatch(/mcp-only|not required|skipped/);
+
+      const handshake = r.result.data.checks.find(c => c.id === "mcp_handshake");
+      expect(handshake?.status).toBe("pass");
+
+      const errorIds = r.result.data.checks.filter(c => c.status === "error").map(c => c.id);
+      expect(errorIds).not.toContain("wiki_path_set");
+      expect(errorIds).not.toContain("wiki_path_exists");
+      expect(JSON.stringify(r.result.data)).not.toContain(MCP_ONLY_TOKEN);
+      expect(r.result.data.humanHint).not.toContain(MCP_ONLY_TOKEN);
+      expect(r.result.data.humanHint).not.toMatch(/skillwiki init/);
+      expect(r.exitCode).not.toBe(29);
     });
   });
 });

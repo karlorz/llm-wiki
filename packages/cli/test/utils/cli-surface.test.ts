@@ -9,6 +9,7 @@ describe("buildCliSurface", () => {
     expect(surface.has("lint")).toBe(true);
     expect(surface.has("health")).toBe(true);
     expect(surface.has("doctor")).toBe(true);
+    expect(surface.has("connect")).toBe(true);
     expect(surface.has("log-rotate")).toBe(true);
     expect(surface.has("log-append")).toBe(true);
   });

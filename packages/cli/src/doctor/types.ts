@@ -54,6 +54,8 @@ export interface DoctorContext {
   fleetLoad: FleetManifestAndHost | null;
   readOnlyScanRoot: string | undefined;
   satelliteGate: FleetSatelliteGate;
+  /** No local vault, vault-sync not installed, MCP token present. */
+  mcpOnlyLeaf: boolean;
 }
 
 export interface DoctorProbe {

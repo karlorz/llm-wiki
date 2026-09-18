@@ -852,7 +852,11 @@ export const vaultSyncProbe: DoctorProbe = {
       snapshotScriptPath: ctx.vsConfig.snapshotScript,
       env: ctx.input.env ?? process.env,
     }));
-    checks.push(checkVaultSyncPullHelper(ctx.input.home, ctx.input.env ?? process.env));
+    if (!ctx.vsConfig.installed) {
+      checks.push(check("pass", "vault_sync_pull_helper", "Vault-sync pull helper", "vault-sync not installed — check skipped"));
+    } else {
+      checks.push(checkVaultSyncPullHelper(ctx.input.home, ctx.input.env ?? process.env));
+    }
     checks.push(checkVaultSyncReviewRequiredJournals(ctx));
     checks.push(checkSnapshotWorktreeUnmerged(ctx));
     return checks;

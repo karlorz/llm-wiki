@@ -145,12 +145,16 @@ describe("doctor golden parity tests", () => {
 
   it("captures golden check ID sequence for unconfigured home (62 checks)", async () => {
     const h = createHome();
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.SKILLWIKI_MCP_TOKEN;
+    delete env.SKILLWIKI_MCP_URL;
 
     const res = await runDoctor({
       home: h,
       envValue: undefined,
       argv: ["node", "skillwiki", "doctor"],
       currentVersion: "0.10.49",
+      env,
     });
 
     expect(res.result.ok).toBe(true);

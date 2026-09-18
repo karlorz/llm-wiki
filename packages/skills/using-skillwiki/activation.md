@@ -26,6 +26,7 @@ Invoke a SkillWiki skill when the user: wants vault/wiki/knowledge-base operatio
 | `wiki-reingest` | Detect source drift and re-ingest updated content |
 | `wiki-add-task` | Quick-capture ideas, bugs, tasks, notes (HTTP MCP on leaf hosts; local files on authoring hosts) |
 | `skillwiki-mcp` | HTTP MCP captures (`wiki_capture`, `wiki_log_append`); never local writes on leaf hosts |
+| `skillwiki-connect` | Unknown-agent HTTP MCP connect: `skillwiki connect --from-file` (never paste-into-chat) |
 | `wiki-adapter-prd` | Map foreign PRD formats (CodeStable, RFC, AIDE, Hermes) |
 | `wiki-sync` | Safely sync vault git repository |
 | `wiki-canvas` | Generate Obsidian Canvas visualization |

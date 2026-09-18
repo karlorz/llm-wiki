@@ -9,6 +9,11 @@ function validateKey(key: string): boolean {
   return (CONFIG_KEYS as readonly string[]).includes(key) || isValidWikiProfileKey(key) || isVaultSyncKey(key);
 }
 
+function displayConfigValue(key: string, value: string): string {
+  if (key === "SKILLWIKI_MCP_TOKEN") return value.length > 0 ? "TOKEN_SET" : "";
+  return value;
+}
+
 export function configPath(home: string): string {
   return join(home, ".skillwiki", ".env");
 }
@@ -85,7 +90,10 @@ export async function runConfigList(
   input: ConfigListInput
 ): Promise<{ exitCode: number; result: Result<ConfigListOutput> }> {
   const map = await parseDotenvFile(configPath(input.home));
-  const entries = Object.entries(map).map(([key, value]) => ({ key, value: value ?? "" }));
+  const entries = Object.entries(map).map(([key, value]) => ({
+    key,
+    value: displayConfigValue(key, value ?? ""),
+  }));
 
   let profiles: Array<{ name: string; path: string; isDefault: boolean }> | undefined;
   if (input.profiles) {

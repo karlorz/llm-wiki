@@ -11,7 +11,7 @@
     {
       "name": "skillwiki",
       "source": "packages/skills",
-      "description": "21 prompt-only wiki skills plus HTTP MCP wiki_capture. Requires SKILLWIKI_MCP_TOKEN (Plugins → Configure).",
+      "description": "22 prompt-only wiki skills plus HTTP MCP wiki_capture. Requires SKILLWIKI_MCP_TOKEN (Plugins → Configure).",
       "category": "integrations",
       "tags": [
         "wiki",
