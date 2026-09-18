@@ -42,7 +42,7 @@ On leaf hosts, wiki captures go through MCP. Do **not** write `raw/transcripts/`
 
 ## Reads
 
-Local `~/wiki` (or `skillwiki path`) is fine for reads. MCP read tools are optional. Prefer ordinary file reads of the local mirror.
+Local `~/wiki` (or `skillwiki path`) is fine for reads. MCP read tools are optional. Prefer ordinary file reads of the local mirror. Frozen-leaf agents should use HTTP `wiki_sources_pending`, `wiki_lint_summary`, `wiki_stale`, `wiki_compile_status`, and `wiki_reviews` instead of local CLI commands when those tools are advertised.
 
 `wiki_query` is typed knowledge only unless `scope` is `work` or `all`. For queued work, doctor, plugin-drift, or MCP diagnose questions, call `wiki_context` first (active_work) or pass `scope: "work"` / `"all"`. Do not treat a top typed packet hit as the live work queue.
 
