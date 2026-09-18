@@ -1,0 +1,30 @@
+{
+  "date": "2026-09-18",
+  "timestamp": "2026-09-18T04-00Z",
+  "count": 2,
+  "sources": {
+    "Reuters Business": 1,
+    "SCMP Business": 1
+  },
+  "headlines": [
+    "Hong Kong stocks rise as Hang Seng tracks Wall Street",
+    "Fed signals patience on interest rates as gold holds"
+  ],
+  "telegram_lang": "zh-Hant",
+  "articles": [
+    {
+      "source": "Reuters Business",
+      "title": "Hong Kong stocks rise as Hang Seng tracks Wall Street",
+      "summary": "The Hang Seng Index rose with US futures as traders watched Federal Reserve commentary.",
+      "link": "https://example.test/hkex-hang-seng",
+      "published": "2026-09-18T03:55:00Z"
+    },
+    {
+      "source": "SCMP Business",
+      "title": "Fed signals patience on interest rates as gold holds",
+      "summary": "Gold held near session highs after the Federal Reserve restated a data-dependent path.",
+      "link": "https://example.test/fed-gold",
+      "published": "2026-09-18T03:40:00Z"
+    }
+  ]
+}

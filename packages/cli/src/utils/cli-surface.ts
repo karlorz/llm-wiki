@@ -281,7 +281,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   fleetCmd.command("health").option("--file <path>").option("--host-id <id>").option("--json");
 
   const mcpAuth = program.commands.find(c => c.name() === "mcp-auth")!;
-  mcpAuth.command("issue-host").requiredOption("--host-id <id>").option("--map <path>").option("--write");
+  mcpAuth.command("issue-host").requiredOption("--host-id <id>").option("--map <path>").option("--allowed-vaults <ids>").option("--write");
 
   // Extract surface map
   const surface = new Map<string, Set<string>>();

@@ -16,7 +16,7 @@ import { FileOAuthStore, type OAuthStore } from "./oauth-store.js";
 import { handshakeFor, mcpInstructionsHandshakeTrailer, normalizeGrants, type Principal } from "./principal.js";
 import { rcloneCopyUpdate, ReconcileGate } from "./reconcile.js";
 import { DEFAULT_VAULT_ID } from "./vault-id.js";
-import { singletonVaultInput, buildVaultRegistry, type VaultRegistry } from "./vault-registry.js";
+import { singletonVaultInput, buildVaultRegistry, resolveVaultS3AdapterTarget, type VaultRegistry } from "./vault-registry.js";
 import { resolveVaultContext, type VaultRuntime } from "./vault-runtime.js";
 import {
   mcpCompletionCompleteAfterShutdownError,
@@ -1113,15 +1113,17 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
       },
     };
     let adapter: { putObject: PutObject; getObject: GetObject } = failClosed;
-    try {
-      adapter = createS3Adapter(cfg, {
-        bucket: entry.s3Bucket ?? cfg.s3Bucket,
-        prefix: entry.s3Bucket !== undefined ? entry.s3Prefix : (entry.s3Prefix || cfg.s3Prefix),
-        endpoint: entry.s3Endpoint ?? cfg.s3Endpoint,
-      });
-    } catch (error: unknown) {
-      if (entry.isDefault) throw error;
-      console.error(`skillwiki-mcp extra vault ${entry.vaultId} S3 adapter failed; vault stays fail-closed:`, error);
+    const s3Target = resolveVaultS3AdapterTarget(entry, cfg);
+    if ("error" in s3Target) {
+      if (entry.isDefault) throw new Error(s3Target.error);
+      console.error(`skillwiki-mcp extra vault ${entry.vaultId} S3 namespace invalid; vault stays fail-closed:`, s3Target.error);
+    } else {
+      try {
+        adapter = createS3Adapter(cfg, s3Target);
+      } catch (error: unknown) {
+        if (entry.isDefault) throw error;
+        console.error(`skillwiki-mcp extra vault ${entry.vaultId} S3 adapter failed; vault stays fail-closed:`, error);
+      }
     }
     const gate = new ReconcileGate(() =>
       rcloneCopyUpdate({

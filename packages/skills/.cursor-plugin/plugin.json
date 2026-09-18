@@ -20,6 +20,11 @@
         "type": "string",
         "title": "SkillWiki HTTP MCP bearer",
         "description": "Bearer for https://wiki.karldigi.dev/mcp. Same SKILLWIKI_MCP_TOKEN used by Grok CLI. Never put the value in plugin files."
+      },
+      "SKILLWIKI_EXTRA_VAULTS": {
+        "type": "string",
+        "title": "SkillWiki extra vault ids",
+        "description": "Optional comma-separated extra vault ids (example: wiki-fin). Non-secret. Same connector URL https://wiki.karldigi.dev/mcp. Default central stays on. Server allowed_vaults is the security boundary; listing an extra here does not authorize it. Do not put a bearer in this field."
       }
     },
     "required": [

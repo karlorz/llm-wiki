@@ -65,4 +65,4 @@ Grok Bot **Plugins → Configure** fields:
 
 Server `allowed_vaults` on the principal is the security boundary. Unknown, disabled, or unauthorized vault ids fail closed before filesystem/S3 I/O. Snapshot, FUSE, research, session-brief, rclone scheduling, and Git promotion stay sibling processes (`skillwiki-backend.target` groups lifecycle only). HTTP MCP still does not grow archive/remove/source-dispose/index/fleet/history mutations.
 
-Do not treat this document as a Slice 6 `wiki-fin` cutover. Production extra-vault provision, Hermes schedule change, and sg01 deploy remain a later attended pass.
+Grok Bot **Plugins → Configure** may set non-secret `SKILLWIKI_EXTRA_VAULTS=wiki-fin` on the same connector. That is client opt-in only. Server `allowed_vaults` remains the gate. Issue a wiki-fin-only host bearer with `skillwiki mcp-auth issue-host --host-id grok-bot-wiki-fin --allowed-vaults wiki-fin --write` on metal; do not add wiki-fin to macos-dev. In-repo example YAML stays `enabled: false` until the live `cloud/wiki-fin` prefix exists.

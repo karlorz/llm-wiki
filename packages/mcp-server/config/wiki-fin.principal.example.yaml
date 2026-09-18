@@ -1,0 +1,13 @@
+# Slice 6a — finance writer principal (example only; hash is not a live bearer).
+# Live sg01 token map (2026-09-18) uses string host-id rows, which grant
+# default_vault only (central). Do not add wiki-fin to macos-dev, cursor-box,
+# sg01-research, or other central-only principals.
+#
+# Default: one host bearer for the finance writer, with allowed_vaults including
+# wiki-fin. Extra bearer only if wiki-fin must not share the central secret.
+# Issue with: skillwiki mcp-auth issue-host --host-id grok-bot-wiki-fin --allowed-vaults wiki-fin --write
+# Do not grant macos-dev. Object form is required; a string host-id row would inherit central.
+
+"0000000000000000000000000000000000000000000000000000000000000000":
+  writer_id: grok-bot-wiki-fin
+  allowed_vaults: [wiki-fin]

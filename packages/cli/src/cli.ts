@@ -2185,13 +2185,19 @@ mcpAuthCmd
   .description("append a host-id hash to the metal map; print raw once on a TTY")
   .requiredOption("--host-id <id>", "host identity to bind")
   .option("--map <path>", "hash map file (defaults to SKILLWIKI_MCP_TOKEN_MAP)")
+  .option("--allowed-vaults <ids>", "comma-separated exact vault ids; omit for default vault only")
   .option("--write", "append the hash (default is dry-run)", false)
   .action(async (opts) => {
     const mapPath = opts.map || process.env.SKILLWIKI_MCP_TOKEN_MAP || "";
+    const allowedVaults = String(opts.allowedVaults ?? "")
+      .split(/[,\s]+/)
+      .map((id: string) => id.trim())
+      .filter(Boolean);
     emit(await runMcpAuthIssueHost({
       hostId: String(opts.hostId),
       mapPath,
       write: !!opts.write,
+      allowedVaults,
     }));
   });
 

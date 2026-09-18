@@ -187,6 +187,12 @@ if "SKILLWIKI_MCP_TOKEN" not in required:
     errors.append("cursor plugin must require SKILLWIKI_MCP_TOKEN")
 if "SKILLWIKI_MCP_TOKEN" not in props:
     errors.append("cursor plugin must declare SKILLWIKI_MCP_TOKEN")
+if "SKILLWIKI_EXTRA_VAULTS" in required:
+    errors.append("cursor plugin must not require SKILLWIKI_EXTRA_VAULTS")
+if "SKILLWIKI_EXTRA_VAULTS" not in props:
+    errors.append("cursor plugin must declare optional SKILLWIKI_EXTRA_VAULTS")
+if props.get("SKILLWIKI_EXTRA_VAULTS", {}).get("type") != "string":
+    errors.append("SKILLWIKI_EXTRA_VAULTS must be a string Configure field")
 if plugin.get("mcpServers") != "./mcp.json":
     errors.append("cursor plugin mcpServers must be ./mcp.json")
 

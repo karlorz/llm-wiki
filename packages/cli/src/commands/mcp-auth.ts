@@ -4,6 +4,7 @@ import {
   HOST_ID_RE,
   appendHostHash,
   generateHostBearer,
+  parseAllowedVaultIds,
   parseMcpTokenMap,
 } from "../utils/mcp-token-map.js";
 
@@ -11,6 +12,7 @@ export interface McpAuthIssueHostInput {
   hostId: string;
   mapPath: string;
   write?: boolean;
+  allowedVaults?: readonly string[];
   isTty?: boolean;
   rng?: () => Buffer;
   readFile?: typeof readFileSync;
@@ -23,6 +25,7 @@ export type McpAuthIssueHostData = {
   hash_prefix: string;
   map_path: string;
   wrote: boolean;
+  allowed_vaults: string[];
 };
 
 function isEnoent(error: unknown): boolean {
@@ -48,6 +51,8 @@ export async function runMcpAuthIssueHost(
 
   if (!mapPath) return preflight("MAP_PATH_REQUIRED");
   if (!HOST_ID_RE.test(hostId)) return preflight("INVALID_HOST_ID");
+  const granted = parseAllowedVaultIds(input.allowedVaults);
+  if ("error" in granted) return preflight(granted.error);
   if (write && !isTty) return preflight("NO_TTY");
 
   let yamlText = "";
@@ -68,12 +73,13 @@ export async function runMcpAuthIssueHost(
         hash_prefix: "",
         map_path: mapPath,
         wrote: false,
+        allowed_vaults: granted.vaults,
       }),
     };
   }
 
   const { raw, hashHex } = generateHostBearer(input.rng);
-  const appended = appendHostHash(yamlText, hashHex, hostId);
+  const appended = appendHostHash(yamlText, hashHex, hostId, granted.vaults);
   if ("error" in appended) return preflight(appended.error);
 
   try {
@@ -85,7 +91,8 @@ export async function runMcpAuthIssueHost(
     throw error;
   }
 
-  stderrWrite(`issued host_id=${hostId} copy once: ${raw}\n`);
+  const grantNote = granted.vaults.length > 0 ? ` allowed_vaults=${granted.vaults.join(",")}` : "";
+  stderrWrite(`issued host_id=${hostId}${grantNote} copy once: ${raw}\n`);
   return {
     exitCode: ExitCode.OK,
     result: ok({
@@ -93,6 +100,7 @@ export async function runMcpAuthIssueHost(
       hash_prefix: hashHex.slice(0, 8),
       map_path: mapPath,
       wrote: true,
+      allowed_vaults: granted.vaults,
     }),
   };
 }

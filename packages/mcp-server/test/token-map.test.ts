@@ -28,6 +28,23 @@ describe("token-map helpers", () => {
     expect(parseMcpTokenMap("yaml" in ok ? ok.yaml : "").get(hashB)).toBe("sg01");
   });
 
+  it("appendHostHash writes wiki-fin-only object principals", () => {
+    const hashA = "a".repeat(64);
+    const hashB = "b".repeat(64);
+    const seed = `${hashA}: macos-dev\n`;
+    const ok = appendHostHash(seed, hashB, "grok-bot-wiki-fin", ["wiki-fin"]);
+    expect("yaml" in ok).toBe(true);
+    if (!("yaml" in ok)) return;
+    expect(ok.yaml).toBe(
+      `${hashA}: macos-dev\n${hashB}:\n  writer_id: grok-bot-wiki-fin\n  allowed_vaults: [wiki-fin]\n`,
+    );
+    expect(parseMcpTokenPrincipals(ok.yaml).get(hashB)).toEqual({
+      writerId: "grok-bot-wiki-fin",
+      allowedVaults: ["wiki-fin"],
+    });
+    expect(parseMcpTokenPrincipals(ok.yaml).get(hashA)).toEqual({ writerId: "macos-dev" });
+  });
+
   it("removeHostId drops the matching line and reports missing", () => {
     const hashA = "a".repeat(64);
     const hashB = "b".repeat(64);
@@ -56,5 +73,8 @@ describe("token-map helpers", () => {
     const next = "d".repeat(64);
     expect(appendHostHash(seed, next, "sg03")).toEqual(cliAppendHostHash(seed, next, "sg03"));
     expect(appendHostHash(seed, next, "macos-dev")).toEqual(cliAppendHostHash(seed, next, "macos-dev"));
+    expect(appendHostHash(seed, next, "grok-bot-wiki-fin", ["wiki-fin"])).toEqual(
+      cliAppendHostHash(seed, next, "grok-bot-wiki-fin", ["wiki-fin"]),
+    );
   });
 });

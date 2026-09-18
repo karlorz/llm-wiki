@@ -12,7 +12,8 @@ export type VaultRegistryErrorCode =
   | "PREFIX_OVERLAP"
   | "RCLONE_S3_MISMATCH"
   | "CENTRAL_NAMESPACE_MISMATCH"
-  | "CLIENT_STORAGE_CLAIM";
+  | "CLIENT_STORAGE_CLAIM"
+  | "EXTRA_S3_NAMESPACE_REQUIRED";
 
 export class VaultRegistryError extends Error {
   readonly code: VaultRegistryErrorCode;
@@ -170,6 +171,16 @@ export function buildVaultRegistry(
     }
 
     const localRoot = resolvedRoot(input.localRoot);
+    if (!isDefault) {
+      const extraBucket = (input.s3Bucket ?? "").trim();
+      const extraPrefix = normalizeSlashPath(input.s3Prefix ?? "");
+      if (!extraBucket || !extraPrefix) {
+        throw new VaultRegistryError(
+          "EXTRA_S3_NAMESPACE_REQUIRED",
+          `extra vault ${input.vaultId} requires explicit s3.bucket and s3.prefix so it cannot inherit the central namespace`,
+        );
+      }
+    }
     if (!rcloneAndS3Agree(input)) {
       throw new VaultRegistryError(
         "RCLONE_S3_MISMATCH",
@@ -246,6 +257,24 @@ export function buildVaultRegistry(
   return {
     defaultVaultId: defaultId,
     entries: new Map(resolved.map((e) => [e.vaultId, e])),
+  };
+}
+
+/** Direct-S3 target for one registry entry. Extras never inherit the process-global central prefix. */
+export function resolveVaultS3AdapterTarget(
+  entry: VaultRegistryEntry,
+  fallback: { s3Bucket?: string; s3Prefix?: string; s3Endpoint?: string },
+): { bucket?: string; prefix: string; endpoint?: string } | { error: string } {
+  if (!entry.isDefault) {
+    if (!entry.s3Bucket || !entry.s3Prefix) {
+      return { error: `extra vault ${entry.vaultId} requires explicit s3.bucket and s3.prefix` };
+    }
+    return { bucket: entry.s3Bucket, prefix: entry.s3Prefix, endpoint: entry.s3Endpoint ?? fallback.s3Endpoint };
+  }
+  return {
+    bucket: entry.s3Bucket ?? fallback.s3Bucket,
+    prefix: entry.s3Bucket !== undefined ? entry.s3Prefix : (entry.s3Prefix || fallback.s3Prefix || ""),
+    endpoint: entry.s3Endpoint ?? fallback.s3Endpoint,
   };
 }
 

@@ -85,7 +85,14 @@ describe("runMcpAuthIssueHost", () => {
       expect(r.result.data.hash_prefix).toMatch(/^[0-9a-f]{8}$/);
       expect(r.result.data.hash_prefix).toBe(plantedHash.slice(0, 8));
       expect(r.result.data.host_id).toBe("sg03");
-      expect(Object.keys(r.result.data).sort()).toEqual(["hash_prefix", "host_id", "map_path", "wrote"]);
+      expect(Object.keys(r.result.data).sort()).toEqual([
+        "allowed_vaults",
+        "hash_prefix",
+        "host_id",
+        "map_path",
+        "wrote",
+      ]);
+      expect(r.result.data.allowed_vaults).toEqual([]);
     }
     const encoded = JSON.stringify(r);
     expect(encoded).not.toContain("raw");
@@ -134,5 +141,59 @@ describe("runMcpAuthIssueHost", () => {
     const map = parseMcpTokenMap(readFileSync(mapPath, "utf8"));
     expect(map.get(plantedHash)).toBe("sg03");
     expect(map.size).toBe(1);
+  });
+
+  it("write with allowed_vaults appends an object principal and does not grant macos-dev", async () => {
+    const { mapPath } = mapDir();
+    const existingHash = "a".repeat(64);
+    writeFileSync(mapPath, `${existingHash}: macos-dev\n`);
+    const stderr: string[] = [];
+    const r = await runMcpAuthIssueHost({
+      hostId: "grok-bot-wiki-fin",
+      mapPath,
+      write: true,
+      isTty: true,
+      allowedVaults: ["wiki-fin"],
+      rng: plantedRng,
+      stderrWrite: (s) => {
+        stderr.push(s);
+      },
+    });
+    expect(r.exitCode).toBe(ExitCode.OK);
+    expect(r.result.ok).toBe(true);
+    if (r.result.ok) {
+      expect(r.result.data.allowed_vaults).toEqual(["wiki-fin"]);
+      expect(r.result.data.host_id).toBe("grok-bot-wiki-fin");
+    }
+    const encoded = JSON.stringify(r);
+    expect(encoded).not.toContain(plantedRaw);
+    expect(encoded).not.toContain(plantedHash);
+    expect(stderr[0]).toContain("allowed_vaults=wiki-fin");
+    expect(stderr[0]).toContain(plantedRaw);
+    const yamlText = readFileSync(mapPath, "utf8");
+    expect(yamlText).toContain("writer_id: grok-bot-wiki-fin");
+    expect(yamlText).toContain("allowed_vaults: [wiki-fin]");
+    const map = parseMcpTokenMap(yamlText);
+    expect(map.get(existingHash)).toBe("macos-dev");
+    expect(map.get(plantedHash)).toBe("grok-bot-wiki-fin");
+  });
+
+  it("refuses wildcard allowed_vaults without writing", async () => {
+    const { mapPath } = mapDir();
+    const body = `${"a".repeat(64)}: macos-dev\n`;
+    writeFileSync(mapPath, body);
+    const r = await runMcpAuthIssueHost({
+      hostId: "grok-bot-wiki-fin",
+      mapPath,
+      write: true,
+      isTty: true,
+      allowedVaults: ["wiki-fin", "*"],
+      rng: plantedRng,
+      stderrWrite: () => {},
+    });
+    expect(r.exitCode).toBe(ExitCode.PREFLIGHT_FAILED);
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toBe("INVALID_ALLOWED_VAULTS");
+    expect(readFileSync(mapPath, "utf8")).toBe(body);
   });
 });

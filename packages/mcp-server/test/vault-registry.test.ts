@@ -6,6 +6,7 @@ import {
   buildVaultRegistry,
   namespacesOverlap,
   rcloneAndS3Agree,
+  resolveVaultS3AdapterTarget,
   singletonVaultInput,
   VaultRegistryError,
 } from "../src/vault-registry.js";
@@ -118,6 +119,33 @@ describe("vault registry validation", () => {
     ).toThrow(/cannot be disabled/);
   });
 
+  it("requires extra vaults to declare an explicit S3 bucket and prefix", () => {
+    expect(() =>
+      buildVaultRegistry([
+        entry({ vaultId: "central", isDefault: true, rclonePath: "cloud/wiki", s3Prefix: "wiki" }),
+        {
+          vaultId: "wiki-fin",
+          localRoot: "/tmp/skillwiki-wiki-fin-ns",
+          rcloneRemote: "seaweed-wiki",
+          rclonePath: "cloud/wiki-fin",
+        },
+      ]),
+    ).toThrow(/explicit s3.bucket and s3.prefix/);
+    try {
+      buildVaultRegistry([
+        entry({ vaultId: "central", isDefault: true, rclonePath: "cloud/wiki", s3Prefix: "wiki" }),
+        {
+          vaultId: "wiki-fin",
+          localRoot: "/tmp/skillwiki-wiki-fin-ns",
+          rcloneRemote: "seaweed-wiki",
+          rclonePath: "cloud/wiki-fin",
+        },
+      ]);
+    } catch (error) {
+      expect((error as VaultRegistryError).code).toBe("EXTRA_S3_NAMESPACE_REQUIRED");
+    }
+  });
+
   it("preserves the existing central namespace when a check is supplied", async () => {
     const root = await mkdtemp(join(tmpdir(), "reg-central-"));
     expect(() =>
@@ -134,5 +162,17 @@ describe("vault registry validation", () => {
         },
       ),
     ).toThrow(/retain the existing central/);
+  });
+
+  it("does not let an extra vault inherit the central S3 prefix", () => {
+    const extra = entry({ vaultId: "wiki-fin", rclonePath: "cloud/wiki-fin", s3Prefix: "wiki-fin" });
+    extra.isDefault = false;
+    const resolved = buildVaultRegistry([
+      entry({ vaultId: "central", isDefault: true, rclonePath: "cloud/wiki", s3Prefix: "wiki" }),
+      extra,
+    ]).entries.get("wiki-fin")!;
+    const target = resolveVaultS3AdapterTarget(resolved, { s3Bucket: "cloud", s3Prefix: "wiki" });
+    expect(target).toEqual({ bucket: "cloud", prefix: "wiki-fin", endpoint: extra.s3Endpoint });
+    expect("prefix" in target && target.prefix).not.toBe("wiki");
   });
 });

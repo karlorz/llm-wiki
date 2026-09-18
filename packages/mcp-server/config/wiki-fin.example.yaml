@@ -1,0 +1,30 @@
+# Slice 6a — wiki-fin extra vault (Identity A). NOT live.
+# Do not copy this onto sg01 until the coordinator approves creating
+# seaweed-wiki:cloud/wiki-fin and a unique local root.
+#
+# Central stays env-defined on sg01 (2026-09-18 live facts):
+#   SKILLWIKI_MCP_VAULT=/opt/skillwiki-mcp/vault
+#   SKILLWIKI_MCP_RCLONE_REMOTE=seaweed-wiki
+#   SKILLWIKI_MCP_RCLONE_BUCKET=cloud/wiki
+#   SKILLWIKI_MCP_S3_BUCKET=cloud
+#   SKILLWIKI_MCP_S3_PREFIX=wiki
+#
+# Clients never send these paths. Tools take vault=wiki-fin only.
+# enabled: false until the prefix exists and Slice 6b dry-run is approved.
+
+default_vault: central
+vaults:
+  - vault_id: wiki-fin
+    default: false
+    enabled: false
+    label: Finance wiki (wiki-fin)
+    local_root: /opt/skillwiki-mcp/vault-wiki-fin
+    rclone:
+      remote: seaweed-wiki
+      path: cloud/wiki-fin
+    s3:
+      bucket: cloud
+      prefix: wiki-fin
+    reconcile_interval_ms: 3600000
+    projection_authority: sg01-wiki-fin-snapshot
+    snapshot_authority: sg01-wiki-fin-snapshot

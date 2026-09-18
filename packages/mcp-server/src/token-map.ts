@@ -4,7 +4,32 @@ import type { TokenPrincipalRecord } from "./principal.js";
 
 export const HOST_ID_RE = /^[a-z][a-z0-9-]{1,62}$/;
 
-export type AppendHostHashError = "INVALID_HOST_ID" | "DUPLICATE_HOST_ID" | "DUPLICATE_HASH";
+export type AppendHostHashError =
+  | "INVALID_HOST_ID"
+  | "DUPLICATE_HOST_ID"
+  | "DUPLICATE_HASH"
+  | "INVALID_ALLOWED_VAULTS";
+
+const VAULT_ID_RE = /^[a-z][a-z0-9-]{1,62}$/;
+
+export function parseAllowedVaultIds(
+  raw: readonly string[] | undefined,
+): { vaults: string[] } | { error: "INVALID_ALLOWED_VAULTS" } {
+  if (!raw || raw.length === 0) return { vaults: [] };
+  const vaults: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    const id = item.trim();
+    if (!id) continue;
+    if (id.includes("*") || id.includes("/") || !VAULT_ID_RE.test(id)) {
+      return { error: "INVALID_ALLOWED_VAULTS" };
+    }
+    if (seen.has(id)) continue;
+    seen.add(id);
+    vaults.push(id);
+  }
+  return { vaults };
+}
 
 function parseAllowedVaults(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
@@ -69,14 +94,24 @@ export function generateHostBearer(rng?: () => Buffer): { raw: string; hashHex: 
   return { raw, hashHex };
 }
 
+function formatHostRow(hashHex: string, hostId: string, allowedVaults: readonly string[]): string {
+  if (allowedVaults.length === 0) {
+    return `${hashHex}: ${hostId}\n`;
+  }
+  return `${hashHex}:\n  writer_id: ${hostId}\n  allowed_vaults: [${allowedVaults.join(", ")}]\n`;
+}
+
 export function appendHostHash(
   yamlText: string,
   hashHex: string,
   hostId: string,
+  allowedVaults?: readonly string[],
 ): { yaml: string } | { error: AppendHostHashError } {
   if (!HOST_ID_RE.test(hostId)) {
     return { error: "INVALID_HOST_ID" };
   }
+  const granted = parseAllowedVaultIds(allowedVaults);
+  if ("error" in granted) return granted;
   const map = parseMcpTokenMap(yamlText);
   const normalizedHash = hashHex.trim().toLowerCase();
   if ([...map.values()].includes(hostId)) {
@@ -85,7 +120,7 @@ export function appendHostHash(
   if (map.has(normalizedHash)) {
     return { error: "DUPLICATE_HASH" };
   }
-  return { yaml: yamlText.replace(/\s*$/, "") + `\n${normalizedHash}: ${hostId}\n` };
+  return { yaml: yamlText.replace(/\s*$/, "") + `\n${formatHostRow(normalizedHash, hostId, granted.vaults)}` };
 }
 
 export function removeHostId(
