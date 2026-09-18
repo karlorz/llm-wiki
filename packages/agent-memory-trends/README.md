@@ -325,6 +325,7 @@ and reject `index.md`, yaml, and undeclared raw paths. `session-brief-mcp` reads
 the MCP working copy without `--write`, reads collector state from
 `/var/lib/skillwiki-research/staging-vault/.skillwiki/agent-memory-trends/latest-run.json`,
 and CAS-publishes only `meta/latest-session-brief.md` as the packet/quiet receipt.
+`session-brief-mcp` prefers `$repo/packages/cli/dist/cli.js` when that file exists so a lagging global `skillwiki` cannot drop `--agent-memory-run-state`.
 
 ### Attended off-box judgement
 

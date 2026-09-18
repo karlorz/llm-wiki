@@ -16,10 +16,11 @@ Deploy after the preview and release CI are green:
 bash scripts/deploy-sg01-mcp.sh --ref v0.10.95 --execute
 ```
 
-The command exports the exact ref, stages it separately under `/opt`, installs locked dependencies, and builds both runtimes referenced by enabled sg01 units:
+The command exports the exact ref, stages it separately under `/opt`, installs locked dependencies, and builds the runtimes used by enabled sg01 units:
 
 - `packages/mcp-server/dist/server.js`
 - `packages/agent-memory-trends/dist/cli.js`
+- `packages/cli/dist/cli.js` (session-brief-mcp prefers this bundled CLI over a lagging global `/usr/bin/skillwiki`)
 
 It atomically swaps `/opt/llm-wiki`, restarts only `skillwiki-mcp.service`, and preserves the previous bundle for rollback. It does not alter FUSE, snapshotter, research timers, session-brief timers, credentials, or vault content. The systemd family target `skillwiki-backend.target` groups the member units on sg01 while restarts remain strictly MCP-only.
 
@@ -54,7 +55,7 @@ Require the handshake to advertise the released version and fourteen tools. On s
 
 For an attended post-deploy proof, the operator separately verifies the sibling jobs:
 
-1. Confirm `/opt/llm-wiki/packages/agent-memory-trends/dist/cli.js` and the CLI runtime used by `skillwiki session-brief` exist under the swapped bundle.
+1. Confirm `/opt/llm-wiki/packages/agent-memory-trends/dist/cli.js` and `/opt/llm-wiki/packages/cli/dist/cli.js` exist under the swapped bundle. `session-brief-mcp` must invoke that bundled CLI (or `AGENT_MEMORY_TRENDS_SKILLWIKI_BIN`), not a lagging global `skillwiki`.
 2. Start `skillwiki-research.service` once. Its checked-in command remains `daily --generate-only --mcp-publish --synthesis-fallback none` and must run as deterministic collector-packet mode without Codex or Claude.
 3. Inspect `/var/lib/skillwiki-research/staging-vault/.skillwiki/agent-memory-trends/latest-run.json`. Accept either a non-quiet success with `selected_candidate_count > 0` and a packet readable through `wiki_read_page`, or a quiet success with zero selected and no packet.
 4. Verify collector mode produced no `queries/YYYY-MM-DD-agent-memory-trends-digest.md` and no proposal capture. The packet, when present, must use canonical published URLs rather than host-local `raw/articles/**` citations.

@@ -55,8 +55,13 @@ done
 PIN="$(git -C "$REPO_ROOT" rev-parse "${REF}^{}")"
 VERSION="$(git -C "$REPO_ROOT" show "${REF}:packages/mcp-server/package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).version))')"
 TRENDS_VERSION="$(git -C "$REPO_ROOT" show "${REF}:packages/agent-memory-trends/package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).version))')"
+CLI_VERSION="$(git -C "$REPO_ROOT" show "${REF}:packages/cli/package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).version))')"
 if [ "$VERSION" != "$TRENDS_VERSION" ]; then
   echo "Error: MCP version $VERSION differs from agent-memory-trends $TRENDS_VERSION" >&2
+  exit 1
+fi
+if [ "$VERSION" != "$CLI_VERSION" ]; then
+  echo "Error: MCP version $VERSION differs from skillwiki CLI $CLI_VERSION" >&2
   exit 1
 fi
 cat <<EOF
@@ -66,7 +71,7 @@ sg01 MCP deployment plan
   pin: $PIN
   version: $VERSION
   ready timeout: ${READY_TIMEOUT_SECONDS}s
-  builds: @skillwiki/mcp-server, @skillwiki/agent-memory-trends
+  builds: @skillwiki/mcp-server, @skillwiki/agent-memory-trends, skillwiki
   backend target check: skillwiki-backend.target enabled if present
   service restart: skillwiki-mcp.service only
 EOF
@@ -130,9 +135,11 @@ cd "$STAGE"
 npm ci --ignore-scripts --no-audit --no-fund
 npm run -w @skillwiki/mcp-server build
 npm run -w @skillwiki/agent-memory-trends build
+npm run -w skillwiki build
 
 test -s packages/mcp-server/dist/server.js
 test -s packages/agent-memory-trends/dist/cli.js
+test -s packages/cli/dist/cli.js
 node -e 'const p=require("./packages/mcp-server/package.json"); if (p.version !== process.argv[1]) process.exit(1)' "$VERSION"
 node --input-type=module -e 'await import("./packages/mcp-server/dist/server.js")'
 node packages/agent-memory-trends/dist/cli.js --help >/dev/null

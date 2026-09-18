@@ -478,6 +478,110 @@ describe("agent-memory-trends CLI", () => {
     ]);
   });
 
+  it("prefers the bundled CLI dist for session-brief-mcp when it exists", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "session-brief-bundled-"));
+    const bundled = join(repo, "packages", "cli", "dist", "cli.js");
+    mkdirSync(join(repo, "packages", "cli", "dist"), { recursive: true });
+    writeFileSync(bundled, "#!/usr/bin/env node\n");
+    const calls: Array<{ command: string; args: string[] }> = [];
+    try {
+      const result = await runAgentMemoryTrendsCli(
+        ["session-brief-mcp", "--dry-run", "--source-vault", "/mcp-vault", "--run-state", "/run/latest.json", "--repo", repo, "--project", "llm-wiki"],
+        {
+          cwd: repo,
+          env: {},
+          now: new Date("2026-09-17T00:00:00Z"),
+          runCommand: async (command, args) => {
+            calls.push({ command, args });
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                ok: true,
+                data: {
+                  project: "llm-wiki",
+                  brief: "# Session Brief\n\nBundled CLI.",
+                  word_count: 3,
+                  generated_at: "2026-09-17T00:00:00Z",
+                },
+              }),
+              stderr: "",
+            };
+          },
+        }
+      );
+      expect(result.exitCode).toBe(0);
+      expect(calls).toEqual([
+        {
+          command: process.execPath,
+          args: [
+            bundled,
+            "session-brief",
+            "/mcp-vault",
+            "--project",
+            "llm-wiki",
+            "--agent-memory-run-state",
+            "/run/latest.json",
+          ],
+        },
+      ]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("honors AGENT_MEMORY_TRENDS_SKILLWIKI_BIN over the bundled CLI dist", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "session-brief-override-"));
+    const bundled = join(repo, "packages", "cli", "dist", "cli.js");
+    const override = join(repo, "custom-skillwiki.js");
+    mkdirSync(join(repo, "packages", "cli", "dist"), { recursive: true });
+    writeFileSync(bundled, "#!/usr/bin/env node\n");
+    writeFileSync(override, "#!/usr/bin/env node\n");
+    const calls: Array<{ command: string; args: string[] }> = [];
+    try {
+      const result = await runAgentMemoryTrendsCli(
+        ["session-brief-mcp", "--dry-run", "--source-vault", "/mcp-vault", "--run-state", "/run/latest.json", "--repo", repo, "--project", "llm-wiki"],
+        {
+          cwd: repo,
+          env: { AGENT_MEMORY_TRENDS_SKILLWIKI_BIN: override },
+          now: new Date("2026-09-17T00:00:00Z"),
+          runCommand: async (command, args) => {
+            calls.push({ command, args });
+            return {
+              exitCode: 0,
+              stdout: JSON.stringify({
+                ok: true,
+                data: {
+                  project: "llm-wiki",
+                  brief: "# Session Brief\n\nOverride CLI.",
+                  word_count: 3,
+                  generated_at: "2026-09-17T00:00:00Z",
+                },
+              }),
+              stderr: "",
+            };
+          },
+        }
+      );
+      expect(result.exitCode).toBe(0);
+      expect(calls).toEqual([
+        {
+          command: process.execPath,
+          args: [
+            override,
+            "session-brief",
+            "/mcp-vault",
+            "--project",
+            "llm-wiki",
+            "--agent-memory-run-state",
+            "/run/latest.json",
+          ],
+        },
+      ]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("publishes only meta/latest-session-brief.md in non-dry-run session-brief-mcp mode", async () => {
     const publications: Array<{ path: string; content: string }> = [];
     const result = await runAgentMemoryTrendsCli(

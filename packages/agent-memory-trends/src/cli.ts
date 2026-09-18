@@ -1868,9 +1868,10 @@ async function runSessionBriefMcp(
     context.env.AGENT_MEMORY_TRENDS_RUN_STATE ??
     "/var/lib/skillwiki-research/staging-vault/.skillwiki/agent-memory-trends/latest-run.json";
   const runCommand = context.runCommand ?? createCommandRunner();
+  const skillwiki = resolveSkillwikiInvocation(resolved.repo, context.env);
   const rendered = await runCommand(
-    "skillwiki",
-    ["session-brief", sourceVault, "--project", resolved.project, "--agent-memory-run-state", runStatePath],
+    skillwiki.command,
+    [...skillwiki.prefixArgs, "session-brief", sourceVault, "--project", resolved.project, "--agent-memory-run-state", runStatePath],
     { cwd: resolved.repo, env: context.env }
   );
   if (rendered.exitCode !== 0) {
@@ -2084,6 +2085,24 @@ function commandAvailable(command: string, env: Record<string, string | undefine
     }
   }
   return false;
+}
+
+function resolveSkillwikiInvocation(
+  repo: string,
+  env: Record<string, string | undefined>
+): { command: string; prefixArgs: string[] } {
+  const override = env.AGENT_MEMORY_TRENDS_SKILLWIKI_BIN;
+  if (typeof override === "string" && override.length > 0) {
+    if (override.endsWith(".js") || override.endsWith(".mjs") || override.endsWith(".cjs")) {
+      return { command: process.execPath, prefixArgs: [override] };
+    }
+    return { command: override, prefixArgs: [] };
+  }
+  const bundled = join(repo, "packages", "cli", "dist", "cli.js");
+  if (existsSync(bundled)) {
+    return { command: process.execPath, prefixArgs: [bundled] };
+  }
+  return { command: "skillwiki", prefixArgs: [] };
 }
 
 function createCommandRunner(): CommandRunner {
