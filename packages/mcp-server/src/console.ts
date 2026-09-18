@@ -19,6 +19,7 @@ const ISSUE_ERROR_COPY: Record<AppendHostHashError, string> = {
   INVALID_HOST_ID: "Invalid host-id.",
   DUPLICATE_HOST_ID: "That host-id is already issued.",
   DUPLICATE_HASH: "Could not issue. Retry.",
+  INVALID_ALLOWED_VAULTS: "allowed_vaults must be exact vault ids with no wildcards.",
 };
 
 export const CONSOLE_PAGE_SIZE = 20;
