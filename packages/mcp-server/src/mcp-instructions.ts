@@ -5,22 +5,22 @@
 export const MCP_INSTRUCTIONS = `## SkillWiki Remote Access Contract
 
 ### Three-Plane Access Architecture
-- **HTTP MCP (Default)**: Primary remote access plane for AI agents. All reads and mutations go through MCP tools; local vault clone is not required.
-- **CLI (Opt-in)**: Local operator and authoring plane for diagnostics, linting, and health checks on provisioned machines.
-- **Git Clone (Opt-in)**: Storage and sync authority on metal authoring hosts; leaf/agent environments do not manage git or push to remotes.
+HTTP MCP is the default agent plane. CLI is an opt-in operator plane; Git clone
+is storage authority on authoring hosts. Leaf agents do not manage vault git.
 
 ### Fail-Closed Boundary
-HTTP MCP is the sole agent writer. Never attempt direct local file writes to typed pages (concepts, entities, comparisons, queries, meta), index.md, or log.md. Direct filesystem mutations outside MCP fail closed. Always use MCP tools (wiki_capture, wiki_log_append, wiki_workitem_write, wiki_page_publish).
+HTTP MCP is the sole managed writer. Use \`wiki_capture\`, \`wiki_log_append\`,
+\`wiki_workitem_write\`, or \`wiki_page_publish\`; never write typed pages,
+\`index.md\`, or \`log.md\` directly.
 
 ### CAS Protocol (Compare-And-Swap)
-Mutating tools (wiki_workitem_write, wiki_page_publish) enforce CAS concurrency control to prevent clobbering:
-1. Call wiki_read_page to retrieve the document and its canonical sha256.
-2. Submit mutations with base_sha256 set to the read sha256.
-3. If the write returns FILE_CHANGED, re-read via wiki_read_page, rebase edits against currentVersion, and retry.
+For \`wiki_workitem_write\` or \`wiki_page_publish\`, read first, send the returned
+sha256 as \`base_sha256\`, and on \`FILE_CHANGED\` re-read, rebase, and retry.
 
 ### Capture Kinds
-Ad-hoc records via wiki_capture require kind in: task | idea | bug | note.
-Captures append remotely to raw/transcripts/ and never overwrite existing files. Use wiki_log_append for append-only log entries. Success returns a receipt; verify via wiki_read_page(event_path). Do not require reading log.md. wiki_read_page accepts optional tail_bytes for browsing oversized pages.
+\`wiki_capture\` kind is \`task | idea | bug | note\`. Captures append to
+\`raw/transcripts/\`. Verify the returned \`event_path\` with \`wiki_read_page\`;
+\`wiki_log_append\` is append-only. Use \`tail_bytes\` for large pages.
 
 ### Sensitive Content
-Never send credentials, API keys, auth tokens, passwords, or PII. Redact sensitive values using [REDACTED:<kind>] (e.g. [REDACTED:token]) before writing.`;
+Never send secrets or personal information. Use \`[REDACTED:<kind>]\`.`;

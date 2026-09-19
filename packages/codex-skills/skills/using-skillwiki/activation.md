@@ -1,98 +1,83 @@
 # SkillWiki Activation
 
-You have SkillWiki - a project-aware knowledge-base CLI + skill suite for agent harnesses.
-This file is loaded at session start. For full operational detail, invoke `/using-skillwiki`.
+SkillWiki is the project-aware knowledge base and skill suite. This file is
+session-start routing context; invoke `using-skillwiki` for full instructions.
 
-## CLI Probe
+## Route
 
-If `skillwiki --help` fails, the CLI is unavailable. Degrade to manual file ops (grep/find) for read-only queries. Fail closed for managed mutations - never write typed pages, index, or log directly.
+Use SkillWiki for vault or wiki work: setup, capture, ingestion, search, health,
+provenance, lifecycle, project workspaces, decisions, sync, or graphing.
+Choose the matching installed skill:
 
-## When to Route
+- Setup and input: `wiki-init`, `wiki-ingest`, `wiki-add-task`,
+  `wiki-adapter-prd`, `skillwiki-connect`.
+- Read and maintain: `wiki-query`, `wiki-lint`, `wiki-audit`,
+  `wiki-crystallize`, `wiki-reingest`, `wiki-archive`, `wiki-remove`.
+- Projects and planning: `proj-init`, `proj-work`, `proj-distill`,
+  `proj-decide`, `wiki-gate-plan-mode`, `dev-loop:research`.
+- Fleet and visualization: `wiki-sync`, `wiki-canvas`.
+- HTTP MCP capture or append: `skillwiki-mcp`.
 
-Invoke a SkillWiki skill when the user: wants vault/wiki/knowledge-base operations, ingests sources or URLs, searches/queries vault content, runs health checks or lint, crystallizes a session, works with project workspaces/ADRs, captures ideas/bugs/tasks, archives pages, removes paths, detects source drift, ingests foreign PRD formats, syncs vault git, or visualizes the vault graph.
+If routing is unclear, invoke `using-skillwiki` rather than guessing.
 
-## Skill Map
+## CLI and Planning
 
-| Skill | When to Invoke |
-|-------|----------------|
-| `wiki-init` | Bootstrap a vault |
-| `wiki-ingest` | Convert URLs/files/text into typed-knowledge pages |
-| `wiki-query` | Search typed knowledge |
-| `wiki-lint` | Vault health and lint checks |
-| `wiki-crystallize` | Distill current session into a typed page |
-| `wiki-audit` | Verify raw provenance and source integrity |
-| `wiki-archive` | Archive typed pages or preserve-move raw sources |
-| `wiki-remove` | Hard-delete vault paths without snapshot resurrection |
-| `wiki-reingest` | Detect source drift and re-ingest updated content |
-| `wiki-add-task` | Quick-capture ideas, bugs, tasks, notes (HTTP MCP on leaf hosts; local files on authoring hosts) |
-| `skillwiki-mcp` | HTTP MCP captures (`wiki_capture`, `wiki_log_append`); never local writes on leaf hosts |
-| `skillwiki-connect` | Unknown-agent HTTP MCP connect: `skillwiki connect --from-file` (never paste-into-chat) |
-| `wiki-adapter-prd` | Map foreign PRD formats (CodeStable, RFC, AIDE, Hermes) |
-| `wiki-sync` | Safely sync vault git repository |
-| `wiki-canvas` | Generate Obsidian Canvas visualization |
-| `wiki-gate-plan-mode` | Toggle EnterPlanMode gating for brainstorming then proj-work |
-| `proj-init` | Bootstrap a project workspace |
-| `proj-work` | Open or run a work item |
-| `proj-distill` | Distill project compound entries into concept pages |
-| `proj-decide` | Write an Architectural Decision Record (ADR) |
-| `dev-loop:research` | Research scan of repo + vault health |
+If `skillwiki --help` fails, use local tools only for read-only inspection and
+fail closed for managed mutations.
 
-## PRD Bridge
+After architectural design approval, invoke `proj-work` and put `spec.md` in
+that work item. Do not invoke `writing-plans`. Do not git commit from
+brainstorming. Use standalone `test-driven-development` for bounded TDD. For UI
+work, offer `visual-companion.md` once. Never create `docs/superpowers/`.
 
-After architectural design approval, invoke `proj-work` then write `spec.md` in that work folder. Do not invoke `writing-plans`. Do not git commit from brainstorming. Bounded TDD uses standalone `test-driven-development` when installed. For UI work, offer brainstorming `visual-companion.md` once (optional). Never create `docs/superpowers/` in any repo.
+Workflow profiles are `native`, `guided`, and explicit-only `full`; selection
+is `adaptive` or `fixed`. Installation or cache discovery proves availability,
+not activation. Native and guided do not force Superpowers or plan-mode gating.
+Only a full profile may use its configured provider flow. Invalid fixed policy
+fails closed; noninteractive sessions do not prompt. Keep workflow profile,
+PRD provider and stage, SkillWiki provenance, and simplify review independent.
 
-## Workflow Profiles
+## Managed-Write Safety
 
-Resolve workflow policy before loading provider skills. Profiles are `native`,
-`guided`, and explicit-only `full`; selection is `adaptive` or `fixed`.
-Adaptive chooses only native or guided. Installation and cache discovery prove
-availability, never activation. Native and guided do not force Superpowers or
-plan-mode gating. Explicit full may use the complete configured provider flow;
-gate plan mode only when that flow actually uses Superpowers/TDD planning.
-Invalid fixed policy is unresolved and fail-closed. Noninteractive sessions do
-not prompt. Keep workflow profile, `prd_layer` provider, `prd_pipeline` stage
-template, SkillWiki provenance, and the independent simplify review gate as
-separate concerns.
+The HTTP MCP contract below controls remote reads and mutations. On leaf hosts,
+captures use MCP, never local `raw/transcripts` or `log.md` writes. Project
+workspace writes use `wiki_workitem_write` with compare-and-swap; stop if the
+tool or path family is unavailable. A wiki push or rclone copy is not a managed
+write and is not visible until the authoritative snapshot. Never use bare `rm`
+or `git rm` for fleet deletion. Never auto-install SkillWiki in unattended
+sessions. If required publish support is unavailable, fail closed.
 
-## Fail-Closed Boundary
-
-Never write typed pages, `index.md`, or `log.md` directly. On leaf hosts, captures use HTTP MCP (`wiki_capture`), never local `raw/transcripts` or `log.md` writes. Project workspace saves (`projects/<slug>/README.md`, `architecture/`, `requirements/`, `compound/` — `.md` only) go through MCP `wiki_workitem_write` CAS; feature-detect and STOP if the tool is absent or the deployed server predates the workspace-family allowlist (`PATH_DENIED`). wiki-push / rclone is never an agent writer — an S3-only copy is invisible to `wiki_read_page` until the sg01 snapshot; never report it as "saved to wiki". Never bare `rm` or `git rm` as a fleet delete (snapshot resurrects from S3). Never auto `npm install -g skillwiki` in headless/goal/satellite sessions. If `skillwiki page publish --help` is unavailable, fail closed.
-
-## Sensitive Content
-
-Never commit secrets, credentials, API keys, tokens, passwords, or PII to the vault. Redact using `[REDACTED:<kind>]` before filing.
+Never send secrets, credentials, tokens, passwords, or personal information.
+Redact with `[REDACTED:<kind>]`.
 
 <!-- mcp-instructions:begin -->
 ## SkillWiki Remote Access Contract
 
 ### Three-Plane Access Architecture
-- **HTTP MCP (Default)**: Primary remote access plane for AI agents. All reads and mutations go through MCP tools; local vault clone is not required.
-- **CLI (Opt-in)**: Local operator and authoring plane for diagnostics, linting, and health checks on provisioned machines.
-- **Git Clone (Opt-in)**: Storage and sync authority on metal authoring hosts; leaf/agent environments do not manage git or push to remotes.
+HTTP MCP is the default agent plane. CLI is an opt-in operator plane; Git clone
+is storage authority on authoring hosts. Leaf agents do not manage vault git.
 
 ### Fail-Closed Boundary
-HTTP MCP is the sole agent writer. Never attempt direct local file writes to typed pages (concepts, entities, comparisons, queries, meta), index.md, or log.md. Direct filesystem mutations outside MCP fail closed. Always use MCP tools (wiki_capture, wiki_log_append, wiki_workitem_write, wiki_page_publish).
+HTTP MCP is the sole managed writer. Use `wiki_capture`, `wiki_log_append`,
+`wiki_workitem_write`, or `wiki_page_publish`; never write typed pages,
+`index.md`, or `log.md` directly.
 
 ### CAS Protocol (Compare-And-Swap)
-Mutating tools (wiki_workitem_write, wiki_page_publish) enforce CAS concurrency control to prevent clobbering:
-1. Call wiki_read_page to retrieve the document and its canonical sha256.
-2. Submit mutations with base_sha256 set to the read sha256.
-3. If the write returns FILE_CHANGED, re-read via wiki_read_page, rebase edits against currentVersion, and retry.
+For `wiki_workitem_write` or `wiki_page_publish`, read first, send the returned
+sha256 as `base_sha256`, and on `FILE_CHANGED` re-read, rebase, and retry.
 
 ### Capture Kinds
-Ad-hoc records via wiki_capture require kind in: task | idea | bug | note.
-Captures append remotely to raw/transcripts/ and never overwrite existing files. Use wiki_log_append for append-only log entries. Success returns a receipt; verify via wiki_read_page(event_path). Do not require reading log.md. wiki_read_page accepts optional tail_bytes for browsing oversized pages.
+`wiki_capture` kind is `task | idea | bug | note`. Captures append to
+`raw/transcripts/`. Verify the returned `event_path` with `wiki_read_page`;
+`wiki_log_append` is append-only. Use `tail_bytes` for large pages.
 
 ### Sensitive Content
-Never send credentials, API keys, auth tokens, passwords, or PII. Redact sensitive values using [REDACTED:<kind>] (e.g. [REDACTED:token]) before writing.
+Never send secrets or personal information. Use `[REDACTED:<kind>]`.
 <!-- mcp-instructions:end -->
 
-## Drift Warning
+## Drift and Canonical Paths
 
-If `skillwiki doctor` mentions a version newer than this file, re-read the full `/using-skillwiki` skill for updated content.
-
-## Canonical Paths
-
-- Full skill (logical): invoke `/using-skillwiki` or read the installed plugin skill at `<plugin-root>/using-skillwiki/SKILL.md` (repository source: `packages/skills/using-skillwiki/SKILL.md`)
-- Vault schema: `SCHEMA.md` at the vault root (run `skillwiki path` to resolve)
-- Frontier agents (`proj-work`, `proj-decide`): plugin-root `agents/<name>.md` with `model: inherit` — refresh with the active plugin channel (`grok plugin update skillwiki` on Grok)
+If `skillwiki doctor` reports a newer version, invoke `using-skillwiki` again.
+The full source skill is `packages/skills/using-skillwiki/SKILL.md`; resolve the
+vault with `skillwiki path`. Frontier project agents are installed under the
+plugin root with `model: inherit`.
