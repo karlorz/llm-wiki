@@ -1167,11 +1167,18 @@ setup_projection_parity_fixture() {
   printf '# Expected Index\n' > "$root/expected-index.md"
   printf '# Expected Log\n\n- latest event\n' > "$root/expected-log.md"
   printf '# Expected Log\n\n- latest event\n- mid-sync mcp append\n' > "$root/newer-log.md"
+  printf '# Expected Log\n\n- latest event\n- mid-sync mcp append\n- post-sync mcp append\n' > "$root/post-sync-log.md"
+  printf '# Expected Log\n\n- latest event\n- mid-sync mcp append\n- post-sync mcp append\n- second mcp append\n' > "$root/second-append-log.md"
+  printf '# Expected Log\n\n- replaced event\n- divergent mcp append\n' > "$root/divergent-log.md"
+  printf '# Expected Log\n' > "$root/shorter-log.md"
+  printf '# Expected Index\n\n- post-sync index rewrite\n' > "$root/divergent-index.md"
   printf '# Stale Index\n' > "$root/stale-index.md"
   printf '# Stale Log\n' > "$root/stale-log.md"
   : > "$root/rclone.calls"
   printf '0\n' > "$root/cat-count-index.md"
   printf '0\n' > "$root/cat-count-log.md"
+  printf '0\n' > "$root/sync-count"
+  printf '0\n' > "$root/store-append-count"
 
   printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
   cp "$root/stale-index.md" "$git_dir/index.md"
@@ -1234,6 +1241,44 @@ if [ "$cmd" = "cat" ]; then
     cp "$SNAPSHOT_TEST_ROOT/newer-log.md" /dev/stdout
     exit 0
   fi
+  # The post-sync race bytes must NOT be visible during the pre-sync parity
+  # wait, or the existing store-ahead adoption would absorb them before the
+  # sync and the race would never occur. Gate every post-sync shape on at least
+  # one completed rclone sync.
+  syncs_so_far="$(cat "$SNAPSHOT_TEST_ROOT/sync-count" 2>/dev/null || printf '0')"
+  case "$syncs_so_far" in ''|*[!0-9]*) syncs_so_far=0 ;; esac
+  if [ "$syncs_so_far" -ge 1 ] \
+      && [ "${RCLONE_POST_SYNC_READ_FAIL:-0}" = "1" ] && [ "$object" = "log.md" ]; then
+    exit 7
+  fi
+  if [ "$syncs_so_far" -ge 1 ] \
+      && [ "${RCLONE_POST_SYNC_APPEND_LOG:-0}" = "1" ] && [ "$object" = "log.md" ]; then
+    append_file="$SNAPSHOT_TEST_ROOT/store-append-count"
+    appends="$(cat "$append_file")"
+    appends=$((appends + 1))
+    printf '%s\n' "$appends" > "$append_file"
+    if [ "${RCLONE_POST_SYNC_APPEND_SECOND:-0}" = "1" ] && [ "$appends" -ge 2 ]; then
+      cp "$SNAPSHOT_TEST_ROOT/second-append-log.md" /dev/stdout
+    else
+      cp "$SNAPSHOT_TEST_ROOT/post-sync-log.md" /dev/stdout
+    fi
+    exit 0
+  fi
+  if [ "$syncs_so_far" -ge 1 ] \
+      && [ "${RCLONE_POST_SYNC_SHORTER_LOG:-0}" = "1" ] && [ "$object" = "log.md" ]; then
+    cp "$SNAPSHOT_TEST_ROOT/shorter-log.md" /dev/stdout
+    exit 0
+  fi
+  if [ "$syncs_so_far" -ge 1 ] \
+      && [ "${RCLONE_POST_SYNC_DIVERGENT_LOG:-0}" = "1" ] && [ "$object" = "log.md" ]; then
+    cp "$SNAPSHOT_TEST_ROOT/divergent-log.md" /dev/stdout
+    exit 0
+  fi
+  if [ "$syncs_so_far" -ge 1 ] \
+      && [ "${RCLONE_POST_SYNC_DIVERGENT_INDEX:-0}" = "1" ] && [ "$object" = "index.md" ]; then
+    cp "$SNAPSHOT_TEST_ROOT/divergent-index.md" /dev/stdout
+    exit 0
+  fi
   if [ "$count" -gt "${RCLONE_PARITY_VISIBLE_AFTER_CALLS:-0}" ]; then
     cp "$SNAPSHOT_TEST_ROOT/expected-$object" /dev/stdout
   else
@@ -1242,9 +1287,27 @@ if [ "$cmd" = "cat" ]; then
   exit 0
 fi
 if [ "$cmd" = "sync" ]; then
+  sync_file="$SNAPSHOT_TEST_ROOT/sync-count"
+  syncs="$(cat "$sync_file")"
+  syncs=$((syncs + 1))
+  printf '%s\n' "$syncs" > "$sync_file"
+  if [ "$syncs" -ge 2 ] && [ "${RCLONE_RETRY_SYNC_FAIL:-0}" = "1" ]; then
+    exit 7
+  fi
   if [ "${RCLONE_SYNC_STALE_PROJECTION:-0}" = "1" ]; then
     cp "$SNAPSHOT_TEST_ROOT/stale-index.md" "$3/index.md"
     cp "$SNAPSHOT_TEST_ROOT/stale-log.md" "$3/log.md"
+  elif [ "${RCLONE_POST_SYNC_APPEND_LOG:-0}" = "1" ]; then
+    # The first sync lands the pre-append store bytes, so the worktree is one
+    # append behind the store and the post-sync gate must detect the race. The
+    # single recovery sync (sync #2) lands the appended log. A third sync would
+    # prove a forbidden second retry.
+    cp "$SNAPSHOT_TEST_ROOT/expected-index.md" "$3/index.md"
+    if [ "$syncs" -ge 2 ]; then
+      cp "$SNAPSHOT_TEST_ROOT/post-sync-log.md" "$3/log.md"
+    else
+      cp "$SNAPSHOT_TEST_ROOT/expected-log.md" "$3/log.md"
+    fi
   elif [ "${RCLONE_SYNC_NEWER_LOG:-0}" = "1" ] \
       || [ "${RCLONE_PARITY_STORE_AHEAD_LOG:-0}" = "1" ]; then
     cp "$SNAPSHOT_TEST_ROOT/expected-index.md" "$3/index.md"
@@ -1448,7 +1511,7 @@ test_snapshot_newer_log_during_sync_promotes_when_store_matches() {
 test_snapshot_semantic_projection_drift_fails_before_commit() {
   local root
   root="$(mktemp -d)"
-  local setup git_dir bin_dir before_head after_head
+  local setup git_dir bin_dir before_head after_head syncs
   setup="$(setup_projection_parity_fixture "$root")"
   git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
   bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
@@ -1459,9 +1522,11 @@ test_snapshot_semantic_projection_drift_fails_before_commit() {
     SNAPSHOT_PREVIEW_DRIFT=1
   local rc=$?
   after_head="$(git -C "$git_dir" rev-parse HEAD)"
+  syncs="$(cat "$root/sync-count")"
 
   if [ "$rc" -ne 0 ] \
       && [ "$before_head" = "$after_head" ] \
+      && [ "$syncs" = "1" ] \
       && grep -q 'projection semantic preview mismatch' "$root/wiki-snapshot.log" \
       && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
     printf 'PASS: semantic projection drift fails before commit\n'
@@ -1475,12 +1540,264 @@ test_snapshot_semantic_projection_drift_fails_before_commit() {
   rm -rf "$root"
 }
 
+# ── Post-sync direct-S3 log append race ──────────────────────
+# An MCP log.md append that lands after the pre-sync parity wait (or after the
+# post-repair sync) leaves S3 log.md strictly longer than the worktree copy, so
+# the post-sync exact worktree parity gate fails on a store that is otherwise
+# self-consistent. The script must recognize exactly that one shape, perform at
+# most ONE additional full rclone sync with the existing RCLONE_OPTS, repeat
+# delete-intent reconciliation, re-read the store, and re-run the existing
+# worktree parity and semantic preview gates. Every other mismatch must refuse
+# before Git commit without retrying.
+
+test_snapshot_recovers_post_sync_log_append_with_one_retry() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir before_head after_head syncs
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_POST_SYNC_APPEND_LOG=1
+  local rc=$?
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+  syncs="$(cat "$root/sync-count")"
+
+  if [ "$rc" -eq 0 ] \
+      && grep -q 'post-sync log-append race detected; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
+      && grep -q 'projection worktree parity confirmed' "$root/wiki-snapshot.log" \
+      && grep -q 'projection semantic preview confirmed' "$root/wiki-snapshot.log" \
+      && grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log" \
+      && ! grep -q 'FAIL projection candidate verification; snapshot promotion refused' "$root/wiki-snapshot.log" \
+      && ! grep -q 'post-sync log-append race retry projection candidate verification' "$root/wiki-snapshot.log" \
+      && [ "$syncs" = "2" ] \
+      && [ "$after_head" != "$before_head" ] \
+      && cmp -s "$root/post-sync-log.md" "$git_dir/log.md"; then
+    printf 'PASS: post-sync log append recovers with exactly one additional sync\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: post-sync log append recovery (rc=%s syncs=%s before=%s after=%s log=%s calls=%s)\n' \
+      "$rc" "$syncs" "$before_head" "$after_head" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)" \
+      "$(tr '\n' ';' < "$root/rclone.calls" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_post_sync_log_append_second_race_fails_closed() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir before_head after_head syncs
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_POST_SYNC_APPEND_LOG=1 \
+    RCLONE_POST_SYNC_APPEND_SECOND=1
+  local rc=$?
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+  syncs="$(cat "$root/sync-count")"
+
+  if [ "$rc" -ne 0 ] \
+      && [ "$before_head" = "$after_head" ] \
+      && [ "$syncs" = "2" ] \
+      && grep -q 'post-sync log-append race detected; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
+      && grep -q 'FAIL post-sync log-append race retry projection candidate verification; snapshot promotion refused' "$root/wiki-snapshot.log" \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
+    printf 'PASS: second post-sync log append refuses before commit after one retry\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: second post-sync race (rc=%s syncs=%s before=%s after=%s log=%s)\n' \
+      "$rc" "$syncs" "$before_head" "$after_head" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_shorter_store_log_does_not_retry_sync() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir before_head after_head syncs
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_POST_SYNC_SHORTER_LOG=1
+  local rc=$?
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+  syncs="$(cat "$root/sync-count")"
+
+  if [ "$rc" -ne 0 ] \
+      && [ "$before_head" = "$after_head" ] \
+      && [ "$syncs" = "1" ] \
+      && grep -q 'current store log.md is not a strict prefix extension of worktree log.md' "$root/wiki-snapshot.log" \
+      && grep -q 'FAIL projection candidate verification; snapshot promotion refused' "$root/wiki-snapshot.log" \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
+    printf 'PASS: shorter store log refuses before commit without a retry sync\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: shorter store log (rc=%s syncs=%s before=%s after=%s log=%s)\n' \
+      "$rc" "$syncs" "$before_head" "$after_head" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_divergent_store_log_does_not_retry_sync() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir before_head after_head syncs
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_POST_SYNC_DIVERGENT_LOG=1
+  local rc=$?
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+  syncs="$(cat "$root/sync-count")"
+
+  if [ "$rc" -ne 0 ] \
+      && [ "$before_head" = "$after_head" ] \
+      && [ "$syncs" = "1" ] \
+      && grep -q 'current store log.md is not a strict prefix extension of worktree log.md' "$root/wiki-snapshot.log" \
+      && ! grep -q 'post-sync log-append race detected; performed one additional rclone sync' "$root/wiki-snapshot.log" \
+      && grep -q 'FAIL projection candidate verification; snapshot promotion refused' "$root/wiki-snapshot.log" \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
+    printf 'PASS: divergent store log refuses before commit without a retry sync\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: divergent store log (rc=%s syncs=%s before=%s after=%s log=%s)\n' \
+      "$rc" "$syncs" "$before_head" "$after_head" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_store_index_mismatch_does_not_retry_sync() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir before_head after_head syncs
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_POST_SYNC_APPEND_LOG=1 \
+    RCLONE_POST_SYNC_DIVERGENT_INDEX=1
+  local rc=$?
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+  syncs="$(cat "$root/sync-count")"
+
+  if [ "$rc" -ne 0 ] \
+      && [ "$before_head" = "$after_head" ] \
+      && [ "$syncs" = "1" ] \
+      && grep -q 'current store index.md differs from worktree index.md' "$root/wiki-snapshot.log" \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
+    printf 'PASS: store index mismatch refuses before commit without a retry sync\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: store index mismatch (rc=%s syncs=%s before=%s after=%s log=%s)\n' \
+      "$rc" "$syncs" "$before_head" "$after_head" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_post_sync_read_failure_does_not_retry() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir before_head after_head syncs
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_POST_SYNC_READ_FAIL=1
+  local rc=$?
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+  syncs="$(cat "$root/sync-count")"
+
+  if [ "$rc" -ne 0 ] \
+      && [ "$before_head" = "$after_head" ] \
+      && [ "$syncs" = "1" ] \
+      && grep -q 'could not read current store log.md after sync' "$root/wiki-snapshot.log" \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
+    printf 'PASS: post-sync store read failure refuses without retry\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: post-sync store read failure (rc=%s syncs=%s log=%s)\n' \
+      "$rc" "$syncs" "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_post_sync_retry_sync_failure_refuses() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir before_head after_head syncs
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    RCLONE_POST_SYNC_APPEND_LOG=1 \
+    RCLONE_RETRY_SYNC_FAIL=1
+  local rc=$?
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+  syncs="$(cat "$root/sync-count")"
+
+  if [ "$rc" -ne 0 ] \
+      && [ "$before_head" = "$after_head" ] \
+      && [ "$syncs" = "2" ] \
+      && grep -q 'log-append race retry rclone sync failed' "$root/wiki-snapshot.log" \
+      && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
+    printf 'PASS: post-sync retry sync failure refuses before commit\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: post-sync retry sync failure (rc=%s syncs=%s log=%s)\n' \
+      "$rc" "$syncs" "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
 test_snapshot_waits_for_direct_remote_projection_parity
 test_snapshot_projection_parity_timeout_fails_before_sync
 test_snapshot_stale_worktree_projection_fails_before_commit
 test_snapshot_store_ahead_log_promotes_when_index_matches
 test_snapshot_newer_log_during_sync_promotes_when_store_matches
 test_snapshot_semantic_projection_drift_fails_before_commit
+test_snapshot_recovers_post_sync_log_append_with_one_retry
+test_snapshot_post_sync_log_append_second_race_fails_closed
+test_snapshot_shorter_store_log_does_not_retry_sync
+test_snapshot_divergent_store_log_does_not_retry_sync
+test_snapshot_store_index_mismatch_does_not_retry_sync
+test_snapshot_post_sync_read_failure_does_not_retry
+test_snapshot_post_sync_retry_sync_failure_refuses
 
 # ── Canonical completion record (v0.10.14) ────────────────────
 # wiki-snapshot.sh must emit one stable machine-parseable terminal record

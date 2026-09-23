@@ -1042,6 +1042,84 @@ if [ ! -f "$SNAPSHOT_WORKTREE/index.md" ]; then
     exit 1
 fi
 
+# --- Post-sync direct-S3 log append race ---
+# An MCP log.md append that lands after the pre-sync parity wait (or after the
+# post-repair sync) leaves S3 log.md strictly longer than the worktree copy.
+# The post-sync gate has already refreshed expectations from direct S3. Compare
+# those bytes with the worktree before running the terminal parity gate. Only a
+# strict append of log.md with an unchanged index.md permits one more sync.
+snapshot_post_sync_log_append_race_detected() {
+    [ -n "$PROJECTION_STATE_DIR" ] || return 1
+    [ -f "$SNAPSHOT_WORKTREE/index.md" ] || return 1
+    [ -f "$SNAPSHOT_WORKTREE/log.md" ] || return 1
+    if ! cmp -s "$SNAPSHOT_WORKTREE/index.md" "$PROJECTION_STATE_DIR/expected-index.md"; then
+        log "post-sync log-append race: current store index.md differs from worktree index.md; no additional sync"
+        return 1
+    fi
+    if ! snapshot_projection_log_is_store_ahead "$SNAPSHOT_WORKTREE/log.md" "$PROJECTION_STATE_DIR/expected-log.md"; then
+        log "post-sync log-append race: current store log.md is not a strict prefix extension of worktree log.md; no additional sync"
+        return 1
+    fi
+    return 0
+}
+
+# Run one additional full rclone sync with the existing RCLONE_OPTS, then repeat
+# delete-intent reconciliation, re-read the current store, and re-run the
+# existing exact worktree parity and semantic preview gates. Returns 0 only when
+# the recovery converged; the caller refuses (without a second retry) otherwise.
+snapshot_retry_sync_after_log_append_race() {
+    local context="${1:-post-sync}"
+    if ! rclone sync "$CLOUD_REMOTE" "$SNAPSHOT_WORKTREE" "${RCLONE_OPTS[@]}" --stats 10s 2>&1 | tee "$RCLONE_LOG"; then
+        log "ERROR: $context log-append race retry rclone sync failed"
+        tail -50 "$RCLONE_LOG" >> "$LOG_FILE" 2>/dev/null || true
+        rm -f "$RCLONE_LOG"
+        return 1
+    fi
+    rm -f "$RCLONE_LOG"
+    log "post-sync log-append race detected; performed one additional rclone sync context=$context"
+    if ! snapshot_reconcile_delete_intents; then
+        log "ERROR: $context log-append race retry delete-intent reconciliation failed"
+        return 1
+    fi
+    snapshot_gate_projection_candidate \
+        "FAIL $context log-append race retry projection expectation refresh; snapshot promotion refused" \
+        "FAIL $context log-append race retry projection candidate verification; snapshot promotion refused"
+}
+
+# Post-sync projection gate with at most one log-append-race recovery.
+# A first failure that is not the recoverable log-append shape (or that does not
+# converge after the single retry) is logged as the terminal refusal.
+snapshot_gate_projection_candidate_with_race_retry() {
+    local context="${1:-post-sync}"
+    local refresh_fail="$2"
+    local verify_fail="$3"
+    if ! snapshot_refresh_projection_expectations_from_store; then
+        log "$refresh_fail"
+        return 1
+    fi
+    # Exact byte parity is the ordinary path. Its semantic preview is terminal:
+    # a later append must not turn a preview failure into a retry.
+    if [ -z "$PROJECTION_STATE_DIR" ] \
+        || { cmp -s "$PROJECTION_STATE_DIR/expected-index.md" "$SNAPSHOT_WORKTREE/index.md" \
+            && cmp -s "$PROJECTION_STATE_DIR/expected-log.md" "$SNAPSHOT_WORKTREE/log.md"; }; then
+        if snapshot_verify_projection_candidate; then
+            return 0
+        fi
+        log "$verify_fail"
+        return 1
+    fi
+    if ! snapshot_post_sync_log_append_race_detected; then
+        snapshot_verify_worktree_projection_parity || true
+        log "$verify_fail"
+        return 1
+    fi
+    if snapshot_retry_sync_after_log_append_race "$context"; then
+        return 0
+    fi
+    log "$verify_fail"
+    return 1
+}
+
 # --- Delete-intent no-resurrect ---
 # Git is SSOT for intentional absences. After S3→worktree sync, strip any path
 # that has an active tombstone on origin/main and optionally prune S3.
@@ -1195,7 +1273,8 @@ snapshot_reconcile_delete_intents() {
 if ! snapshot_reconcile_delete_intents; then
     exit 1
 fi
-if ! snapshot_gate_projection_candidate \
+if ! snapshot_gate_projection_candidate_with_race_retry \
+    "post-sync" \
     "FAIL projection expectation refresh after sync; snapshot promotion refused" \
     "FAIL projection candidate verification; snapshot promotion refused"; then
     exit 1
@@ -1270,7 +1349,8 @@ if [ "$needs_repair" = true ]; then
     if ! snapshot_reconcile_delete_intents; then
         exit 1
     fi
-    if ! snapshot_gate_projection_candidate \
+    if ! snapshot_gate_projection_candidate_with_race_retry \
+        "post-repair" \
         "FAIL post-repair projection expectation refresh after sync; snapshot promotion refused" \
         "FAIL post-repair projection candidate verification; snapshot promotion refused"; then
         exit 1
