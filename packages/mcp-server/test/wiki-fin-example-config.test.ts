@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { configVaultRegistry, loadConfig } from "../src/config.js";
@@ -30,14 +30,14 @@ describe("wiki-fin Slice 6a example config", () => {
     const extra = registry.entries.get("wiki-fin");
     expect(extra).toBeDefined();
     expect(extra!.enabled).toBe(false);
-    expect(extra!.localRoot).toBe("/opt/skillwiki-mcp/vault-wiki-fin");
+    expect(extra!.localRoot).toBe(resolve("/opt/skillwiki-mcp/vault-wiki-fin"));
     expect(extra!.rclonePath).toBe("cloud/wiki-fin");
     expect(extra!.s3Bucket).toBe("cloud");
     expect(extra!.s3Prefix).toBe("wiki-fin");
     expect(extra!.snapshotAuthority).toBe("sg01-wiki-fin-snapshot");
     expect(extra!.projectionAuthority).toBe("sg01-wiki-fin-snapshot");
     const central = registry.entries.get("central")!;
-    expect(central.localRoot).toBe("/opt/skillwiki-mcp/vault");
+    expect(central.localRoot).toBe(resolve("/opt/skillwiki-mcp/vault"));
     expect(central.rclonePath).toBe("cloud/wiki");
     expect(namespacesOverlap("cloud/wiki", "cloud/wiki-fin")).toBe(false);
     expect(namespacesOverlap("cloud/wiki", "cloud/wiki/fin")).toBe(true);
