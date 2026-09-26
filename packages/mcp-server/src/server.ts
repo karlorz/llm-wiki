@@ -162,6 +162,10 @@ export function toolResult(data: unknown, isError = false) {
   };
 }
 
+function writeToolResult(data: { ok: boolean }, vaultId: string) {
+  return toolResult(data.ok ? { ...data, vault_id: vaultId } : data, !data.ok);
+}
+
 function mcpServerPackageVersion(): string {
   return (
     JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
@@ -531,6 +535,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
         ...failureShape,
         path: z.string().optional(),
         writer_id: z.string().optional(),
+        vault_id: z.string().optional(),
       }).passthrough(),
       annotations: {
         readOnlyHint: false,
@@ -542,7 +547,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       const selected = bind(args.vault);
       if (!selected.ok) return toolResult(selected, true);
       const out = await wikiCapture(selected.writes, args);
-      return toolResult(out, !out.ok);
+      return writeToolResult(out, selected.writes.vaultId);
     },
   );
 
@@ -566,6 +571,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
         log_sha256: z.string().optional(),
         s3_verified: z.boolean().optional(),
         projection_repaired: z.boolean().optional(),
+        vault_id: z.string().optional(),
       }).passthrough(),
       annotations: {
         readOnlyHint: false,
@@ -577,7 +583,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       const selected = bind(args.vault);
       if (!selected.ok) return toolResult(selected, true);
       const out = await wikiLogAppend(selected.writes, args);
-      return toolResult(out, !out.ok);
+      return writeToolResult(out, selected.writes.vaultId);
     },
   );
 
@@ -594,6 +600,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       }),
       outputSchema: z.object({
         ...failureShape,
+        vault_id: z.string().optional(),
       }).passthrough(),
       annotations: {
         readOnlyHint: false,
@@ -606,7 +613,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       const selected = bind(args.vault);
       if (!selected.ok) return toolResult(selected, true);
       const out = await wikiWorkitemWrite(selected.writes, args);
-      return toolResult(out, !out.ok);
+      return writeToolResult(out, selected.writes.vaultId);
     },
   );
 
@@ -623,6 +630,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       }),
       outputSchema: z.object({
         ...failureShape,
+        vault_id: z.string().optional(),
       }).passthrough(),
       annotations: {
         readOnlyHint: false,
@@ -635,7 +643,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       const selected = bind(args.vault);
       if (!selected.ok) return toolResult(selected, true);
       const out = await wikiPagePublish(selected.writes, args);
-      return toolResult(out, !out.ok);
+      return writeToolResult(out, selected.writes.vaultId);
     },
   );
 

@@ -104,6 +104,8 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       expect(instructions).toContain("default_vault:");
       expect(instructions).toContain("allowed_vaults:");
       expect(instructions).toContain("central");
+      expect(instructions).toContain("check its successful receipt's `vault_id`");
+      expect(instructions).toContain("Verify its returned `path` with `wiki_read_page`");
       expect(instructions).toContain("default_vault:");
       expect(instructions).toContain("allowed_vaults:");
       expect(instructions).toContain("central");

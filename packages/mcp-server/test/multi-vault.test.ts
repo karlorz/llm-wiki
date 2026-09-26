@@ -231,6 +231,12 @@ describe("multi-vault HTTP MCP slices 1-5", () => {
           expect(sc.default_vault).toBe("central");
           expect(sc.vault_id).toBe("central");
         }
+        if (["wiki_capture", "wiki_log_append", "wiki_workitem_write", "wiki_page_publish"].includes(name)) {
+          expect(sc.ok, name).toBe(true);
+          expect(sc.vault_id, name).toBe("central");
+          const result = body.result as { content: Array<{ text: string }> };
+          expect(JSON.parse(result.content[0]!.text), name).toEqual(sc);
+        }
       }
       expect(ctx.extraS3.store.has("concepts/omit-page.md")).toBe(false);
       expect(ctx.centralS3.store.has("concepts/omit-page.md")).toBe(true);
@@ -261,6 +267,7 @@ describe("multi-vault HTTP MCP slices 1-5", () => {
         vault: "wiki-fin",
       });
       expect(structured(writeBody).ok).toBe(false);
+      expect(structured(writeBody).vault_id).toBeUndefined();
       expect(ctxSnapshot(unauthorized.centralS3.store)).toEqual(beforeCentral);
       expect(ctxSnapshot(unauthorized.extraS3.store)).toEqual(beforeExtra);
     } finally {
@@ -333,6 +340,7 @@ wiki-fin updated
         ).body,
       );
       expect(extraWrite.ok).toBe(true);
+      expect(extraWrite.vault_id).toBe("wiki-fin");
       const centralAfter = await readFile(join(ctx.central, "concepts", "shared.md"), "utf8");
       expect(centralAfter).toContain("central body");
       expect(await readFile(join(ctx.extra, "concepts", "shared.md"), "utf8")).toContain("wiki-fin updated");
@@ -349,8 +357,56 @@ wiki-fin updated
         ).body,
       );
       expect(capture.ok).toBe(true);
+      expect(capture.vault_id).toBe("wiki-fin");
       expect(ctx.centralS3.store.has(String(capture.path))).toBe(false);
       expect(ctx.extraS3.store.has(String(capture.path))).toBe(true);
+
+      const logAppend = structured(
+        (await callTool(ctx.port, ctx.token, "wiki_log_append", {
+          vault: "wiki-fin",
+          content: "extra vault log receipt",
+        })).body,
+      );
+      expect(logAppend.ok).toBe(true);
+      expect(logAppend.vault_id).toBe("wiki-fin");
+      expect(ctx.centralS3.store.has(String(logAppend.event_path))).toBe(false);
+      expect(ctx.extraS3.store.has(String(logAppend.event_path))).toBe(true);
+
+      const workPath = "projects/finance/work/2026-09-18-vault-receipt/spec.md";
+      const workWrite = structured(
+        (await callTool(ctx.port, ctx.token, "wiki_workitem_write", {
+          vault: "wiki-fin",
+          path: workPath,
+          content: "# Finance work item\n",
+        })).body,
+      );
+      expect(workWrite.ok).toBe(true);
+      expect(workWrite.vault_id).toBe("wiki-fin");
+      expect(ctx.centralS3.store.has(workPath)).toBe(false);
+      expect(ctx.extraS3.store.has(workPath)).toBe(true);
+
+      const rejectedCapture = structured(
+        (await callTool(ctx.port, ctx.token, "wiki_capture", {
+          vault: "wiki-fin",
+          kind: "note",
+          project: "missing-project",
+          title: "rejected",
+          content: "no capture",
+        })).body,
+      );
+      expect(rejectedCapture).toMatchObject({ ok: false, error: "USAGE" });
+      expect(rejectedCapture.vault_id).toBeUndefined();
+
+      const rejectedCas = structured(
+        (await callTool(ctx.port, ctx.token, "wiki_page_publish", {
+          vault: "wiki-fin",
+          path: "concepts/shared.md",
+          content: "# Stale overwrite\n",
+          base_sha256: "0".repeat(64),
+        })).body,
+      );
+      expect(rejectedCas).toMatchObject({ ok: false, error: "FILE_CHANGED" });
+      expect(rejectedCas.vault_id).toBeUndefined();
 
       const audit = await readFile(join(ctx.central, "audit.jsonl"), "utf8");
       expect(audit).toContain('"vault_id":"wiki-fin"');
