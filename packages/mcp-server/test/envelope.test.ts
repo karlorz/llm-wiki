@@ -149,6 +149,7 @@ describe("C4 typed result envelope and request body cap", () => {
         const tool = toolMap.get(name);
         expect(tool, `tool ${name} exists`).toBeDefined();
         expect(tool?.outputSchema, `tool ${name} has outputSchema`).toBeDefined();
+        expect((tool?.outputSchema?.properties as Record<string, unknown>)?.vault_id, name).toBeDefined();
         expect(tool?.annotations).toEqual({
           readOnlyHint: false,
           destructiveHint: false,
@@ -160,6 +161,7 @@ describe("C4 typed result envelope and request body cap", () => {
         const tool = toolMap.get(name);
         expect(tool, `tool ${name} exists`).toBeDefined();
         expect(tool?.outputSchema, `tool ${name} has outputSchema`).toBeDefined();
+        expect((tool?.outputSchema?.properties as Record<string, unknown>)?.vault_id, name).toBeDefined();
         expect(tool?.annotations).toEqual({
           readOnlyHint: false,
           destructiveHint: false,

@@ -125,7 +125,10 @@ describe("skillwiki connect", () => {
     expect(r.result.data.ok).toBe(true);
     expect(r.result.data.reconcile_ready).toBe(true);
     expect(existsSync(dest)).toBe(true);
-    expect(statSync(dest).mode & 0o777).toBe(0o600);
+    // Windows reports synthesized mode bits; POSIX permissions are not observable there.
+    if (process.platform !== "win32") {
+      expect(statSync(dest).mode & 0o777).toBe(0o600);
+    }
     expect(readFileSync(dest, "utf8")).toContain(`SKILLWIKI_MCP_TOKEN=${PLANTED}`);
     assertNoSecret(r.result);
   });
