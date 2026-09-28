@@ -132,12 +132,27 @@ export function consentClientLabel(clientName?: string | null): string {
   return trimmed && trimmed.length > 0 ? trimmed : "this client";
 }
 
+export function isLoopbackRedirectUri(raw: string | undefined): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:") return false;
+    const host = parsed.hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
 function authorizeLoginHtml(params: Record<string, string>, error?: string, clientName?: string | null): string {
   const hiddens = AUTHORIZE_HIDDEN_KEYS.filter((key) => params[key])
     .map((key) => `<input type="hidden" name="${key}" value="${escapeHtml(params[key])}">`)
     .join("\n");
   const err = error ? `<p role="alert">${escapeHtml(error)}</p>` : "";
   const clientLabel = escapeHtml(consentClientLabel(clientName));
+  const loopbackNote = isLoopbackRedirectUri(params.redirect_uri)
+    ? `<p>This client uses a loopback callback. Approve only if this browser is on the same machine as the waiting MCP client. Remote SSH sessions should use a host-id bearer instead of this login.</p>`
+    : "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -148,6 +163,7 @@ function authorizeLoginHtml(params: Record<string, string>, error?: string, clie
 <body>
 <h1>SkillWiki</h1>
 <p>Enter the operator password to allow ${clientLabel} to access this vault.</p>
+${loopbackNote}
 ${err}
 <form method="post" action="/authorize">
 ${hiddens}

@@ -8,6 +8,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROBE="$REPO_ROOT/packages/skills/scripts/check_readiness.py"
 ROOT_PROBE="$REPO_ROOT/scripts/check_readiness.py"
 SKILL="$REPO_ROOT/packages/skills/skillwiki-mcp/SKILL.md"
+CONNECT="$REPO_ROOT/packages/skills/skillwiki-connect/SKILL.md"
 MCP_JSON="$REPO_ROOT/packages/skills/.mcp.json"
 
 JSON_FILES=(
@@ -58,6 +59,7 @@ assert_json_file() {
 assert_file "$PROBE"
 assert_file "$ROOT_PROBE"
 assert_file "$SKILL"
+assert_file "$CONNECT"
 for json_path in "${JSON_FILES[@]}"; do
   assert_file "$json_path"
 done
@@ -79,7 +81,14 @@ MISSING_OUT="$(mktemp "${TMPDIR:-/tmp}/skillwiki-readiness-missing.XXXXXX")"
 MISSING_ERR="$(mktemp "${TMPDIR:-/tmp}/skillwiki-readiness-missing-err.XXXXXX")"
 PRESENT_OUT="$(mktemp "${TMPDIR:-/tmp}/skillwiki-readiness-present.XXXXXX")"
 PRESENT_ERR="$(mktemp "${TMPDIR:-/tmp}/skillwiki-readiness-present-err.XXXXXX")"
-cleanup() { rm -f "$MISSING_OUT" "$MISSING_ERR" "$PRESENT_OUT" "$PRESENT_ERR"; }
+SSH_MISSING_OUT="$(mktemp "${TMPDIR:-/tmp}/skillwiki-readiness-ssh-missing.XXXXXX")"
+SSH_MISSING_ERR="$(mktemp "${TMPDIR:-/tmp}/skillwiki-readiness-ssh-missing-err.XXXXXX")"
+SSH_PRESENT_OUT="$(mktemp "${TMPDIR:-/tmp}/skillwiki-readiness-ssh-present.XXXXXX")"
+SSH_PRESENT_ERR="$(mktemp "${TMPDIR:-/tmp}/skillwiki-readiness-ssh-present-err.XXXXXX")"
+cleanup() {
+  rm -f "$MISSING_OUT" "$MISSING_ERR" "$PRESENT_OUT" "$PRESENT_ERR" \
+    "$SSH_MISSING_OUT" "$SSH_MISSING_ERR" "$SSH_PRESENT_OUT" "$SSH_PRESENT_ERR"
+}
 trap cleanup EXIT
 
 # Missing token: fail closed (exit 2), missing_prereq, no secret leakage.
@@ -98,6 +107,38 @@ if grep -Eiq 'sk-|bearer |token=' "$MISSING_OUT" "$MISSING_ERR"; then
   FAIL=$((FAIL + 1))
 else
   printf 'PASS: missing-token output does not print a token\n'
+  PASS=$((PASS + 1))
+fi
+
+MISSING_WARN="$(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv[1])).get('warnings') or []))" "$MISSING_OUT")"
+if printf '%s' "$MISSING_WARN" | grep -Fq "headless_oauth_loopback"; then
+  printf 'FAIL: non-SSH missing token must not warn headless_oauth_loopback\n'
+  FAIL=$((FAIL + 1))
+else
+  printf 'PASS: non-SSH missing token has no headless_oauth_loopback warning\n'
+  PASS=$((PASS + 1))
+fi
+
+set +e
+run_probe SSH_CONNECTION="1.2.3.4 12345 5.6.7.8 22" >"$SSH_MISSING_OUT" 2>"$SSH_MISSING_ERR"
+SSH_MISSING_RC=$?
+set -e
+assert_eq "SSH missing token exit code" "2" "$SSH_MISSING_RC"
+SSH_MISSING_STATUS="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('status',''))" "$SSH_MISSING_OUT")"
+assert_eq "SSH missing token status" "missing_prereq" "$SSH_MISSING_STATUS"
+SSH_MISSING_WARN="$(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv[1])).get('warnings') or []))" "$SSH_MISSING_OUT")"
+if printf '%s' "$SSH_MISSING_WARN" | grep -Fq "headless_oauth_loopback"; then
+  printf 'PASS: SSH missing token warns headless_oauth_loopback\n'
+  PASS=$((PASS + 1))
+else
+  printf 'FAIL: SSH missing token must warn headless_oauth_loopback: %s\n' "$SSH_MISSING_WARN"
+  FAIL=$((FAIL + 1))
+fi
+if grep -Eiq 'sk-|bearer |token=' "$SSH_MISSING_OUT" "$SSH_MISSING_ERR"; then
+  printf 'FAIL: SSH missing-token output leaked a token-like string\n'
+  FAIL=$((FAIL + 1))
+else
+  printf 'PASS: SSH missing-token output does not print a token\n'
   PASS=$((PASS + 1))
 fi
 
@@ -124,6 +165,29 @@ if grep -Fq "$TOKEN_VALUE" "$PRESENT_OUT" "$PRESENT_ERR"; then
   FAIL=$((FAIL + 1))
 else
   printf 'PASS: probe does not print the bearer token\n'
+  PASS=$((PASS + 1))
+fi
+
+set +e
+run_probe SKILLWIKI_MCP_TOKEN="$TOKEN_VALUE" SSH_TTY="/dev/pts/0" >"$SSH_PRESENT_OUT" 2>"$SSH_PRESENT_ERR"
+SSH_PRESENT_RC=$?
+set -e
+assert_eq "SSH present token exit code" "0" "$SSH_PRESENT_RC"
+SSH_PRESENT_STATUS="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('status',''))" "$SSH_PRESENT_OUT")"
+assert_eq "SSH present token status" "in_sync" "$SSH_PRESENT_STATUS"
+SSH_PRESENT_WARN="$(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv[1])).get('warnings') or []))" "$SSH_PRESENT_OUT")"
+if printf '%s' "$SSH_PRESENT_WARN" | grep -Fq "headless_oauth_loopback"; then
+  printf 'FAIL: SSH with token must not warn headless_oauth_loopback: %s\n' "$SSH_PRESENT_WARN"
+  FAIL=$((FAIL + 1))
+else
+  printf 'PASS: SSH with token has no headless_oauth_loopback warning\n'
+  PASS=$((PASS + 1))
+fi
+if grep -Fq "$TOKEN_VALUE" "$SSH_PRESENT_OUT" "$SSH_PRESENT_ERR"; then
+  printf 'FAIL: SSH present-token probe printed the bearer token\n'
+  FAIL=$((FAIL + 1))
+else
+  printf 'PASS: SSH present-token probe does not print the bearer token\n'
   PASS=$((PASS + 1))
 fi
 
@@ -235,11 +299,46 @@ else
   printf 'FAIL: skill missing wiki_capture / wiki_log_append\n'
   FAIL=$((FAIL + 1))
 fi
+if grep -Fq "headless_oauth_loopback" "$SKILL"; then
+  printf 'PASS: skill mentions headless_oauth_loopback\n'
+  PASS=$((PASS + 1))
+else
+  printf 'FAIL: skill missing headless_oauth_loopback\n'
+  FAIL=$((FAIL + 1))
+fi
+if grep -Fiq "do not tell the operator to click the login link on another machine" "$SKILL"; then
+  printf 'PASS: skill forbids completing OAuth login on another machine\n'
+  PASS=$((PASS + 1))
+else
+  printf 'FAIL: skill does not forbid completing OAuth login on another machine\n'
+  FAIL=$((FAIL + 1))
+fi
 if grep -Ei "raw/transcripts/" "$SKILL" | grep -Eiq "never|do not|don't"; then
   printf 'PASS: skill forbids local raw/transcripts capture writes\n'
   PASS=$((PASS + 1))
 else
   printf 'FAIL: skill does not forbid local raw/transcripts capture writes\n'
+  FAIL=$((FAIL + 1))
+fi
+if grep -Fiq "complete SkillWiki OAuth login in a laptop browser" "$CONNECT"; then
+  printf 'PASS: skillwiki-connect forbids laptop OAuth login for SSH hosts\n'
+  PASS=$((PASS + 1))
+else
+  printf 'FAIL: skillwiki-connect missing SSH OAuth loopback rule\n'
+  FAIL=$((FAIL + 1))
+fi
+if grep -Fq "skillwiki connect --from-file" "$CONNECT"; then
+  printf 'PASS: skillwiki-connect names --from-file overlay\n'
+  PASS=$((PASS + 1))
+else
+  printf 'FAIL: skillwiki-connect missing skillwiki connect --from-file\n'
+  FAIL=$((FAIL + 1))
+fi
+if cmp -s "$PROBE" "$ROOT_PROBE"; then
+  printf 'PASS: scripts/check_readiness.py matches packages/skills probe\n'
+  PASS=$((PASS + 1))
+else
+  printf 'FAIL: scripts/check_readiness.py diverges from packages/skills probe\n'
   FAIL=$((FAIL + 1))
 fi
 

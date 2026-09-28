@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bearerToken, resolveWriter, unauthorizedHeaders } from "../src/auth.js";
-import { consentClientLabel, hashPassword } from "../src/oauth.js";
+import { consentClientLabel, hashPassword, isLoopbackRedirectUri } from "../src/oauth.js";
 import { FileOAuthStore, InMemoryOAuthStore } from "../src/oauth-store.js";
 import { ReconcileGate } from "../src/reconcile.js";
 import { startMcpHttpServer } from "../src/server.js";
@@ -21,6 +21,21 @@ describe("OAuth consent client label", () => {
     expect(consentClientLabel(undefined)).toBe("this client");
     expect(consentClientLabel("")).toBe("this client");
     expect(consentClientLabel("   ")).toBe("this client");
+  });
+});
+
+describe("OAuth loopback redirect detection", () => {
+  it("accepts http loopback hosts", () => {
+    expect(isLoopbackRedirectUri("http://localhost:3118/callback")).toBe(true);
+    expect(isLoopbackRedirectUri("http://127.0.0.1/callback")).toBe(true);
+    expect(isLoopbackRedirectUri("http://[::1]/callback")).toBe(true);
+  });
+
+  it("rejects https and non-loopback http", () => {
+    expect(isLoopbackRedirectUri("https://chatgpt.com/connector/oauth/callback")).toBe(false);
+    expect(isLoopbackRedirectUri("http://example.com/callback")).toBe(false);
+    expect(isLoopbackRedirectUri("not a url")).toBe(false);
+    expect(isLoopbackRedirectUri(undefined)).toBe(false);
   });
 });
 
@@ -450,6 +465,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       expect(html).toContain("chatgpt-dcr-client");
       expect(html).toContain("state-xyz");
       expect(html).toContain("allow this client to access this vault");
+      expect(html).not.toContain("loopback callback");
       expect(html).not.toContain("ChatGPT");
       expect(html).not.toContain("unused");
     } finally {
@@ -493,6 +509,9 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       expect(res.status).toBe(200);
       const html = await res.text();
       expect(html).toContain("allow Doubao to access this vault");
+      expect(html).toContain("loopback callback");
+      expect(html).toContain("same machine as the waiting MCP client");
+      expect(html).toContain("host-id bearer");
       expect(html).not.toContain("ChatGPT");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
@@ -535,6 +554,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       expect(res.status).toBe(200);
       const html = await res.text();
       expect(html).toContain("allow ChatGPT to access this vault");
+      expect(html).not.toContain("loopback callback");
       expect(html).not.toContain("allow this client to access this vault");
     } finally {
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));

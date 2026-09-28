@@ -16,10 +16,21 @@ from typing import Mapping
 PRODUCTION_MCP_URL = "https://wiki.karldigi.dev/mcp"
 TOKEN_ENV = "SKILLWIKI_MCP_TOKEN"
 URL_ENV = "SKILLWIKI_MCP_URL"
+HEADLESS_OAUTH_LOOPBACK_WARNING = (
+    "headless_oauth_loopback: SSH session cannot finish MCP OAuth in a laptop "
+    "browser; localhost callback stays on this host. Set "
+    f"{TOKEN_ENV} via process env, host Configure, or skillwiki connect "
+    "--from-file. Do not click the SkillWiki OAuth login on another machine."
+)
 
 
 def _strip(value: str | None) -> str:
     return (value or "").strip()
+
+
+def _ssh_remote_session(source: Mapping[str, str]) -> bool:
+    """True when this process is an SSH session (callback would bind here)."""
+    return bool(_strip(source.get("SSH_CONNECTION")) or _strip(source.get("SSH_TTY")))
 
 
 def probe(environ: Mapping[str, str] | None = None) -> dict:
@@ -30,6 +41,8 @@ def probe(environ: Mapping[str, str] | None = None) -> dict:
     reasons: list[str] = []
 
     if not token:
+        if _ssh_remote_session(source):
+            warnings.append(HEADLESS_OAUTH_LOOPBACK_WARNING)
         return {
             "status": "missing_prereq",
             "reasons": [f"{TOKEN_ENV} unset"],
