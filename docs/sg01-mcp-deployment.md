@@ -51,7 +51,7 @@ From macos-dev:
 skillwiki doctor --check-mcp
 ```
 
-Require the handshake to advertise the released version and fourteen tools. On sg01, confirm the MCP service has no restart/error loop, that `skillwiki-backend.target` (and its member units) remains enabled, and that the research/session-brief timers still reference existing runtime files. The deploy script still restarts only `skillwiki-mcp.service`; it must not auto-start or restart either sibling oneshot.
+Require the handshake to advertise the released version and fifteen tools. On sg01, confirm the MCP service has no restart/error loop, that `skillwiki-backend.target` (and its member units) remains enabled, and that the research/session-brief timers still reference existing runtime files. The deploy script still restarts only `skillwiki-mcp.service`; it must not auto-start or restart either sibling oneshot.
 
 For an attended post-deploy proof, the operator separately verifies the sibling jobs:
 
