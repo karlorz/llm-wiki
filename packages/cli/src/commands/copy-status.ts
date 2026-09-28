@@ -15,6 +15,7 @@ import {
   runCopyStatus as runCopyStatusCore,
   type CopyStatus,
   type CopyStatusDeps,
+  type LiveDriftReasonCode,
 } from "../copy-status/copy-status.js";
 
 export interface CopyStatusInput {
@@ -51,6 +52,9 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
       : nestedWithLive
         ? "configured fetch projection and live vault must not be nested"
         : undefined);
+  let unmeasuredLiveDriftReason: LiveDriftReasonCode = "fetch_projection_not_configured";
+  if (selection.invalidDetail) unmeasuredLiveDriftReason = "fetch_projection_invalid";
+  else if (projectionProblem) unmeasuredLiveDriftReason = "fetch_projection_conflicts_with_live_vault";
   const gitVault = input.vault;
   const projectionWarning = selection.configured
     ? `configured fetch projection ignored for Git status; using live vault${projectionProblem ? ` (${projectionProblem})` : ""}`
@@ -130,10 +134,18 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
     },
     probeLiveDrift() {
       if (!configuredProjection) {
-        return { unknown: true, detail: projectionProblem ?? "live drift requires a configured fetch projection" };
+        return {
+          unknown: true,
+          reason_code: unmeasuredLiveDriftReason,
+          detail: projectionProblem ?? "live drift requires a configured fetch projection",
+        };
       }
       if (!existsSync(join(configuredProjection, ".git"))) {
-        return { unknown: true, detail: invalidProjectionDetail };
+        return {
+          unknown: true,
+          reason_code: "fetch_projection_invalid",
+          detail: invalidProjectionDetail,
+        };
       }
       return measureAuthoritativeLiveDrift(input.vault, configuredProjection);
     },

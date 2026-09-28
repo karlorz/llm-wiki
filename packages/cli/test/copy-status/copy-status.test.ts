@@ -12,6 +12,7 @@ describe("composeCopyStatus", () => {
     expect(out.github.state).toBe("ok");
     expect(out.local_git.state).toBe("ok");
     expect(out.live_drift.state).toBe("unknown");
+    expect(out.live_drift.reason_code).toBe("live_drift_unmeasured");
     expect(out.humanHint).toMatch(/^live: /m);
     expect(out.humanHint).toMatch(/^github: /m);
     expect(out.humanHint).toMatch(/^local_git: /m);
@@ -95,7 +96,9 @@ describe("composeCopyStatus", () => {
     expect(out.github.state).toBe("unknown");
     expect(out.local_git.state).toBe("unknown");
     expect(out.live_drift.state).toBe("unknown");
+    expect(out.live_drift.reason_code).toBe("live_drift_unmeasured");
     expect(out.humanHint).not.toContain("stale");
+    expect(out.humanHint).toContain("reason_code=live_drift_unmeasured");
   });
 
   it("reports authoritative live drift separately from clean projection git", () => {
@@ -121,6 +124,26 @@ describe("composeCopyStatus", () => {
     expect(out.local_git.state).toBe("stale");
     expect(out.github.state).toBe("ok");
   });
+
+  it("preserves a stable reason code for unknown live drift", () => {
+    const out = composeCopyStatus({
+      live: { reachable: true },
+      github: { oid: "aaaaaaaaaaaa" },
+      local: { head: "aaaaaaaaaaaa", behind: 0 },
+      liveDrift: {
+        unknown: true,
+        reason_code: "fetch_projection_not_configured",
+        detail: "live drift requires a configured fetch projection",
+      },
+    });
+
+    expect(out.live_drift).toEqual({
+      state: "unknown",
+      reason_code: "fetch_projection_not_configured",
+      detail: "live drift requires a configured fetch projection",
+    });
+    expect(out.humanHint).toContain("live_drift: unknown reason_code=fetch_projection_not_configured");
+  });
 });
 
 describe("runCopyStatus", () => {
@@ -134,7 +157,10 @@ describe("runCopyStatus", () => {
     expect(out.live.state).toBe("ok");
     expect(out.github.oid).toBe("deadbeefdead");
     expect(out.local_git.state).toBe("stale");
-    expect(out.live_drift.state).toBe("unknown");
+    expect(out.live_drift).toMatchObject({
+      state: "unknown",
+      reason_code: "live_drift_unmeasured",
+    });
   });
 
   it("uses the optional live-drift adapter", async () => {

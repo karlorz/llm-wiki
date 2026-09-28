@@ -1946,7 +1946,7 @@ memoryCmd
         check: false,
         ifStale: !!opts.ifStale,
       }),
-      { postCommit: true }
+      { postCommit: false }
     );
   });
 

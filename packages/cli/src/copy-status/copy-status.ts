@@ -33,11 +33,17 @@ export interface CopyStatus {
 }
 
 export type LiveDriftState = "clean" | "drifted" | "unknown";
+export type LiveDriftReasonCode =
+  | "fetch_projection_not_configured"
+  | "fetch_projection_invalid"
+  | "fetch_projection_conflicts_with_live_vault"
+  | "live_drift_unmeasured";
 
 export interface LiveDriftRecord {
   state: LiveDriftState;
   content?: number;
   ledger?: number;
+  reason_code?: LiveDriftReasonCode;
   detail?: string;
 }
 
@@ -45,6 +51,7 @@ export interface LiveDriftProbe {
   content?: number;
   ledger?: number;
   unknown?: boolean;
+  reason_code?: LiveDriftReasonCode;
   detail?: string;
 }
 
@@ -169,7 +176,11 @@ function localRecord(p: LocalGitProbe, githubOid?: string): PlaneRecord {
 
 function liveDriftRecord(p: LiveDriftProbe | undefined): LiveDriftRecord {
   if (!p || p.unknown || (p.content === undefined && p.ledger === undefined)) {
-    return { state: "unknown", detail: p?.detail ?? "live drift unmeasured" };
+    return {
+      state: "unknown",
+      reason_code: p?.reason_code ?? "live_drift_unmeasured",
+      detail: p?.detail ?? "live drift unmeasured",
+    };
   }
   const content = p.content ?? 0;
   const ledger = p.ledger ?? 0;
@@ -186,6 +197,7 @@ function formatLiveDrift(rec: LiveDriftRecord): string {
   const parts = [`live_drift: ${rec.state}`];
   if (rec.content !== undefined) parts.push(`content=${rec.content}`);
   if (rec.ledger !== undefined) parts.push(`ledger=${rec.ledger}`);
+  if (rec.reason_code) parts.push(`reason_code=${rec.reason_code}`);
   if (rec.detail) parts.push(rec.detail);
   return parts.join(" ");
 }

@@ -351,6 +351,67 @@ provenance_projects: ["[[pi-check]]"]
     expect(log.split("\n")).toHaveLength(1);
   });
 
+  it("memory index --if-stale does not auto-commit stale last-op files when the cache is current", () => {
+    const vault = mkdtempSync(join(tmpdir(), "smoke-memory-index-ac-"));
+    const today = new Date().toISOString().slice(0, 10);
+    mkdirSync(join(vault, "concepts"), { recursive: true });
+    writeFileSync(join(vault, "SCHEMA.md"), "# Vault Schema\n");
+    writeFileSync(join(vault, "index.md"), "# Index\n");
+    writeFileSync(join(vault, "log.md"), "# Vault Log\n");
+    writeFileSync(join(vault, "concepts", "memory.md"), `---
+title: Memory
+type: concept
+tags: [memory]
+sources: []
+provenance: project
+provenance_projects: ["[[llm-wiki]]"]
+created: ${today}
+updated: ${today}
+memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_privacy: local
+memory_status: active
+---
+
+Current memory source.
+`);
+    execFileSync("git", ["init", vault], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "config", "user.email", "test@test.com"], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "config", "user.name", "Test"], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "add", "-A"], { encoding: "utf8" });
+    execFileSync("git", ["-C", vault, "commit", "-m", "init"], { encoding: "utf8" });
+
+    const home = mkdtempSync(join(tmpdir(), "smoke-memory-index-ac-home-"));
+    const initial = run(
+      ["memory", "index", vault, "--project", "llm-wiki", "--if-stale"],
+      { ...process.env, HOME: home, AUTO_COMMIT: "false" },
+    );
+    expect(initial.status).toBe(0);
+
+    writeFileSync(join(vault, "log.md"), "# Vault Log\n\nUnrelated pending append.\n");
+    writeFileSync(join(vault, ".skillwiki", "last-op.json"), JSON.stringify([{
+      operation: "older-command",
+      summary: "must remain pending",
+      files: ["log.md"],
+      timestamp: "2026-09-29T00:00:00.000Z",
+    }], null, 2));
+
+    const result = run(
+      ["memory", "index", vault, "--project", "llm-wiki", "--if-stale"],
+      { ...process.env, HOME: home, AUTO_COMMIT: "true" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      data: { stale: false, files_written: [] },
+    });
+    expect(execFileSync("git", ["-C", vault, "diff", "--cached", "--name-only"], { encoding: "utf8" })).toBe("");
+    expect(execFileSync("git", ["-C", vault, "rev-list", "--count", "HEAD"], { encoding: "utf8" }).trim()).toBe("1");
+    expect(readFileSync(join(vault, ".skillwiki", "last-op.json"), "utf8")).toContain("older-command");
+  });
+
   it("--human produces non-JSON output for graph", () => {
     const json = run(["graph", "build", TMP_VAULT]);
     const human = run(["graph", "build", TMP_VAULT, "--human"]);

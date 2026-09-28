@@ -84,13 +84,30 @@ describe("defaultCopyStatusDeps fetch projection", () => {
     const fixture = projectionFixture();
     writeFileSync(join(fixture.home, ".skillwiki", ".env"), "WIKI_PATH=/unused\n");
 
-    const deps = defaultCopyStatusDeps({ vault: fixture.live, home: fixture.home, s3Ok: true });
-
-    const github = await deps.probeGithub();
-    expect(github).toMatchObject({ oid: fixture.head });
-    const local = await deps.probeLocalGit();
-    expect(local).toMatchObject({ head: fixture.head, behind: 0 });
-    expect(local.detail ?? "").not.toContain("fetch projection");
+    const output = await runCopyStatusCommand({
+      vault: fixture.live,
+      home: fixture.home,
+      s3Ok: true,
+    });
+    expect(output.result).toMatchObject({
+      ok: true,
+      data: {
+        github: { oid: fixture.head },
+        local_git: { oid: fixture.head, behind: 0 },
+        live_drift: {
+          state: "unknown",
+          reason_code: "fetch_projection_not_configured",
+          detail: "live drift requires a configured fetch projection",
+        },
+      },
+    });
+    if (output.result.ok) {
+      expect(output.result.data.local_git.detail ?? "").not.toContain("fetch projection");
+      expect(output.result.data.humanHint).toContain(
+        "live_drift: unknown reason_code=fetch_projection_not_configured",
+      );
+      expect(JSON.stringify(output.result.data.live_drift)).not.toContain(fixture.live);
+    }
   });
 
   it("uses live Git planes with a warning when an explicit projection is missing", () => {
