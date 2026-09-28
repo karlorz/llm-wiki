@@ -1,8 +1,9 @@
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import yaml from "js-yaml";
 import { identityToken, RawSourceSchema } from "@skillwiki/shared";
-import { extractFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
+import { extractFrontmatter, splitFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
 import {
   canonicalEventJson,
   eventPathFor,
@@ -183,6 +184,13 @@ function notReady(ctx: WriteContext): ToolFailure | null {
   return fail("TOOLS_NOT_READY", "tools blocked until first S3 reconcile completes");
 }
 
+function validateIdentity(field: "agent_role" | "agent_id", value?: string): ToolFailure | null {
+  if (value === undefined) return null;
+  const parsed = identityToken.safeParse(value);
+  if (parsed.success) return null;
+  return fail("USAGE", `invalid ${field}: ${parsed.error.issues[0]?.message}`);
+}
+
 export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promise<CaptureSuccess | ToolFailure> {
   const started = Date.now();
   const blocked = notReady(ctx);
@@ -197,19 +205,10 @@ export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promi
   if (!project) return fail("USAGE", "project must be a vault project slug");
   if (!vaultHasProject(ctx.vaultDir, project)) return fail("USAGE", "unknown project");
 
-  if (input.agent_role !== undefined) {
-    const roleParsed = identityToken.safeParse(input.agent_role);
-    if (!roleParsed.success) {
-      return fail("USAGE", `invalid agent_role: ${roleParsed.error.issues[0]?.message}`);
-    }
-  }
-
-  if (input.agent_id !== undefined) {
-    const idParsed = identityToken.safeParse(input.agent_id);
-    if (!idParsed.success) {
-      return fail("USAGE", `invalid agent_id: ${idParsed.error.issues[0]?.message}`);
-    }
-  }
+  const invalidRole = validateIdentity("agent_role", input.agent_role);
+  if (invalidRole) return invalidRole;
+  const invalidId = validateIdentity("agent_id", input.agent_id);
+  if (invalidId) return invalidId;
 
   const combined = `${input.title}\n${input.content}\n${input.agent_note ?? ""}\n${input.agent_role ?? ""}\n${input.agent_id ?? ""}`;
   const sensitive = scanSensitiveContent(combined, { file: "wiki_capture" });
@@ -484,6 +483,34 @@ export interface OverwriteInput {
   path: string;
   content: string;
   base_sha256?: string;
+  agent_role?: string;
+  agent_id?: string;
+}
+
+const WORKITEM_SPEC_PLAN_RE = /^projects\/[^/]+\/work\/[^/]+\/(spec|plan)\.md$/;
+
+function stampWorkitemSpecOrPlan(
+  content: string,
+  host: string,
+  role?: string,
+  id?: string,
+): string | null {
+  const split = splitFrontmatter(content);
+  if (!split.ok || !split.data.rawFrontmatter) return null;
+  let parsed: unknown;
+  try {
+    parsed = yaml.load(split.data.rawFrontmatter, { schema: yaml.JSON_SCHEMA });
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const merged: Record<string, unknown> = {
+    ...(parsed as Record<string, unknown>),
+    host,
+  };
+  if (role !== undefined) merged.agent_role = role;
+  if (id !== undefined) merged.agent_id = id;
+  return `---\n${yaml.dump(merged, { schema: yaml.JSON_SCHEMA, noRefs: true, lineWidth: -1 }).trimEnd()}\n---\n${split.data.body}`;
 }
 
 async function wikiOverwrite(
@@ -505,7 +532,13 @@ async function wikiOverwrite(
     if (!validated.ok) return fail("PATH_DENIED", relPath);
   }
 
-  const sensitive = scanSensitiveContent(content, { file: relPath });
+  const invalidRole = validateIdentity("agent_role", input.agent_role);
+  if (invalidRole) return invalidRole;
+  const invalidId = validateIdentity("agent_id", input.agent_id);
+  if (invalidId) return invalidId;
+
+  const combined = `${content}\n${input.agent_role ?? ""}\n${input.agent_id ?? ""}`;
+  const sensitive = scanSensitiveContent(combined, { file: relPath });
   if (sensitive.length > 0) {
     appendAudit(ctx.auditFile, {
       host_id: ctx.hostId,
@@ -519,10 +552,22 @@ async function wikiOverwrite(
     return fail("SENSITIVE_CONTENT_DETECTED");
   }
 
+  let finalContent = content;
+  if (kind === "workitem" && WORKITEM_SPEC_PLAN_RE.test(relPath)) {
+    const stamped = stampWorkitemSpecOrPlan(
+      content,
+      ctx.hostId,
+      input.agent_role,
+      input.agent_id,
+    );
+    if (stamped === null) return fail("INVALID_FRONTMATTER");
+    finalContent = stamped;
+  }
+
   try {
     const cas = await commitCasWrite(
       { vaultDir: ctx.vaultDir, vaultId: ctx.vaultId, putObject: ctx.putObject, getObject: ctx.getObject, onCommit: ctx.onCommit },
-      { relPath, content },
+      { relPath, content: finalContent },
       input.base_sha256,
     );
     if (!cas.ok) {

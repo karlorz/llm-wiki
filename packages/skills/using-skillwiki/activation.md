@@ -16,7 +16,7 @@ Choose the matching installed skill:
 - Projects and planning: `proj-init`, `proj-work`, `proj-distill`,
   `proj-decide`, `wiki-gate-plan-mode`, `dev-loop:research`.
 - Fleet and visualization: `wiki-sync`, `wiki-canvas`.
-- HTTP MCP capture or append: `skillwiki-mcp`.
+- HTTP MCP capture, append, or progress query: `skillwiki-mcp`.
 
 If routing is unclear, invoke `using-skillwiki` rather than guessing.
 
@@ -39,10 +39,7 @@ PRD provider and stage, SkillWiki provenance, and simplify review independent.
 
 ## Managed-Write Safety
 
-The HTTP MCP contract below controls remote reads and mutations. On leaf hosts,
-captures use MCP, never local `raw/transcripts` or `log.md` writes. Project
-workspace writes use `wiki_workitem_write` with compare-and-swap; stop if the
-tool or path family is unavailable. A wiki push or rclone copy is not a managed
+The HTTP MCP contract below controls remote reads and mutations. Local Mac coding agents with a valid bearer are managed read-write peers through advertised MCP tools. Remote and other agents are read-mostly; they write only when explicitly authorized and the advertised MCP tool permits the target. On leaf hosts, captures use MCP, never local `raw/transcripts` or `log.md` writes. Project workspace writes use `wiki_workitem_write` with compare-and-swap; stop if the tool or path family is unavailable. A wiki push or rclone copy is not a managed
 write and is not visible until the authoritative snapshot. Never use bare `rm`
 or `git rm` for fleet deletion. Never auto-install SkillWiki in unattended
 sessions. If required publish support is unavailable, fail closed.
@@ -71,6 +68,9 @@ vault.
 ### CAS Protocol (Compare-And-Swap)
 For `wiki_workitem_write` or `wiki_page_publish`, read first, send the returned
 sha256 as `base_sha256`, and on `FILE_CHANGED` re-read, rebase, and retry.
+
+### Progress Queries
+Use `wiki_progress` for recent progress, key projects, or to-dos. Apply requested project, host, or agent-role filters and answer with complete bullet lists.
 
 ### Capture Kinds
 `wiki_capture` kind is `task | idea | bug | note`. Captures append to

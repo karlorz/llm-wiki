@@ -668,6 +668,8 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
         path: z.string().min(1),
         content: z.string().min(1),
         base_sha256: z.string().optional(),
+        agent_role: z.string().optional(),
+        agent_id: z.string().optional(),
         ...vaultField,
       }),
       outputSchema: z.object({

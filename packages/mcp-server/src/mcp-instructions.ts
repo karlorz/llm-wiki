@@ -23,6 +23,9 @@ vault.
 For \`wiki_workitem_write\` or \`wiki_page_publish\`, read first, send the returned
 sha256 as \`base_sha256\`, and on \`FILE_CHANGED\` re-read, rebase, and retry.
 
+### Progress Queries
+Use \`wiki_progress\` for recent progress, key projects, or to-dos. Apply requested project, host, or agent-role filters and answer with complete bullet lists.
+
 ### Capture Kinds
 \`wiki_capture\` kind is \`task | idea | bug | note\`. Captures append to
 \`raw/transcripts/\`. Verify its returned \`path\` with \`wiki_read_page\`.

@@ -378,7 +378,7 @@ wiki-fin updated
         (await callTool(ctx.port, ctx.token, "wiki_workitem_write", {
           vault: "wiki-fin",
           path: workPath,
-          content: "# Finance work item\n",
+          content: "---\ntitle: Finance work item\nstatus: planned\n---\n# Finance work item\n",
         })).body,
       );
       expect(workWrite.ok).toBe(true);

@@ -56,7 +56,116 @@ describe("wiki_workitem_write CAS", () => {
       { path: rel, content: next, base_sha256: sha256Utf8(original) },
     );
     expect(result.ok).toBe(true);
+    expect(await readFile(join(vault, rel), "utf8")).toBe(
+      "---\nstatus: completed\ncompleted: 2026-09-13\nhost: macos-dev\n---\nnew\n",
+    );
+  });
+
+  it("stamps role and id and replaces existing frontmatter fields on spec/plan overwrite", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const rel = "projects/llm-wiki/work/2026-09-13-tier2/plan.md";
+    await mkdir(join(vault, "projects/llm-wiki/work/2026-09-13-tier2"), { recursive: true });
+    const original = "---\nstatus: planned\nhost: old-host\nagent_role: old-role\nagent_id: old-id\n---\nold\n";
+    await writeFile(join(vault, rel), original, "utf8");
+    const next = "---\nstatus: in-progress\nhost: ignore-host\nagent_role: ignore-role\n---\nupdated body\n";
+    const result = await wikiWorkitemWrite(
+      { vaultDir: vault, hostId: "macos-dev", gate, putObject: async () => undefined },
+      {
+        path: rel,
+        content: next,
+        base_sha256: sha256Utf8(original),
+        agent_role: "worker",
+        agent_id: "agent-1",
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(await readFile(join(vault, rel), "utf8")).toBe(
+      "---\nstatus: in-progress\nhost: macos-dev\nagent_role: worker\nagent_id: agent-1\n---\nupdated body\n",
+    );
+  });
+
+  it("rejects malformed spec frontmatter with INVALID_FRONTMATTER without writing", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const rel = "projects/llm-wiki/work/2026-09-13-tier2/spec.md";
+    await mkdir(join(vault, "projects/llm-wiki/work/2026-09-13-tier2"), { recursive: true });
+    const original = "---\nstatus: planned\n---\nbody\n";
+    await writeFile(join(vault, rel), original, "utf8");
+    const result = await wikiWorkitemWrite(
+      { vaultDir: vault, hostId: "macos-dev", gate, putObject: async () => undefined },
+      { path: rel, content: "no-frontmatter\n", base_sha256: sha256Utf8(original) },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toBe("INVALID_FRONTMATTER");
+    expect(await readFile(join(vault, rel), "utf8")).toBe(original);
+  });
+
+  it("leaves architecture content unchanged without host stamping", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const rel = "projects/llm-wiki/architecture/2026-09-14-topology.md";
+    await mkdir(join(vault, "projects/llm-wiki/architecture"), { recursive: true });
+    const original = "---\ntitle: topology\n---\nold\n";
+    await writeFile(join(vault, rel), original, "utf8");
+    const next = "---\ntitle: topology\n---\nnew\n";
+    const result = await wikiWorkitemWrite(
+      { vaultDir: vault, hostId: "macos-dev", gate, putObject: async () => undefined },
+      { path: rel, content: next, base_sha256: sha256Utf8(original), agent_role: "worker" },
+    );
+    expect(result.ok).toBe(true);
     expect(await readFile(join(vault, rel), "utf8")).toBe(next);
+  });
+
+  it("rejects invalid identity tokens without writing", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const rel = "projects/llm-wiki/work/2026-09-13-tier2/spec.md";
+    await mkdir(join(vault, "projects/llm-wiki/work/2026-09-13-tier2"), { recursive: true });
+    const original = "---\nstatus: planned\n---\nbody\n";
+    await writeFile(join(vault, rel), original, "utf8");
+    const result = await wikiWorkitemWrite(
+      { vaultDir: vault, hostId: "macos-dev", gate, putObject: async () => undefined },
+      {
+        path: rel,
+        content: "---\nstatus: in-progress\n---\nbody\n",
+        base_sha256: sha256Utf8(original),
+        agent_role: "invalid role with spaces",
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toBe("USAGE");
+    expect(result.message).toContain("invalid agent_role");
+    expect(await readFile(join(vault, rel), "utf8")).toBe(original);
+  });
+
+  it("rejects sensitive identity values without writing", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const rel = "projects/llm-wiki/work/2026-09-13-tier2/spec.md";
+    await mkdir(join(vault, "projects/llm-wiki/work/2026-09-13-tier2"), { recursive: true });
+    const original = "---\nstatus: planned\n---\nbody\n";
+    await writeFile(join(vault, rel), original, "utf8");
+    const result = await wikiWorkitemWrite(
+      { vaultDir: vault, hostId: "macos-dev", gate, putObject: async () => undefined },
+      {
+        path: rel,
+        content: "---\nstatus: in-progress\n---\nbody\n",
+        base_sha256: sha256Utf8(original),
+        agent_id: "sk-live-agent-token-1234567890abcdef",
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.error).toBe("SENSITIVE_CONTENT_DETECTED");
+    expect(await readFile(join(vault, rel), "utf8")).toBe(original);
   });
 
   it("returns FILE_CHANGED with currentVersion on hash mismatch", async () => {
