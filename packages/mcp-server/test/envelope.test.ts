@@ -534,6 +534,22 @@ describe("C4 typed result envelope and request body cap", () => {
       await assertNoWrite("whitespace title", whitespace);
       expect(whitespace.isError).toBe(true);
       expect(whitespace.structured?.error).toBe("USAGE");
+
+      const badRole = await callCapture(
+        { kind: "note", project: "llm-wiki", title: "bad role", content: "valid", agent_role: "invalid role spaces" },
+        77,
+      );
+      await assertNoWrite("invalid agent_role", badRole);
+      expect(badRole.isError).toBe(true);
+      expect(badRole.structured?.error).toBe("USAGE");
+
+      const badId = await callCapture(
+        { kind: "note", project: "llm-wiki", title: "bad id", content: "valid", agent_id: "bad#id" },
+        78,
+      );
+      await assertNoWrite("invalid agent_id", badId);
+      expect(badId.isError).toBe(true);
+      expect(badId.structured?.error).toBe("USAGE");
     } finally {
       await ctx.close();
     }

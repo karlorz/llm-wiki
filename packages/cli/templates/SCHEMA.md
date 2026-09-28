@@ -92,6 +92,9 @@ created: YYYY-MM-DD     # when capture was written
 ingested:          # filled by ingest pipeline (empty at creation)
 kind:             # idea | bug | task | note | other
 project:          # optional: "[[slug]]" for cross-reference
+host:             # optional: host identity token (stamped by MCP writer)
+agent_role:       # optional: agent role identity token
+agent_id:         # optional: agent identity token
 ---
 ```
 
@@ -101,6 +104,9 @@ project:          # optional: "[[slug]]" for cross-reference
 - `ingested`: Date processed into typed knowledge. **Empty at creation.** Filled by `wiki-ingest`, `wiki-crystallize`.
 - `kind`: Capture type. Affects dev-loop routing (`bug`/`task` → work items; `idea` → knowledge development).
 - `project`: Optional project cross-reference. Enables `provenance_projects:` auto-linking.
+- `host`: Optional host identity token (e.g. `macos-dev`, `sg01`). Stamped by MCP writer from authenticated identity.
+- `agent_role`: Optional agent role identity token (e.g. `researcher`, `worker`, `reviewer`).
+- `agent_id`: Optional specific agent instance identifier.
 
 ### vs Ingested Sources
 

@@ -40,13 +40,149 @@ describe("wiki_capture validation", () => {
       title: "Fix the template mismatch",
       content: "Body here",
       date: "2026-09-13",
+      host: "macos-dev",
+      agent_role: "planner",
+      agent_id: "agent-007",
     });
     expect(md).toContain("kind: idea");
     expect(md).toContain('project: "[[llm-wiki]]"');
     expect(md).toContain("ingested: 2026-09-13");
     expect(md).toContain("source_url: null");
+    expect(md).toContain("host: macos-dev");
+    expect(md).toContain("agent_role: planner");
+    expect(md).toContain("agent_id: agent-007");
     expect(md).toContain("# idea: Fix the template mismatch");
     expect(md).toContain("Body here");
+  });
+
+  it("stamps authenticated ctx.hostId even without supplied role or id", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const result = await wikiCapture({
+      vaultDir: vault,
+      hostId: "sg01",
+      gate,
+      putObject: async () => undefined,
+      now: () => new Date("2026-09-13T12:00:00Z"),
+    }, {
+      kind: "note",
+      project: "llm-wiki",
+      title: "Host Stamping Test",
+      content: "Content with host",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    const rawContent = await readFile(join(vault, result.path), "utf8");
+    expect(rawContent).toContain("host: sg01");
+    expect(rawContent).not.toContain("agent_role:");
+    expect(rawContent).not.toContain("agent_id:");
+  });
+
+  it("stamps host, agent_role, and agent_id when supplied", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+    const result = await wikiCapture({
+      vaultDir: vault,
+      hostId: "macos-dev",
+      gate,
+      putObject: async () => undefined,
+      now: () => new Date("2026-09-13T12:00:00Z"),
+    }, {
+      kind: "note",
+      project: "llm-wiki",
+      title: "Full Identity Stamping Test",
+      content: "Content with full identity",
+      agent_role: "researcher",
+      agent_id: "claude-subagent-1",
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    const rawContent = await readFile(join(vault, result.path), "utf8");
+    expect(rawContent).toContain("host: macos-dev");
+    expect(rawContent).toContain("agent_role: researcher");
+    expect(rawContent).toContain("agent_id: claude-subagent-1");
+  });
+
+  it("rejects invalid agent_role or agent_id tokens without writing", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+
+    const badRole = await wikiCapture({
+      vaultDir: vault,
+      hostId: "macos-dev",
+      gate,
+      putObject: async () => undefined,
+    }, {
+      kind: "note",
+      project: "llm-wiki",
+      title: "bad role",
+      content: "content",
+      agent_role: "invalid role with spaces",
+    });
+    expect(badRole.ok).toBe(false);
+    if (badRole.ok) throw new Error("expected failure");
+    expect(badRole.error).toBe("USAGE");
+
+    const badId = await wikiCapture({
+      vaultDir: vault,
+      hostId: "macos-dev",
+      gate,
+      putObject: async () => undefined,
+    }, {
+      kind: "note",
+      project: "llm-wiki",
+      title: "bad id",
+      content: "content",
+      agent_id: "bad/id/slashes",
+    });
+    expect(badId.ok).toBe(false);
+    if (badId.ok) throw new Error("expected failure");
+    expect(badId.error).toBe("USAGE");
+
+    expect(await readdir(join(vault, "raw", "transcripts"))).toEqual([]);
+  });
+
+  it("sensitive content scanning covers agent_role and agent_id values", async () => {
+    const vault = await makeTempVault();
+    const gate = readyGate();
+    await gate.runFirst();
+
+    const roleSecret = await wikiCapture({
+      vaultDir: vault,
+      hostId: "macos-dev",
+      gate,
+      putObject: async () => undefined,
+    }, {
+      kind: "note",
+      project: "llm-wiki",
+      title: "secret in role",
+      content: "safe content",
+      agent_role: "sk-live-role-token-1234567890abcdef",
+    });
+    expect(roleSecret.ok).toBe(false);
+    if (roleSecret.ok) throw new Error("expected failure");
+    expect(roleSecret.error).toBe("SENSITIVE_CONTENT_DETECTED");
+
+    const idSecret = await wikiCapture({
+      vaultDir: vault,
+      hostId: "macos-dev",
+      gate,
+      putObject: async () => undefined,
+    }, {
+      kind: "note",
+      project: "llm-wiki",
+      title: "secret in id",
+      content: "safe content",
+      agent_id: "sk-live-id-token-1234567890abcdef",
+    });
+    expect(idSecret.ok).toBe(false);
+    if (idSecret.ok) throw new Error("expected failure");
+    expect(idSecret.error).toBe("SENSITIVE_CONTENT_DETECTED");
+
+    expect(await readdir(join(vault, "raw", "transcripts"))).toEqual([]);
   });
 
   it("rejects live credential patterns instead of writing", async () => {

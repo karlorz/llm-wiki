@@ -1,7 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { RawSourceSchema } from "@skillwiki/shared";
+import { identityToken, RawSourceSchema } from "@skillwiki/shared";
 import { extractFrontmatter } from "../../../cli/src/parsers/frontmatter.js";
 import {
   canonicalEventJson,
@@ -58,6 +58,8 @@ export interface CaptureInput {
   title: string;
   content: string;
   agent_note?: string;
+  agent_role?: string;
+  agent_id?: string;
 }
 
 export type ToolFailure = {
@@ -102,6 +104,9 @@ export function renderCaptureMarkdown(input: {
   content: string;
   date: string;
   agent_note?: string;
+  host?: string;
+  agent_role?: string;
+  agent_id?: string;
 }): string {
   const lines = [
     "---",
@@ -112,6 +117,9 @@ export function renderCaptureMarkdown(input: {
     `kind: ${input.kind}`,
   ];
   if (input.project) lines.push(`project: "[[${input.project.replace(/^\[\[|\]\]$/g, "")}]]"`);
+  if (input.host) lines.push(`host: ${input.host}`);
+  if (input.agent_role) lines.push(`agent_role: ${input.agent_role}`);
+  if (input.agent_id) lines.push(`agent_id: ${input.agent_id}`);
   lines.push("---", "", `# ${input.kind}: ${input.title}`, "", input.content.trim());
   if (input.agent_note?.trim()) {
     lines.push("", `> agent_note: ${input.agent_note.trim()}`);
@@ -189,7 +197,21 @@ export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promi
   if (!project) return fail("USAGE", "project must be a vault project slug");
   if (!vaultHasProject(ctx.vaultDir, project)) return fail("USAGE", "unknown project");
 
-  const combined = `${input.title}\n${input.content}\n${input.agent_note ?? ""}`;
+  if (input.agent_role !== undefined) {
+    const roleParsed = identityToken.safeParse(input.agent_role);
+    if (!roleParsed.success) {
+      return fail("USAGE", `invalid agent_role: ${roleParsed.error.issues[0]?.message}`);
+    }
+  }
+
+  if (input.agent_id !== undefined) {
+    const idParsed = identityToken.safeParse(input.agent_id);
+    if (!idParsed.success) {
+      return fail("USAGE", `invalid agent_id: ${idParsed.error.issues[0]?.message}`);
+    }
+  }
+
+  const combined = `${input.title}\n${input.content}\n${input.agent_note ?? ""}\n${input.agent_role ?? ""}\n${input.agent_id ?? ""}`;
   const sensitive = scanSensitiveContent(combined, { file: "wiki_capture" });
   if (sensitive.length > 0) {
     appendAudit(ctx.auditFile, {
@@ -214,6 +236,9 @@ export async function wikiCapture(ctx: WriteContext, input: CaptureInput): Promi
     content: input.content,
     date,
     agent_note: input.agent_note,
+    host: ctx.hostId,
+    agent_role: input.agent_role,
+    agent_id: input.agent_id,
   });
   const fm = extractFrontmatter(content);
   if (!fm.ok) return fail("INVALID_FRONTMATTER");

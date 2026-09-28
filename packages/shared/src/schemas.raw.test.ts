@@ -102,4 +102,28 @@ describe("RawSourceSchema", () => {
   it("accepts export-wiki as ingested_by", () => {
     expect(RawSourceSchema.parse({ ...remote, ingested_by: "export-wiki" })).toMatchObject({ ingested_by: "export-wiki" });
   });
+
+  it("accepts valid host, agent_role, and agent_id identity fields", () => {
+    const v = {
+      ...remote,
+      source_url: null,
+      kind: "note",
+      project: "[[llm-wiki]]",
+      host: "macos-dev",
+      agent_role: "researcher",
+      agent_id: "agent-01"
+    };
+    expect(RawSourceSchema.parse(v)).toMatchObject({
+      host: "macos-dev",
+      agent_role: "researcher",
+      agent_id: "agent-01"
+    });
+  });
+
+  it("rejects invalid identity tokens for host, agent_role, or agent_id", () => {
+    expect(() => RawSourceSchema.parse({ ...remote, host: "" })).toThrow();
+    expect(() => RawSourceSchema.parse({ ...remote, host: "host with spaces" })).toThrow();
+    expect(() => RawSourceSchema.parse({ ...remote, agent_role: "role@bad!" })).toThrow();
+    expect(() => RawSourceSchema.parse({ ...remote, agent_id: "a".repeat(129) })).toThrow();
+  });
 });

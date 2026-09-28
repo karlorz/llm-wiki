@@ -34,6 +34,12 @@ export type TypedKnowledge = z.infer<typeof TypedKnowledgeSchema>;
 
 const sha256Hex = z.string().regex(/^[0-9a-f]{64}$/);
 
+export const identityToken = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-zA-Z0-9_.-]+$/, "must be bounded alphanumeric token with _.-");
+
 export const RawSourceSchema = z.object({
   title: z.string().min(1).optional(),
   source_url: z.string().nullable(),
@@ -43,7 +49,10 @@ export const RawSourceSchema = z.object({
   sha256: sha256Hex.optional(),
   project: wikilink.optional(),
   work_item: wikilink.optional(),
-  kind: z.enum(["postmortem", "session-log", "meeting-notes", "other", "idea", "bug", "task", "note"]).optional()
+  kind: z.enum(["postmortem", "session-log", "meeting-notes", "other", "idea", "bug", "task", "note"]).optional(),
+  host: identityToken.optional(),
+  agent_role: identityToken.optional(),
+  agent_id: identityToken.optional()
 }).superRefine((v, ctx) => {
   if (v.work_item !== undefined && (v.project === undefined || v.kind === undefined)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "project and kind are required when work_item is set" });
@@ -78,6 +87,9 @@ export const WorkItemSchema = z.object({
   parent: wikilink.optional(),
   related: z.array(wikilink).optional(),
   sources: z.array(z.string()).optional(),
+  host: identityToken.optional(),
+  agent_role: identityToken.optional(),
+  agent_id: identityToken.optional(),
   post_release_verification: PostReleaseVerificationSchema.optional()
 }).superRefine((v, ctx) => {
   if (v.status === "completed" && !v.completed) {

@@ -75,4 +75,25 @@ describe("WorkItemSchema", () => {
       }
     })).toThrow(/completed/);
   });
+
+  it("accepts valid host, agent_role, and agent_id fields", () => {
+    const item = WorkItemSchema.parse({
+      ...v,
+      host: "macos-dev",
+      agent_role: "worker",
+      agent_id: "agent-alpha-42"
+    });
+    expect(item).toMatchObject({
+      host: "macos-dev",
+      agent_role: "worker",
+      agent_id: "agent-alpha-42"
+    });
+  });
+
+  it("rejects invalid host, agent_role, or agent_id tokens", () => {
+    expect(() => WorkItemSchema.parse({ ...v, host: "" })).toThrow();
+    expect(() => WorkItemSchema.parse({ ...v, agent_role: "has spaces" })).toThrow();
+    expect(() => WorkItemSchema.parse({ ...v, agent_id: "bad#char" })).toThrow();
+    expect(() => WorkItemSchema.parse({ ...v, host: "h".repeat(129) })).toThrow();
+  });
 });
