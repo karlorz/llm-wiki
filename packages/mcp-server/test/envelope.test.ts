@@ -91,7 +91,7 @@ describe("C4 typed result envelope and request body cap", () => {
     }
   });
 
-  it("tools/list includes all 14 tools with outputSchema and annotations", async () => {
+  it("tools/list includes all 15 tools with outputSchema and annotations", async () => {
     const ctx = await setupTestServer();
     try {
       const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
@@ -127,6 +127,7 @@ describe("C4 typed result envelope and request body cap", () => {
         "wiki_memory_recall",
         "wiki_status",
         "wiki_context",
+        "wiki_progress",
         "wiki_sources_pending",
         "wiki_compile_status",
         "wiki_reviews",
@@ -136,7 +137,7 @@ describe("C4 typed result envelope and request body cap", () => {
       const nonIdempotentWrites = ["wiki_capture", "wiki_log_append"];
       const idempotentWrites = ["wiki_workitem_write", "wiki_page_publish"];
 
-      expect(toolMap.size).toBe(14);
+      expect(toolMap.size).toBe(15);
 
       for (const name of expectedReads) {
         const tool = toolMap.get(name);

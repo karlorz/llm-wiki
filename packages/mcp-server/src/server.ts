@@ -67,6 +67,7 @@ import {
   handleWikiContext,
   handleWikiLintSummary,
   handleWikiMemoryRecall,
+  handleWikiProgress,
   handleWikiQuery,
   handleWikiReadPage,
   handleWikiReviews,
@@ -104,6 +105,7 @@ const MCP_TOOL_NAMES = [
   "wiki_memory_recall",
   "wiki_status",
   "wiki_context",
+  "wiki_progress",
   "wiki_sources_pending",
   "wiki_compile_status",
   "wiki_reviews",
@@ -415,6 +417,74 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       const selected = bind(args.vault);
       if (!selected.ok) return toolResult(selected, true);
       const out = await handleWikiContext(selected.reads, { tools: [...MCP_TOOL_NAMES], project: args.project });
+      return toolResult(out, !out.ok);
+    },
+  );
+
+  server.registerTool(
+    "wiki_progress",
+    {
+      description:
+        "Structured overview of active work items, key projects, and prioritized todos (read-only). Optional project, host, agent_role filters; limit default 10 max 50.",
+      inputSchema: z.object({
+        project: z.string().optional(),
+        host: z.string().optional(),
+        agent_role: z.string().optional(),
+        limit: z.number().int().min(1).max(50).optional(),
+        ...vaultField,
+      }),
+      outputSchema: z.object({
+        ...failureShape,
+        recent_progress: z
+          .array(
+            z.object({
+              project: z.string(),
+              work_item: z.string(),
+              title: z.string(),
+              status: z.enum(["planned", "in-progress"]),
+              priority: z.enum(["high", "medium", "low"]).optional(),
+              date: z.string().optional(),
+              host: z.string().optional(),
+              agent_role: z.string().optional(),
+              agent_id: z.string().optional(),
+              path: z.string(),
+            }),
+          )
+          .optional(),
+        key_projects: z
+          .array(
+            z.object({
+              project: z.string(),
+              active_count: z.number(),
+              highest_priority: z.enum(["high", "medium", "low"]).optional(),
+              newest_date: z.string().optional(),
+              work_items: z.array(z.string()),
+            }),
+          )
+          .optional(),
+        todos: z
+          .array(
+            z.object({
+              project: z.string(),
+              work_item: z.string(),
+              title: z.string(),
+              status: z.enum(["planned", "in-progress"]),
+              priority: z.enum(["high", "medium", "low"]).optional(),
+              date: z.string().optional(),
+              host: z.string().optional(),
+              agent_role: z.string().optional(),
+              agent_id: z.string().optional(),
+              path: z.string(),
+            }),
+          )
+          .optional(),
+      }).passthrough(),
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      const selected = bind(args.vault);
+      if (!selected.ok) return toolResult(selected, true);
+      const out = await handleWikiProgress(selected.reads, args);
       return toolResult(out, !out.ok);
     },
   );

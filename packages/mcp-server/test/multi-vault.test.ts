@@ -20,6 +20,7 @@ const TOOLS = [
   "wiki_memory_recall",
   "wiki_status",
   "wiki_context",
+  "wiki_progress",
   "wiki_sources_pending",
   "wiki_compile_status",
   "wiki_reviews",
@@ -218,7 +219,7 @@ describe("multi-vault HTTP MCP slices 1-5", () => {
           content: "---\ntitle: omit\ncreated: 2026-09-18\nupdated: 2026-09-18\ntype: concept\ntags: []\nsources: []\n---\nbody\n",
         },
       };
-      expect(TOOLS).toHaveLength(14);
+      expect(TOOLS).toHaveLength(15);
       for (const name of TOOLS) {
         const { status, body } = await callTool(ctx.port, ctx.token, name, argsByTool[name]!);
         expect(status, name).toBe(200);

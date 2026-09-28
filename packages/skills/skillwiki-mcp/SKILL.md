@@ -47,7 +47,7 @@ Check the successful write receipt's `vault_id` against the intended vault befor
 
 Local `~/wiki` (or `skillwiki path`) is fine for reads. MCP read tools are optional. Prefer ordinary file reads of the local mirror. Frozen-leaf agents should use HTTP `wiki_sources_pending`, `wiki_lint_summary`, `wiki_stale`, `wiki_compile_status`, and `wiki_reviews` instead of local CLI commands when those tools are advertised.
 
-`wiki_query` is typed knowledge only unless `scope` is `work` or `all`. For queued work, doctor, plugin-drift, or MCP diagnose questions, call `wiki_context` first (active_work) or pass `scope: "work"` / `"all"`. Do not treat a top typed packet hit as the live work queue.
+`wiki_query` is typed knowledge only unless `scope` is `work` or `all`. For recent progress, key projects, or to-dos, feature-detect and call `wiki_progress`; apply `project`, `host`, or `agent_role` filters when requested, and present `recent_progress`, `key_projects`, and `todos` as complete bullet lists. For queued work, doctor, plugin-drift, or MCP diagnose questions, call `wiki_context` first (active_work) or pass `scope: "work"` / `"all"`. Do not treat a top typed packet hit as the live work queue.
 
 ## Errors
 

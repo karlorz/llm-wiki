@@ -17,6 +17,7 @@ import { ReconcileGate } from "../reconcile.js";
 import { sha256Bytes } from "../txn.js";
 import { currentVersion, type GetObject } from "../versions.js";
 import { CAPTURE_KINDS, normalizeCaptureProject, vaultHasProject } from "./writes.js";
+import { identityToken } from "@skillwiki/shared";
 import { DEFAULT_VAULT_ID } from "../vault-id.js";
 
 export const MAX_READ_PAGE_BYTES = 256 * 1024;
@@ -498,4 +499,289 @@ export async function handleWikiStale(
     project,
   });
   return flattenReadCommandResult(result.result);
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export interface WikiProgressEntry {
+  project: string;
+  work_item: string;
+  title: string;
+  status: "planned" | "in-progress";
+  priority?: "high" | "medium" | "low";
+  date?: string;
+  host?: string;
+  agent_role?: string;
+  agent_id?: string;
+  path: string;
+}
+
+export interface WikiProgressKeyProject {
+  project: string;
+  active_count: number;
+  highest_priority?: "high" | "medium" | "low";
+  newest_date?: string;
+  work_items: string[];
+}
+
+export interface WikiProgressResult {
+  ok: true;
+  recent_progress: WikiProgressEntry[];
+  key_projects: WikiProgressKeyProject[];
+  todos: WikiProgressEntry[];
+}
+
+const PRIORITY_ORDER: Record<string, number> = {
+  high: 1,
+  medium: 2,
+  low: 3,
+};
+
+export async function handleWikiProgress(
+  ctx: ReadContext,
+  input: {
+    project?: string;
+    host?: string;
+    agent_role?: string;
+    limit?: number;
+  },
+) {
+  const blocked = ensureReady(ctx.gate);
+  if (blocked) return blocked;
+
+  let limit = 10;
+  if (input.limit !== undefined) {
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 50) {
+      return { ok: false as const, error: "USAGE", message: "limit must be an integer from 1 to 50" };
+    }
+    limit = input.limit;
+  }
+
+  let filterProject: string | undefined;
+  if (input.project !== undefined) {
+    const norm = normalizeCaptureProject(input.project);
+    if (!norm) {
+      return { ok: false as const, error: "USAGE", message: "project must be a vault project slug" };
+    }
+    if (!vaultHasProject(ctx.vaultDir, norm)) {
+      return { ok: false as const, error: "USAGE", message: "unknown project" };
+    }
+    filterProject = norm;
+  }
+
+  let filterHost: string | undefined;
+  if (input.host !== undefined) {
+    const parsed = identityToken.safeParse(input.host);
+    if (!parsed.success) {
+      return { ok: false as const, error: "USAGE", message: `invalid host: ${parsed.error.issues[0]?.message}` };
+    }
+    filterHost = parsed.data;
+  }
+
+  let filterAgentRole: string | undefined;
+  if (input.agent_role !== undefined) {
+    const parsed = identityToken.safeParse(input.agent_role);
+    if (!parsed.success) {
+      return { ok: false as const, error: "USAGE", message: `invalid agent_role: ${parsed.error.issues[0]?.message}` };
+    }
+    filterAgentRole = parsed.data;
+  }
+
+  const projectsDir = join(ctx.vaultDir, "projects");
+  let dirEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
+  try {
+    dirEntries = await readdir(projectsDir, { withFileTypes: true });
+  } catch {
+    // missing projects dir or unreadable
+  }
+
+  let candidateProjects = dirEntries
+    .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+    .map((e) => e.name)
+    .sort();
+
+  if (filterProject) {
+    candidateProjects = candidateProjects.filter((p) => p === filterProject);
+  }
+
+  const activeEntries: WikiProgressEntry[] = [];
+
+  for (const proj of candidateProjects) {
+    const workDir = join(projectsDir, proj, "work");
+    let workEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
+    try {
+      workEntries = await readdir(workDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    const workDirs = workEntries
+      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+      .map((e) => e.name);
+
+    for (const workItem of workDirs) {
+      const specPath = join(workDir, workItem, "spec.md");
+      let content: string;
+      try {
+        content = await readFile(specPath, "utf8");
+      } catch {
+        continue;
+      }
+
+      const fm = extractFrontmatter(content);
+      if (!fm.ok) continue;
+
+      const data = fm.data;
+      const status = data.status;
+      if (status !== "planned" && status !== "in-progress") {
+        continue;
+      }
+
+      const parsedHost = data.host === undefined ? undefined : identityToken.safeParse(data.host);
+      const parsedAgentRole = data.agent_role === undefined ? undefined : identityToken.safeParse(data.agent_role);
+      const parsedAgentId = data.agent_id === undefined ? undefined : identityToken.safeParse(data.agent_id);
+      if (parsedHost && !parsedHost.success) continue;
+      if (parsedAgentRole && !parsedAgentRole.success) continue;
+      if (parsedAgentId && !parsedAgentId.success) continue;
+
+      const host = parsedHost?.success ? parsedHost.data : undefined;
+      const agentRole = parsedAgentRole?.success ? parsedAgentRole.data : undefined;
+      const agentId = parsedAgentId?.success ? parsedAgentId.data : undefined;
+
+      if (filterHost !== undefined && host !== filterHost) continue;
+      if (filterAgentRole !== undefined && agentRole !== filterAgentRole) continue;
+
+      // Title fallback to work_item
+      const rawTitle = typeof data.title === "string" ? data.title.trim() : "";
+      const title = rawTitle || workItem;
+
+      // Priority
+      let priority: "high" | "medium" | "low" | undefined;
+      if (data.priority === "high" || data.priority === "medium" || data.priority === "low") {
+        priority = data.priority;
+      }
+
+      // Date: updated then created if YYYY-MM-DD
+      let date: string | undefined;
+      const rawUpdated = typeof data.updated === "string" ? data.updated.trim() : "";
+      const rawCreated = typeof data.created === "string" ? data.created.trim() : "";
+      if (ISO_DATE_RE.test(rawUpdated)) {
+        date = rawUpdated;
+      } else if (ISO_DATE_RE.test(rawCreated)) {
+        date = rawCreated;
+      }
+
+      const relPath = `projects/${proj}/work/${workItem}/spec.md`;
+
+      activeEntries.push({
+        project: proj,
+        work_item: workItem,
+        title,
+        status,
+        ...(priority !== undefined ? { priority } : {}),
+        ...(date !== undefined ? { date } : {}),
+        ...(host !== undefined ? { host } : {}),
+        ...(agentRole !== undefined ? { agent_role: agentRole } : {}),
+        ...(agentId !== undefined ? { agent_id: agentId } : {}),
+        path: relPath,
+      });
+    }
+  }
+
+  // Recent sort: date descending then work_item descending
+  const recentSorted = [...activeEntries].sort((a, b) => {
+    const dateA = a.date ?? "";
+    const dateB = b.date ?? "";
+    if (dateA !== dateB) {
+      return dateB.localeCompare(dateA);
+    }
+    return b.work_item.localeCompare(a.work_item);
+  });
+
+  // Todos sort: priority (high < medium < low < none) then date descending then work_item descending
+  const todosSorted = [...activeEntries].sort((a, b) => {
+    const rankA = a.priority ? PRIORITY_ORDER[a.priority] : 99;
+    const rankB = b.priority ? PRIORITY_ORDER[b.priority] : 99;
+    if (rankA !== rankB) {
+      return rankA - rankB;
+    }
+    const dateA = a.date ?? "";
+    const dateB = b.date ?? "";
+    if (dateA !== dateB) {
+      return dateB.localeCompare(dateA);
+    }
+    return b.work_item.localeCompare(a.work_item);
+  });
+
+  // Key projects aggregate filtered active entries
+  const projectGroups = new Map<string, WikiProgressEntry[]>();
+  for (const entry of activeEntries) {
+    let group = projectGroups.get(entry.project);
+    if (!group) {
+      group = [];
+      projectGroups.set(entry.project, group);
+    }
+    group.push(entry);
+  }
+
+  const keyProjectsList: WikiProgressKeyProject[] = [];
+  for (const [proj, entries] of projectGroups.entries()) {
+    // work_items up to 5 recent (sorted date descending then work_item descending)
+    const sortedEntries = [...entries].sort((a, b) => {
+      const dateA = a.date ?? "";
+      const dateB = b.date ?? "";
+      if (dateA !== dateB) {
+        return dateB.localeCompare(dateA);
+      }
+      return b.work_item.localeCompare(a.work_item);
+    });
+
+    const workItems = sortedEntries.slice(0, 5).map((e) => e.work_item);
+
+    // highest priority
+    let highestPriority: "high" | "medium" | "low" | undefined;
+    for (const p of ["high", "medium", "low"] as const) {
+      if (entries.some((e) => e.priority === p)) {
+        highestPriority = p;
+        break;
+      }
+    }
+
+    // newest date
+    let newestDate: string | undefined;
+    for (const e of sortedEntries) {
+      if (e.date) {
+        newestDate = e.date;
+        break;
+      }
+    }
+
+    keyProjectsList.push({
+      project: proj,
+      active_count: entries.length,
+      ...(highestPriority !== undefined ? { highest_priority: highestPriority } : {}),
+      ...(newestDate !== undefined ? { newest_date: newestDate } : {}),
+      work_items: workItems,
+    });
+  }
+
+  // Sort key projects: active_count desc, newest_date desc, project asc
+  keyProjectsList.sort((a, b) => {
+    if (b.active_count !== a.active_count) {
+      return b.active_count - a.active_count;
+    }
+    const dateA = a.newest_date ?? "";
+    const dateB = b.newest_date ?? "";
+    if (dateA !== dateB) {
+      return dateB.localeCompare(dateA);
+    }
+    return a.project.localeCompare(b.project);
+  });
+
+  return {
+    ok: true as const,
+    recent_progress: recentSorted.slice(0, limit),
+    key_projects: keyProjectsList.slice(0, limit),
+    todos: todosSorted.slice(0, limit),
+  };
 }
