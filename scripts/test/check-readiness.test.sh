@@ -134,6 +134,22 @@ else
   printf 'FAIL: SSH missing token must warn headless_oauth_loopback: %s\n' "$SSH_MISSING_WARN"
   FAIL=$((FAIL + 1))
 fi
+if printf '%s' "$SSH_MISSING_WARN" | grep -Fq "operator browser" && \
+   printf '%s' "$SSH_MISSING_WARN" | grep -Fq "this host" && \
+   printf '%s' "$SSH_MISSING_WARN" | grep -Fq "hint"; then
+  printf 'PASS: SSH missing token warning contains operator browser, this host, and hint\n'
+  PASS=$((PASS + 1))
+else
+  printf 'FAIL: SSH missing token warning missing required discriminator copy: %s\n' "$SSH_MISSING_WARN"
+  FAIL=$((FAIL + 1))
+fi
+if printf '%s' "$SSH_MISSING_WARN" | grep -Eq 'DISPLAY|headed|auto-detect'; then
+  printf 'FAIL: SSH missing token warning must not contain DISPLAY, headed, or auto-detect: %s\n' "$SSH_MISSING_WARN"
+  FAIL=$((FAIL + 1))
+else
+  printf 'PASS: SSH missing token warning does not contain DISPLAY, headed, or auto-detect\n'
+  PASS=$((PASS + 1))
+fi
 if grep -Eiq 'sk-|bearer |token=' "$SSH_MISSING_OUT" "$SSH_MISSING_ERR"; then
   printf 'FAIL: SSH missing-token output leaked a token-like string\n'
   FAIL=$((FAIL + 1))

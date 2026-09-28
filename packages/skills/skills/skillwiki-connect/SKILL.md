@@ -21,7 +21,7 @@ Unknown-agent HTTP MCP setup. Use when the client has no SkillWiki plugin and no
 - Do **not** use 云盘 / Drive / CloudStorage as the secret path. Only a chat-attached file reaches the VM.
 - Missing `WIKI_PATH` is expected on an MCP-only leaf. Handshake pass is done.
 - Do **not** instruct the operator to paste the bearer into the chat transcript.
-- Do **not** tell the operator to complete SkillWiki OAuth login in a laptop browser for an SSH/headless host. Loopback `http://localhost:<port>/callback` stays on the remote client. Use `skillwiki connect --from-file`.
+- Do **not** tell the operator to complete SkillWiki OAuth login in a laptop browser for an SSH/remote host. Loopback `http://localhost:<port>/callback` binds on the remote client; headed vs headless is not the discriminator, and SSH is a hint that the operator browser may not be this host. Use `skillwiki connect --from-file`.
 
 ## Paste-once prompt
 
