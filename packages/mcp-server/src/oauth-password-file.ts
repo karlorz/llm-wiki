@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
 export const OPERATOR_PASSWORD_HASH_FILENAME = "password.hash";
+export const REVIEW_PASSWORD_HASH_FILENAME = "review-password.hash";
 
 /**
  * Validates that an encoded hash follows the expected scrypt format:
@@ -14,12 +15,8 @@ export function isValidPasswordHashFormat(hash: string): boolean {
   return parts.length === 7 && parts[0] === "scrypt" && parts[5] === "urlsafe";
 }
 
-/**
- * Reads {stateDir}/password.hash when present and non-empty.
- * Returns the trimmed hash string, or undefined if absent or empty.
- */
-export function readPasswordHashFile(stateDir: string): string | undefined {
-  const filePath = join(stateDir, OPERATOR_PASSWORD_HASH_FILENAME);
+export function readPasswordHashFromFile(stateDir: string, filename: string): string | undefined {
+  const filePath = join(stateDir, filename);
   if (!existsSync(filePath)) {
     return undefined;
   }
@@ -34,11 +31,7 @@ export function readPasswordHashFile(stateDir: string): string | undefined {
   }
 }
 
-/**
- * Writes an encoded scrypt string to {stateDir}/password.hash.
- * Uses atomic same-directory temp write + rename + chmod 0600.
- */
-export function writePasswordHashFile(stateDir: string, encodedHash: string): void {
+export function writePasswordHashToFile(stateDir: string, filename: string, encodedHash: string): void {
   const trimmed = encodedHash.trim();
   if (!isValidPasswordHashFormat(trimmed)) {
     throw new Error("Invalid password hash format: expected encoded scrypt string");
@@ -46,8 +39,8 @@ export function writePasswordHashFile(stateDir: string, encodedHash: string): vo
 
   mkdirSync(stateDir, { recursive: true });
 
-  const targetPath = join(stateDir, OPERATOR_PASSWORD_HASH_FILENAME);
-  const tempPath = join(stateDir, `${OPERATOR_PASSWORD_HASH_FILENAME}.${randomBytes(8).toString("hex")}.tmp`);
+  const targetPath = join(stateDir, filename);
+  const tempPath = join(stateDir, `${filename}.${randomBytes(8).toString("hex")}.tmp`);
 
   writeFileSync(tempPath, `${trimmed}\n`, { mode: 0o600 });
   try {
@@ -63,4 +56,20 @@ export function writePasswordHashFile(stateDir: string, encodedHash: string): vo
   } catch {
     // ignore
   }
+}
+
+/**
+ * Reads {stateDir}/password.hash when present and non-empty.
+ * Returns the trimmed hash string, or undefined if absent or empty.
+ */
+export function readPasswordHashFile(stateDir: string): string | undefined {
+  return readPasswordHashFromFile(stateDir, OPERATOR_PASSWORD_HASH_FILENAME);
+}
+
+/**
+ * Writes an encoded scrypt string to {stateDir}/password.hash.
+ * Uses atomic same-directory temp write + rename + chmod 0600.
+ */
+export function writePasswordHashFile(stateDir: string, encodedHash: string): void {
+  writePasswordHashToFile(stateDir, OPERATOR_PASSWORD_HASH_FILENAME, encodedHash);
 }

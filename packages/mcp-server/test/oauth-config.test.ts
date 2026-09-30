@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../src/config.js";
 import { hashPassword, verifyPassword } from "../src/oauth.js";
-import { writePasswordHashFile } from "../src/oauth-password-file.js";
+import { REVIEW_PASSWORD_HASH_FILENAME, writePasswordHashFile, writePasswordHashToFile } from "../src/oauth-password-file.js";
 
 describe("OAuth config loading", () => {
   let tempDir: string;
@@ -195,6 +195,110 @@ oauth:
     );
     expect(cfg.oauth?.stateDir).toBe(stateDirEnv);
     expect(cfg.oauth?.passwordHash).toBe(pwhashEnvDir);
+  });
+
+  it("gives precedence to review hash file > env > YAML", () => {
+    const reviewYaml = hashPassword("review-yaml");
+    const reviewEnv = hashPassword("review-env");
+    const reviewDisk = hashPassword("review-disk");
+
+    writePasswordHashToFile(tempDir, REVIEW_PASSWORD_HASH_FILENAME, reviewDisk);
+
+    const yaml = `
+vault_dir: /vault
+token_map: /tokens.yaml
+rclone:
+  remote: seaweed-wiki
+  bucket: cloud/wiki
+oauth:
+  enabled: true
+  review_password_hash: "${reviewYaml}"
+  state_dir: ${JSON.stringify(tempDir)}
+`;
+    const cfg = loadConfig(
+      {
+        SKILLWIKI_MCP_OAUTH_REVIEW_PASSWORD_HASH: reviewEnv,
+      },
+      yaml,
+    );
+    expect(cfg.oauth?.reviewPasswordHash).toBe(reviewDisk);
+    expect(verifyPassword("review-disk", cfg.oauth!.reviewPasswordHash!)).toBe(true);
+  });
+
+  it("falls through to env then YAML when review hash file is missing or empty", () => {
+    const reviewYaml = hashPassword("review-yaml");
+    const reviewEnv = hashPassword("review-env");
+
+    const yaml = `
+vault_dir: /vault
+token_map: /tokens.yaml
+rclone:
+  remote: seaweed-wiki
+  bucket: cloud/wiki
+oauth:
+  enabled: true
+  review_password_hash: "${reviewYaml}"
+  state_dir: ${JSON.stringify(tempDir)}
+`;
+    const cfgEnv = loadConfig(
+      {
+        SKILLWIKI_MCP_OAUTH_REVIEW_PASSWORD_HASH: reviewEnv,
+      },
+      yaml,
+    );
+    expect(cfgEnv.oauth?.reviewPasswordHash).toBe(reviewEnv);
+
+    const cfgYaml = loadConfig({}, yaml);
+    expect(cfgYaml.oauth?.reviewPasswordHash).toBe(reviewYaml);
+
+    writeFileSync(join(tempDir, REVIEW_PASSWORD_HASH_FILENAME), "");
+    const cfgEmptyFileEnv = loadConfig(
+      {
+        SKILLWIKI_MCP_OAUTH_REVIEW_PASSWORD_HASH: reviewEnv,
+      },
+      yaml,
+    );
+    expect(cfgEmptyFileEnv.oauth?.reviewPasswordHash).toBe(reviewEnv);
+
+    const cfgEmptyFileYaml = loadConfig({}, yaml);
+    expect(cfgEmptyFileYaml.oauth?.reviewPasswordHash).toBe(reviewYaml);
+  });
+
+  it("loads review hash independently of production password.hash", () => {
+    const prodDisk = hashPassword("prod-disk");
+    const prodEnv = hashPassword("prod-env");
+    const prodYaml = hashPassword("prod-yaml");
+    const reviewDisk = hashPassword("review-disk");
+    const reviewEnv = hashPassword("review-env");
+    const reviewYaml = hashPassword("review-yaml");
+
+    writePasswordHashFile(tempDir, prodDisk);
+    writePasswordHashToFile(tempDir, REVIEW_PASSWORD_HASH_FILENAME, reviewDisk);
+
+    const yaml = `
+vault_dir: /vault
+token_map: /tokens.yaml
+rclone:
+  remote: seaweed-wiki
+  bucket: cloud/wiki
+oauth:
+  enabled: true
+  password_hash: "${prodYaml}"
+  review_password_hash: "${reviewYaml}"
+  state_dir: ${JSON.stringify(tempDir)}
+`;
+    const cfg = loadConfig(
+      {
+        SKILLWIKI_MCP_OAUTH_PASSWORD_HASH: prodEnv,
+        SKILLWIKI_MCP_OAUTH_REVIEW_PASSWORD_HASH: reviewEnv,
+      },
+      yaml,
+    );
+    expect(cfg.oauth?.passwordHash).toBe(prodDisk);
+    expect(cfg.oauth?.reviewPasswordHash).toBe(reviewDisk);
+    expect(verifyPassword("prod-disk", cfg.oauth!.passwordHash!)).toBe(true);
+    expect(verifyPassword("review-disk", cfg.oauth!.reviewPasswordHash!)).toBe(true);
+    expect(cfg.oauth?.passwordHash).not.toBe(cfg.oauth?.reviewPasswordHash);
   });
 });
 

@@ -39,6 +39,10 @@ _Avoid_: auto-provision, first-run wizard, doctor apply, public Caddy `/console`
 The shared secret that authorizes a new OAuth `/authorize`. The daemon stores a scrypt hash only. After a console set, that hash lives in a dedicated file that outranks env and YAML. The operator may keep the plaintext in a host Keychain. It is not a writer identity.
 _Avoid_: API key, connector password, OAuth client secret, host-id bearer
 
+**Reviewer operator password**:
+The shared secret that authorizes a new OAuth `/authorize` as writer `chatgpt-review`. The daemon stores a scrypt hash in `review-password.hash` (outranks env/YAML). It is not a writer identity. It never unlocks `central`.
+_Avoid_: production operator password, Google login
+
 **Full MCP read/write**:
 Live HTTP MCP tools include capture, work-item write, and page publish. A local vault mirror is optional for reads.
 _Avoid_: captures-only, local git writer
@@ -212,6 +216,7 @@ An attended decision process that reviews ranked-audit evidence, resolves ambigu
 - vault_sync.push_enabled selects the vault-sync job profile on an installed leaf.
 - Operator console mutates the same token-map and reads the same audit JSONL as CLI `mcp-auth`; it is attended issuance over SSH, not a second writer identity.
 - Operator password is not a writer identity. It only authorizes a new OAuth grant. Console Set password writes the hash file and does not revoke grants or write a host Keychain.
+- Reviewer operator password authorizes writer `chatgpt-review` onto extra vaults that exclude `central`. Production operator password remains the grant for `chatgpt-web`.
 - Composer chip bind is Doubao project attachment; it is not HTTP MCP compact activation and does not change writer identity.
 - Query scope is independent of compact activation and of composer chip bind; default typed never implies work-item search. HTTP scope=work ranks Layer-3 work first. Unknown or empty HTTP scope fail-closes and does not invent a writer_id.
 - Query project is an optional wiki_query filter; unknown or empty project fail-closes and does not invent a writer_id.

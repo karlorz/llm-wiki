@@ -44,6 +44,35 @@ describe("wiki-fin Slice 6a example config", () => {
     expect(central.localRoot).not.toBe(extra!.localRoot);
   });
 
+  it("skillwiki-demo example does not overlap live central cloud/wiki namespace", () => {
+    const demoPath = join(here, "../config/skillwiki-demo.example.yaml");
+    const fileText = readFileSync(demoPath, "utf8");
+    const cfg = loadConfig(
+      {
+        SKILLWIKI_MCP_VAULT: "/opt/skillwiki-mcp/vault",
+        SKILLWIKI_MCP_TOKEN_MAP: "/etc/skillwiki-mcp/tokens.yaml",
+        SKILLWIKI_MCP_RCLONE_REMOTE: "seaweed-wiki",
+        SKILLWIKI_MCP_RCLONE_BUCKET: "cloud/wiki",
+        SKILLWIKI_MCP_S3_BUCKET: "cloud",
+        SKILLWIKI_MCP_S3_PREFIX: "wiki",
+      },
+      fileText,
+    );
+    const registry = configVaultRegistry(cfg);
+    expect(registry.defaultVaultId).toBe("central");
+    const extra = registry.entries.get("skillwiki-demo");
+    expect(extra).toBeDefined();
+    expect(extra!.enabled).toBe(false);
+    expect(extra!.localRoot).toBe(resolve("/opt/skillwiki-mcp/vault-skillwiki-demo"));
+    expect(extra!.rclonePath).toBe("cloud/wiki-demo");
+    expect(extra!.s3Bucket).toBe("cloud");
+    expect(extra!.s3Prefix).toBe("wiki-demo");
+    const central = registry.entries.get("central")!;
+    expect(namespacesOverlap("cloud/wiki", "cloud/wiki-demo")).toBe(false);
+    expect(namespacesOverlap("cloud/wiki", "cloud/wiki/demo")).toBe(true);
+    expect(central.localRoot).not.toBe(extra!.localRoot);
+  });
+
   it("does not grant wiki-fin to string host-id central-only principals", () => {
     const example = readFileSync(principalExamplePath, "utf8");
     const hashA = "a".repeat(64);

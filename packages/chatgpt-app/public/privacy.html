@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SkillWiki — Privacy Policy</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #1a202c;
+      max-width: 720px;
+      margin: 40px auto;
+      padding: 0 20px;
+      background: #f7fafc;
+    }
+    .card {
+      background: #ffffff;
+      padding: 32px;
+      border-radius: 8px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    h1 { color: #2d3748; margin-top: 0; }
+    h2 { color: #4a5568; margin-top: 24px; font-size: 1.25em; }
+    p, li { color: #4a5568; }
+    a { color: #3182ce; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    nav { margin-top: 24px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: 0.95em; }
+    nav a { margin-right: 16px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Privacy Policy</h1>
+    <p>Last updated: September 2026</p>
+    
+    <h2>1. Overview & Architecture</h2>
+    <p>SkillWiki is an operator-hosted knowledge base system. It exposes a Model Context Protocol (MCP) endpoint that allows AI clients like ChatGPT to read and write notes in an authorized vault on behalf of the operator.</p>
+
+    <h2>2. Authentication & Data Access</h2>
+    <p>ChatGPT connects via OAuth 2.0 PKCE using the operator-configured password for the specific vault. No third-party identities (such as Google or email logins) are accepted or stored. Host-id bearer tokens remain a separate infrastructure plane and are never exposed to ChatGPT or end-user sessions.</p>
+
+    <h2>3. Data Transferred Through MCP</h2>
+    <p>When you use the SkillWiki ChatGPT App, ChatGPT sends tool arguments (such as search queries, read paths, and markdown content for note captures or page publications) to the configured MCP server endpoint over HTTPS. Only content explicitly requested or authored in the chat is transmitted.</p>
+
+    <h2>4. Data Storage and Retention</h2>
+    <p>Notes, transcripts, and published pages are stored within the operator's private vault storage (local filesystem and backed up to configured S3 object storage). Data retention, backup policies, and access controls are entirely controlled by the vault operator.</p>
+
+    <h2>5. Third Parties & Telemetry</h2>
+    <p>The SkillWiki MCP server does not collect usage analytics, advertising telemetry, or tracking cookies. Data sent to OpenAI or processed by ChatGPT is governed by OpenAI's respective privacy policy.</p>
+
+    <h2>6. Contact</h2>
+    <p>For questions or assistance regarding privacy and data practices, please consult our <a href="/support">Support page</a>.</p>
+
+    <nav>
+      <a href="/">Home</a>
+      <a href="/terms">Terms of Service</a>
+      <a href="/support">Support</a>
+    </nav>
+  </div>
+</body>
+</html>

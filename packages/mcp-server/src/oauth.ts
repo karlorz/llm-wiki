@@ -8,9 +8,12 @@ export interface OAuthWriterMapping {
   allowed_vaults?: string[];
 }
 
+export const REVIEW_WRITER_ID = "chatgpt-review";
+
 export interface OAuthConfig {
   enabled: boolean;
   passwordHash?: string;
+  reviewPasswordHash?: string;
   issuer?: string;
   stateDir?: string;
   writers?: OAuthWriterMapping[];
@@ -75,6 +78,15 @@ export function resolveWriterId(clientId: string | undefined, mappings: OAuthWri
   const wildcard = mappings.find((m) => !m.client_id || m.client_id === "*");
   if (wildcard) return wildcard.writer_id;
   return mappings[0].writer_id;
+}
+
+export function isSafeReviewWriterGrant(mappings: OAuthWriterMapping[] | undefined): boolean {
+  if (!mappings || mappings.length === 0) return false;
+  const review = mappings.find((m) => m.writer_id === REVIEW_WRITER_ID);
+  if (!review) return false;
+  const vaults = review.allowed_vaults;
+  if (!Array.isArray(vaults) || vaults.length === 0) return false;
+  return !vaults.includes("central");
 }
 
 export function getIssuer(req: IncomingMessage, configuredIssuer?: string): string {
@@ -144,6 +156,14 @@ export function isLoopbackRedirectUri(raw: string | undefined): boolean {
   }
 }
 
+function denyOperatorPassword(res: ServerResponse, wantsHtml: boolean, params: Record<string, string>, clientName?: string | null, status = 401): void {
+  if (wantsHtml) {
+    htmlResponse(res, status, authorizeLoginHtml(params, "Invalid operator password", clientName));
+    return;
+  }
+  jsonResponse(res, status, { error: "access_denied", error_description: "Invalid operator password" });
+}
+
 function authorizeLoginHtml(params: Record<string, string>, error?: string, clientName?: string | null): string {
   const hiddens = AUTHORIZE_HIDDEN_KEYS.filter((key) => params[key])
     .map((key) => `<input type="hidden" name="${key}" value="${escapeHtml(params[key])}">`)
@@ -159,6 +179,58 @@ function authorizeLoginHtml(params: Record<string, string>, error?: string, clie
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SkillWiki operator login</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    margin: 0 auto;
+    max-width: 32rem;
+    padding: 2.5rem 1.25rem;
+    line-height: 1.5;
+    color: #1c1917;
+    background: #fafaf9;
+  }
+  h1 { font-size: 1.5rem; font-weight: 650; margin: 0 0 0.75rem; }
+  p { margin: 0.75rem 0; }
+  form {
+    margin: 1.5rem 0;
+    padding: 1.25rem;
+    background: #fff;
+    border: 1px solid #e7e5e4;
+    border-radius: 0.75rem;
+  }
+  label { display: block; font-weight: 600; }
+  input[type="password"] {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 0.4rem;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid #d6d3d1;
+    border-radius: 0.4rem;
+    font: inherit;
+  }
+  button {
+    margin-top: 1rem;
+    padding: 0.5rem 1.1rem;
+    font: inherit;
+    font-weight: 600;
+    color: #fff;
+    background: #1c1917;
+    border: 0;
+    border-radius: 0.4rem;
+    cursor: pointer;
+  }
+  p[role="alert"] {
+    color: #991b1b;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 0.4rem;
+    padding: 0.6rem 0.75rem;
+  }
+  footer { margin-top: 2rem; font-size: 0.9rem; color: #57534e; }
+  footer a { color: inherit; }
+</style>
 </head>
 <body>
 <h1>SkillWiki</h1>
@@ -170,6 +242,7 @@ ${hiddens}
 <p><label>Operator password <input type="password" name="password" required autocomplete="current-password"></label></p>
 <p><button type="submit">Allow</button></p>
 </form>
+<footer><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></footer>
 </body>
 </html>`;
 }
@@ -338,13 +411,28 @@ export async function handleOAuthRequest(
       return true;
     }
 
-    if (!oauthCfg.passwordHash || !password || !verifyPassword(password, oauthCfg.passwordHash)) {
-      if (wantsHtml) {
-        htmlResponse(res, 401, authorizeLoginHtml(params, "Invalid operator password", clientName));
+    if (!password) {
+      denyOperatorPassword(res, wantsHtml, params, clientName);
+      return true;
+    }
+
+    const productionOk = Boolean(oauthCfg.passwordHash) && verifyPassword(password, oauthCfg.passwordHash!);
+    const reviewOk =
+      !productionOk && Boolean(oauthCfg.reviewPasswordHash) && verifyPassword(password, oauthCfg.reviewPasswordHash!);
+    if (!productionOk && !reviewOk) {
+      denyOperatorPassword(res, wantsHtml, params, clientName);
+      return true;
+    }
+
+    let writerId: string;
+    if (productionOk) {
+      writerId = resolveWriterId(client_id, oauthCfg.writers);
+    } else {
+      if (!isSafeReviewWriterGrant(oauthCfg.writers)) {
+        denyOperatorPassword(res, wantsHtml, params, clientName, 403);
         return true;
       }
-      jsonResponse(res, 401, { error: "access_denied", error_description: "Invalid operator password" });
-      return true;
+      writerId = REVIEW_WRITER_ID;
     }
 
     let redirectUrl: URL | undefined;
@@ -356,8 +444,6 @@ export async function handleOAuthRequest(
         return true;
       }
     }
-
-    const writerId = resolveWriterId(client_id, oauthCfg.writers);
     const code = randomBytes(24).toString("base64url");
     const codeHash = sha256Hex(code);
 

@@ -69,4 +69,21 @@ describe("principal authorization", () => {
       allowed_vaults: ["central"],
     });
   });
+
+  it("extra-only grants omit vault= to the first enabled allowed vault", () => {
+    const reg = registry();
+    const principal = normalizeGrants("chatgpt-review", ["wiki-fin"], reg);
+    expect(principal.allowedVaults).toEqual(["wiki-fin"]);
+    expect(authorizeVaultSelection({ requested: undefined, principal, registry: reg })).toEqual({
+      ok: true,
+      vaultId: "wiki-fin",
+    });
+    expect(handshakeFor(principal, reg)).toEqual({
+      default_vault: "wiki-fin",
+      allowed_vaults: ["wiki-fin"],
+    });
+    expect(authorizeVaultSelection({ requested: "central", principal, registry: reg })).toMatchObject({
+      error: "VAULT_UNAUTHORIZED",
+    });
+  });
 });

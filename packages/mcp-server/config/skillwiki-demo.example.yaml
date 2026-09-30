@@ -1,0 +1,28 @@
+# SkillWiki demo extra vault. NOT live.
+# Enable only after the seaweed-wiki:cloud/wiki-demo prefix exists.
+# chatgpt-review writers allowed_vaults: [skillwiki-demo]
+#
+# Must not overlap live central cloud/wiki.
+# Central stays env-defined on sg01:
+#   SKILLWIKI_MCP_VAULT=/opt/skillwiki-mcp/vault
+#   SKILLWIKI_MCP_RCLONE_REMOTE=seaweed-wiki
+#   SKILLWIKI_MCP_RCLONE_BUCKET=cloud/wiki
+#   SKILLWIKI_MCP_S3_BUCKET=cloud
+#   SKILLWIKI_MCP_S3_PREFIX=wiki
+#
+# Clients never send these paths. Tools take vault=skillwiki-demo only.
+# enabled: false until the prefix exists.
+
+default_vault: central
+vaults:
+  - vault_id: skillwiki-demo
+    default: false
+    enabled: false
+    label: SkillWiki demo
+    local_root: /opt/skillwiki-mcp/vault-skillwiki-demo
+    rclone:
+      remote: seaweed-wiki
+      path: cloud/wiki-demo
+    s3:
+      bucket: cloud
+      prefix: wiki-demo

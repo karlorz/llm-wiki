@@ -1,7 +1,7 @@
 import yaml from "js-yaml";
 import { DEFAULT_RCLONE_COPY_TIMEOUT_MS } from "./reconcile.js";
 import type { OAuthConfig, OAuthWriterMapping } from "./oauth.js";
-import { readPasswordHashFile } from "./oauth-password-file.js";
+import { readPasswordHashFile, readPasswordHashFromFile, REVIEW_PASSWORD_HASH_FILENAME } from "./oauth-password-file.js";
 import { DEFAULT_VAULT_ID } from "./vault-id.js";
 import {
   buildVaultRegistry,
@@ -53,6 +53,7 @@ interface FileConfig {
   oauth?: {
     enabled?: boolean;
     password_hash?: string;
+    review_password_hash?: string;
     issuer?: string;
     state_dir?: string;
     writers?: OAuthWriterMapping[];
@@ -239,6 +240,10 @@ function parseOAuthConfig(
   const passwordHash =
     fileHash ?? env.SKILLWIKI_MCP_OAUTH_PASSWORD_HASH ?? fileOAuth?.password_hash;
 
+  const reviewFileHash = stateDir ? readPasswordHashFromFile(stateDir, REVIEW_PASSWORD_HASH_FILENAME) : undefined;
+  const reviewPasswordHash =
+    reviewFileHash ?? env.SKILLWIKI_MCP_OAUTH_REVIEW_PASSWORD_HASH ?? fileOAuth?.review_password_hash;
+
   let writers = fileOAuth?.writers;
   if (env.SKILLWIKI_MCP_OAUTH_WRITERS) {
     try {
@@ -251,6 +256,7 @@ function parseOAuthConfig(
   return {
     enabled,
     passwordHash,
+    reviewPasswordHash,
     issuer,
     stateDir,
     writers,

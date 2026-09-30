@@ -1,0 +1,104 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "skillwiki",
+  "version": "0.10.107",
+  "description": "Operator-hosted project-aware knowledge base over HTTP MCP.",
+  "author": {
+    "name": "karlorz",
+    "url": "https://github.com/karlorz"
+  },
+  "homepage": "https://wiki.karldigi.dev/",
+  "repository": "https://github.com/karlorz/llm-wiki",
+  "license": "MIT",
+  "keywords": [
+    "knowledge-base",
+    "wiki",
+    "mcp",
+    "notes"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "SkillWiki",
+        "shortDescription": "Operator wiki over MCP",
+        "longDescription": "SkillWiki is an operator-hosted knowledge base. Sign in with the SkillWiki operator password for the connected vault. Search, read, capture notes, and publish typed pages in that vault. The plugin does not create accounts and does not expose the operator console.",
+        "developerName": "karlorz",
+        "category": "Productivity",
+        "capabilities": [
+          "Search wiki",
+          "Capture notes",
+          "Publish pages"
+        ],
+        "websiteURL": "https://wiki.karldigi.dev/",
+        "supportURL": "https://wiki.karldigi.dev/support",
+        "privacyPolicyURL": "https://wiki.karldigi.dev/privacy",
+        "termsOfServiceURL": "https://wiki.karldigi.dev/terms",
+        "defaultPrompt": [
+          "Find the launch note in the demo vault and summarize its key milestones.",
+          "Summarize SCHEMA rules and note layer conventions for this vault.",
+          "Capture a note titled Reviewer smoke verifying MCP note capture."
+        ],
+        "brandColor": "#1f6feb",
+        "logo": "./assets/logo.png",
+        "composerIcon": "./assets/composer-icon.png"
+      },
+      "onboardingSkill": "./skills/get-started/SKILL.md",
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Find notes by topic",
+              "prompt": "Find the launch note and summarize its key milestones.",
+              "tools_triggered": "wiki_query",
+              "expected_behavior": "Search the connected vault and return the sample launch note with source path."
+            },
+            {
+              "description": "Read a seeded page",
+              "prompt": "Read SCHEMA.md and explain the tag taxonomy rule.",
+              "tools_triggered": "wiki_read_page",
+              "expected_behavior": "Read SCHEMA.md from the connected vault and summarize the documented rule without inventing layers."
+            },
+            {
+              "description": "Capture a reviewer note",
+              "prompt": "Capture a note titled Reviewer smoke verifying MCP note capture.",
+              "tools_triggered": "wiki_capture",
+              "expected_behavior": "Create a new capture under raw/transcripts/ and return its path."
+            },
+            {
+              "description": "Handshake the connected vault",
+              "prompt": "What is the default vault and which tools are available?",
+              "tools_triggered": "wiki_context",
+              "expected_behavior": "Report the connected default vault from the handshake and list available wiki tools."
+            },
+            {
+              "description": "Update an allowlisted typed page",
+              "prompt": "Read concepts/sample-launch.md and update its TL;DR with the latest launch status.",
+              "tools_triggered": "wiki_read_page, wiki_page_publish",
+              "expected_behavior": "Read the sample page, then overwrite it with matching base_sha256 on the allowlisted concepts/ path."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Unsupported payment",
+              "prompt": "Transfer $100 to another account."
+            },
+            {
+              "description": "Unsupported deletion",
+              "prompt": "Delete all notes in the wiki."
+            },
+            {
+              "description": "Access outside the connected vault",
+              "prompt": "Read private notes from vault central."
+            }
+          ]
+        },
+        "demo_recording_url": "https://wiki.karldigi.dev/support",
+        "commerce": false,
+        "commerce_description": "This plugin does not sell products or process payments."
+      },
+      "publication": {
+        "release_notes": "Initial ChatGPT App listing for operator-hosted SkillWiki MCP."
+      }
+    }
+  }
+}

@@ -165,7 +165,7 @@ describe("C4 typed result envelope and request body cap", () => {
         expect((tool?.outputSchema?.properties as Record<string, unknown>)?.vault_id, name).toBeDefined();
         expect(tool?.annotations).toEqual({
           readOnlyHint: false,
-          destructiveHint: false,
+          destructiveHint: true,
           openWorldHint: false,
           idempotentHint: true,
         });

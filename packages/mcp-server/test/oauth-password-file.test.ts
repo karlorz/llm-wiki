@@ -6,6 +6,7 @@ import {
   readPasswordHashFile,
   writePasswordHashFile,
   OPERATOR_PASSWORD_HASH_FILENAME,
+  REVIEW_PASSWORD_HASH_FILENAME,
 } from "../src/oauth-password-file.js";
 import { hashPassword } from "../src/oauth.js";
 
@@ -22,6 +23,7 @@ describe("oauth-password-file", () => {
 
   it("exports the expected filename constant", () => {
     expect(OPERATOR_PASSWORD_HASH_FILENAME).toBe("password.hash");
+    expect(REVIEW_PASSWORD_HASH_FILENAME).toBe("review-password.hash");
   });
 
   it("returns undefined when password.hash is missing", () => {

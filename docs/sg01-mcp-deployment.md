@@ -78,3 +78,17 @@ Grok Bot **Plugins → Configure** fields:
 Server `allowed_vaults` on the principal is the security boundary. Unknown, disabled, or unauthorized vault ids fail closed before filesystem/S3 I/O. Snapshot, FUSE, research, session-brief, rclone scheduling, and Git promotion stay sibling processes (`skillwiki-backend.target` groups lifecycle only). HTTP MCP still does not grow archive/remove/source-dispose/index/fleet/history mutations.
 
 Grok Bot **Plugins → Configure** may set non-secret `SKILLWIKI_EXTRA_VAULTS=wiki-fin` on the same connector. That is client opt-in only. Server `allowed_vaults` remains the gate. Issue a wiki-fin-only host bearer with `skillwiki mcp-auth issue-host --host-id grok-bot-wiki-fin --allowed-vaults wiki-fin --write` on metal; do not add wiki-fin to macos-dev. In-repo example YAML stays `enabled: false` until the live `cloud/wiki-fin` prefix exists.
+
+## ChatGPT App listing (operator)
+
+The ChatGPT App directory integration for SkillWiki connects to the HTTP MCP daemon using password-based OAuth 2.0 PKCE. Production setup on sg01 requires the following operator configurations:
+
+- **Caddy static routes:** Caddy must serve `GET /`, `/privacy`, `/terms`, and `/support` from `packages/chatgpt-app/public` (or an operator-staged public directory).
+- **Domain challenge token:** `GET /.well-known/openai-apps-challenge` is a plain-text verification token file provided during app submission. The operator drops this file on sg01; never commit the challenge token to git.
+- **Daemon proxying:** Keep proxying `/mcp`, `/authorize`, `/register`, `/token`, and `/.well-known/oauth-*` to the SkillWiki MCP daemon. Do not proxy `/console` publicly; the operator console remains behind internal network/SSH loopback access only.
+- **Reviewer vault & credentials:**
+  - Provision an extra vault `skillwiki-demo` seeded with `packages/chatgpt-app/demo-vault/` and configured via `packages/mcp-server/config/skillwiki-demo.example.yaml` (`local_root: /opt/skillwiki-mcp/vault-skillwiki-demo`, S3 prefix `cloud/wiki-demo`).
+  - Store the hashed reviewer operator password in `review-password.hash` within the OAuth `state_dir`.
+  - Writers mapping uses `writer_id: chatgpt-review` with `allowed_vaults: [skillwiki-demo]`. ChatGPT's DCR `client_id` is not the writer. The review password selects this writer; it must never include `central`.
+- **Live verification:** After directory publication, perform live testing by initiating the ChatGPT directory connect flow and authenticating with the production operator password against the default vault.
+

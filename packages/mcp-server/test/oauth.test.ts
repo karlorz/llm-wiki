@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { bearerToken, resolveWriter, unauthorizedHeaders } from "../src/auth.js";
-import { consentClientLabel, hashPassword, isLoopbackRedirectUri } from "../src/oauth.js";
+import { consentClientLabel, hashPassword, isLoopbackRedirectUri, sha256Hex } from "../src/oauth.js";
 import { FileOAuthStore, InMemoryOAuthStore } from "../src/oauth-store.js";
 import { ReconcileGate } from "../src/reconcile.js";
 import { startMcpHttpServer } from "../src/server.js";
@@ -464,7 +464,11 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       expect(html).toContain('name="client_id"');
       expect(html).toContain("chatgpt-dcr-client");
       expect(html).toContain("state-xyz");
+      expect(html).toContain("SkillWiki operator login");
       expect(html).toContain("allow this client to access this vault");
+      expect(html).toContain('autocomplete="current-password"');
+      expect(html).toContain('href="/privacy"');
+      expect(html).toContain('href="/terms"');
       expect(html).not.toContain("loopback callback");
       expect(html).not.toContain("ChatGPT");
       expect(html).not.toContain("unused");
@@ -682,7 +686,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
         }).toString(),
         redirect: "manual",
       });
-      expect([401, 403]).toContain(failAuthRes.status);
+      expect(failAuthRes.status).toBe(401);
 
       // 6. Authorize with correct password -> 302 or JSON code
       const authRes = await fetch(`${baseUrl}/authorize`, {
@@ -907,6 +911,181 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
         }).toString(),
       });
       expect(replayRes.status).toBe(400);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
+  async function exchangePasswordForAccessToken(input: {
+    baseUrl: string;
+    store: InMemoryOAuthStore;
+    password: string;
+    clientId: string;
+  }): Promise<{ status: number; location: string | null; writerId?: string }> {
+    const codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk_long_verifier_string_at_least_43_chars";
+    const codeChallenge = createHash("sha256").update(codeVerifier, "ascii").digest("base64url");
+    const redirectUri = "https://chatgpt.com/connector/oauth/callback";
+    const authRes = await fetch(`${input.baseUrl}/authorize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        password: input.password,
+        client_id: input.clientId,
+        redirect_uri: redirectUri,
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+        response_type: "code",
+      }).toString(),
+      redirect: "manual",
+    });
+    const location = authRes.headers.get("location");
+    if (authRes.status !== 302 || !location) {
+      return { status: authRes.status, location };
+    }
+    const code = new URL(location).searchParams.get("code");
+    if (!code) {
+      return { status: authRes.status, location };
+    }
+    const tokenRes = await fetch(`${input.baseUrl}/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: input.clientId,
+        code,
+        redirect_uri: redirectUri,
+        code_verifier: codeVerifier,
+      }).toString(),
+    });
+    const tokenBody = (await tokenRes.json()) as { access_token?: string };
+    const saved = tokenBody.access_token
+      ? await input.store.getAccessToken(sha256Hex(tokenBody.access_token))
+      : null;
+    return { status: authRes.status, location, writerId: saved?.writerId };
+  }
+
+  it("same ChatGPT client_id maps production password to chatgpt-web and review password to chatgpt-review", async () => {
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const store = new InMemoryOAuthStore();
+    const clientId = "chatgpt-shared-client";
+    const server = await startMcpHttpServer({
+      bind: "127.0.0.1",
+      port: 0,
+      vaultDir,
+      tokenMap: new Map(),
+      gate,
+      putObject: async () => undefined,
+      oauth: {
+        enabled: true,
+        passwordHash: hashPassword("prod-operator"),
+        reviewPasswordHash: hashPassword("review-operator"),
+        writers: [
+          { client_id: clientId, writer_id: "chatgpt-web", allowed_vaults: ["central"] },
+          { writer_id: "chatgpt-review", allowed_vaults: ["skillwiki-demo"] },
+        ],
+        store,
+      },
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const baseUrl = `http://127.0.0.1:${port}`;
+      const production = await exchangePasswordForAccessToken({
+        baseUrl,
+        store,
+        password: "prod-operator",
+        clientId,
+      });
+      expect(production.status).toBe(302);
+      expect(production.writerId).toBe("chatgpt-web");
+
+      const review = await exchangePasswordForAccessToken({
+        baseUrl,
+        store,
+        password: "review-operator",
+        clientId,
+      });
+      expect(review.status).toBe(302);
+      expect(review.writerId).toBe("chatgpt-review");
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
+  it("review password with missing or unsafe writers mapping does not issue a code", async () => {
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+
+    async function authorizeReview(writers: { client_id?: string; writer_id: string; allowed_vaults?: string[] }[]) {
+      const store = new InMemoryOAuthStore();
+      const server = await startMcpHttpServer({
+        bind: "127.0.0.1",
+        port: 0,
+        vaultDir,
+        tokenMap: new Map(),
+        gate,
+        putObject: async () => undefined,
+        oauth: {
+          enabled: true,
+          passwordHash: hashPassword("prod-operator"),
+          reviewPasswordHash: hashPassword("review-operator"),
+          writers,
+          store,
+        },
+      });
+      try {
+        const { port } = server.address() as AddressInfo;
+        const issued = await exchangePasswordForAccessToken({
+          baseUrl: `http://127.0.0.1:${port}`,
+          store,
+          password: "review-operator",
+          clientId: "chatgpt-shared-client",
+        });
+        expect([401, 403]).toContain(issued.status);
+        expect(issued.location).toBeNull();
+        expect(issued.writerId).toBeUndefined();
+      } finally {
+        await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+      }
+    }
+
+    await authorizeReview([{ client_id: "chatgpt-shared-client", writer_id: "chatgpt-web", allowed_vaults: ["central"] }]);
+    await authorizeReview([{ writer_id: "chatgpt-review" }]);
+    await authorizeReview([{ writer_id: "chatgpt-review", allowed_vaults: ["central"] }]);
+    await authorizeReview([{ writer_id: "chatgpt-review", allowed_vaults: ["skillwiki-demo", "central"] }]);
+    await authorizeReview([{ writer_id: "chatgpt-review", allowed_vaults: [] }]);
+  });
+
+  it("wrong operator password still returns 401", async () => {
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const store = new InMemoryOAuthStore();
+    const server = await startMcpHttpServer({
+      bind: "127.0.0.1",
+      port: 0,
+      vaultDir,
+      tokenMap: new Map(),
+      gate,
+      putObject: async () => undefined,
+      oauth: {
+        enabled: true,
+        passwordHash: hashPassword("prod-operator"),
+        reviewPasswordHash: hashPassword("review-operator"),
+        writers: [{ writer_id: "chatgpt-review", allowed_vaults: ["skillwiki-demo"] }],
+        store,
+      },
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      const issued = await exchangePasswordForAccessToken({
+        baseUrl: `http://127.0.0.1:${port}`,
+        store,
+        password: "not-the-operator",
+        clientId: "chatgpt-shared-client",
+      });
+      expect(issued.status).toBe(401);
+      expect(issued.location).toBeNull();
+      expect(issued.writerId).toBeUndefined();
     } finally {
       await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
     }

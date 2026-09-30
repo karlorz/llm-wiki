@@ -47,17 +47,25 @@ export function normalizeGrants(
   return { writerId, defaultVault, allowedVaults: exact };
 }
 
+function enabledAllowedVaults(principal: Principal, registry: VaultRegistry): string[] {
+  return principal.allowedVaults.filter((id) => Boolean(registry.entries.get(id)?.enabled));
+}
+
+export function effectiveDefaultVault(principal: Principal, registry: VaultRegistry): string {
+  const advertised = enabledAllowedVaults(principal, registry);
+  if (advertised.includes(principal.defaultVault)) {
+    return principal.defaultVault;
+  }
+  return advertised[0] ?? principal.defaultVault;
+}
+
 export function handshakeFor(principal: Principal, registry: VaultRegistry): {
   default_vault: string;
   allowed_vaults: string[];
 } {
-  const advertised = principal.allowedVaults.filter((id) => {
-    const entry = registry.entries.get(id);
-    return Boolean(entry?.enabled);
-  });
   return {
-    default_vault: principal.defaultVault,
-    allowed_vaults: advertised,
+    default_vault: effectiveDefaultVault(principal, registry),
+    allowed_vaults: enabledAllowedVaults(principal, registry),
   };
 }
 
@@ -81,7 +89,7 @@ export function authorizeVaultSelection(input: {
 }): { ok: true; vaultId: string } | VaultAuthFailure {
   const raw = input.requested;
   if (raw === undefined || raw.trim() === "") {
-    return authorizeExact(input.principal.defaultVault, input.principal, input.registry);
+    return authorizeExact(effectiveDefaultVault(input.principal, input.registry), input.principal, input.registry);
   }
   const vaultId = normalizeVaultId(raw);
   if (!vaultId) {

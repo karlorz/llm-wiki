@@ -236,7 +236,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
     const reads = {
       vaultDir: resolved.ctx.vaultDir,
       vaultId: resolved.ctx.vaultId,
-      defaultVault: opts.principal.defaultVault,
+      defaultVault: handshake.default_vault,
       allowedVaults: handshake.allowed_vaults,
       hostId: opts.hostId,
       gate: resolved.ctx.gate,
@@ -678,7 +678,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       }).passthrough(),
       annotations: {
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         openWorldHint: false,
         idempotentHint: true,
       },
@@ -708,7 +708,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       }).passthrough(),
       annotations: {
         readOnlyHint: false,
-        destructiveHint: false,
+        destructiveHint: true,
         openWorldHint: false,
         idempotentHint: true,
       },
