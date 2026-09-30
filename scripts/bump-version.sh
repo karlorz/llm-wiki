@@ -23,7 +23,8 @@
 #   16. packages/skills/.cursor-plugin/plugin.json (Cursor/Grok Bot plugin)
 #   17. packages/vault-sync/.cursor-plugin/plugin.json (Cursor vault-sync plugin)
 #   18. .cursor-plugin/marketplace.json   (Cursor marketplace metadata.version)
-#   19. package-lock.json                 (npm-generated root/workspace metadata)
+#   19. packages/chatgpt-app/plugin.json  (ChatGPT App listing manifest)
+#   20. package-lock.json                 (npm-generated root/workspace metadata)
 #
 # After editing, regenerates package-lock.json and verifies all release metadata.
 
@@ -72,6 +73,7 @@ bump_file "packages/mcp-server/package.json"           "${REPO_ROOT}/packages/mc
 bump_file "packages/skills/.cursor-plugin/plugin.json" "${REPO_ROOT}/packages/skills/.cursor-plugin/plugin.json"
 bump_file "packages/vault-sync/.cursor-plugin/plugin.json" "${REPO_ROOT}/packages/vault-sync/.cursor-plugin/plugin.json"
 bump_file ".cursor-plugin/marketplace.json"            "${REPO_ROOT}/.cursor-plugin/marketplace.json"
+bump_file "packages/chatgpt-app/plugin.json"            "${REPO_ROOT}/packages/chatgpt-app/plugin.json"
 
 echo "  … Regenerating package-lock.json"
 (
@@ -100,6 +102,7 @@ EXPECTED_FILES=(
   "${REPO_ROOT}/packages/mcp-server/package.json"
   "${REPO_ROOT}/packages/skills/.cursor-plugin/plugin.json"
   "${REPO_ROOT}/packages/vault-sync/.cursor-plugin/plugin.json"
+  "${REPO_ROOT}/packages/chatgpt-app/plugin.json"
 )
 
 MISSING=0
@@ -121,9 +124,9 @@ if ! grep -q "\"version\": \"${VERSION}\"" "${REPO_ROOT}/.cursor-plugin/marketpl
 fi
 
 if [ "$MISSING" -eq 0 ]; then
-  echo "  ✓ All 18 manifest version fields updated to ${VERSION}"
+  echo "  ✓ All 19 manifest version fields updated to ${VERSION}"
 else
-  echo "  ⚠ Expected 18 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
+  echo "  ⚠ Expected 19 manifests at ${VERSION}, found ${MISSING} mismatch(es)" >&2
   exit 1
 fi
 

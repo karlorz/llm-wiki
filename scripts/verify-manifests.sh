@@ -68,7 +68,7 @@ else
   echo "✓ sg01 MCP deployment contract passed"
 fi
 
-# ---- 1. Version consistency across all 18 manifests ----
+# ---- 1. Version consistency across all 19 manifests ----
 
 CLI_VER=$(grep '"version"' "$REPO_ROOT/packages/cli/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
 SKILLS_PKG_VER=$(grep '"version"' "$REPO_ROOT/packages/skills/package.json" | head -1 | sed 's/.*: *"//;s/".*//')
@@ -88,6 +88,7 @@ MARKET_VER=$(python3 -c "import json; d=json.load(open('$REPO_ROOT/.claude-plugi
 CURSOR_PLUGIN_VER=$(grep '"version"' "$REPO_ROOT/packages/skills/.cursor-plugin/plugin.json" 2>/dev/null | head -1 | sed 's/.*: *"//;s/".*//' || true)
 VAULT_SYNC_CURSOR_VER=$(grep '"version"' "$REPO_ROOT/packages/vault-sync/.cursor-plugin/plugin.json" 2>/dev/null | head -1 | sed 's/.*: *"//;s/".*//' || true)
 CURSOR_MARKET_VER=$(python3 -c "import json; d=json.load(open('$REPO_ROOT/.cursor-plugin/marketplace.json')); print(d['metadata']['version'])")
+CHATGPT_APP_VER=$(grep '"version"' "$REPO_ROOT/packages/chatgpt-app/plugin.json" | head -1 | sed 's/.*: *"//;s/".*//')
 
 check_version() {
   local label="$1" ver="$2"
@@ -137,9 +138,10 @@ check_version ".claude-plugin/marketplace.json metadata.version" "$MARKET_VER"
 check_version "packages/skills/.cursor-plugin/plugin.json" "$CURSOR_PLUGIN_VER"
 check_version "packages/vault-sync/.cursor-plugin/plugin.json" "$VAULT_SYNC_CURSOR_VER"
 check_version ".cursor-plugin/marketplace.json metadata.version" "$CURSOR_MARKET_VER"
+check_version "packages/chatgpt-app/plugin.json" "$CHATGPT_APP_VER"
 
 if [ "$ERRORS" -eq 0 ]; then
-  echo "✓ All 18 manifests at version $CLI_VER"
+  echo "✓ All 19 manifests at version $CLI_VER"
 fi
 
 if ! node "$REPO_ROOT/scripts/check-release-lockfile.mjs" "$CLI_VER" "$REPO_ROOT/package-lock.json"; then

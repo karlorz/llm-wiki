@@ -1,6 +1,6 @@
 {
   "name": "@skillwiki/maintenance",
-  "version": "0.10.107",
+  "version": "0.10.108",
   "private": true,
   "type": "module",
   "bin": {

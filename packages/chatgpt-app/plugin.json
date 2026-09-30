@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "skillwiki",
-  "version": "0.10.107",
+  "version": "0.10.108",
   "description": "Operator-hosted project-aware knowledge base over HTTP MCP.",
   "author": {
     "name": "karlorz",
