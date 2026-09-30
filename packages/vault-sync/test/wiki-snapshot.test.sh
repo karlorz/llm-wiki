@@ -82,6 +82,7 @@ assert_contains "snapshot rechecks convergence receipt before staging" "snapshot
 assert_contains "snapshot refreshes origin for final proof" "final snapshot proof"
 assert_contains "snapshot captures S3 log-events for freeze/preview" "snapshot_capture_direct_s3_log_events"
 assert_contains "snapshot freeze uses --events-from" "--events-from"
+assert_contains "snapshot retries semantic-preview race once" "snapshot_retry_sync_after_projection_race"
 
 test_snapshot_dry_run_warns_on_direct_s3_note_not_in_git() {
   local root
@@ -1165,6 +1166,7 @@ setup_projection_parity_fixture() {
   make_live_vault_fixture "$root"
 
   printf '# Expected Index\n' > "$root/expected-index.md"
+  printf '# Expected Index\n\n- concepts/late-page.md\n' > "$root/current-index.md"
   printf '# Expected Log\n\n- latest event\n' > "$root/expected-log.md"
   printf '# Expected Log\n\n- latest event\n- mid-sync mcp append\n' > "$root/newer-log.md"
   printf '# Expected Log\n\n- latest event\n- mid-sync mcp append\n- post-sync mcp append\n' > "$root/post-sync-log.md"
@@ -1179,6 +1181,7 @@ setup_projection_parity_fixture() {
   printf '0\n' > "$root/cat-count-log.md"
   printf '0\n' > "$root/sync-count"
   printf '0\n' > "$root/store-append-count"
+  printf '0\n' > "$root/preview-count"
 
   printf '# Vault Schema\n' > "$git_dir/SCHEMA.md"
   cp "$root/stale-index.md" "$git_dir/index.md"
@@ -1209,7 +1212,16 @@ if [ "$1" = "projections" ] && [ "$2" = "materialize" ]; then
     cp "$SNAPSHOT_TEST_ROOT/expected-log.md" "$3/log.md"
     exit 0
   fi
+  preview_file="$SNAPSHOT_TEST_ROOT/preview-count"
+  previews="$(cat "$preview_file" 2>/dev/null || printf '0')"
+  case "$previews" in ''|*[!0-9]*) previews=0 ;; esac
+  previews=$((previews + 1))
+  printf '%s\n' "$previews" > "$preview_file"
   if [ "${SNAPSHOT_PREVIEW_DRIFT:-0}" = "1" ]; then
+    printf '{"ok":true,"data":{"index_drift":true,"log_drift":false,"dry_run":true}}\n'
+  elif [ "${SNAPSHOT_PREVIEW_INDEX_LAG:-0}" = "1" ] && [ "$previews" -eq 1 ]; then
+    # First post-sync preview sees a late typed page whose S3 index.md has not
+    # landed yet. The recovery re-sync must make the second preview succeed.
     printf '{"ok":true,"data":{"index_drift":true,"log_drift":false,"dry_run":true}}\n'
   else
     printf '{"ok":true,"data":{"index_drift":false,"log_drift":false,"dry_run":true}}\n'
@@ -1279,6 +1291,11 @@ if [ "$cmd" = "cat" ]; then
     cp "$SNAPSHOT_TEST_ROOT/divergent-index.md" /dev/stdout
     exit 0
   fi
+  if [ "$syncs_so_far" -ge 2 ] \
+      && [ "${RCLONE_SYNC_INDEX_LAG:-0}" = "1" ] && [ "$object" = "index.md" ]; then
+    cp "$SNAPSHOT_TEST_ROOT/current-index.md" /dev/stdout
+    exit 0
+  fi
   if [ "$count" -gt "${RCLONE_PARITY_VISIBLE_AFTER_CALLS:-0}" ]; then
     cp "$SNAPSHOT_TEST_ROOT/expected-$object" /dev/stdout
   else
@@ -1315,6 +1332,17 @@ if [ "$cmd" = "sync" ]; then
     if [ "${RCLONE_SYNC_NEWER_LOG:-0}" = "1" ]; then
       cp "$SNAPSHOT_TEST_ROOT/newer-log.md" "$SNAPSHOT_TEST_ROOT/expected-log.md"
     fi
+  elif [ "${RCLONE_SYNC_INDEX_LAG:-0}" = "1" ]; then
+    # First sync lands the late typed page while store index.md still lags.
+    # The single recovery sync (sync #2) lands the matching index projection.
+    mkdir -p "$3/concepts"
+    printf '# Late page\n' > "$3/concepts/late-page.md"
+    if [ "$syncs" -ge 2 ]; then
+      cp "$SNAPSHOT_TEST_ROOT/current-index.md" "$3/index.md"
+    else
+      cp "$SNAPSHOT_TEST_ROOT/expected-index.md" "$3/index.md"
+    fi
+    cp "$SNAPSHOT_TEST_ROOT/expected-log.md" "$3/log.md"
   else
     cp "$SNAPSHOT_TEST_ROOT/expected-index.md" "$3/index.md"
     cp "$SNAPSHOT_TEST_ROOT/expected-log.md" "$3/log.md"
@@ -1526,15 +1554,64 @@ test_snapshot_semantic_projection_drift_fails_before_commit() {
 
   if [ "$rc" -ne 0 ] \
       && [ "$before_head" = "$after_head" ] \
-      && [ "$syncs" = "1" ] \
+      && [ "$syncs" = "2" ] \
       && grep -q 'projection semantic preview mismatch' "$root/wiki-snapshot.log" \
+      && grep -q 'post-sync semantic-preview race detected; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
+      && grep -q 'FAIL post-sync semantic-preview race retry projection candidate verification; snapshot promotion refused' "$root/wiki-snapshot.log" \
       && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
-    printf 'PASS: semantic projection drift fails before commit\n'
+    printf 'PASS: semantic projection drift fails before commit after one retry\n'
     PASS=$((PASS + 1))
   else
     printf 'FAIL: semantic projection drift fixture (rc=%s before=%s after=%s log=%s)\n' \
       "$rc" "$before_head" "$after_head" \
       "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+# ── Post-sync page-vs-index semantic preview race (issue #53) ─
+# A leaf push can land an index-relevant typed page in S3 after freeze and
+# during rclone sync while S3 index.md still lags. Worktree bytes then match
+# the current store projection objects, but the read-only semantic preview
+# reports index_drift=true. The script must perform at most ONE additional
+# full rclone sync, re-read the store, and re-run worktree parity plus
+# semantic preview. Persistent drift still refuses after that single retry.
+
+test_snapshot_recovers_semantic_preview_index_lag_with_one_retry() {
+  local root
+  root="$(mktemp -d)"
+  local setup git_dir bin_dir before_head after_head syncs
+  setup="$(setup_projection_parity_fixture "$root")"
+  git_dir="$(printf '%s\n' "$setup" | sed -n '1p')"
+  bin_dir="$(printf '%s\n' "$setup" | sed -n '2p')"
+  before_head="$(git -C "$git_dir" rev-parse HEAD)"
+
+  run_projection_parity_fixture \
+    "$root" "$git_dir" "$bin_dir" \
+    SNAPSHOT_PREVIEW_INDEX_LAG=1 \
+    RCLONE_SYNC_INDEX_LAG=1
+  local rc=$?
+  after_head="$(git -C "$git_dir" rev-parse HEAD)"
+  syncs="$(cat "$root/sync-count")"
+
+  if [ "$rc" -eq 0 ] \
+      && grep -q 'post-sync semantic-preview race detected; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
+      && grep -q 'projection worktree parity confirmed' "$root/wiki-snapshot.log" \
+      && grep -q 'projection semantic preview confirmed' "$root/wiki-snapshot.log" \
+      && grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log" \
+      && ! grep -q 'FAIL projection candidate verification; snapshot promotion refused' "$root/wiki-snapshot.log" \
+      && ! grep -q 'semantic-preview race retry projection candidate verification' "$root/wiki-snapshot.log" \
+      && [ "$syncs" = "2" ] \
+      && [ "$after_head" != "$before_head" ] \
+      && cmp -s "$root/current-index.md" "$git_dir/index.md"; then
+    printf 'PASS: semantic preview index lag recovers with exactly one additional sync\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: semantic preview index lag recovery (rc=%s syncs=%s before=%s after=%s log=%s calls=%s)\n' \
+      "$rc" "$syncs" "$before_head" "$after_head" \
+      "$(tr '\n' ' ' < "$root/wiki-snapshot.log" 2>/dev/null)" \
+      "$(tr '\n' ';' < "$root/rclone.calls" 2>/dev/null)"
     FAIL=$((FAIL + 1))
   fi
   rm -rf "$root"
@@ -1547,8 +1624,9 @@ test_snapshot_semantic_projection_drift_fails_before_commit() {
 # self-consistent. The script must recognize exactly that one shape, perform at
 # most ONE additional full rclone sync with the existing RCLONE_OPTS, repeat
 # delete-intent reconciliation, re-read the store, and re-run the existing
-# worktree parity and semantic preview gates. Every other mismatch must refuse
-# before Git commit without retrying.
+# worktree parity and semantic preview gates. Byte-equal worktree==store with
+# a drifting semantic preview is a separate recoverable race (page-vs-index).
+# Every other mismatch must refuse before Git commit without retrying.
 
 test_snapshot_recovers_post_sync_log_append_with_one_retry() {
   local root
@@ -1791,6 +1869,7 @@ test_snapshot_stale_worktree_projection_fails_before_commit
 test_snapshot_store_ahead_log_promotes_when_index_matches
 test_snapshot_newer_log_during_sync_promotes_when_store_matches
 test_snapshot_semantic_projection_drift_fails_before_commit
+test_snapshot_recovers_semantic_preview_index_lag_with_one_retry
 test_snapshot_recovers_post_sync_log_append_with_one_retry
 test_snapshot_post_sync_log_append_second_race_fails_closed
 test_snapshot_shorter_store_log_does_not_retry_sync

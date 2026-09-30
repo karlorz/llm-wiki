@@ -1067,28 +1067,33 @@ snapshot_post_sync_log_append_race_detected() {
 # delete-intent reconciliation, re-read the current store, and re-run the
 # existing exact worktree parity and semantic preview gates. Returns 0 only when
 # the recovery converged; the caller refuses (without a second retry) otherwise.
-snapshot_retry_sync_after_log_append_race() {
+# reason is log-append (store log is a strict prefix extension) or
+# semantic-preview (worktree matches store but preview reports index/log drift).
+snapshot_retry_sync_after_projection_race() {
     local context="${1:-post-sync}"
+    local reason="${2:-log-append}"
     if ! rclone sync "$CLOUD_REMOTE" "$SNAPSHOT_WORKTREE" "${RCLONE_OPTS[@]}" --stats 10s 2>&1 | tee "$RCLONE_LOG"; then
-        log "ERROR: $context log-append race retry rclone sync failed"
+        log "ERROR: $context $reason race retry rclone sync failed"
         tail -50 "$RCLONE_LOG" >> "$LOG_FILE" 2>/dev/null || true
         rm -f "$RCLONE_LOG"
         return 1
     fi
     rm -f "$RCLONE_LOG"
-    log "post-sync log-append race detected; performed one additional rclone sync context=$context"
+    log "post-sync $reason race detected; performed one additional rclone sync context=$context"
     if ! snapshot_reconcile_delete_intents; then
-        log "ERROR: $context log-append race retry delete-intent reconciliation failed"
+        log "ERROR: $context $reason race retry delete-intent reconciliation failed"
         return 1
     fi
     snapshot_gate_projection_candidate \
-        "FAIL $context log-append race retry projection expectation refresh; snapshot promotion refused" \
-        "FAIL $context log-append race retry projection candidate verification; snapshot promotion refused"
+        "FAIL $context $reason race retry projection expectation refresh; snapshot promotion refused" \
+        "FAIL $context $reason race retry projection candidate verification; snapshot promotion refused"
 }
 
-# Post-sync projection gate with at most one log-append-race recovery.
-# A first failure that is not the recoverable log-append shape (or that does not
-# converge after the single retry) is logged as the terminal refusal.
+# Post-sync projection gate with at most one recoverable-race re-sync.
+# Recoverable shapes are a store-ahead log append, or exact worktree==store
+# byte parity whose semantic preview still reports index/log drift (a late
+# typed page whose matching index.md has not landed yet). Any other mismatch,
+# or a retry that does not converge, is the terminal refusal.
 snapshot_gate_projection_candidate_with_race_retry() {
     local context="${1:-post-sync}"
     local refresh_fail="$2"
@@ -1097,12 +1102,15 @@ snapshot_gate_projection_candidate_with_race_retry() {
         log "$refresh_fail"
         return 1
     fi
-    # Exact byte parity is the ordinary path. Its semantic preview is terminal:
-    # a later append must not turn a preview failure into a retry.
     if [ -z "$PROJECTION_STATE_DIR" ] \
         || { cmp -s "$PROJECTION_STATE_DIR/expected-index.md" "$SNAPSHOT_WORKTREE/index.md" \
             && cmp -s "$PROJECTION_STATE_DIR/expected-log.md" "$SNAPSHOT_WORKTREE/log.md"; }; then
         if snapshot_verify_projection_candidate; then
+            return 0
+        fi
+        # Exact byte parity with a drifting preview is the page-vs-index race:
+        # retry once. A later append must not get a second retry after this.
+        if snapshot_retry_sync_after_projection_race "$context" "semantic-preview"; then
             return 0
         fi
         log "$verify_fail"
@@ -1113,7 +1121,7 @@ snapshot_gate_projection_candidate_with_race_retry() {
         log "$verify_fail"
         return 1
     fi
-    if snapshot_retry_sync_after_log_append_race "$context"; then
+    if snapshot_retry_sync_after_projection_race "$context" "log-append"; then
         return 0
     fi
     log "$verify_fail"
