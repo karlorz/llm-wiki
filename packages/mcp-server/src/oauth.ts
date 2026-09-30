@@ -81,12 +81,8 @@ export function resolveWriterId(clientId: string | undefined, mappings: OAuthWri
 }
 
 export function isSafeReviewWriterGrant(mappings: OAuthWriterMapping[] | undefined): boolean {
-  if (!mappings || mappings.length === 0) return false;
-  const review = mappings.find((m) => m.writer_id === REVIEW_WRITER_ID);
-  if (!review) return false;
-  const vaults = review.allowed_vaults;
-  if (!Array.isArray(vaults) || vaults.length === 0) return false;
-  return !vaults.includes("central");
+  const vaults = resolveWriterVaults(REVIEW_WRITER_ID, mappings);
+  return vaults !== undefined && vaults.length > 0 && !vaults.includes("central");
 }
 
 export function getIssuer(req: IncomingMessage, configuredIssuer?: string): string {

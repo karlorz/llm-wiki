@@ -63,9 +63,10 @@ export function handshakeFor(principal: Principal, registry: VaultRegistry): {
   default_vault: string;
   allowed_vaults: string[];
 } {
+  const advertised = enabledAllowedVaults(principal, registry);
   return {
-    default_vault: effectiveDefaultVault(principal, registry),
-    allowed_vaults: enabledAllowedVaults(principal, registry),
+    default_vault: advertised.includes(principal.defaultVault) ? principal.defaultVault : advertised[0] ?? principal.defaultVault,
+    allowed_vaults: advertised,
   };
 }
 
