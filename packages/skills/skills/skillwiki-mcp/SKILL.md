@@ -45,9 +45,17 @@ Check the successful write receipt's `vault_id` against the intended vault befor
 
 ## Reads
 
+CLI `skillwiki query` reads a local configured vault; it does not forward to HTTP MCP. On an MCP-only leaf, leave `WIKI_PATH` unset and use the advertised MCP `wiki_query` for live reads. Optional Git mirrors are read-only snapshots and may lag the live writer.
+
 Local `~/wiki` (or `skillwiki path`) is fine for reads. MCP read tools are optional. Prefer ordinary file reads of the local mirror. Frozen-leaf agents should use HTTP `wiki_sources_pending`, `wiki_lint_summary`, `wiki_stale`, `wiki_compile_status`, and `wiki_reviews` instead of local CLI commands when those tools are advertised.
 
 `wiki_query` is typed knowledge only unless `scope` is `work` or `all`. For recent progress, key projects, or to-dos, feature-detect and call `wiki_progress`; apply `project`, `host`, or `agent_role` filters when requested, and present `recent_progress`, `key_projects`, and `todos` as complete bullet lists. For queued work, doctor, plugin-drift, or MCP diagnose questions, call `wiki_context` first (active_work) or pass `scope: "work"` / `"all"`. Do not treat a top typed packet hit as the live work queue.
+
+## Bridge diagnostics
+
+Use a protocol SDK rather than copying a one-line SSE parser. SkillWiki diagnostic clients use the existing MCP TypeScript SDK to validate initialization, negotiate the protocol, send `notifications/initialized`, carry optional session IDs and negotiated protocol headers, and parse JSON or SSE (including multiline data). Empty HTTP 202 bodies acknowledge notifications/responses, not a successful initialize result. Doctor/connect probes have a 10-second overall deadline per connection and close their transports without terminating the server session.
+
+Treat a missing/invalid initialize result, authentication refusal, or timeout as a failed handshake; do not proceed to tools calls merely because the HTTP status is successful. Preserve bearer redaction in all diagnostics.
 
 ## Errors
 

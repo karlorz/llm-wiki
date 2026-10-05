@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { CheckResult, DoctorContext, DoctorProbe } from "../types.js";
 import { check } from "./helpers.js";
 import { mcpAuthFromEnv, redactMcpSecret } from "../../utils/mcp-auth-env.js";
+import { withMcpClient } from "../../utils/mcp-client.js";
 
 export const DEFAULT_MCP_URL = "https://wiki.karldigi.dev/mcp";
 
@@ -81,70 +82,6 @@ function handshakeRow(status: CheckResult["status"], detail: string, secret?: st
   return check(status, HANDSHAKE_ID, HANDSHAKE_LABEL, redactSecret(detail, secret));
 }
 
-function parseMcpBody(text: string): unknown {
-  const trimmed = text.trim();
-  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    return JSON.parse(trimmed);
-  }
-  for (const line of trimmed.split(/\r?\n/)) {
-    const prefix = line.startsWith("data:") ? line.slice(5).trim() : "";
-    if (prefix.startsWith("{")) return JSON.parse(prefix);
-  }
-  throw new Error("non-JSON MCP body");
-}
-
-function jsonRpcResult(body: unknown): Record<string, unknown> {
-  if (typeof body !== "object" || body === null) {
-    throw new Error("invalid JSON-RPC body");
-  }
-  const rec = body as { error?: { message?: string }; result?: unknown };
-  if (rec.error) {
-    throw new Error(typeof rec.error.message === "string" ? rec.error.message : "JSON-RPC error");
-  }
-  if (typeof rec.result !== "object" || rec.result === null) {
-    throw new Error("missing JSON-RPC result");
-  }
-  return rec.result as Record<string, unknown>;
-}
-
-async function mcpJsonRpc(
-  fetchFn: typeof fetch,
-  url: string,
-  token: string,
-  method: string,
-  id: number,
-  params: Record<string, unknown>,
-  sessionId?: string,
-): Promise<{ result: Record<string, unknown>; sessionId?: string }> {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-    Accept: "application/json, text/event-stream",
-  };
-  if (sessionId) headers["mcp-session-id"] = sessionId;
-  const res = await fetchFn(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
-  });
-  if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`);
-  }
-  const nextSession = res.headers.get("mcp-session-id") ?? sessionId;
-  const result = jsonRpcResult(parseMcpBody(await res.text()));
-  return { result, sessionId: nextSession ?? undefined };
-}
-
-function toolNames(result: Record<string, unknown>): string[] {
-  const tools = result.tools;
-  if (!Array.isArray(tools)) return [];
-  return tools
-    .map((t) => (typeof t === "object" && t !== null && typeof (t as { name?: unknown }).name === "string"
-      ? (t as { name: string }).name
-      : ""))
-    .filter((name) => name.length > 0);
-}
-
 async function checkMcpHandshake(ctx: DoctorContext): Promise<CheckResult> {
   if (!ctx.input.checkMcp) {
     return handshakeRow("pass", "not requested — check skipped");
@@ -161,37 +98,17 @@ async function checkMcpHandshake(ctx: DoctorContext): Promise<CheckResult> {
   const fetchFn = ctx.input.mcpFetch ?? globalThis.fetch;
   const shipped = ctx.input.currentVersion;
   try {
-    const init = await mcpJsonRpc(
-      fetchFn,
-      url,
-      token,
-      "initialize",
-      1,
-      {
-        protocolVersion: "2025-11-25",
-        capabilities: {},
-        clientInfo: { name: "skillwiki-doctor", version: shipped },
-      },
+    const { advertised, tools } = await withMcpClient(
+      { fetchFn, url, token, clientName: "skillwiki-doctor", version: shipped },
+      async (client, signal) => ({
+        advertised: client.getServerVersion()?.version ?? "",
+        tools: (await client.listTools({}, { signal })).tools.map((tool) => tool.name),
+      }),
     );
-    const serverInfo = init.result.serverInfo;
-    const advertised = (typeof serverInfo === "object" && serverInfo !== null
-      && typeof (serverInfo as { version?: unknown }).version === "string")
-      ? (serverInfo as { version: string }).version
-      : "";
     if (!advertised) {
       return handshakeRow("error", "handshake failed — missing serverInfo.version", token);
     }
 
-    const listed = await mcpJsonRpc(
-      fetchFn,
-      url,
-      token,
-      "tools/list",
-      2,
-      {},
-      init.sessionId,
-    );
-    const tools = toolNames(listed.result);
     const frozen = Boolean(ctx.resolvedPath && existsSync(join(ctx.resolvedPath, ".WIKI_GIT_FROZEN")));
     if (frozen && !tools.includes(WORKITEM_TOOL)) {
       return handshakeRow(

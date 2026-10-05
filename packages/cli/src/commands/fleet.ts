@@ -1,3 +1,4 @@
+import { resolveSkillwikiHome } from "../utils/home.js";
 import { readFile } from "node:fs/promises";
 import { hostname as nodeHostname, userInfo } from "node:os";
 import { join } from "node:path";
@@ -93,7 +94,7 @@ export async function runFleetValidate(input: FleetValidateInput): Promise<{ exi
 
 export async function runFleetContext(input: FleetContextInput): Promise<{ exitCode: number; result: Result<FleetContextOutput> }> {
   const env = input.env ?? process.env;
-  const home = input.home ?? env.HOME ?? "";
+  const home = resolveSkillwikiHome(input.home, env);
   const cwd = input.cwd ?? process.cwd();
   const osHostname = input.osHostname ?? safeEnvValue(env.HOSTNAME) ?? nodeHostname();
   const user = input.user ?? safeEnvValue(env.USER) ?? safeUserName();
@@ -240,7 +241,7 @@ function fleetContextEnv(input: FleetContextInput): {
   file: string | undefined;
 } {
   const env = input.env ?? process.env;
-  const home = input.home ?? env.HOME ?? "";
+  const home = resolveSkillwikiHome(input.home, env);
   const osHostname = input.osHostname ?? safeEnvValue(env.HOSTNAME) ?? nodeHostname();
   const vault = input.vault ?? safeEnvValue(env.WIKI_PATH);
   const file = input.file ?? (vault ? join(vault, FLEET_REL_PATH) : undefined);

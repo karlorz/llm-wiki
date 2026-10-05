@@ -1,3 +1,4 @@
+import { resolveSkillwikiHome } from "./home.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ExitCode, err, ok, type Result } from "@skillwiki/shared";
@@ -508,7 +509,7 @@ export async function runManagedWritePreflight(
   }
 
   if (!convergenceVault && host.role === "snapshotter" && host.protected === true) {
-    const home = input.home ?? input.env?.HOME ?? process.env.HOME ?? "";
+    const home = resolveSkillwikiHome(input.home, input.env);
     const configured =
       (deps.resolveConfiguredSnapshotWorktree ?? resolveConfiguredSnapshotWorktree)(home);
     if (!configured) {

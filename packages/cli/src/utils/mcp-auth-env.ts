@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { parseDotenvFile } from "./dotenv.js";
+import { resolveSkillwikiHome } from "./home.js";
 
 export const MCP_URL_ENV = "SKILLWIKI_MCP_URL";
 export const MCP_TOKEN_ENV = "SKILLWIKI_MCP_TOKEN";
@@ -36,7 +37,7 @@ export async function resolveMcpAuthEnv(input: {
   env?: NodeJS.ProcessEnv | Record<string, string | undefined>;
 }): Promise<McpAuthEnv> {
   const processAuth = mcpAuthFromEnv(input.env ?? process.env);
-  const dotenv = await parseDotenvFile(join(input.home, ".skillwiki", ".env"));
+  const dotenv = await parseDotenvFile(join(resolveSkillwikiHome(input.home, input.env), ".skillwiki", ".env"));
   const fileAuth = mcpAuthFromEnv(dotenv);
   return {
     url: processAuth.url ?? fileAuth.url,

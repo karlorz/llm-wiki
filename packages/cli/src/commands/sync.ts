@@ -1,3 +1,4 @@
+import { resolveSkillwikiHome } from "../utils/home.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -209,7 +210,7 @@ export function runSyncStatus(input: SyncStatusInput): { exitCode: number; resul
   }
 
   if (input.includeRemoteHealth) {
-    const home = input.home ?? process.env.HOME ?? "";
+    const home = resolveSkillwikiHome(input.home);
     const remote_health = probeRemoteHealth({
       vaultPath: vault,
       home,

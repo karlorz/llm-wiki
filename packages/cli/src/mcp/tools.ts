@@ -1,3 +1,4 @@
+import { resolveSkillwikiHome } from "../utils/home.js";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { runQuery } from "../commands/query.js";
@@ -86,7 +87,7 @@ export function registerMcpTools(server: McpServer): void {
         await resolveMcpVault({ vault, wiki });
         const pkg = readCliPackageJson();
         const r = await runDoctor({
-          home: process.env.HOME ?? "",
+          home: resolveSkillwikiHome(),
           envValue: process.env.WIKI_PATH,
           argv: process.argv,
           currentVersion: pkg.version,
@@ -167,7 +168,7 @@ export function registerMcpTools(server: McpServer): void {
     },
     async ({ key }) =>
       runMcpToolHandler("skillwiki.config_get", {}, async () => {
-        const r = await runConfigGet({ key, home: process.env.HOME ?? "" });
+        const r = await runConfigGet({ key, home: resolveSkillwikiHome() });
         return formatToolResult(r);
       }),
   );

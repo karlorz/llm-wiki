@@ -1,3 +1,4 @@
+import { resolveSkillwikiHome } from "../utils/home.js";
 import { existsSync, readFileSync } from "node:fs";
 import { execSync as nodeExecSync } from "node:child_process";
 import { hostname as nodeHostname, platform as nodePlatform } from "node:os";
@@ -340,7 +341,7 @@ export async function runFleetHealth(
 ): Promise<{ exitCode: number; result: Result<FleetHealthOutput> }> {
   const deps = input.deps ?? defaultDeps();
   const env = input.env ?? process.env;
-  const home = input.home ?? env.HOME ?? "";
+  const home = resolveSkillwikiHome(input.home, env);
   const osHostname = input.osHostname ?? env.HOSTNAME ?? nodeHostname();
   const vault = input.vault ?? env.WIKI_PATH;
   const file = input.file ?? (vault ? join(vault, FLEET_REL_PATH) : undefined);

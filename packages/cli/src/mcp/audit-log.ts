@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveSkillwikiHome } from "../utils/home.js";
 
 export interface McpAuditEntry {
   ts: string;
@@ -25,7 +25,7 @@ function auditSink(): "stderr" | "file" {
 function auditFilePath(): string {
   const custom = process.env.SKILLWIKI_MCP_AUDIT_FILE;
   if (custom && custom.length > 0) return custom;
-  return join(homedir(), ".skillwiki", "mcp-audit.jsonl");
+  return join(resolveSkillwikiHome(), ".skillwiki", "mcp-audit.jsonl");
 }
 
 /** Structured one-line JSON audit (stderr default; optional file via SKILLWIKI_MCP_AUDIT_FILE). */

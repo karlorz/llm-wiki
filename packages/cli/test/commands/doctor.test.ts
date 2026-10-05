@@ -1293,6 +1293,8 @@ describe("runDoctor", () => {
       const mcpFetch = (async (_input: unknown, init?: RequestInit) => {
         const raw = typeof init?.body === "string" ? init.body : "{}";
         const parsed = JSON.parse(raw) as { id?: unknown; method?: string };
+        if (init?.method === "GET") return new Response(null, { status: 405 });
+        if (parsed.method === "notifications/initialized") return new Response(null, { status: 202 });
         if (parsed.method === "initialize") {
           return new Response(JSON.stringify({
             jsonrpc: "2.0",
@@ -1312,7 +1314,7 @@ describe("runDoctor", () => {
               tools: [
                 "wiki_query", "wiki_memory_recall", "wiki_read_page", "wiki_status",
                 "wiki_capture", "wiki_log_append", "wiki_page_publish", "wiki_workitem_write",
-              ].map((name) => ({ name })),
+              ].map((name) => ({ name, inputSchema: { type: "object" } })),
             },
           }), { status: 200, headers: { "Content-Type": "application/json" } });
         }
@@ -2030,6 +2032,8 @@ hosts:
         if (opts.fail) throw new Error("ECONNREFUSED test-handshake");
         const raw = typeof init?.body === "string" ? init.body : "{}";
         const parsed = JSON.parse(raw) as { id?: unknown; method?: string };
+        if (init?.method === "GET") return new Response(null, { status: 405 });
+        if (parsed.method === "notifications/initialized") return new Response(null, { status: 202 });
         if (parsed.method === "initialize") {
           return jsonRpcResult(parsed.id, {
             protocolVersion: "2025-11-25",
@@ -2039,7 +2043,7 @@ hosts:
         }
         if (parsed.method === "tools/list") {
           return jsonRpcResult(parsed.id, {
-            tools: opts.tools.map((name) => ({ name })),
+            tools: opts.tools.map((name) => ({ name, inputSchema: { type: "object" } })),
           });
         }
         return new Response("{}", { status: 400 });
@@ -2187,6 +2191,8 @@ hosts:
         seen.push(auth);
         const raw = typeof init?.body === "string" ? init.body : "{}";
         const parsed = JSON.parse(raw) as { id?: unknown; method?: string };
+        if (init?.method === "GET") return new Response(null, { status: 405 });
+        if (parsed.method === "notifications/initialized") return new Response(null, { status: 202 });
         if (parsed.method === "initialize") {
           return jsonRpcResult(parsed.id, {
             protocolVersion: "2025-11-25",
@@ -2195,7 +2201,7 @@ hosts:
           });
         }
         if (parsed.method === "tools/list") {
-          return jsonRpcResult(parsed.id, { tools: WRITE_TOOLS.map((name) => ({ name })) });
+          return jsonRpcResult(parsed.id, { tools: WRITE_TOOLS.map((name) => ({ name, inputSchema: { type: "object" } })) });
         }
         return new Response("{}", { status: 400 });
       }) as typeof fetch;
@@ -2256,6 +2262,8 @@ hosts:
         mcpFetch: (async (_input: unknown, init?: RequestInit) => {
           const raw = typeof init?.body === "string" ? init.body : "{}";
           const parsed = JSON.parse(raw) as { id?: unknown; method?: string };
+          if (init?.method === "GET") return new Response(null, { status: 405 });
+          if (parsed.method === "notifications/initialized") return new Response(null, { status: 202 });
           if (parsed.method === "initialize") {
             return new Response(JSON.stringify({
               jsonrpc: "2.0",
@@ -2275,7 +2283,7 @@ hosts:
                 tools: [
                   "wiki_query", "wiki_memory_recall", "wiki_read_page", "wiki_status",
                   "wiki_capture", "wiki_log_append", "wiki_page_publish", "wiki_workitem_write",
-                ].map((name) => ({ name })),
+                ].map((name) => ({ name, inputSchema: { type: "object" } })),
               },
             }), { status: 200, headers: { "Content-Type": "application/json" } });
           }

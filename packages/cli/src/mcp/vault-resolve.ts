@@ -1,3 +1,4 @@
+import { resolveSkillwikiHome } from "../utils/home.js";
 import { join, resolve } from "node:path";
 import { ok, err, type Result } from "@skillwiki/shared";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
@@ -13,7 +14,7 @@ export interface ResolveVaultInput {
 
 /** Resolve and validate a vault root (SCHEMA.md present). No shell, no arbitrary paths without validation. */
 export async function resolveMcpVault(input: ResolveVaultInput): Promise<Result<{ vault: string; source: string }>> {
-  const home = input.home ?? process.env.HOME ?? "";
+  const home = resolveSkillwikiHome(input.home);
   let vaultPath: string;
   let source = "resolved";
 

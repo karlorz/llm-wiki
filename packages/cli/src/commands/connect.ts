@@ -6,6 +6,7 @@ import {
   MCP_HOST_ID_ENV,
   MCP_TOKEN_ENV,
   MCP_URL_ENV,
+  mcpAuthFromEnv,
   mergeMcpAuthIntoEnv,
   nonEmptyEnvValue,
   redactMcpSecret,
@@ -13,6 +14,9 @@ import {
 import { HOST_ID_RE } from "../utils/mcp-token-map.js";
 import { DEFAULT_MCP_URL } from "../doctor/probes/mcp-handshake.js";
 import { runDoctor } from "../doctor/runner.js";
+import { resolveSkillwikiHome } from "../utils/home.js";
+import { withMcpClient } from "../utils/mcp-client.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 
 export const CONNECT_DESCRIPTION =
   "HTTP MCP leaf connect: ingest a chat-attached env file into ~/.skillwiki/.env (mode 0600). Never runs skillwiki init. Cloud Drive / 云盘 is unsupported.";
@@ -101,65 +105,44 @@ async function readWikiStatus(
   fetchFn: typeof fetch,
   url: string,
   token: string,
-): Promise<{ writer_id: string | null; ok: boolean | null; reconcile_ready: boolean | null }> {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-    Accept: "application/json, text/event-stream",
-  };
+): Promise<{ writer_id: string | null; ok: boolean | null; reconcile_ready: boolean | null; error?: string }> {
   try {
-    const initRes = await fetchFn(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "initialize",
-        params: {
-          protocolVersion: "2025-11-25",
-          capabilities: {},
-          clientInfo: { name: "skillwiki-connect", version: "0" },
-        },
-      }),
-    });
-    const session = initRes.headers.get("mcp-session-id");
-    if (session) headers["mcp-session-id"] = session;
-    const statusRes = await fetchFn(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-        method: "tools/call",
-        params: { name: "wiki_status", arguments: {} },
-      }),
-    });
-    const raw = await statusRes.text();
-    const parsed = JSON.parse(raw.startsWith("data:") ? raw.replace(/^data:\s*/m, "") : raw) as {
-      result?: { structuredContent?: Record<string, unknown>; content?: Array<{ text?: string }> };
-    };
-    const structured = parsed.result?.structuredContent;
-    let body: Record<string, unknown> | undefined = structured;
+    const result = await withMcpClient(
+      { fetchFn, url, token, clientName: "skillwiki-connect", version: "0" },
+      async (client, signal) => CallToolResultSchema.parse(await client.callTool({ name: "wiki_status", arguments: {} }, undefined, { signal })),
+    );
+    if (result.isError) return { writer_id: null, ok: null, reconcile_ready: null, error: "wiki_status returned a tool error" };
+    let body: Record<string, unknown> | undefined = result.structuredContent;
     if (!body) {
-      const text = parsed.result?.content?.find((c) => typeof c.text === "string")?.text;
+      const content = result.content.find((item) => item.type === "text");
+      const text = content?.type === "text" ? content.text : undefined;
       if (text) {
         try { body = JSON.parse(text) as Record<string, unknown>; } catch { body = undefined; }
       }
     }
-    if (!body) return { writer_id: null, ok: null, reconcile_ready: null };
+    if (!body || typeof body !== "object" || Array.isArray(body)
+      || typeof body.ok !== "boolean" || typeof body.reconcile_ready !== "boolean"
+      || (body.writer_id !== undefined && typeof body.writer_id !== "string")) {
+      return { writer_id: null, ok: null, reconcile_ready: null, error: "wiki_status returned an invalid status object" };
+    }
+    if (!body.ok) return { writer_id: null, ok: false, reconcile_ready: body.reconcile_ready, error: "wiki_status reported failure" };
     return {
-      writer_id: typeof body.writer_id === "string" ? body.writer_id : null,
-      ok: typeof body.ok === "boolean" ? body.ok : null,
-      reconcile_ready: typeof body.reconcile_ready === "boolean" ? body.reconcile_ready : null,
+      writer_id: body.writer_id ?? null,
+      ok: body.ok,
+      reconcile_ready: body.reconcile_ready,
     };
-  } catch {
-    return { writer_id: null, ok: null, reconcile_ready: null };
+  } catch (error: unknown) {
+    return {
+      writer_id: null, ok: null, reconcile_ready: null,
+      error: redactMcpSecret(error instanceof Error ? error.message : String(error), token),
+    };
   }
 }
 
 export async function runConnect(
   input: ConnectInput,
 ): Promise<{ exitCode: number; result: Result<ConnectOutput> }> {
+  input = { ...input, home: resolveSkillwikiHome(input.home, input.env) };
   const dest = join(input.home, ".skillwiki", ".env");
   const fromFile = input.fromFile?.trim();
   const fromStdin = Boolean(input.fromStdin);
@@ -277,8 +260,13 @@ export async function runConnect(
     if (doctor.result.ok) {
       handshake = doctor.result.data.checks.find((c) => c.id === "mcp_handshake")?.detail ?? null;
     }
-    const url = incomingUrl ?? DEFAULT_MCP_URL;
-    const status = await readWikiStatus(input.mcpFetch ?? globalThis.fetch, url, incomingToken);
+    const auth = mcpAuthFromEnv(env);
+    const url = auth.url ?? DEFAULT_MCP_URL;
+    const status = await readWikiStatus(input.mcpFetch ?? globalThis.fetch, url, auth.token ?? incomingToken);
+    if (status.error) {
+      doctorExit = ExitCode.DOCTOR_HAS_ERRORS;
+      handshake = `${handshake ?? ""}; wiki_status verification failed — ${status.error}`;
+    }
     writerId = status.writer_id;
     statusOk = status.ok;
     reconcileReady = status.reconcile_ready;

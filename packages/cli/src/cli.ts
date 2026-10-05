@@ -1,3 +1,4 @@
+import { resolveSkillwikiHome } from "./utils/home.js";
 import { join } from "node:path";
 import { Command } from "commander";
 import type { Result, ErrResult } from "@skillwiki/shared";
@@ -165,7 +166,7 @@ async function emitGuardedVaultWrite<T>(
     vault,
     command,
     env: process.env,
-    home: process.env.HOME ?? "",
+    home: resolveSkillwikiHome(),
     cwd: process.cwd(),
     osHostname: process.env.HOSTNAME,
     user: process.env.USER,
@@ -196,7 +197,7 @@ async function emitManagedVaultWrite<T>(
     vault,
     command,
     env: process.env,
-    home: process.env.HOME ?? "",
+    home: resolveSkillwikiHome(),
     cwd: process.cwd(),
     osHostname: process.env.HOSTNAME,
     user: process.env.USER,
@@ -215,7 +216,7 @@ async function emitManagedVaultWrite<T>(
     allowImmutableRecord: opts?.allowImmutableRecord === true,
     convergenceVault: opts?.convergenceVault,
     env: process.env,
-    home: process.env.HOME ?? "",
+    home: resolveSkillwikiHome(),
     cwd: process.cwd(),
     osHostname: process.env.HOSTNAME,
     user: process.env.USER,
@@ -594,7 +595,7 @@ program
   .action(async (vault, opts) => emit(await runOrphans({
     vault,
     envValue: process.env.WIKI_PATH,
-    home: process.env.HOME ?? "",
+    home: resolveSkillwikiHome(),
     wiki: opts.wiki,
     cwd: process.cwd(),
   })));
@@ -604,14 +605,14 @@ program.command("audit <file>").description("audit citation markers and source p
 program
   .command("install")
   .description("install skillwiki SKILL.md files into ~/.claude/skills/")
-  .option("--target <dir>", "target install directory", `${process.env.HOME ?? ""}/.claude/skills/`)
+  .option("--target <dir>", "target install directory", `${resolveSkillwikiHome()}/.claude/skills/`)
   .option("--dry-run", "preview only", false)
   .option("--skills-root <dir>", "source skills directory (defaults to packaged)")
   .option("--symlink", "create symlinks instead of copies (dev mode — edits to source are immediately visible)", false)
   .option("--force", "install CLI copies even when the skillwiki@llm-wiki plugin channel is active", false)
   .action(async (opts) => {
     const skillsRoot = opts.skillsRoot ?? new URL("../skills/", import.meta.url).pathname;
-    emit(await runInstall({ skillsRoot, target: opts.target, dryRun: !!opts.dryRun, symlink: !!opts.symlink, home: process.env.HOME ?? "", force: !!opts.force }));
+    emit(await runInstall({ skillsRoot, target: opts.target, dryRun: !!opts.dryRun, symlink: !!opts.symlink, home: resolveSkillwikiHome(), force: !!opts.force }));
   });
 
 program
@@ -629,7 +630,7 @@ program
     const r = await runPath({
       flag,
       envValue: process.env.WIKI_PATH,
-      home: process.env.HOME ?? "",
+      home: resolveSkillwikiHome(),
       initTime,
       wiki: opts.wiki,
       cwd: process.cwd(),
@@ -653,7 +654,7 @@ program
     emit(await runLang({
       flag: opts.lang,
       envValue: process.env.WIKI_LANG,
-      home: process.env.HOME ?? "",
+      home: resolveSkillwikiHome(),
       explain: !!opts.explain
     }));
   });
@@ -678,7 +679,7 @@ program
     emit(await runInit({
       flag: opts.target,
       envValue: process.env.WIKI_PATH,
-      home: process.env.HOME ?? "",
+      home: resolveSkillwikiHome(),
       templates,
       domain: opts.domain,
       taxonomy,
@@ -697,7 +698,7 @@ async function resolveVaultArg(arg: string | undefined, wiki?: string): Promise<
     flag: undefined,
     envValue: process.env.WIKI_PATH,
     wikiEnv: process.env.WIKI,
-    home: process.env.HOME ?? "",
+    home: resolveSkillwikiHome(),
     wiki,
     cwd: process.cwd(),
   });
@@ -1161,7 +1162,7 @@ program
     else emit(await runHealth({
       vault: v.vault,
       vaultSource: vault ? "flag" : "resolved",
-      home: process.env.HOME ?? "",
+      home: resolveSkillwikiHome(),
       envValue: process.env.WIKI_PATH,
       argv: process.argv,
       currentVersion: pkg.version,
@@ -1179,23 +1180,23 @@ const configCmd = program.command("config").description("manage skillwiki config
 configCmd
   .command("get <key>")
   .description("print the value of a config key")
-  .action(async (key) => emit(await runConfigGet({ key, home: process.env.HOME ?? "" })));
+  .action(async (key) => emit(await runConfigGet({ key, home: resolveSkillwikiHome() })));
 
 configCmd
   .command("set <key> <value>")
   .description("set a config key value")
-  .action(async (key, value) => emit(await runConfigSet({ key, value, home: process.env.HOME ?? "" })));
+  .action(async (key, value) => emit(await runConfigSet({ key, value, home: resolveSkillwikiHome() })));
 
 configCmd
   .command("list")
   .option("--profiles", "show wiki profiles summary", false)
   .description("list all config key=value pairs")
-  .action(async (opts) => emit(await runConfigList({ home: process.env.HOME ?? "", profiles: !!opts.profiles })));
+  .action(async (opts) => emit(await runConfigList({ home: resolveSkillwikiHome(), profiles: !!opts.profiles })));
 
 configCmd
   .command("path")
   .description("print the config file path")
-  .action(async () => emit(await runConfigPath({ home: process.env.HOME ?? "" })));
+  .action(async () => emit(await runConfigPath({ home: resolveSkillwikiHome() })));
 
 // doctor
 program
@@ -1204,7 +1205,7 @@ program
   .option("--check-snapshotter", "SSH-probe fleet snapshotter (short timeout)", false)
   .option("--check-mcp", "live-handshake HTTP MCP initialize + tools/list (network)", false)
   .action(async (opts) => emit(await runDoctor({
-    home: process.env.HOME ?? "",
+    home: resolveSkillwikiHome(),
     envValue: process.env.WIKI_PATH,
     argv: process.argv,
     currentVersion: pkg.version,
@@ -1222,7 +1223,7 @@ program
   .option("--dry-run", "validate without writing ~/.skillwiki/.env")
   .option("--force", "overwrite a different existing token")
   .action(async (opts) => emit(await runConnect({
-    home: process.env.HOME ?? "",
+    home: resolveSkillwikiHome(),
     fromFile: opts.fromFile,
     fromStdin: !!opts.fromStdin,
     dryRun: !!opts.dryRun,
@@ -1242,7 +1243,7 @@ program
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runStatus({
       vault: v.vault,
-      home: process.env.HOME ?? "",
+      home: resolveSkillwikiHome(),
       langEnvValue: process.env.WIKI_LANG,
     }), v.vault);
   });
@@ -1256,7 +1257,7 @@ program
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else emit(await runCopyStatusCommand({
       vault: v.vault,
-      home: process.env.HOME ?? "",
+      home: resolveSkillwikiHome(),
     }), v.vault, { postCommit: false });
   });
 
@@ -1428,7 +1429,7 @@ program
   .description("update skillwiki CLI from npm dist-tag")
   .option("--tag <tag>", "npm dist-tag", "latest")
   .action(async (opts) => emit(await runUpdate({
-    home: process.env.HOME ?? "",
+    home: resolveSkillwikiHome(),
     distTag: opts.tag,
   })));
 
@@ -1439,7 +1440,7 @@ program
   .option("--check", "check for updates without installing", false)
   .option("--tag <tag>", "npm dist-tag", "latest")
   .action(async (opts) => emit(await runSelfUpdate({
-    home: process.env.HOME ?? "",
+    home: resolveSkillwikiHome(),
     check: !!opts.check,
     distTag: opts.tag,
   })));
@@ -1569,7 +1570,7 @@ syncCmd
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) emit({ exitCode: v.exitCode, result: v.payload });
     else {
-      const home = process.env.HOME ?? "";
+      const home = resolveSkillwikiHome();
       let snapshotterAlias: string | undefined;
       if (opts.checkSnapshotter) {
         const fleetLoad = await loadFleetManifestAndHost({
@@ -1785,7 +1786,7 @@ backupCmd
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) { emit({ exitCode: v.exitCode, result: v.payload }); return; }
-    const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
+    const home = resolveSkillwikiHome();
     const dotenv = await parseDotenvFile(configPath(home));
     emit(await runBackupSync({
       vault: v.vault,
@@ -1810,7 +1811,7 @@ backupCmd
   .action(async (vault, opts) => {
     const v = await resolveVaultArg(vault, opts.wiki);
     if (!v.ok) { emit({ exitCode: v.exitCode, result: v.payload }); return; }
-    const home = process.env.HOME ?? process.env.USERPROFILE ?? "/tmp";
+    const home = resolveSkillwikiHome();
     const dotenv = await parseDotenvFile(configPath(home));
     return emitGuardedVaultWrite(
       v.vault,
@@ -2082,7 +2083,7 @@ fleetCmd
       file: opts.file,
       hostId: opts.hostId,
       env: process.env,
-      home: process.env.HOME ?? "",
+      home: resolveSkillwikiHome(),
       cwd: process.cwd(),
       osHostname: process.env.HOSTNAME,
       user: process.env.USER,
@@ -2102,7 +2103,7 @@ fleetCmd
       hostId: opts.hostId,
       json: !!opts.json,
       env: process.env,
-      home: process.env.HOME ?? "",
+      home: resolveSkillwikiHome(),
       cwd: process.cwd(),
       osHostname: process.env.HOSTNAME,
       user: process.env.USER,
@@ -2224,12 +2225,12 @@ mcpAuthCmd
     }));
   });
 
-for (const w of getDeprecatedWarnings(process.env.HOME ?? "")) {
+for (const w of getDeprecatedWarnings(resolveSkillwikiHome())) {
   process.stderr.write(w + "\n");
 }
 
 // Background auto-update check (non-blocking, 24h cache)
-triggerAutoUpdate(process.env.HOME ?? "", pkg.version);
+triggerAutoUpdate(resolveSkillwikiHome(), pkg.version);
 
 program.parseAsync(process.argv).catch((e) => {
   process.stdout.write(JSON.stringify({ ok: false, error: "INTERNAL", detail: { message: String(e) } }) + "\n");

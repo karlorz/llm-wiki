@@ -3,6 +3,7 @@ import { isVaultSyncKey, parseVaultSyncKeyValue } from "@skillwiki/shared";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { resolveSkillwikiHome } from "../utils/home.js";
 import { parseDotenvFile, parseDotenvText, writeDotenv, type DotenvMap, CONFIG_KEYS, type ConfigKey, isValidWikiProfileKey } from "../utils/dotenv.js";
 
 function validateKey(key: string): boolean {
@@ -15,7 +16,7 @@ function displayConfigValue(key: string, value: string): string {
 }
 
 export function configPath(home: string): string {
-  return join(home, ".skillwiki", ".env");
+  return join(resolveSkillwikiHome(home), ".skillwiki", ".env");
 }
 
 export interface ConfigGetInput {

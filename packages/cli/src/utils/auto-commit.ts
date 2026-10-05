@@ -1,3 +1,4 @@
+import { resolveSkillwikiHome } from "./home.js";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, normalize } from "node:path";
 import { git, gitStrict } from "./git.js";
@@ -31,7 +32,7 @@ export async function postCommit(vault: string, exitCode: number): Promise<void>
   if (exitCode !== 0) return;
 
   // Guard: check config (default: enabled)
-  const home = process.env.HOME ?? "";
+  const home = resolveSkillwikiHome();
   const dotenv = await parseDotenvFile(configPath(home));
   const autoCommit = process.env.AUTO_COMMIT ?? dotenv["AUTO_COMMIT"];
   if (autoCommit === "false") return;

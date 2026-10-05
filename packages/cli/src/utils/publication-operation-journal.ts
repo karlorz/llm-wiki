@@ -1,3 +1,4 @@
+import { resolveSkillwikiHome } from "./home.js";
 /**
  * Host-local publication recovery journal (outside the vault).
  *
@@ -18,7 +19,6 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { err, ok, type Result } from "@skillwiki/shared";
 import { sha256Hex } from "./publication-approval.js";
@@ -98,14 +98,14 @@ export function vaultIdentity(vaultPath: string): string {
   return sha256Hex(real).slice(0, 16);
 }
 
-export function publicationJournalRoot(home: string = process.env.HOME || homedir()): string {
-  return join(home, ".skillwiki", "publication-operations");
+export function publicationJournalRoot(home: string = resolveSkillwikiHome()): string {
+  return join(resolveSkillwikiHome(home), ".skillwiki", "publication-operations");
 }
 
 export function resolveJournalPaths(
   vaultPath: string,
   operationId: string,
-  home: string = process.env.HOME || homedir(),
+  home: string = resolveSkillwikiHome(),
 ): JournalPaths {
   const identity = vaultIdentity(vaultPath);
   const rootDir = publicationJournalRoot(home);
@@ -249,7 +249,7 @@ export function buildIdentitySummary(input: {
 export function readPublicationJournal(
   vaultPath: string,
   operationId: string,
-  home: string = process.env.HOME || homedir(),
+  home: string = resolveSkillwikiHome(),
 ): Result<PublicationJournalRecord | null> {
   const { journalPath } = resolveJournalPaths(vaultPath, operationId, home);
   if (!existsSync(journalPath)) return ok(null);
@@ -277,7 +277,7 @@ export function createPublicationJournal(
     home?: string;
   },
 ): Result<PublicationJournalRecord> {
-  const home = input.home ?? process.env.HOME ?? homedir();
+  const home = resolveSkillwikiHome(input.home);
   const paths = resolveJournalPaths(input.vaultPath, input.operationId, home);
   if (existsSync(paths.journalPath)) {
     return err("WRITE_FAILED", { message: "journal already exists", path: paths.journalPath });
@@ -316,7 +316,7 @@ export function advancePublicationJournal(
     home?: string;
   },
 ): Result<PublicationJournalRecord> {
-  const home = input.home ?? process.env.HOME ?? homedir();
+  const home = resolveSkillwikiHome(input.home);
   const existing = readPublicationJournal(input.vaultPath, input.operationId, home);
   if (!existing.ok) return existing;
   if (!existing.data) {
@@ -368,7 +368,7 @@ export function advancePublicationJournal(
 export function deletePublicationJournal(
   vaultPath: string,
   operationId: string,
-  home: string = process.env.HOME || homedir(),
+  home: string = resolveSkillwikiHome(),
 ): Result<{ deleted: boolean }> {
   const { journalPath } = resolveJournalPaths(vaultPath, operationId, home);
   if (!existsSync(journalPath)) return ok({ deleted: false });
@@ -400,7 +400,7 @@ export function completePublicationJournal(
   const deleted = deletePublicationJournal(
     input.vaultPath,
     input.operationId,
-    input.home ?? process.env.HOME ?? homedir(),
+    resolveSkillwikiHome(input.home),
   );
   if (!deleted.ok) return deleted;
   return ok({ completed: true });

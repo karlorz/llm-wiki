@@ -1,3 +1,4 @@
+import { resolveSkillwikiHome } from "./home.js";
 import { resolve as resolvePath } from "node:path";
 import { err, ExitCode, type ErrResult } from "@skillwiki/shared";
 import { loadFleetManifestAndHost } from "../commands/fleet.js";
@@ -33,7 +34,7 @@ export async function guardProtectedVaultWrite(
   input: ProtectedVaultWriteGuardInput
 ): Promise<ProtectedVaultWriteGuardResult> {
   const env = input.env ?? process.env;
-  const home = input.home ?? process.env.HOME ?? "";
+  const home = resolveSkillwikiHome(input.home, env);
   const cwd = input.cwd ?? process.cwd();
   const liveVaultPath = await resolveLiveVaultPath({ env, home, cwd });
   const load = await loadFleetManifestAndHost({

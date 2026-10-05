@@ -1,3 +1,4 @@
+import { resolveSkillwikiHome } from "../utils/home.js";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, appendFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -47,7 +48,7 @@ export interface SnapshotMaintenanceInput {
   liveVaultPath?: string;
   /** Injectable TTY presence (tests). Defaults to process.stdin.isTTY. */
   isTty?: boolean;
-  /** Injectable home (tests). Defaults to process.env.HOME. */
+  /** Injectable home (tests). Defaults to the resolved user home. */
   home?: string;
   /** Injectable env (tests). Defaults to process.env. */
   env?: NodeJS.ProcessEnv;
@@ -166,7 +167,7 @@ export async function runSnapshotMaintenanceDryRun(
   input: SnapshotMaintenanceInput,
 ): Promise<{ exitCode: number; result: Result<SnapshotMaintenanceOutput> }> {
   const env = input.env ?? process.env;
-  const home = input.home ?? env.HOME ?? "";
+  const home = resolveSkillwikiHome(input.home, env);
   const audit = input.auditSink ?? defaultAuditSink(home);
   const now = input.now ?? Date.now();
 
@@ -363,7 +364,7 @@ export async function runSnapshotMaintenanceExecute(
   input: SnapshotMaintenanceInput,
 ): Promise<{ exitCode: number; result: Result<SnapshotMaintenanceOutput> }> {
   const env = input.env ?? process.env;
-  const home = input.home ?? env.HOME ?? "";
+  const home = resolveSkillwikiHome(input.home, env);
   const audit = input.auditSink ?? defaultAuditSink(home);
   const now = input.now ?? Date.now();
   const isTty = input.isTty ?? !!process.stdin.isTTY;
@@ -550,7 +551,7 @@ async function authorizeRepairContext(
   unmerged: string[];
 }> {
   const env = input.env ?? process.env;
-  const home = input.home ?? env.HOME ?? "";
+  const home = resolveSkillwikiHome(input.home, env);
   const audit = input.auditSink ?? defaultAuditSink(home);
   const now = input.now ?? Date.now();
 
@@ -632,7 +633,7 @@ export async function runProjectionConflictRepairDryRun(
   input: SnapshotMaintenanceInput,
 ): Promise<{ exitCode: number; result: Result<SnapshotMaintenanceOutput> }> {
   const env = input.env ?? process.env;
-  const home = input.home ?? env.HOME ?? "";
+  const home = resolveSkillwikiHome(input.home, env);
   const audit = input.auditSink ?? defaultAuditSink(home);
   const now = input.now ?? Date.now();
   const ctx = await authorizeRepairContext(input);
@@ -750,7 +751,7 @@ export async function runProjectionConflictRepairExecute(
   input: SnapshotMaintenanceInput,
 ): Promise<{ exitCode: number; result: Result<SnapshotMaintenanceOutput> }> {
   const env = input.env ?? process.env;
-  const home = input.home ?? env.HOME ?? "";
+  const home = resolveSkillwikiHome(input.home, env);
   const audit = input.auditSink ?? defaultAuditSink(home);
   const now = input.now ?? Date.now();
   const isTty = input.isTty ?? !!process.stdin.isTTY;

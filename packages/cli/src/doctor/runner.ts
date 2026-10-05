@@ -1,5 +1,6 @@
 import { ok, ExitCode, type Result } from "@skillwiki/shared";
 import { resolveRuntimePath } from "../utils/wiki-path.js";
+import { resolveSkillwikiHome } from "../utils/home.js";
 import { resolveConfiguredSnapshotWorktree } from "../utils/snapshot-worktree.js";
 import {
   isMcpOnlyLeaf,
@@ -46,6 +47,7 @@ export class DoctorRunner {
   async run(
     input: DoctorInput
   ): Promise<{ exitCode: number; result: Result<DoctorOutput> }> {
+    input = { ...input, home: resolveSkillwikiHome(input.home, input.env) };
     const devSourceRun = isDevSourceRun(input.argv);
     const vsConfig = readVaultSyncConfig(input.home);
     const baseEnv = input.env ?? process.env;

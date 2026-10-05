@@ -1,6 +1,7 @@
+import { resolveSkillwikiHome } from "./home.js";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { homedir, platform } from "node:os";
+import { platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { err, ok, type Result } from "@skillwiki/shared";
@@ -57,13 +58,7 @@ export function candidateHelperPaths(input: VaultSyncPullHelperInput = { vault: 
     paths.push(join(here, "..", "..", "..", "vault-sync", "scripts", HELPER_NAME));
   }
 
-  const home = input.home ?? env.HOME ?? env.USERPROFILE ?? (() => {
-    try {
-      return homedir();
-    } catch {
-      return undefined;
-    }
-  })();
+  const home = resolveSkillwikiHome(input.home, env);
 
   if (home) {
     const xdg = env.XDG_DATA_HOME;

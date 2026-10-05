@@ -68,6 +68,14 @@ skillwiki connect --from-stdin --dry-run
 
 Doctor on an MCP-only leaf (no vault + token present + vault-sync not installed) treats missing `WIKI_PATH` as info, not an init cluster.
 
+## Windows MCP-only leaves
+
+- Do not configure an optional Git mirror as `WIKI_PATH`: CLI `skillwiki query` reads that local mirror, not HTTP MCP. Use the advertised `wiki_query` tool for live reads and `wiki_context` for active work.
+- User config home resolves from a nonblank explicit home, then `HOME`, `USERPROFILE`, and the OS home directory. Empty or unset `HOME` does not require persisting a workaround environment variable. `skillwiki config path` and doctor's config-file row show the resolved absolute path.
+- If the npm-generated PowerShell launcher fails or interrupts a command sequence, use `skillwiki.cmd config path` and `skillwiki.cmd doctor --check-mcp`, or invoke the installed `dist/cli.js` with Node. Do not edit generated shims or infer a SkillWiki defect without inspecting the failing wrapper.
+- POSIX mode `0600` is not proof of a restrictive Windows ACL. The operator must keep the user config private. If a harness blocks attachment/stdin credential transfer, stop and request operator-controlled configuration of that resolved file with restricted access; never automatically bypass the harness, print the token, or store it in a repo or Drive.
+- Record CLI/plugin/daemon versions separately when investigating drift. A scheduled notifier is not evidence that an upgrade completed; use an explicit operator-approved upgrade and restart the client when delivery includes installation changes.
+
 ## Stop conditions
 
 - A non-local-only SkillWiki connector already authenticates.

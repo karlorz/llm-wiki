@@ -34,6 +34,8 @@ function fakeMcpFetch(): typeof fetch {
   return (async (_input, init) => {
     const raw = typeof init?.body === "string" ? init.body : "{}";
     const parsed = JSON.parse(raw) as { id?: unknown; method?: string; params?: { name?: string } };
+    if (init?.method === "GET") return new Response(null, { status: 405 });
+    if (parsed.method === "notifications/initialized") return new Response(null, { status: 202 });
     if (parsed.method === "initialize") {
       return new Response(JSON.stringify({
         jsonrpc: "2.0",
@@ -53,7 +55,7 @@ function fakeMcpFetch(): typeof fetch {
           tools: [
             "wiki_query", "wiki_memory_recall", "wiki_read_page", "wiki_status",
             "wiki_capture", "wiki_log_append", "wiki_page_publish", "wiki_workitem_write",
-          ].map((name) => ({ name })),
+          ].map((name) => ({ name, inputSchema: { type: "object" } })),
         },
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
@@ -62,6 +64,7 @@ function fakeMcpFetch(): typeof fetch {
         jsonrpc: "2.0",
         id: parsed.id,
         result: {
+          content: [],
           structuredContent: {
             writer_id: HOST,
             ok: true,
@@ -81,6 +84,117 @@ function assertNoSecret(payload: unknown): void {
 }
 
 describe("skillwiki connect", () => {
+  it("uses the same effective URL and credential for doctor and status", async () => {
+    const home = tmpHome();
+    const original = fakeMcpFetch();
+    const requests: Array<{ url: string; auth: string | null }> = [];
+    const mcpFetch: typeof fetch = async (url, init) => {
+      requests.push({ url: String(url), auth: new Headers(init?.headers).get("authorization") });
+      return original(url, init);
+    };
+    const result = await runConnect({
+      home, fromFile: envFile(home, fixtureEnv()), checkMcp: true,
+      currentVersion: "0.10.98", env: { SKILLWIKI_MCP_TOKEN: OTHER, SKILLWIKI_MCP_URL: "https://runtime.example.test/mcp" }, mcpFetch,
+    });
+    expect(requests.length).toBeGreaterThan(2);
+    expect(requests.every((request) => request.url === "https://runtime.example.test/mcp" && request.auth === `Bearer ${OTHER}`)).toBe(true);
+    expect(result.result.ok).toBe(true);
+    assertNoSecret(result.result);
+  });
+
+  it.each([{}, null, "not a status", [], { ok: true, reconcile_ready: "yes" }, { ok: false, reconcile_ready: false }].map((statusBody) => [statusBody]))(
+    "rejects malformed or failed wiki_status payload %j", async (statusBody) => {
+      const home = tmpHome();
+      const original = fakeMcpFetch();
+      const mcpFetch: typeof fetch = async (url, init) => {
+        const request = JSON.parse(String(init?.body ?? "{}"));
+        if (request.method !== "tools/call") return original(url, init);
+        return new Response(JSON.stringify({
+          jsonrpc: "2.0", id: request.id,
+          result: { content: [{ type: "text", text: JSON.stringify(statusBody) }] },
+        }), { headers: { "Content-Type": "application/json" } });
+      };
+      const result = await runConnect({
+        home, fromFile: envFile(home, fixtureEnv()), checkMcp: true,
+        currentVersion: "0.10.98", env: {}, mcpFetch,
+      });
+      expect(result.exitCode).toBe(ExitCode.DOCTOR_HAS_ERRORS);
+      expect(result.result.ok).toBe(true);
+      if (!result.result.ok) return;
+      expect(result.result.data.handshake).toContain("wiki_status verification failed");
+      assertNoSecret(result.result);
+    },
+  );
+
+  it("does not claim success or call wiki_status after invalid initialization", async () => {
+    const home = tmpHome();
+    const methods: string[] = [];
+    const mcpFetch: typeof fetch = async (_url, init) => {
+      const request = JSON.parse(String(init?.body ?? "{}"));
+      methods.push(request.method);
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: `refused ${PLANTED}` } }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+    const result = await runConnect({
+      home, fromFile: envFile(home, fixtureEnv()), checkMcp: true,
+      currentVersion: "0.10.98", env: {}, mcpFetch,
+    });
+    expect(result.exitCode).toBe(ExitCode.DOCTOR_HAS_ERRORS);
+    expect(methods).not.toContain("tools/call");
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) return;
+    expect(result.result.data.ok).toBeNull();
+    assertNoSecret(result.result);
+  });
+
+  it("reads text-form wiki_status results through the SDK", async () => {
+    const home = tmpHome();
+    const original = fakeMcpFetch();
+    const mcpFetch: typeof fetch = async (url, init) => {
+      const request = JSON.parse(String(init?.body ?? "{}"));
+      if (request.method !== "tools/call") return original(url, init);
+      return new Response(JSON.stringify({
+        jsonrpc: "2.0", id: request.id,
+        result: { content: [{ type: "text", text: JSON.stringify({ writer_id: HOST, ok: true, reconcile_ready: true }) }] },
+      }), { headers: { "Content-Type": "application/json" } });
+    };
+    const result = await runConnect({
+      home, fromFile: envFile(home, fixtureEnv()), checkMcp: true,
+      currentVersion: "0.10.98", env: {}, mcpFetch,
+    });
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) return;
+    expect(result.result.data.writer_id).toBe(HOST);
+    expect(result.result.data.ok).toBe(true);
+    assertNoSecret(result.result);
+  });
+
+  it("reports a failed status initialization even when the doctor handshake passed", async () => {
+    const home = tmpHome();
+    const original = fakeMcpFetch();
+    let initializations = 0;
+    const mcpFetch: typeof fetch = async (url, init) => {
+      const request = JSON.parse(String(init?.body ?? "{}"));
+      if (request.method === "initialize" && ++initializations === 2) {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: `status refused ${PLANTED}` } }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return original(url, init);
+    };
+    const result = await runConnect({
+      home, fromFile: envFile(home, fixtureEnv()), checkMcp: true,
+      currentVersion: "0.10.98", env: {}, mcpFetch,
+    });
+    expect(result.exitCode).toBe(ExitCode.DOCTOR_HAS_ERRORS);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) return;
+    expect(result.result.data.ok).toBeNull();
+    expect(result.result.data.handshake).toMatch(/wiki_status verification failed/);
+    assertNoSecret(result.result);
+  });
+
   it("dry-run validates without writing ~/.skillwiki/.env", async () => {
     const home = tmpHome();
     const dest = join(home, ".skillwiki", ".env");
