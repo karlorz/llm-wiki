@@ -18,11 +18,12 @@ import { sha256Bytes } from "../txn.js";
 import { currentVersion, type GetObject } from "../versions.js";
 import { CAPTURE_KINDS, normalizeCaptureProject, vaultHasProject } from "./writes.js";
 import { identityToken } from "@skillwiki/shared";
+import type { S3WriteHealth } from "../s3-write-probe.js";
 import { DEFAULT_VAULT_ID } from "../vault-id.js";
 
 export const MAX_READ_PAGE_BYTES = 256 * 1024;
 
-export interface ReadContext {
+export interface ReadContext extends S3WriteHealth {
   vaultDir: string;
   vaultId?: string;
   defaultVault?: string;
@@ -270,7 +271,7 @@ async function statusFleetIdentity(ctx: ReadContext): Promise<StatusFleetIdentit
 }
 
 export async function handleWikiStatus(
-  ctx: ReadContext & { s3Ok?: boolean },
+  ctx: ReadContext,
   input?: { host_id?: string },
 ) {
   const blocked = ensureReady(ctx.gate);
@@ -305,6 +306,8 @@ export async function handleWikiStatus(
       vault: ctx.vaultDir,
       home: process.env.HOME ?? "",
       s3Ok: ctx.s3Ok ?? true,
+      s3Writable: ctx.s3Writable === true,
+      s3WritableError: ctx.s3WritableError,
     }),
   ]);
   const base = result.result.ok ? result.result.data : { humanHint: "status failed" };
@@ -316,6 +319,10 @@ export async function handleWikiStatus(
     vault_id: ctx.vaultId ?? DEFAULT_VAULT_ID,
     reconcile_ready: ctx.gate.ready,
     s3_ok: ctx.s3Ok ?? true,
+    s3_writable: ctx.s3Writable === true,
+    healthy: ctx.gate.ready && (ctx.s3Ok ?? true) && ctx.s3Writable === true,
+    ...(ctx.s3WritableCheckedAt ? { s3_writable_checked_at: ctx.s3WritableCheckedAt } : {}),
+    ...(ctx.s3Writable !== true ? { s3_writable_error: ctx.s3WritableError ?? "S3_PROBE_PENDING" } : {}),
     ...base,
     ...(copiesData ? { copies: copiesData } : {}),
     humanHint,

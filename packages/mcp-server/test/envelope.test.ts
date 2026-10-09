@@ -14,6 +14,9 @@ async function setupTestServer(opts?: {
   seedVaultPathsToS3?: string[];
   auditFile?: string;
   gateReady?: boolean;
+  s3Writable?: boolean;
+  s3WritableCheckedAt?: string;
+  s3WritableError?: string;
 }) {
   const vault = await makeTempVault();
   const token = "test-token";
@@ -39,6 +42,9 @@ async function setupTestServer(opts?: {
     vaultDir: vault,
     tokenMap: new Map([[hash, "macos-dev"]]),
     gate,
+    s3Writable: opts && "s3Writable" in opts ? opts.s3Writable : true,
+    s3WritableCheckedAt: opts?.s3WritableCheckedAt,
+    s3WritableError: opts?.s3WritableError,
     putObject: s3?.putObject ?? (async () => undefined),
     getObject: s3?.getObject,
     auditFile: opts?.auditFile,
@@ -83,12 +89,46 @@ describe("C4 typed result envelope and request body cap", () => {
       expect(body.result?.structuredContent).toBeDefined();
       expect(body.result?.structuredContent?.ok).toBe(true);
       expect(body.result?.structuredContent?.reconcile_ready).toBe(true);
+      expect(body.result?.structuredContent?.s3_ok).toBe(true);
+      expect(body.result?.structuredContent?.s3_writable).toBe(true);
+      expect(body.result?.structuredContent?.healthy).toBe(true);
       expect(body.result?.content?.[0]?.type).toBe("text");
       const parsedText = JSON.parse(body.result?.content?.[0]?.text ?? "{}");
       expect(parsedText).toEqual(body.result?.structuredContent);
     } finally {
       await ctx.close();
     }
+  });
+
+  it("HTTP health fails closed before the writable probe has a result", async () => {
+    const ctx = await setupTestServer({ s3Writable: undefined });
+    try {
+      const health = await fetch(`http://127.0.0.1:${ctx.port}/health`);
+      expect(health.status).toBe(503);
+      expect(await health.json()).toMatchObject({ ok: false, s3_writable: false });
+    } finally { await ctx.close(); }
+  });
+
+  it("HTTP status preserves writable failure metadata and both health routes fail closed", async () => {
+    const checkedAt = new Date().toISOString();
+    const ctx = await setupTestServer({ s3Writable: false, s3WritableCheckedAt: checkedAt, s3WritableError: "S3_WRITE_FAILED" });
+    try {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${ctx.token}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "wiki_status", arguments: {} } }),
+      });
+      const body = await res.json() as { result: { structuredContent: Record<string, unknown> } };
+      expect(body.result.structuredContent).toMatchObject({
+        ok: true, healthy: false, s3_ok: true, s3_writable: false,
+        s3_writable_checked_at: checkedAt, s3_writable_error: "S3_WRITE_FAILED",
+      });
+      for (const path of ["/health", "/mcp/health"]) {
+        const health = await fetch(`http://127.0.0.1:${ctx.port}${path}`);
+        expect(health.status).toBe(503);
+        expect(await health.json()).toMatchObject({ ok: false, reconcile_ready: true, s3_ok: true, s3_writable: false });
+      }
+    } finally { await ctx.close(); }
   });
 
   it("tools/list includes all 15 tools with outputSchema and annotations", async () => {
@@ -138,6 +178,11 @@ describe("C4 typed result envelope and request body cap", () => {
       const idempotentWrites = ["wiki_workitem_write", "wiki_page_publish"];
 
       expect(toolMap.size).toBe(15);
+      const statusProperties = toolMap.get("wiki_status")?.outputSchema?.properties as Record<string, { type: string }>;
+      expect(statusProperties.s3_ok.type).toBe("boolean");
+      expect(statusProperties.s3_writable.type).toBe("boolean");
+      expect(statusProperties.s3_writable_checked_at.type).toBe("string");
+      expect(statusProperties.s3_writable_error.type).toBe("string");
 
       for (const name of expectedReads) {
         const tool = toolMap.get(name);

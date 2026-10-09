@@ -145,6 +145,7 @@ wiki-fin body
         gate: centralGate,
         putObject: centralS3.putObject,
         getObject: centralS3.getObject,
+        s3WriteHealth: { s3Writable: true },
       },
     ],
     [
@@ -154,6 +155,7 @@ wiki-fin body
         gate: extraGate,
         putObject: extraS3.putObject,
         getObject: extraS3.getObject,
+        s3WriteHealth: { s3Writable: false, s3WritableError: "S3_WRITE_FAILED" },
       },
     ],
   ]);
@@ -194,6 +196,20 @@ wiki-fin body
 }
 
 describe("multi-vault HTTP MCP slices 1-5", () => {
+  it("reports writable health for the selected vault and fails aggregate health", async () => {
+    const ctx = await setupDualVault();
+    try {
+      const central = structured((await callTool(ctx.port, ctx.token, "wiki_status", {})).body);
+      const extra = structured((await callTool(ctx.port, ctx.token, "wiki_status", { vault: "wiki-fin" })).body);
+      expect(central).toMatchObject({ ok: true, healthy: true, s3_writable: true });
+      expect(central.s3_writable_error).toBeUndefined();
+      expect(extra).toMatchObject({ ok: true, healthy: false, s3_ok: true, s3_writable: false, s3_writable_error: "S3_WRITE_FAILED" });
+      const health = await fetch(`http://127.0.0.1:${ctx.port}/health`);
+      expect(health.status).toBe(503);
+      expect(await health.json()).toMatchObject({ ok: false, s3_writable: false });
+    } finally { await ctx.close(); }
+  });
+
   it("omitted vault on every tool stays on central", async () => {
     const ctx = await setupDualVault();
     try {

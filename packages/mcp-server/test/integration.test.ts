@@ -27,11 +27,13 @@ describe("integration vs temp vault + mock S3", () => {
     const vault = await makeTempVault();
     const gate = new ReconcileGate(async () => undefined);
     await gate.runFirst();
-    const status = await handleWikiStatus({ vaultDir: vault, hostId: "macos-dev", gate, s3Ok: true });
+    const status = await handleWikiStatus({ vaultDir: vault, hostId: "macos-dev", gate, s3Ok: true, s3Writable: true });
     expect(status.ok).toBe(true);
     if (!status.ok) throw new Error("expected ok");
     expect(status.reconcile_ready).toBe(true);
     expect(status.s3_ok).toBe(true);
+    expect(status.s3_writable).toBe(true);
+    expect(status.healthy).toBe(true);
     expect(status.vault_path).toBe(vault);
     expect(status.writer_id).toBe("macos-dev");
     expect(status.host_id).toBe("macos-dev");
@@ -45,6 +47,28 @@ describe("integration vs temp vault + mock S3", () => {
     expect(status.humanHint).toMatch(/^live: /m);
     expect(status.humanHint).toMatch(/^github: /m);
     expect(status.humanHint).toMatch(/^local_git: /m);
+  });
+
+  it.each([false, undefined])("status keeps read connectivity separate from writable=%s", async (s3Writable) => {
+    const vault = await makeTempVault();
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const checkedAt = new Date().toISOString();
+    const status = await handleWikiStatus({
+      vaultDir: vault, hostId: "macos-dev", gate, s3Ok: true, s3Writable,
+      s3WritableCheckedAt: s3Writable === false ? checkedAt : undefined,
+      s3WritableError: s3Writable === false ? "S3_WRITE_FAILED" : undefined,
+    });
+    expect(status.ok).toBe(true);
+    if (!status.ok) throw new Error("expected status receipt");
+    expect(status.s3_ok).toBe(true);
+    expect(status.s3_writable).toBe(false);
+    expect(status.healthy).toBe(false);
+    expect(status.s3_writable_checked_at).toBe(s3Writable === false ? checkedAt : undefined);
+    expect(status.s3_writable_error).toBe(s3Writable === false ? "S3_WRITE_FAILED" : "S3_PROBE_PENDING");
+    expect(status.copies?.live).toMatchObject({ state: "blocked", reachable: true, writable: false });
+    expect(status.humanHint).toContain("MCP S3 write probe failed");
+    expect(status.humanHint).not.toContain("MCP S3 ok");
   });
 
   it("status fails closed when no authenticated host is present", async () => {

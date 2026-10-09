@@ -112,7 +112,7 @@ The `wiki_read_page` HTTP payload. Success sha256 is the UTF-8 digest of the ful
 _Avoid_: hashing only the tail, treating PAGE_TOO_LARGE as the only tail test, inventing writer_id
 
 **Status receipt**:
-The `wiki_status` HTTP payload. It reports daemon health (`ok`, `reconcile_ready`, `s3_ok`) plus the authenticated writer as both `writer_id` and `host_id`. A `fleet` object is always present on success (`identity_status` known|unknown|invalid). Optional `host_id` must match the authenticated writer. Unknown host-id, empty/whitespace host-id, and missing host identity fail closed (`USAGE`) with no `fleet` and no other-host leak. Do not invent a Doubao `writer_id`.
+The `wiki_status` HTTP payload. It reports daemon health (`healthy`, `reconcile_ready`, `s3_ok`, `s3_writable`) plus the authenticated writer as both `writer_id` and `host_id`. `ok` marks a successful status read. `healthy` requires reconcile readiness, S3 connectivity, and a successful write probe. `s3_ok` keeps the read/connectivity meaning. `s3_writable` is false until a write → read → verify probe succeeds and after a failure; optional `s3_writable_checked_at` and `s3_writable_error` describe the last check. `copies.live` reports a blocked write path distinctly when writable is false. A `fleet` object is always present on success (`identity_status` known|unknown|invalid). Optional `host_id` must match the authenticated writer. Unknown host-id, empty/whitespace host-id, and missing host identity fail closed (`USAGE`) with no `fleet` and no other-host leak. Do not invent a Doubao `writer_id`.
 _Avoid_: treating vault page counts as identity, leaking sg01 from fleet.yaml on a failed status, inventing chatgpt-web
 
 **Capture validation**:

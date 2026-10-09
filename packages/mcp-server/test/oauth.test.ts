@@ -158,6 +158,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       oauth: { enabled: false },
     });
@@ -184,6 +185,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       oauth: {
         enabled: true,
@@ -214,6 +216,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
         vaultDir,
         tokenMap: new Map(),
         gate,
+        s3Writable: true,
         putObject: async () => undefined,
         oauth: {
           enabled: true,
@@ -233,6 +236,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       oauth: {
         enabled: true,
@@ -285,6 +289,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       oauth: {
         enabled: true,
@@ -348,6 +353,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       oauth: {
         enabled: true,
@@ -436,6 +442,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       oauth: {
         enabled: true,
@@ -492,6 +499,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       oauth: {
         enabled: true,
@@ -537,6 +545,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       oauth: {
         enabled: true,
@@ -580,6 +589,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       oauth: {
         enabled: true,
@@ -619,6 +629,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       auditFile,
       oauth: {
@@ -975,6 +986,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       oauth: {
         enabled: true,
@@ -1024,6 +1036,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
         vaultDir,
         tokenMap: new Map(),
         gate,
+        s3Writable: true,
         putObject: async () => undefined,
         oauth: {
           enabled: true,
@@ -1066,6 +1079,7 @@ describe("OAuth HTTP Server Integration (oauth.ts + server.ts)", () => {
       vaultDir,
       tokenMap: new Map(),
       gate,
+      s3Writable: true,
       putObject: async () => undefined,
       oauth: {
         enabled: true,
