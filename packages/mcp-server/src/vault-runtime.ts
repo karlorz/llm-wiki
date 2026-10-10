@@ -1,5 +1,6 @@
 import type { ReconcileGate } from "./reconcile.js";
 import type { PutObject } from "./txn.js";
+import type { S3WriteHealth } from "./s3-write-probe.js";
 import type { GetObject } from "./versions.js";
 import type { VaultRegistry, VaultRegistryEntry } from "./vault-registry.js";
 import { authorizeVaultSelection, type Principal, type VaultAuthFailure } from "./principal.js";
@@ -9,6 +10,7 @@ export interface VaultRuntime {
   readonly gate: ReconcileGate;
   readonly putObject: PutObject;
   readonly getObject?: GetObject;
+  readonly s3WriteHealth?: S3WriteHealth;
 }
 
 export interface VaultRequestContext {
@@ -18,6 +20,7 @@ export interface VaultRequestContext {
   gate: ReconcileGate;
   putObject: PutObject;
   getObject?: GetObject;
+  s3WriteHealth?: S3WriteHealth;
 }
 
 export function resolveVaultContext(input: {
@@ -45,6 +48,7 @@ export function resolveVaultContext(input: {
       gate: runtime.gate,
       putObject: runtime.putObject,
       getObject: runtime.getObject,
+      s3WriteHealth: runtime.s3WriteHealth,
     },
   };
 }

@@ -16,6 +16,7 @@ export interface PlaneRecord {
   behind?: number;
   age_hours?: number;
   reachable?: boolean;
+  writable?: boolean;
   blocked_reason?: string;
   dirty?: number;
   untracked?: number;
@@ -57,6 +58,7 @@ export interface LiveDriftProbe {
 
 export interface LiveProbe {
   reachable?: boolean;
+  writable?: boolean;
   unknown?: boolean;
   detail?: string;
 }
@@ -88,11 +90,20 @@ export interface CopyStatusDeps {
 }
 
 function liveRecord(p: LiveProbe): PlaneRecord {
+  if (p.writable === false) {
+    return {
+      state: "blocked",
+      reachable: p.reachable,
+      writable: false,
+      blocked_reason: "s3_write_probe_failed",
+      detail: p.detail ?? "S3 write probe failed",
+    };
+  }
   if (p.unknown || p.reachable === undefined) {
     return { state: "unknown", reachable: p.reachable, detail: p.detail ?? "S3/MCP unmeasured" };
   }
   if (p.reachable) {
-    return { state: "ok", reachable: true, detail: p.detail ?? "S3 reachable" };
+    return { state: "ok", reachable: true, ...(p.writable === true ? { writable: true } : {}), detail: p.detail ?? "S3 reachable" };
   }
   return { state: "unknown", reachable: false, detail: p.detail ?? "S3 unreachable" };
 }

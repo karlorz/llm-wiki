@@ -22,6 +22,8 @@ export interface CopyStatusInput {
   vault: string;
   home: string;
   s3Ok?: boolean;
+  s3Writable?: boolean;
+  s3WritableError?: string;
   deps?: CopyStatusDeps;
 }
 
@@ -68,6 +70,14 @@ export function defaultCopyStatusDeps(input: CopyStatusInput): CopyStatusDeps {
   };
   return {
     probeLive() {
+      if (input.s3Writable === false) {
+        return {
+          reachable: input.s3Ok,
+          writable: false,
+          detail: `MCP S3 write probe failed${input.s3WritableError ? ` (${input.s3WritableError})` : ""}`,
+        };
+      }
+      if (input.s3Ok === true && input.s3Writable === true) return { reachable: true, writable: true, detail: "MCP S3 readable and writable" };
       if (input.s3Ok === true) return { reachable: true, detail: "MCP S3 ok" };
       if (input.s3Ok === false) return { reachable: false, detail: "MCP S3 not ok" };
       const remote = resolveWikiS3Remote({ home: input.home });

@@ -12,7 +12,9 @@
 
 import { execSync } from "node:child_process";
 import { platform } from "node:os";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, readFileSync as readFile } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { readFile, writeFile, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
 const OS = platform(); // "linux" | "darwin"
@@ -227,23 +229,38 @@ export interface WriteTestResult {
   error?: string;
 }
 
+export interface WriteTestIO {
+  write(path: string, payload: string): Promise<void>;
+  read(path: string): Promise<string>;
+  remove(path: string): Promise<void>;
+}
+
 /**
- * Write a small file to the vault, flush, read it back, verify, then delete.
- * This is the only check that actually exercises the full write path through
- * the FUSE mount → rclone VFS buffer → S3 upload queue.
+ * Write a small file, read it back, verify, then delete.
+ * Local IO exercises the FUSE path when dir is a mount; injected IO can
+ * verify the authoritative S3 object directly.
  *
- * The test file is named `.doctor-write-test-<pid>.tmp` to avoid collision
- * and to signal that it's safe to delete if left behind by a crash.
+ * The default file is `.doctor-write-test-<pid>.tmp`. An injected transport
+ * exercises direct S3 writes for daemons with a plain local working copy.
  */
-export function writeTest(dir: string): WriteTestResult {
-  const testFile = join(dir, `.doctor-write-test-${process.pid}.tmp`);
-  const payload = `skillwiki doctor write test — ${Date.now()} — ${Math.random().toString(36).slice(2)}`;
+export async function writeTest(
+  dir: string,
+  options: { fileName?: string; io?: WriteTestIO } = {},
+): Promise<WriteTestResult> {
+  const testFile = join(dir, options.fileName ?? `.doctor-write-test-${process.pid}.tmp`);
+  const io = options.io ?? {
+    write: (path: string, payload: string) => writeFile(path, payload, "utf8"),
+    read: (path: string) => readFile(path, "utf8"),
+    remove: (path: string) => unlink(path),
+  };
+  const payload = `skillwiki write test — ${new Date().toISOString()} — ${randomUUID()}`;
   const start = Date.now();
 
   // Write
   try {
-    writeFileSync(testFile, payload, "utf8");
+    await io.write(testFile, payload);
   } catch (e: any) {
+    try { await io.remove(testFile); } catch { /* best effort */ }
     return { success: false, writeMs: Date.now() - start, readMs: 0, size: 0, error: `write failed: ${e.message}` };
   }
   const writeMs = Date.now() - start;
@@ -251,21 +268,21 @@ export function writeTest(dir: string): WriteTestResult {
   // Read back
   const readStart = Date.now();
   try {
-    const back = readFile(testFile, "utf8");
+    const back = await io.read(testFile);
     const readMs = Date.now() - readStart;
 
     if (back !== payload) {
       // Clean up before returning
-      try { unlinkSync(testFile); } catch { /* best effort */ }
+      try { await io.remove(testFile); } catch { /* best effort */ }
       return { success: false, writeMs, readMs, size: Buffer.byteLength(payload, "utf8"), error: "content mismatch — wrote and read-back differ" };
     }
   } catch (e: any) {
-    try { unlinkSync(testFile); } catch { /* best effort */ }
+    try { await io.remove(testFile); } catch { /* best effort */ }
     return { success: false, writeMs, readMs: Date.now() - readStart, size: 0, error: `read failed: ${e.message}` };
   }
 
   // Clean up
-  try { unlinkSync(testFile); } catch { /* best effort */ }
+  try { await io.remove(testFile); } catch { /* best effort */ }
 
   return { success: true, writeMs, readMs: Date.now() - readStart, size: Buffer.byteLength(payload, "utf8") };
 }

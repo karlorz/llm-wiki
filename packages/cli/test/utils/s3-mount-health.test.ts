@@ -79,9 +79,9 @@ describe("getRcloneVersion", () => {
 });
 
 describe("writeTest", () => {
-  it("succeeds on a writable dir and leaves no residue", () => {
+  it("succeeds on a writable dir and leaves no residue", async () => {
     const dir = mkdtempSync(join(tmpdir(), "wt-"));
-    const res = writeTest(dir);
+    const res = await writeTest(dir);
     expect(res.success).toBe(true);
     expect(res.size).toBeGreaterThan(0);
     expect(res.writeMs).toBeGreaterThanOrEqual(0);
@@ -90,8 +90,8 @@ describe("writeTest", () => {
     expect(readdirSync(dir).some(f => f.startsWith(".doctor-write-test-"))).toBe(false);
   });
 
-  it("fails gracefully on a non-existent dir", () => {
-    const res = writeTest("/nonexistent/path/should/not/exist");
+  it("fails gracefully on a non-existent dir", async () => {
+    const res = await writeTest("/nonexistent/path/should/not/exist");
     expect(res.success).toBe(false);
     expect(res.error).toBeTruthy();
   });

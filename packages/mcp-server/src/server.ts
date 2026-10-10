@@ -1,9 +1,11 @@
-import { GetObjectCommand, PutObjectCommand, S3Client, S3ServiceException } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client, S3ServiceException } from "@aws-sdk/client-s3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { hostname } from "node:os";
+import { startS3WritePulse, type S3WriteHealth, type S3WriteProbeDeps } from "./s3-write-probe.js";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from "./auth.js";
@@ -80,7 +82,7 @@ import { CAPTURE_KINDS, wikiCapture, wikiLogAppend, wikiPagePublish, wikiWorkite
 import { S3PutError, type PutObject } from "./txn.js";
 import { type GetObject, type S3Adapter } from "./versions.js";
 
-export interface HttpServerOptions {
+export interface HttpServerOptions extends S3WriteHealth {
   bind: string;
   port: number;
   vaultDir: string;
@@ -201,6 +203,7 @@ function ensureVaultState(opts: HttpServerOptions): {
         gate: opts.gate,
         putObject: opts.putObject,
         getObject: opts.getObject,
+        s3WriteHealth: opts,
       },
     ],
   ]);
@@ -242,6 +245,9 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       gate: resolved.ctx.gate,
       getObject: resolved.ctx.getObject,
       s3Ok: opts.s3Ok,
+      s3Writable: resolved.ctx.s3WriteHealth?.s3Writable,
+      s3WritableCheckedAt: resolved.ctx.s3WriteHealth?.s3WritableCheckedAt,
+      s3WritableError: resolved.ctx.s3WriteHealth?.s3WritableError,
       vaultReadiness: authorizedReadiness,
     };
     const writes = {
@@ -349,7 +355,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
     "wiki_status",
     {
       description:
-        "Vault health snapshot plus daemon reconcile, S3 connectivity, and plane-tagged copy status (live vs GitHub vs local_git). Optional host_id must match the authenticated writer; unknown or missing host identity fail closed.",
+        "Vault health snapshot plus daemon reconcile, S3 connectivity and writability, and plane-tagged copy status (live vs GitHub vs local_git). Optional host_id must match the authenticated writer; unknown or missing host identity fail closed.",
       inputSchema: z.object({
         host_id: z.string().optional(),
         ...vaultField,
@@ -359,6 +365,10 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
         vault_path: z.string().optional(),
         reconcile_ready: z.boolean().optional(),
         s3_ok: z.boolean().optional(),
+        s3_writable: z.boolean().optional(),
+        s3_writable_checked_at: z.string().optional(),
+        s3_writable_error: z.string().optional(),
+        healthy: z.boolean().optional(),
         writer_id: z.string().optional(),
         host_id: z.string().optional(),
         fleet: z
@@ -745,7 +755,7 @@ async function streamToBuffer(stream: unknown): Promise<Buffer> {
   throw new Error("unsupported S3 stream body");
 }
 
-export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: string; prefix?: string; endpoint?: string }): S3Adapter {
+export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: string; prefix?: string; endpoint?: string }, requestTimeoutMs?: number): S3Adapter & { deleteObject: (path: string) => Promise<void> } {
   const endpoint = namespace?.endpoint ?? cfg.s3Endpoint;
   const bucket = namespace?.bucket ?? cfg.s3Bucket;
   const prefix = namespace?.prefix ?? cfg.s3Prefix;
@@ -762,6 +772,7 @@ export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: str
     forcePathStyle: true,
   });
 
+  const requestOptions = () => requestTimeoutMs ? { abortSignal: AbortSignal.timeout(requestTimeoutMs) } : {};
   const resolveKey = (relPath: string) => [prefix, relPath].filter((p) => p && p.length > 0).join("/");
 
   const putObject: PutObject = async (relPath, body) => {
@@ -772,6 +783,7 @@ export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: str
           Key: resolveKey(relPath),
           Body: body,
         }),
+        requestOptions(),
       );
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
@@ -786,6 +798,7 @@ export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: str
           Bucket: bucket,
           Key: resolveKey(relPath),
         }),
+        requestOptions(),
       );
       if (!res.Body) return null;
       const body = await streamToBuffer(res.Body);
@@ -802,7 +815,10 @@ export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: str
     }
   };
 
-  return { putObject, getObject };
+  const deleteObject = async (relPath: string) => {
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: resolveKey(relPath) }), requestOptions());
+  };
+  return { putObject, getObject, deleteObject };
 }
 
 export function createPutObject(cfg: McpDaemonConfig): PutObject {
@@ -827,7 +843,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
     const path = url.pathname;
 
     if (req.method === "GET" && (path === "/health" || path === "/mcp/health")) {
-      json(res, 200, { ok: true, reconcile_ready: opts.gate.ready });
+      const runtimes = [...vaultState.runtimes.values()].filter((rt) => rt.entry.enabled);
+      const reconcileReady = runtimes.every((rt) => rt.gate.ready);
+      const s3Writable = runtimes.every((rt) => rt.s3WriteHealth?.s3Writable === true);
+      const healthy = runtimes.length > 0 && reconcileReady && s3Writable && opts.s3Ok !== false;
+      json(res, healthy ? 200 : 503, { ok: healthy, reconcile_ready: reconcileReady, s3_ok: opts.s3Ok ?? true, s3_writable: s3Writable });
       return;
     }
 
@@ -1188,6 +1208,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
   const registry = configVaultRegistry(cfg);
   const hub = new ChangedEventHub({ pingMs: cfg.ssePingMs });
   const runtimes = new Map<string, VaultRuntime>();
+  const probeDeps = new Map<string, Omit<S3WriteProbeDeps, "hostId">>();
 
   for (const entry of registry.entries.values()) {
     if (!entry.enabled) continue;
@@ -1199,7 +1220,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
         throw new S3PutError(`S3 unavailable for vault ${entry.vaultId}`);
       },
     };
-    let adapter: { putObject: PutObject; getObject: GetObject } = failClosed;
+    let adapter: S3Adapter = failClosed;
     const s3Target = resolveVaultS3AdapterTarget(entry, cfg);
     if ("error" in s3Target) {
       if (entry.isDefault) throw new Error(s3Target.error);
@@ -1207,6 +1228,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     } else {
       try {
         adapter = createS3Adapter(cfg, s3Target);
+        probeDeps.set(entry.vaultId, createS3Adapter(cfg, s3Target, 30_000));
       } catch (error: unknown) {
         if (entry.isDefault) throw error;
         console.error(`skillwiki-mcp extra vault ${entry.vaultId} S3 adapter failed; vault stays fail-closed:`, error);
@@ -1225,6 +1247,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
       gate,
       putObject: adapter.putObject,
       getObject: adapter.getObject,
+      s3WriteHealth: {},
     });
   }
 
@@ -1247,7 +1270,13 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     runtimes,
   });
 
+  const stopPulses: Array<() => void> = [];
+  server.once("close", () => { for (const stop of stopPulses) stop(); });
   for (const rt of runtimes.values()) {
+    stopPulses.push(startS3WritePulse({
+      hostId: env.SKILLWIKI_HOST_ID ?? hostname(),
+      ...(probeDeps.get(rt.entry.vaultId) ?? { putObject: rt.putObject }),
+    }, rt.s3WriteHealth!));
     const vaultId = rt.entry.vaultId;
     void rt.gate.runFirst().catch((error: unknown) => {
       console.error(`skillwiki-mcp reconcile failed for ${vaultId}:`, error);

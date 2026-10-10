@@ -250,7 +250,7 @@ function checkRcloneVersion(
 }
 
 /** Check C: write-then-read test — can the vault actually write and read files? */
-function checkWriteTest(resolvedPath: string | undefined): CheckResult {
+async function checkWriteTest(resolvedPath: string | undefined): Promise<CheckResult> {
   if (!resolvedPath) {
     return check("pass", "s3_write_test", "S3 write test", "No vault path — check skipped");
   }
@@ -264,7 +264,7 @@ function checkWriteTest(resolvedPath: string | undefined): CheckResult {
     return check("pass", "s3_write_test", "S3 write test", "no concepts/ dir to test — check skipped");
   }
 
-  const result = writeTest(conceptsDir);
+  const result = await writeTest(conceptsDir);
 
   if (result.success) {
     const totalMs = result.writeMs + result.readMs;
@@ -332,13 +332,13 @@ function checkVfsCacheHealth(resolvedPath: string | undefined): CheckResult {
 
 export const s3MountHealthProbe: DoctorProbe = {
   id: "s3_mount_health",
-  run(ctx: DoctorContext): CheckResult[] {
+  async run(ctx: DoctorContext): Promise<CheckResult[]> {
     return [
       checkS3MountPerf(ctx.resolvedPath),
       checkS3MountFreshness(ctx.resolvedPath),
       checkRcloneFlagAudit(ctx.resolvedPath),
       checkRcloneVersion(ctx.resolvedPath, ctx.vsConfig.installed, ctx.vsConfig.pushEnabled !== false, ctx.mcpOnlyLeaf),
-      checkWriteTest(ctx.resolvedPath),
+      await checkWriteTest(ctx.resolvedPath),
       checkVfsCacheHealth(ctx.resolvedPath),
     ];
   },
