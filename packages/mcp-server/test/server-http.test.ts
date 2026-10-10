@@ -109,6 +109,43 @@ describe("HTTP surface", () => {
     }
   });
 
+  it("GET and DELETE /mcp with a bearer are 405 POST-only", async () => {
+    const vault = await makeTempVault();
+    const token = "test-token";
+    const hash = createHash("sha256").update(token, "utf8").digest("hex");
+    const gate = new ReconcileGate(async () => undefined);
+    await gate.runFirst();
+    const server = await startMcpHttpServer({
+      bind: "127.0.0.1",
+      port: 0,
+      vaultDir: vault,
+      tokenMap: new Map([[hash, "macos-dev"]]),
+      gate,
+      putObject: async () => undefined,
+    });
+    try {
+      const { port } = server.address() as AddressInfo;
+      for (const method of ["GET", "DELETE"] as const) {
+        const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "text/event-stream",
+            "Mcp-Protocol-Version": "2025-11-25",
+          },
+        });
+        expect(res.status, method).toBe(405);
+        expect(res.headers.get("allow"), method).toBe("POST");
+        expect(res.headers.get("content-type"), method).toMatch(/application\/json/);
+        expect(res.headers.get("content-type"), method).not.toMatch(/text\/event-stream/);
+        const body = (await res.json()) as { error?: string };
+        expect(body.error, method).toBe("method_not_allowed");
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+    }
+  });
+
   it("initialize serverInfo.version matches package.json", async () => {
     const vault = await makeTempVault();
     const token = "test-token";

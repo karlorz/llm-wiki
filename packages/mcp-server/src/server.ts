@@ -915,6 +915,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
     }
 
     if (path === "/mcp" || path === "/mcp/") {
+      // Stateless JSON transport is POST-only. GET SSE lives at /events, not /mcp.
+      if (req.method !== "POST") {
+        json(res, 405, { error: "method_not_allowed" }, { Allow: "POST" });
+        return;
+      }
       let parsed: unknown;
       if (req.method === "POST") {
         let raw: string;
