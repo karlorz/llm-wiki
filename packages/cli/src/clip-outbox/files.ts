@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, open, realpath } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 /** Validate every component, then open the leaf without following links. */
 export async function readRegular(root: string, path: string, maxBytes: number): Promise<Buffer> {
@@ -32,4 +32,37 @@ export async function readRegular(root: string, path: string, maxBytes: number):
     if (bytesRead !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) throw new Error("input changed during read");
     return bytes.subarray(0, bytesRead);
   } finally { await handle.close(); }
+}
+
+/** Create-only write under root. Same bytes are idempotent; different bytes never overwrite. */
+export async function writeRegularExclusive(root: string, rel: string, body: Buffer): Promise<"created" | "idempotent" | "conflict"> {
+  const dest = resolve(root, ...rel.split("/"));
+  const checked = relative(root, dest);
+  if (!checked || checked.startsWith(`..${sep}`) || checked === ".." || isAbsolute(checked)) throw new Error("unsafe dest path");
+  let current = resolve(root);
+  const parts = checked.split(sep);
+  for (let i = 0; i < parts.length - 1; i++) {
+    current = resolve(current, parts[i]!);
+    try {
+      const st = await lstat(current);
+      if (st.isSymbolicLink()) throw new Error("symlink dest refused");
+      if (!st.isDirectory()) throw new Error("invalid dest parent");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await mkdir(current);
+    }
+  }
+  const leaf = resolve(current, parts[parts.length - 1]!);
+  if (dirname(leaf) !== current) throw new Error("unsafe dest path");
+  try {
+    const handle = await open(leaf, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
+    try { await handle.writeFile(body); } finally { await handle.close(); }
+    return "created";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const st = await lstat(leaf);
+    if (st.isSymbolicLink() || !st.isFile() || st.size !== body.length) return "conflict";
+    const existing = await readRegular(root, leaf, body.length);
+    return existing.equals(body) ? "idempotent" : "conflict";
+  }
 }

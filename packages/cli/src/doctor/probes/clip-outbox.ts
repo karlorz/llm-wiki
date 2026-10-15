@@ -8,6 +8,7 @@ import type { CheckResult, DoctorContext, DoctorProbe } from "../types.js";
 import { check, MCP_ONLY_LEAF_SKIP } from "./helpers.js";
 import {
   CLIP_NOT_CONFIGURED,
+  PRODUCTION_MIRROR_LABEL,
   PRODUCTION_WATCHER_LABEL,
   RETIRED_WATCHER_LABELS,
   loadClipOutboxConfig,
@@ -93,9 +94,20 @@ function credentialPresent(env: NodeJS.ProcessEnv, ref: string): boolean {
   return typeof value === "string" && value.length > 0;
 }
 
-function listenerOk(env: NodeJS.ProcessEnv): boolean {
+function listenerOk(env: NodeJS.ProcessEnv, home: string): boolean {
   if (env.CLIP_LISTENER_FIXTURE === "ok") return true;
-  return false;
+  if (env.CLIP_LISTENER_FIXTURE === "missing" || env.CLIP_LISTENER_FIXTURE === "disabled") return false;
+  if (!launchdLoaded(PRODUCTION_MIRROR_LABEL)) return false;
+  const plist = join(home, "Library", "LaunchAgents", `${PRODUCTION_MIRROR_LABEL}.plist`);
+  try {
+    const text = readFileSync(plist, "utf8");
+    if (text.includes("<key>WatchPaths</key>")) return false;
+    const disabled = execSync(`launchctl print-disabled gui/${process.getuid!()}`, { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+    const explicitlyDisabled = disabled.split("\n").some((line) => line.includes(`"${PRODUCTION_MIRROR_LABEL}"`) && line.includes("true"));
+    return text.includes("mirror-watch") && text.includes(PRODUCTION_MIRROR_LABEL) && !explicitlyDisabled;
+  } catch {
+    return false;
+  }
 }
 
 function conditionalCreateEvidence(env: NodeJS.ProcessEnv): boolean {
@@ -136,7 +148,7 @@ export const clipOutboxProbe: DoctorProbe = {
         condCreate = await conditionalCreateProven(cfg, credentials.s3.endpoint);
       } catch { s3Creds = false; readyCreds = false; condCreate = false; }
     }
-    const listener = listenerOk(env);
+    const listener = listenerOk(env, ctx.input.home);
 
     return [
       check("pass", "clip_config", clipLabel("clip_config"), "clip_outbox.enabled=true; schema valid"),
@@ -159,7 +171,7 @@ export const clipOutboxProbe: DoctorProbe = {
         ? check("pass", "clip_ready_channel", clipLabel("clip_ready_channel"), "ready URL and credential reference present")
         : check("error", "clip_ready_channel", clipLabel("clip_ready_channel"), "ready credential missing"),
       listener
-        ? check("pass", "clip_mirror_listener", clipLabel("clip_mirror_listener"), "inbound production SSE listener configured")
+        ? check("pass", "clip_mirror_listener", clipLabel("clip_mirror_listener"), `loaded and enabled: ${PRODUCTION_MIRROR_LABEL}`)
         : check("error", "clip_mirror_listener", clipLabel("clip_mirror_listener"), "inbound SSE listener disabled or missing"),
     ];
   },

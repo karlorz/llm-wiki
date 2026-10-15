@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.karlchow.skillwiki-mirror-sse</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@NODE_BINARY@</string>
+    <string>@CLI_BINARY@</string>
+    <string>clip-outbox</string><string>mirror-watch</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>HOME</key><string>@HOME@</string><key>SKILLWIKI_HOME</key><string>@HOME@</string></dict>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>@LOG_ROOT@/clip-mirror-sse.log</string>
+  <key>StandardErrorPath</key><string>@LOG_ROOT@/clip-mirror-sse-error.log</string>
+</dict>
+</plist>

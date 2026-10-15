@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { appendFile, chmod, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { loadClipCredentials, conditionalCreateProven } from "../../src/clip-outbox/runtime.js";
+import { loadClipCredentials, conditionalCreateProven, assertClipS3Endpoint } from "../../src/clip-outbox/runtime.js";
 import { clipFixture } from "./fixture.js";
 
 const fixtureS3 = { endpoint: "https://storage.example.com", accessKeyId: "fixture-access", secretAccessKey: "fixture-secret" };
@@ -24,6 +24,27 @@ describe.skipIf(process.platform === "win32")("protected file channel providers"
     await writeFile(join(config.stateRoot, "conditional-create.json"), JSON.stringify({ verified: true, destination: config.destination, endpoint: fixtureS3.endpoint, testedAt: new Date().toISOString() }));
     expect(await conditionalCreateProven(config, fixtureS3.endpoint)).toBe(true);
     expect(await conditionalCreateProven(config, "https://another.example.com")).toBe(false);
+    await rm(home, { recursive: true });
+  });
+  it("allows https S3 and private http SeaweedFS, and refuses public http", async () => {
+    await expect(assertClipS3Endpoint("https://storage.example.com")).resolves.toBeUndefined();
+    await expect(assertClipS3Endpoint("http://192.168.1.10:8333")).resolves.toBeUndefined();
+    await expect(assertClipS3Endpoint("http://10.0.0.8:8333")).resolves.toBeUndefined();
+    await expect(assertClipS3Endpoint("http://127.0.0.1:8333")).resolves.toBeUndefined();
+    await expect(assertClipS3Endpoint("http://1.1.1.1:8333")).rejects.toThrow(/RFC1918 or loopback/);
+    await expect(assertClipS3Endpoint("http://seaweed.example", async () => ["8.8.8.8"])).rejects.toThrow(/RFC1918 or loopback/);
+    await expect(assertClipS3Endpoint("http://seaweed.lan", async () => ["192.168.88.1"])).resolves.toBeUndefined();
+    const { home, config } = await clipFixture();
+    await writeFile(join(home, ".skillwiki/clip-outbox-credentials.json"), JSON.stringify({
+      CLIP_S3: { endpoint: "http://192.168.1.10:8333", accessKeyId: "fixture-access", secretAccessKey: "fixture-secret" },
+      CLIP_READY: "fixture-file-only",
+    }), { mode: 0o600 });
+    expect((await loadClipCredentials(home, config, {})).s3.endpoint).toBe("http://192.168.1.10:8333");
+    await writeFile(join(home, ".skillwiki/clip-outbox-credentials.json"), JSON.stringify({
+      CLIP_S3: { endpoint: "http://1.1.1.1:8333", accessKeyId: "fixture-access", secretAccessKey: "fixture-secret" },
+      CLIP_READY: "fixture-file-only",
+    }), { mode: 0o600 });
+    await expect(loadClipCredentials(home, config, {})).rejects.toThrow(/separate file-ingress token/);
     await rm(home, { recursive: true });
   });
 });

@@ -11,6 +11,7 @@ import { resolveSkillwikiHome } from "./home.js";
 
 export const CLIP_NOT_CONFIGURED = "clip channel not configured";
 export const PRODUCTION_WATCHER_LABEL = CLIP_OUTBOX_DEFAULTS.watcher_label;
+export const PRODUCTION_MIRROR_LABEL = "com.karlchow.skillwiki-mirror-sse";
 export const RETIRED_WATCHER_LABELS = [
   "com.karlchow.wiki-dev-outbox",
   "com.karlchow.wiki-dev-sse",

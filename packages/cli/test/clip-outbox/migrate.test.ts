@@ -20,6 +20,7 @@ describe("attended clip migration", () => {
     expect(plist).toContain("<key>KeepAlive</key><true/>");
     expect(plist).not.toContain("@OUTBOX_ROOT@");
     expect(result.loaded).toBe(false);
+    expect(result.mirrorLoaded).toBe(false);
     expect(launch).not.toHaveBeenCalled();
     expect(await readFile(join(home, ".skillwiki/.env"), "utf8")).toBe(env);
     await writeFile(result.plistPath, "stale /usr/local/bin/skillwiki");

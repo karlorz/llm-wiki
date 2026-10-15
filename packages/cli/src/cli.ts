@@ -38,7 +38,7 @@ import { runLint } from "./commands/lint.js";
 import { runHealth, type SyncMode } from "./commands/health.js";
 import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "./commands/config.js";
 import { runDoctor } from "./commands/doctor.js";
-import { runClipOutboxStatus, runClipOutboxInstall, runClipOutboxWatch } from "./commands/clip-outbox.js";
+import { runClipOutboxStatus, runClipOutboxInstall, runClipOutboxWatch, runClipOutboxMirrorWatch } from "./commands/clip-outbox.js";
 import { runConnect, CONNECT_DESCRIPTION } from "./commands/connect.js";
 import { runArchive } from "./commands/archive.js";
 import { runRemove } from "./commands/remove.js";
@@ -1226,11 +1226,16 @@ clipOutboxCmd
   .description("run the enabled dedicated outbox worker using macOS FSEvents")
   .action(async () => emit(await runClipOutboxWatch(resolveSkillwikiHome())));
 clipOutboxCmd
+  .command("mirror-watch")
+  .description("copy admitted raw/articles and raw/assets from storage into the frozen mirror using MCP SSE")
+  .action(async () => emit(await runClipOutboxMirrorWatch(resolveSkillwikiHome())));
+clipOutboxCmd
   .command("install-or-migrate")
   .description("refresh the packaged launchd plist without enabling the channel")
-  .option("--load", "attended launchd bootstrap; requires existing enabled=true", false)
+  .option("--load", "attended clip watcher bootstrap; requires existing enabled=true", false)
+  .option("--load-mirror", "attended inbound SSE bootstrap; requires existing enabled=true; never auto-loaded on upgrade", false)
   .option("--conditional-create-proven", "attest the deployed SeaweedFS If-None-Match:* race test passed", false)
-  .action(async (opts) => emit(await runClipOutboxInstall({ home: resolveSkillwikiHome(), load: opts.load, conditionalCreateProven: opts.conditionalCreateProven })));
+  .action(async (opts) => emit(await runClipOutboxInstall({ home: resolveSkillwikiHome(), load: opts.load, loadMirror: opts.loadMirror, conditionalCreateProven: opts.conditionalCreateProven })));
 
 
 program
