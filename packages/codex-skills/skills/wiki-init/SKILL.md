@@ -41,6 +41,9 @@ None for the first run.
    worker localizes required v1 HTTPS images before freeze, writes
    `![[raw/assets/...]]` embeds, and uploads `raw/assets/<capture-id>/note.md`.
    `wiki_capture` is not clip ingress. Never use `.txt` as the only index.
+   The inbound production SSE listener is a separate attended
+   `skillwiki clip-outbox install-or-migrate --load-mirror` job; package
+   upgrade never auto-loads it and never watches `~/wiki` as clip input.
 8. **Suggest first sources.** Propose 3–5 initial sources (URLs, papers, articles) appropriate to the domain. Prompt the user to provide the first one to ingest, then hand off to wiki-ingest.
 
 ## Stop conditions

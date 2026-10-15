@@ -56,7 +56,7 @@ export async function assertPublicHttpsUrl(
   return { ok: true, href: parsed.href };
 }
 
-async function defaultLookup(hostname: string): Promise<string[]> {
+export async function defaultLookup(hostname: string): Promise<string[]> {
   if (isIP(hostname)) return [hostname];
   const v4 = await dnsLookup(hostname, { all: true, verbatim: true });
   return v4.map((row) => row.address);

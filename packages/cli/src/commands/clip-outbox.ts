@@ -35,7 +35,7 @@ export async function runClipOutboxStatus(home: string): Promise<{
   };
 }
 
-export async function runClipOutboxInstall(input: { home: string; load?: boolean; conditionalCreateProven?: boolean }) {
+export async function runClipOutboxInstall(input: { home: string; load?: boolean; loadMirror?: boolean; conditionalCreateProven?: boolean }) {
   try {
     const { migrateClipOutbox } = await import("../clip-outbox/migrate.js");
     return { exitCode: ExitCode.OK, result: ok(await migrateClipOutbox(input)) };
@@ -83,4 +83,46 @@ export async function runClipOutboxWatch(home: string) {
   } catch {
     return { exitCode: ExitCode.PREFLIGHT_FAILED, result: err("PREFLIGHT_FAILED", { message: "clip worker startup failed; check configuration, protected credential references, conditional-create evidence and worker lock" }) };
   } finally { client?.destroy(); }
+}
+
+export async function runClipOutboxMirrorWatch(home: string) {
+  const resolved = await loadClipOutboxConfig(home);
+  if (!resolved.ok || !resolved.enabled) return { exitCode: ExitCode.INVALID_CONFIG_VALUE, result: err("INVALID_CONFIG_VALUE", { message: resolved.ok ? CLIP_NOT_CONFIGURED : resolved.message }) };
+  let client: import("@aws-sdk/client-s3").S3Client | undefined;
+  const abort = new AbortController();
+  try {
+    const { S3Client } = await import("@aws-sdk/client-s3");
+    const { loadClipCredentials, validateRuntime } = await import("../clip-outbox/runtime.js");
+    const { createS3GetObject, eventsUrlFromMcp, parseDestinationForMirror, startMirrorListener } = await import("../clip-outbox/mirror.js");
+    const { resolveMcpAuthEnv } = await import("../utils/mcp-auth-env.js");
+    const cfg = resolved.config;
+    const credentials = await loadClipCredentials(home, cfg);
+    await validateRuntime(home, cfg, credentials.s3.endpoint);
+    const auth = await resolveMcpAuthEnv({ home });
+    if (!auth.url || !auth.token) throw new Error("MCP bearer required for inbound SSE");
+    const destination = parseDestinationForMirror(cfg.destination);
+    client = new S3Client({ endpoint: credentials.s3.endpoint, region: credentials.s3.region, credentials: credentials.s3, forcePathStyle: true, maxAttempts: 1 });
+    const done = new Promise<void>((resolve) => {
+      abort.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    process.once("SIGTERM", () => abort.abort());
+    process.once("SIGINT", () => abort.abort());
+    await Promise.race([
+      startMirrorListener({
+        home,
+        config: cfg,
+        eventsUrl: eventsUrlFromMcp(auth.url),
+        mcpToken: auth.token,
+        getObject: createS3GetObject({ client, bucket: destination.bucket, prefix: destination.prefix, maxBytes: cfg.maxBundleBytes }),
+        signal: abort.signal,
+      }),
+      done,
+    ]);
+    return { exitCode: ExitCode.OK, result: ok({ humanHint: "Inbound SSE listener stopped." }) };
+  } catch {
+    return { exitCode: ExitCode.PREFLIGHT_FAILED, result: err("PREFLIGHT_FAILED", { message: "inbound SSE listener startup failed; check MCP bearer, clip credentials, frozen mirror and wiki-push isolation" }) };
+  } finally {
+    abort.abort();
+    client?.destroy();
+  }
 }

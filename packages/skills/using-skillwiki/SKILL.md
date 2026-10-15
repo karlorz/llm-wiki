@@ -183,7 +183,7 @@ If the vault has `.WIKI_GIT_FROZEN`:
 ## Skill Map
 | Skill | When to Invoke |
 |-------|----------------|
-| `wiki-init` | Bootstrap a vault and install `_Templates/web-clipper/llm-wiki-clippings.json` plus import guidance. File-level clips use a dedicated `~/Obsidian/clip-outbox` vault, not `~/wiki`; `skillwiki doctor` reports clip-channel rows; `wiki_capture` is not clip ingress. |
+| `wiki-init` | Bootstrap a vault and install `_Templates/web-clipper/llm-wiki-clippings.json` plus import guidance. File-level clips use a dedicated `~/Obsidian/clip-outbox` vault, not `~/wiki`; `skillwiki doctor` reports clip-channel rows including the inbound `com.karlchow.skillwiki-mirror-sse` listener, which upgrades never auto-load; `wiki_capture` is not clip ingress. |
 | `wiki-ingest` | Convert URLs, files, or pasted text into typed-knowledge pages |
 | `wiki-query` | Search typed knowledge by default; work-queue / doctor / MCP diagnose questions use `wiki_context` or `--scope work` / `--scope all`; explicitly requested fresh/raw evidence uses the separate pending channel |
 | `wiki-lint` | Vault health and lint checks; use `health` for whole-system reports and `lint --summary` for bounded lint buckets |

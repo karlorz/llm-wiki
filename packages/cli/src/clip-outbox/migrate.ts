@@ -4,14 +4,14 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { atomicWriteText } from "../utils/atomic-write.js";
 import { parseDotenvFile } from "../utils/dotenv.js";
-import { expandUserPath, nestedOrEqual, PRODUCTION_WATCHER_LABEL, resolveClipOutboxConfig } from "../utils/clip-outbox-config.js";
+import { expandUserPath, nestedOrEqual, PRODUCTION_MIRROR_LABEL, PRODUCTION_WATCHER_LABEL, resolveClipOutboxConfig } from "../utils/clip-outbox-config.js";
 import { evidencePath, loadClipCredentials, validateRuntime } from "./runtime.js";
 
-export const CLIP_MIGRATION_HINT = "Clip channel requires attended setup: run skillwiki clip-outbox install-or-migrate, then skillwiki doctor. Installation/update never sets clip_outbox.enabled=true or loads launchd. Prove deployed SeaweedFS If-None-Match:* create-only before operator enablement.";
+export const CLIP_MIGRATION_HINT = "Clip channel requires attended setup: run skillwiki clip-outbox install-or-migrate, then skillwiki doctor. Installation/update never sets clip_outbox.enabled=true or loads launchd. Prove deployed SeaweedFS If-None-Match:* create-only before --load. Inbound SSE uses a separate --load-mirror and never watches ~/wiki as clip input.";
 export const xml = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;");
-export async function packagedPlist(): Promise<string> {
+export async function packagedPlist(label: string = PRODUCTION_WATCHER_LABEL): Promise<string> {
   for (const rel of ["../templates/launchd/", "../../templates/launchd/"]) {
-    try { return await readFile(new URL(`${rel}${PRODUCTION_WATCHER_LABEL}.plist`, import.meta.url), "utf8"); } catch { /* source/dist layouts */ }
+    try { return await readFile(new URL(`${rel}${label}.plist`, import.meta.url), "utf8"); } catch { /* source/dist layouts */ }
   }
   throw new Error("packaged clip launchd template missing");
 }
@@ -24,11 +24,12 @@ export async function stableCliBinary(argvPath = process.argv[1]): Promise<strin
   }
   throw new Error("global npm skillwiki binary not found; install/link the CLI before migrating");
 }
-export async function migrateClipOutbox(input: { home: string; load?: boolean; conditionalCreateProven?: boolean; binaryPath?: string; nodePath?: string; platform?: string; launch?: (args: string[]) => void }): Promise<{ plistPath: string; loaded: boolean; enabled: boolean; humanHint: string }> {
+export async function migrateClipOutbox(input: { home: string; load?: boolean; loadMirror?: boolean; conditionalCreateProven?: boolean; binaryPath?: string; nodePath?: string; platform?: string; launch?: (args: string[]) => void }): Promise<{ plistPath: string; mirrorPlistPath: string; loaded: boolean; mirrorLoaded: boolean; enabled: boolean; humanHint: string }> {
   const map = await parseDotenvFile(join(input.home, ".skillwiki", ".env"));
   const resolved = resolveClipOutboxConfig(map as Record<string, string>, input.home);
   if (!resolved.ok) throw new Error(resolved.message);
   if (input.load && (!resolved.enabled || !input.conditionalCreateProven)) throw new Error("--load requires existing clip_outbox.enabled=true and --conditional-create-proven after the operator's deployed create-only race test");
+  if (input.loadMirror && !resolved.enabled) throw new Error("--load-mirror requires existing clip_outbox.enabled=true; upgrades never auto-load the inbound SSE listener");
   if ((input.platform ?? process.platform) !== "darwin") throw new Error("clip launchd migration requires macOS");
   // Validate the topology while disabled too, without persisting an enable flag.
   const rawRoot = map["clip_outbox.root"] ?? "~/Obsidian/clip-outbox";
@@ -40,9 +41,16 @@ export async function migrateClipOutbox(input: { home: string; load?: boolean; c
   if (!isAbsolute(binary) || !isAbsolute(input.nodePath ?? process.execPath)) throw new Error("absolute executable paths required");
   const logRoot = join(input.home, "Library", "Logs", "SkillWiki");
   const plistPath = join(input.home, "Library", "LaunchAgents", `${PRODUCTION_WATCHER_LABEL}.plist`);
-  const template = await packagedPlist();
-  let plist = template;
-  for (const [key, value] of Object.entries({ NODE_BINARY: input.nodePath ?? process.execPath, CLI_BINARY: binary, OUTBOX_ROOT: root, HOME: input.home, LOG_ROOT: logRoot })) plist = plist.replaceAll(`@${key}@`, xml(value));
+  const mirrorPlistPath = join(input.home, "Library", "LaunchAgents", `${PRODUCTION_MIRROR_LABEL}.plist`);
+  const replacements = { NODE_BINARY: input.nodePath ?? process.execPath, CLI_BINARY: binary, OUTBOX_ROOT: root, HOME: input.home, LOG_ROOT: logRoot };
+  const render = async (label: string) => {
+    let plist = await packagedPlist(label);
+    for (const [key, value] of Object.entries(replacements)) plist = plist.replaceAll(`@${key}@`, xml(value));
+    if (label === PRODUCTION_MIRROR_LABEL && plist.includes("<key>WatchPaths</key>")) throw new Error("inbound SSE plist must not watch the frozen mirror");
+    return plist;
+  };
+  const watcherPlist = await render(PRODUCTION_WATCHER_LABEL);
+  const mirrorPlist = await render(PRODUCTION_MIRROR_LABEL);
   if (input.load) {
     if (!resolved.enabled) throw new Error("--load requires existing clip_outbox.enabled=true and --conditional-create-proven after the operator's deployed create-only race test");
     const creds = await loadClipCredentials(input.home, resolved.config);
@@ -53,18 +61,32 @@ export async function migrateClipOutbox(input: { home: string; load?: boolean; c
   }
   await mkdir(dirname(plistPath), { recursive: true });
   await mkdir(logRoot, { recursive: true });
-  const result = await atomicWriteText(plistPath, plist);
+  const result = await atomicWriteText(plistPath, watcherPlist);
   if (!result.ok) throw new Error("cannot refresh clip plist");
-  if (input.load) {
+  const mirrorResult = await atomicWriteText(mirrorPlistPath, mirrorPlist);
+  if (!mirrorResult.ok) throw new Error("cannot refresh inbound SSE plist");
+  const bootstrap = (label: string, path: string) => {
     if (typeof process.getuid !== "function") throw new Error("clip launchd load requires macOS");
     const domain = `gui/${process.getuid()}`;
     const launch = input.launch ?? ((args: string[]) => { execFileSync("launchctl", args, { stdio: "ignore", timeout: 5000 }); });
-    // bootout may report not loaded; bootstrap/enable failures remain fatal.
-    try { launch(["bootout", `${domain}/${PRODUCTION_WATCHER_LABEL}`]); } catch { /* absent is normal on first install */ }
-    launch(["enable", `${domain}/${PRODUCTION_WATCHER_LABEL}`]);
-    launch(["bootstrap", domain, plistPath]);
-  }
-  return { plistPath, loaded: !!input.load, enabled: resolved.enabled, humanHint: `${result.data.changed ? "Refreshed" : "Current"} clip launchd plist: ${plistPath}. ${input.load ? "Operator-gated launchd bootstrap requested." : CLIP_MIGRATION_HINT}` };
+    try { launch(["bootout", `${domain}/${label}`]); } catch { /* absent is normal on first install */ }
+    launch(["enable", `${domain}/${label}`]);
+    launch(["bootstrap", domain, path]);
+  };
+  if (input.load) bootstrap(PRODUCTION_WATCHER_LABEL, plistPath);
+  if (input.loadMirror) bootstrap(PRODUCTION_MIRROR_LABEL, mirrorPlistPath);
+  const loadedBits = [
+    input.load ? "Operator-gated clip watcher bootstrap requested." : undefined,
+    input.loadMirror ? "Operator-gated inbound SSE bootstrap requested." : undefined,
+  ].filter(Boolean).join(" ");
+  return {
+    plistPath,
+    mirrorPlistPath,
+    loaded: !!input.load,
+    mirrorLoaded: !!input.loadMirror,
+    enabled: resolved.enabled,
+    humanHint: `${result.data.changed ? "Refreshed" : "Current"} clip launchd plist: ${plistPath}. ${mirrorResult.data.changed ? "Refreshed" : "Current"} inbound SSE plist: ${mirrorPlistPath}. ${loadedBits || CLIP_MIGRATION_HINT}`,
+  };
 }
 
 /** Refresh an already-installed clip plist after CLI upgrade. Never creates or loads a job. */

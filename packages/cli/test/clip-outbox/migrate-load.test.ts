@@ -16,6 +16,7 @@ describe.skipIf(process.platform === "win32")("operator-gated load", () => {
     const launch = vi.fn();
     const result = await migrateClipOutbox({ home, platform: "darwin", load: true, conditionalCreateProven: true, binaryPath: "/opt/homebrew/bin/skillwiki", launch });
     expect(result.loaded).toBe(true);
+    expect(result.mirrorLoaded).toBe(false);
     expect(validateRuntime).toHaveBeenCalled();
     const proof = JSON.parse(await readFile(join(config.stateRoot, "conditional-create.json"), "utf8"));
     expect(proof).toMatchObject({ verified: true, endpoint: "https://storage.example.com", destination: "seaweed-wiki:cloud/wiki" });
