@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { ResolvedClipOutboxConfig } from "../utils/clip-outbox-config.js";
 import {
   extensionForKind,
@@ -42,6 +42,11 @@ class LocalizeError extends Error {
   }
 }
 
+function isInsideDir(root: string, candidate: string): boolean {
+  const rel = relative(resolve(root), resolve(candidate));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
 export async function localizeCapture(
   markdown: string,
   opts: {
@@ -72,7 +77,7 @@ export async function localizeCapture(
         const rel = localAssetRelPath(ref.target);
         if (!rel) throw new LocalizeError(`unsafe or missing local image: ${ref.target}`);
         const abs = resolve(opts.outboxRoot, rel);
-        if (!abs.startsWith(resolve(opts.outboxRoot, "raw/assets") + "/") && abs !== resolve(opts.outboxRoot, "raw/assets")) {
+        if (!isInsideDir(resolve(opts.outboxRoot, "raw/assets"), abs)) {
           throw new LocalizeError("local image outside raw/assets");
         }
         const reader = deps.readLocal ?? ((p: string) => readFile(p));
