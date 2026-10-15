@@ -16,7 +16,7 @@ function entry(source: string): JournalEntry {
   return { captureId: "abcdef1234567890", source, articleKey: "raw/articles/capture-abcdef1234567890.md", assetKeys: [], sha256: {}, state: "preparing" };
 }
 
-describe("clip outbox event worker", () => {
+describe.skipIf(process.platform === "win32")("clip outbox event worker", () => {
   it("coalesces FSEvents, seals and immediately sends assets before article and ready without polling", async () => {
     const { home, config } = await clipFixture();
     const ev = events();
@@ -120,7 +120,7 @@ describe("clip outbox event worker", () => {
   });
 });
 
-describe("stable immutable bundle seal", () => {
+describe.skipIf(process.platform === "win32")("stable immutable bundle seal", () => {
   it("restarts on an article or local dependency change during the stable window", async () => {
     const { home, config } = await clipFixture();
     const source = join(config.root, "raw/articles/changing.md");
@@ -149,7 +149,7 @@ describe("stable immutable bundle seal", () => {
   });
 });
 
-describe("locked realtime timing", () => {
+describe.skipIf(process.platform === "win32")("locked realtime timing", () => {
   it("waits 500 ms quiet plus 500 ms matching hashes, then uploads without an extra timer", async () => {
     const { home, config } = await clipFixture();
     config.debounceMs = 500; config.stableHashMs = 500;

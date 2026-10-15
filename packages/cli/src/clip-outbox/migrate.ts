@@ -1,6 +1,6 @@
 import { access, mkdir, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { atomicWriteText } from "../utils/atomic-write.js";
 import { parseDotenvFile } from "../utils/dotenv.js";
@@ -19,7 +19,7 @@ export async function stableCliBinary(argvPath = process.argv[1]): Promise<strin
   // Keep the npm bin symlink, rather than its resolved package/version target.
   const candidates = [argvPath, ...[dirname(process.execPath), ...(process.env.PATH ?? "").split(":")].map((dir) => join(dir, "skillwiki"))];
   for (const candidate of candidates) {
-    if (!candidate || !isAbsolute(candidate) || !candidate.endsWith("/skillwiki")) continue;
+    if (!candidate || !isAbsolute(candidate) || basename(candidate) !== "skillwiki") continue;
     try { await access(candidate, constants.X_OK); return candidate; } catch { /* try next prefix */ }
   }
   throw new Error("global npm skillwiki binary not found; install/link the CLI before migrating");
@@ -56,7 +56,8 @@ export async function migrateClipOutbox(input: { home: string; load?: boolean; c
   const result = await atomicWriteText(plistPath, plist);
   if (!result.ok) throw new Error("cannot refresh clip plist");
   if (input.load) {
-    const domain = `gui/${process.getuid!()}`;
+    if (typeof process.getuid !== "function") throw new Error("clip launchd load requires macOS");
+    const domain = `gui/${process.getuid()}`;
     const launch = input.launch ?? ((args: string[]) => { execFileSync("launchctl", args, { stdio: "ignore", timeout: 5000 }); });
     // bootout may report not loaded; bootstrap/enable failures remain fatal.
     try { launch(["bootout", `${domain}/${PRODUCTION_WATCHER_LABEL}`]); } catch { /* absent is normal on first install */ }

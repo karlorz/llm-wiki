@@ -10,7 +10,7 @@ vi.mock("../../src/clip-outbox/runtime.js", async (importOriginal) => ({
 import { migrateClipOutbox } from "../../src/clip-outbox/migrate.js";
 import { validateRuntime } from "../../src/clip-outbox/runtime.js";
 
-describe("operator-gated load", () => {
+describe.skipIf(process.platform === "win32")("operator-gated load", () => {
   it("records endpoint-bound attestation and loads only after runtime validation", async () => {
     const { home, config } = await clipFixture();
     const launch = vi.fn();

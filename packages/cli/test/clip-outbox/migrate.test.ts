@@ -16,7 +16,7 @@ describe("attended clip migration", () => {
     const plist = await readFile(result.plistPath, "utf8");
     expect(plist).toContain("/opt/homebrew/bin/skillwiki");
     expect(plist).toContain("/opt/homebrew/bin/node");
-    expect(plist).toContain(`${home}/Obsidian/clip-outbox`);
+    expect(plist).toContain(join(home, "Obsidian", "clip-outbox"));
     expect(plist).toContain("<key>KeepAlive</key><true/>");
     expect(plist).not.toContain("@OUTBOX_ROOT@");
     expect(result.loaded).toBe(false);

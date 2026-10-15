@@ -5,7 +5,7 @@ import { loadClipCredentials, conditionalCreateProven } from "../../src/clip-out
 import { clipFixture } from "./fixture.js";
 
 const fixtureS3 = { endpoint: "https://storage.example.com", accessKeyId: "fixture-access", secretAccessKey: "fixture-secret" };
-describe("protected file channel providers", () => {
+describe.skipIf(process.platform === "win32")("protected file channel providers", () => {
   it("rejects an MCP token saved only in host dotenv and never includes values in errors", async () => {
     const { home, config } = await clipFixture();
     await appendFile(join(home, ".skillwiki/.env"), "\nSKILLWIKI_MCP_TOKEN=fixture-mcp-only\n");
