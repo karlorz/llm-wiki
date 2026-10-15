@@ -65,8 +65,9 @@ describe("runInit", () => {
       noteContentFormat: "{{content}}",
       triggers: [],
     });
-    expect(clipperTemplate.noteNameFormat).toBe('{{date|date:"YYYY-MM-DD"}}-{{title|safe_name}}');
+    expect(clipperTemplate.noteNameFormat).toBe('{{date|date:"YYYY-MM-DD"}}-{{title|safe_name}}-{{date|date:"HHmmss"}}');
     expect(readFileSync(clipperReadmePath, "utf8")).toContain("Obsidian Web Clipper Settings");
+    expect(readFileSync(clipperReadmePath, "utf8")).toContain("clip-outbox");
     if (r.result.ok) {
       expect(r.result.data.web_clipper_template_path).toBe("_Templates/web-clipper/llm-wiki-clippings.json");
       expect(r.result.data.web_clipper_readme_path).toBe("_Templates/web-clipper/readme.txt");

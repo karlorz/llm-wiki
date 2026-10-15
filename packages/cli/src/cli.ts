@@ -38,6 +38,7 @@ import { runLint } from "./commands/lint.js";
 import { runHealth, type SyncMode } from "./commands/health.js";
 import { runConfigGet, runConfigSet, runConfigList, runConfigPath } from "./commands/config.js";
 import { runDoctor } from "./commands/doctor.js";
+import { runClipOutboxStatus } from "./commands/clip-outbox.js";
 import { runConnect, CONNECT_DESCRIPTION } from "./commands/connect.js";
 import { runArchive } from "./commands/archive.js";
 import { runRemove } from "./commands/remove.js";
@@ -1214,6 +1215,12 @@ program
     checkMcp: !!opts.checkMcp,
     env: process.env,
   })));
+
+const clipOutboxCmd = program.command("clip-outbox").description("dedicated file-level web-clip outbox");
+clipOutboxCmd
+  .command("status")
+  .description("show whether the clip-outbox channel is configured")
+  .action(async () => emit(await runClipOutboxStatus(resolveSkillwikiHome())));
 
 program
   .command("connect")

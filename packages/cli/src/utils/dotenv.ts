@@ -1,6 +1,6 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import { isVaultSyncKey } from "@skillwiki/shared";
+import { isClipOutboxKey, isVaultSyncKey } from "@skillwiki/shared";
 
 export const CONFIG_KEYS = [
   "WIKI_PATH", "WIKI_LANG",
@@ -46,7 +46,7 @@ export function parseDotenvText(text: string): DotenvMap {
     if (eq <= 0) continue;
     const key = line.slice(0, eq).trim();
     const value = line.slice(eq + 1).trim();
-    if (!_whitelist.has(key) && !isValidWikiProfileKey(key) && !isVaultSyncKey(key)) continue;
+    if (!_whitelist.has(key) && !isValidWikiProfileKey(key) && !isVaultSyncKey(key) && !isClipOutboxKey(key)) continue;
     if (value.length === 0) continue;
     (out as Record<string, string>)[key] = value;
   }
