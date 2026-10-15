@@ -132,6 +132,9 @@ export class DoctorRunner {
     if (summary.info > 0) summaryParts.push(`${summary.info} info`);
     summaryParts.push(`${summary.warn} warn`, `${summary.error} error`);
     lines.push(summaryParts.join(" · "));
+    if (checks.some((c) => c.id === "clip_config" && c.detail === "clip channel not configured")) {
+      lines.push("Clip setup is attended: skillwiki clip-outbox install-or-migrate refreshes the packaged plist; prove SeaweedFS conditional-create before enabling/loading the channel.");
+    }
     const humanHint = redactMcpSecret(lines.join("\n"), auth.token);
 
     return { exitCode, result: ok({ checks, summary, humanHint }) };

@@ -53,10 +53,11 @@ export async function localizeCapture(
     config: ResolvedClipOutboxConfig;
     sourceUrl?: string;
     outboxRoot: string;
+    captureId?: string;
   },
   deps: LocalizeDeps = {},
 ): Promise<LocalizeResult> {
-  const captureId = randomUUID().replace(/-/g, "").slice(0, 16);
+  const captureId = opts.captureId ?? randomUUID().replace(/-/g, "").slice(0, 16);
   const refs = parseImageDependencies(markdown, opts.sourceUrl);
   if (refs.length > opts.config.maxImages) {
     throw new LocalizeError(`too many images: ${refs.length}`);
@@ -83,6 +84,8 @@ export async function localizeCapture(
         const reader = deps.readLocal ?? ((p: string) => readFile(p));
         const bytes = await reader(abs);
         asset = sealAsset(captureId, bytes, ref.target, opts.config);
+        // Existing referenced binaries retain their exact paths.
+        asset.captureRel = rel;
       } else {
         const bytes = await downloadImage(ref.target, opts.config, fetchImpl, deps.lookup);
         asset = sealAsset(captureId, bytes, ref.target, opts.config);

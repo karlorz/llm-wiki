@@ -27,6 +27,7 @@ describe("doctor clip-outbox probe", () => {
     if (!res.result.ok) return;
     const clip = res.result.data.checks.filter((c) => c.id.startsWith("clip_"));
     expect(clip).toHaveLength(8);
+    expect(res.result.data.humanHint).toContain("clip-outbox install-or-migrate");
     expect(clip.every((c) => c.status === "info")).toBe(true);
     expect(clip.every((c) => c.detail === "clip channel not configured")).toBe(true);
     expect(JSON.stringify(res.result.data.checks)).not.toContain("SECRET");

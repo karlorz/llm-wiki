@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { readCache, writeCache, type UpdateCache, resolveAutoApplyAt } from "../utils/auto-update.js";
 import { normalizeDistTag } from "../utils/update-consts.js";
 import { readCliPackageJson } from "../utils/package-info.js";
+import { CLIP_MIGRATION_HINT, refreshInstalledClipPlist } from "../clip-outbox/migrate.js";
 import { runInstall } from "./install.js";
 
 function parseCoreSemver(version: string): { major: number; minor: number; patch: number } | null {
@@ -59,6 +60,8 @@ export function migrationNotesForUpgrade(previousVersion: string, newVersion: st
       "- frozen-leaf hosts write via HTTP MCP only; do not local-write raw/transcripts/ or vault git",
     );
   }
+  const next = parseCoreSemver(newVersion);
+  if (next && isAtLeast(next, 0, 10, 111)) notes.push(CLIP_MIGRATION_HINT);
   return notes;
 }
 
@@ -160,7 +163,7 @@ export async function runUpdate(
         version_warnings: [],
         skills_refreshed: false,
         deferred_to_plugin: false,
-        humanHint: `Already on npm@${tag}: v${currentVersion}`,
+        humanHint: `Already on npm@${tag}: v${currentVersion}\n${CLIP_MIGRATION_HINT}`,
       }),
     };
   }
@@ -198,6 +201,12 @@ export async function runUpdate(
   }
   for (const line of migrationNotesForUpgrade(currentVersion, latest)) {
     hintLines.push(line);
+  }
+  try {
+    const clipHint = await refreshInstalledClipPlist(input.home);
+    if (clipHint) hintLines.push(clipHint);
+  } catch (e: unknown) {
+    hintLines.push(`clip plist refresh skipped: ${e instanceof Error ? e.message : "migration failed"}`);
   }
 
   return {

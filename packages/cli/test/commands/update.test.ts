@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,6 +59,19 @@ function mockInstallFailure(error: string) {
 }
 
 describe("runUpdate", () => {
+  it("ships clip migration guidance while preserving disabled host configuration", async () => {
+    const h = home();
+    const config = "clip_outbox.enabled=false\nvault_sync.push_enabled=false\n";
+    writeFileSync(join(h, ".skillwiki/.env"), config);
+    mockExec.mockReturnValueOnce("0.10.111\n").mockReturnValueOnce(undefined).mockReturnValueOnce("/opt/homebrew/lib/node_modules\n");
+    mockInstallSuccess();
+    const result = await runUpdate({ home: h });
+    expect(result.result.ok && result.result.data.humanHint).toContain("clip-outbox install-or-migrate");
+    expect(readFileSync(join(h, ".skillwiki/.env"), "utf8")).toBe(config);
+    expect(existsSync(join(h, "Library/LaunchAgents"))).toBe(false);
+    expect(mockExec.mock.calls.every(([cmd]) => !String(cmd).includes("launchctl"))).toBe(true);
+  });
+
   beforeEach(() => {
     mockExec.mockReset();
     mockInstall.mockReset();

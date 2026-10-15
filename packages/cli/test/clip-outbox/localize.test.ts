@@ -123,6 +123,6 @@ describe("clip-outbox localize and upload", () => {
       { config: config(root), outboxRoot: root },
     );
     expect(result.assets).toHaveLength(1);
-    expect(result.markdown).toMatch(/!\[\[raw\/assets\/[a-f0-9]+\/[a-f0-9]{64}\.png\]\]/);
+    expect(result.markdown).toContain("![[raw/assets/shot.png]]");
   });
 });

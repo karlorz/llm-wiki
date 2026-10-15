@@ -54,7 +54,7 @@ export type ClipConfigResult =
   | { ok: true; enabled: true; config: ResolvedClipOutboxConfig }
   | { ok: false; message: string };
 
-function expandUserPath(raw: string, home: string): string {
+export function expandUserPath(raw: string, home: string): string {
   if (raw === "~") return home;
   if (raw.startsWith("~/")) return resolve(home, raw.slice(2));
   return raw;
@@ -78,7 +78,7 @@ function canonicalPath(raw: string, home: string): { ok: true; path: string } | 
   }
 }
 
-function nestedOrEqual(a: string, b: string): boolean {
+export function nestedOrEqual(a: string, b: string): boolean {
   if (a === b) return true;
   const prefixA = a.endsWith(sep) ? a : a + sep;
   const prefixB = b.endsWith(sep) ? b : b + sep;

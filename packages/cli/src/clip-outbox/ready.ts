@@ -21,13 +21,22 @@ export async function postReadyHint(opts: {
   fetchImpl?: typeof fetch;
 }): Promise<{ ok: true } | { ok: false; status: number }> {
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const body = JSON.stringify(opts.hint);
+  if (Buffer.byteLength(body) > 32768) return { ok: false, status: 413 };
   const res = await fetchImpl(opts.url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${opts.token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(opts.hint),
+    body,
+    signal: AbortSignal.timeout(10_000),
+    redirect: "error",
   });
-  return res.ok ? { ok: true } : { ok: false, status: res.status };
+  if (!res.ok) return { ok: false, status: res.status };
+  const result = await res.json() as { ok?: boolean; paths?: unknown };
+  const paths = result.paths;
+  // A queued/202 acknowledgment alone is not central visibility.
+  return result.ok === true && Array.isArray(paths) && opts.hint.files.every((f) => paths.includes(f.path))
+    ? { ok: true } : { ok: false, status: 503 };
 }

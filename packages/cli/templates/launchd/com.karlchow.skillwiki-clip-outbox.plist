@@ -2,21 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key>
-  <string>com.karlchow.skillwiki-clip-outbox</string>
+  <key>Label</key><string>com.karlchow.skillwiki-clip-outbox</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/skillwiki</string>
-    <string>clip-outbox</string>
-    <string>watch</string>
+    <string>@NODE_BINARY@</string>
+    <string>@CLI_BINARY@</string>
+    <string>clip-outbox</string><string>watch</string>
   </array>
-  <key>KeepAlive</key>
-  <true/>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>WatchPaths</key>
-  <array>
-    <string>/Users/REPLACE/Obsidian/clip-outbox/raw/articles</string>
-  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>HOME</key><string>@HOME@</string><key>SKILLWIKI_HOME</key><string>@HOME@</string></dict>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>WatchPaths</key><array><string>@OUTBOX_ROOT@</string></array>
+  <key>StandardOutPath</key><string>@LOG_ROOT@/clip-outbox.log</string>
+  <key>StandardErrorPath</key><string>@LOG_ROOT@/clip-outbox-error.log</string>
 </dict>
 </plist>

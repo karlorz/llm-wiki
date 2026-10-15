@@ -132,6 +132,7 @@ node packages/cli/dist/cli.js --help | awk '/^Commands:/{listed=1; next} listed 
 | `claims audit [vault]` | Read-only transcript claim-integrity report: duplicates, malformed or dangling refs, project mismatches, and unbacked `work_item` metadata. |
 | `config` | Manage skillwiki configuration and wiki profiles. |
 | `doctor` | Diagnose setup issues (paths, env, plugin, sync health, HTTP MCP). |
+| `clip-outbox` | Event-driven macOS clip worker, queue status, and [attended launchd migration](packages/cli/docs/clip-outbox.md); disabled by default. |
 | `connect` | Ingest a chat-attached MCP env file into `~/.skillwiki/.env` (mode 0600). Never init. |
 | `path` | Resolve vault or project paths. |
 | `lang` | Detect vault language from SCHEMA.md. |
