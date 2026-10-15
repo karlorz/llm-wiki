@@ -1,6 +1,6 @@
 {
   "name": "@skillwiki/mcp-server",
-  "version": "0.10.109",
+  "version": "0.10.110",
   "private": true,
   "type": "module",
   "bin": {
