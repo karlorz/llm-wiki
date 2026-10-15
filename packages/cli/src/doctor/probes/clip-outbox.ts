@@ -1,7 +1,9 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { platform } from "node:os";
 import { join } from "node:path";
+import { loadClipCredentials, conditionalCreateProven } from "../../clip-outbox/runtime.js";
+import { xml } from "../../clip-outbox/migrate.js";
 import type { CheckResult, DoctorContext, DoctorProbe } from "../types.js";
 import { check, MCP_ONLY_LEAF_SKIP } from "./helpers.js";
 import {
@@ -54,7 +56,7 @@ function launchdLoaded(label: string): boolean {
   }
 }
 
-function watcherStatus(env: NodeJS.ProcessEnv, label: string): { loaded: boolean; enabled: boolean; kind: "production" | "retired" | "unknown" } {
+function watcherStatus(env: NodeJS.ProcessEnv, label: string, home: string, root: string): { loaded: boolean; enabled: boolean; kind: "production" | "retired" | "unknown" } {
   const fixture = env.CLIP_WATCHER_FIXTURE;
   if (fixture === "loaded-enabled") return { loaded: true, enabled: true, kind: "production" };
   if (fixture === "stopped") return { loaded: false, enabled: false, kind: "production" };
@@ -67,8 +69,15 @@ function watcherStatus(env: NodeJS.ProcessEnv, label: string): { loaded: boolean
   if (!launchdLoaded(label)) {
     return { loaded: false, enabled: false, kind: "unknown" };
   }
-  const plist = join(process.env.HOME ?? "", "Library", "LaunchAgents", `${label}.plist`);
-  return { loaded: true, enabled: existsSync(plist), kind: "production" };
+  const plist = join(home, "Library", "LaunchAgents", `${label}.plist`);
+  try {
+    const text = readFileSync(plist, "utf8");
+    const xmlRoot = xml(root);
+    const matchesRoot = text.includes(`<key>WatchPaths</key><array><string>${xmlRoot}</string></array>`);
+    const disabled = execSync(`launchctl print-disabled gui/${process.getuid!()}`, { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+    const explicitlyDisabled = disabled.split("\n").some((line) => line.includes(`"${label}"`) && line.includes("true"));
+    return { loaded: true, enabled: matchesRoot && !explicitlyDisabled, kind: "production" };
+  } catch { return { loaded: true, enabled: false, kind: "unknown" }; }
 }
 
 function pushLoaded(env: NodeJS.ProcessEnv): boolean {
@@ -116,10 +125,17 @@ export const clipOutboxProbe: DoctorProbe = {
     const frozen = existsSync(join(cfg.mirrorRoot, ".WIKI_GIT_FROZEN"));
     const pushOn = ctx.vsConfig.pushEnabled !== false;
     const pushIsLoaded = pushLoaded(env);
-    const watch = watcherStatus(env, cfg.watcherLabel);
-    const s3Creds = credentialPresent(env, cfg.s3CredentialRef);
-    const readyCreds = credentialPresent(env, cfg.readyCredentialRef);
-    const condCreate = conditionalCreateEvidence(env);
+    const watch = watcherStatus(env, cfg.watcherLabel, ctx.input.home, cfg.root);
+    let s3Creds = credentialPresent(env, cfg.s3CredentialRef);
+    let readyCreds = credentialPresent(env, cfg.readyCredentialRef);
+    let condCreate = conditionalCreateEvidence(env);
+    if (!env.CLIP_CREDENTIAL_FIXTURE) {
+      try {
+        const credentials = await loadClipCredentials(ctx.input.home, cfg, env);
+        s3Creds = true; readyCreds = true;
+        condCreate = await conditionalCreateProven(cfg, credentials.s3.endpoint);
+      } catch { s3Creds = false; readyCreds = false; condCreate = false; }
+    }
     const listener = listenerOk(env);
 
     return [

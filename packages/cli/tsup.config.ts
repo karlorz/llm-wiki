@@ -7,5 +7,6 @@ export default defineConfig({
   clean: true,
   dts: false,
   banner: { js: "#!/usr/bin/env node" },
+  external: ["fsevents"],
   noExternal: ["@skillwiki/shared"]
 });
