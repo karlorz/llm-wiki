@@ -293,6 +293,20 @@ describe("runConfigSet vault_sync.* typed validation (A1)", () => {
     expect(r.result.ok).toBe(true);
   });
 
+  it("accepts clip_outbox.enabled true/false", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "clip_outbox.enabled", value: "false", home: h });
+    expect(r.exitCode).toBe(0);
+    const got = await runConfigGet({ key: "clip_outbox.enabled", home: h });
+    if (got.result.ok) expect(got.result.data.value).toBe("false");
+  });
+
+  it("rejects poll-only clip_outbox.mode", async () => {
+    const h = home();
+    const r = await runConfigSet({ key: "clip_outbox.mode", value: "poll-only", home: h });
+    expect(r.exitCode).toBe(54);
+  });
+
   it("rejects unknown vault_sync.* keys with exit 26 (INVALID_CONFIG_KEY)", async () => {
     const h = home();
     const r = await runConfigSet({ key: "vault_sync.bogus", value: "value", home: h });

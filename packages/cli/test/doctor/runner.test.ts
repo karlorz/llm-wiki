@@ -24,6 +24,7 @@ describe("DoctorRunner probe registry and execution", () => {
       "activation_marker",
       "ds_store_noise",
       "mcp",
+      "clip_outbox",
     ]);
   });
 

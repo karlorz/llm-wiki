@@ -129,13 +129,21 @@ describe("doctor golden parity tests", () => {
       "mcp_credential_present",
       "mcp_frozen_leaf_write_path",
       "mcp_handshake",
+      "clip_config",
+      "clip_frozen_mirror",
+      "clip_push_isolation",
+      "clip_outbox_root",
+      "clip_watcher",
+      "clip_storage_credentials",
+      "clip_ready_channel",
+      "clip_mirror_listener",
     ];
 
     expect(checkIds).toEqual(expectedCheckIds);
-    expect(res.result.data.checks.length).toBe(60);
+    expect(res.result.data.checks.length).toBe(68);
     expect(res.result.data.summary).toEqual({
       pass: expect.any(Number),
-      info: 5, // 5 vault metrics
+      info: 13, // 5 vault metrics + 8 clip-not-configured
       warn: expect.any(Number),
       error: expect.any(Number),
     });
@@ -160,7 +168,7 @@ describe("doctor golden parity tests", () => {
     expect(res.result.ok).toBe(true);
     if (!res.result.ok) return;
 
-    expect(res.result.data.checks.length).toBe(62);
+    expect(res.result.data.checks.length).toBe(70);
 
     // Verify unconfigured checks fail or skip as expected
     const wp = res.result.data.checks.find(c => c.id === "wiki_path_set");
@@ -215,7 +223,7 @@ describe("doctor golden parity tests", () => {
     expect(res.result.ok).toBe(true);
     if (!res.result.ok) return;
 
-    expect(res.result.data.checks.length).toBe(61);
+    expect(res.result.data.checks.length).toBe(69);
     const snapIds = [
       "vault_sync_installed",
       "vault_sync_jobs_enabled",

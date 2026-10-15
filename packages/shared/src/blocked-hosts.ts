@@ -25,6 +25,11 @@ function inRange(ip: string, baseStr: string, prefix: number): boolean {
   return (ipN & mask) === (baseN & mask);
 }
 
+/** CIDR membership for an IPv4 literal. Host blocking stays in `isBlockedHost`. */
+export function ipv4InCidr(ip: string, base: string, prefix: number): boolean {
+  return inRange(ip, base, prefix);
+}
+
 export function isBlockedHost(host: string): boolean {
   const lower = host.toLowerCase();
   if (METADATA_HOSTS.has(lower)) return true;

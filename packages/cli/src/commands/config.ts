@@ -1,5 +1,5 @@
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
-import { isVaultSyncKey, parseVaultSyncKeyValue } from "@skillwiki/shared";
+import { isClipOutboxKey, isVaultSyncKey, parseClipOutboxKeyValue, parseVaultSyncKeyValue } from "@skillwiki/shared";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -7,7 +7,7 @@ import { resolveSkillwikiHome } from "../utils/home.js";
 import { parseDotenvFile, parseDotenvText, writeDotenv, type DotenvMap, CONFIG_KEYS, type ConfigKey, isValidWikiProfileKey } from "../utils/dotenv.js";
 
 function validateKey(key: string): boolean {
-  return (CONFIG_KEYS as readonly string[]).includes(key) || isValidWikiProfileKey(key) || isVaultSyncKey(key);
+  return (CONFIG_KEYS as readonly string[]).includes(key) || isValidWikiProfileKey(key) || isVaultSyncKey(key) || isClipOutboxKey(key);
 }
 
 function displayConfigValue(key: string, value: string): string {
@@ -60,6 +60,12 @@ export async function runConfigSet(
   }
   if (isVaultSyncKey(input.key)) {
     const parsed = parseVaultSyncKeyValue(input.key, input.value);
+    if (!parsed.ok) {
+      return { exitCode: ExitCode.INVALID_CONFIG_VALUE, result: err("INVALID_CONFIG_VALUE", { key: input.key, value: input.value, message: parsed.message }) };
+    }
+  }
+  if (isClipOutboxKey(input.key)) {
+    const parsed = parseClipOutboxKeyValue(input.key, input.value);
     if (!parsed.ok) {
       return { exitCode: ExitCode.INVALID_CONFIG_VALUE, result: err("INVALID_CONFIG_VALUE", { key: input.key, value: input.value, message: parsed.message }) };
     }

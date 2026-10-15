@@ -12,6 +12,7 @@ import { fuseStalenessProbe } from "./fuse-staleness.js";
 import { activationMarkerProbe } from "./activation-marker.js";
 import { dsStoreNoiseProbe } from "./ds-store-noise.js";
 import { mcpHandshakeProbe } from "./mcp-handshake.js";
+import { clipOutboxProbe } from "./clip-outbox.js";
 
 export const DOCTOR_PROBES: readonly DoctorProbe[] = [
   environmentProbe,
@@ -27,4 +28,5 @@ export const DOCTOR_PROBES: readonly DoctorProbe[] = [
   activationMarkerProbe,
   dsStoreNoiseProbe,
   mcpHandshakeProbe,
+  clipOutboxProbe,
 ];

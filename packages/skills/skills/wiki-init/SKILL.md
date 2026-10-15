@@ -29,17 +29,18 @@ None for the first run.
    `skillwiki init --target <dir> --domain existing --write-gitignore`.
 6. Report the installed Web Clipper assets at
    `_Templates/web-clipper/llm-wiki-clippings.json` and
-   `_Templates/web-clipper/readme.txt`. Tell the user to open Obsidian Web
-   Clipper Settings, import the JSON, and repeat the import for every browser
-   profile that should capture into the vault. Re-init preserves existing
-   customized copies, including short files.
-7. Explain that the generic template preserves `{{content}}`; remote HTTP(S)
-   images remain external dependencies. An attended local-asset capture may
-   choose any URL-friendly path under `raw/assets/`, but it must write the asset,
-   emit an explicit vault-qualified `![[raw/assets/...]]` embed, verify
-   resolution/preview, and only then finalize the immutable raw note. Also write
-   a sibling Markdown note (`listings.md`, `note.md`, or a dated `.md`) that
-   embeds each file. Never use `.txt` as the only index.
+   `_Templates/web-clipper/readme.txt`. For the file-level clip channel, create
+   or select the dedicated Obsidian vault `~/Obsidian/clip-outbox` (never
+   `~/wiki`), with `raw/articles` and `raw/assets`, attachment folder
+   `raw/assets`. Tell the user to open Obsidian Web Clipper Settings, import the
+   JSON, select that outbox vault, keep **Add to Obsidian**, and repeat the
+   import for every browser profile. Re-init preserves existing customized
+   copies, including short files. A new package version never silently updates
+   browser extension storage.
+7. Explain that the generic template preserves `{{content}}`. The clip-outbox
+   worker localizes required v1 HTTPS images before freeze, writes
+   `![[raw/assets/...]]` embeds, and uploads `raw/assets/<capture-id>/note.md`.
+   `wiki_capture` is not clip ingress. Never use `.txt` as the only index.
 8. **Suggest first sources.** Propose 3–5 initial sources (URLs, papers, articles) appropriate to the domain. Prompt the user to provide the first one to ingest, then hand off to wiki-ingest.
 
 ## Stop conditions

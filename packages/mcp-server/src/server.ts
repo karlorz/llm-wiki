@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import { loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from "./auth.js";
+import { bearerToken, loadTokenMap, resolveWriter, unauthorizedHeaders, type TokenMap } from "./auth.js";
 import { handleConsoleRequest, isConsolePath, isConsoleRequestAllowed } from "./console.js";
 import { appendAudit } from "./audit.js";
 import { configVaultRegistry, loadConfig, type McpDaemonConfig } from "./config.js";
@@ -62,6 +62,7 @@ import {
   mcpToolsListBeforeInitializeError,
 } from "./mcp-initialize.js";
 import { ChangedEventHub } from "./events.js";
+import { ReadyHintSchema, adoptReadyHint, emitNewRawAfterCopy, fileIngressTokenMatches } from "./file-ingress.js";
 import {
   handleWikiCompileStatus,
   handleWikiContext,
@@ -95,6 +96,7 @@ export interface HttpServerOptions {
   oauth?: OAuthConfig;
   registry?: VaultRegistry;
   runtimes?: Map<string, VaultRuntime>;
+  fileIngressTokenSha256?: string;
 }
 
 const MAX_MCP_BODY_BYTES = 1048576; // 1 MiB
@@ -831,6 +833,56 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
       return;
     }
 
+    if (req.method === "POST" && path === "/file-ingress/ready") {
+      const expected = opts.fileIngressTokenSha256;
+      if (!expected) {
+        json(res, 404, { error: "not_found" });
+        return;
+      }
+      const token = bearerToken(typeof req.headers.authorization === "string" ? req.headers.authorization : undefined);
+      if (!token || !fileIngressTokenMatches(token, expected)) {
+        json(res, 401, { error: "unauthorized" });
+        return;
+      }
+      let raw: string;
+      try {
+        raw = await readBody(req);
+      } catch (err) {
+        if (err instanceof PayloadTooLargeError) {
+          json(res, 413, { error: "payload_too_large", message: err.message });
+          return;
+        }
+        throw err;
+      }
+      let parsed: unknown;
+      try {
+        parsed = raw.length > 0 ? JSON.parse(raw) : undefined;
+      } catch {
+        json(res, 400, { error: "invalid_json" });
+        return;
+      }
+      const hint = ReadyHintSchema.safeParse(parsed);
+      if (!hint.success) {
+        json(res, 400, { error: "invalid_hint" });
+        return;
+      }
+      if (!opts.getObject) {
+        json(res, 503, { error: "s3_unavailable" });
+        return;
+      }
+      const result = await adoptReadyHint(hint.data, {
+        vaultDir: opts.vaultDir,
+        getObject: opts.getObject,
+        emitChanged: (paths, vaultId) => opts.hub?.emitChanged(paths, vaultId),
+      });
+      if (!result.ok) {
+        json(res, result.status, { error: result.error });
+        return;
+      }
+      json(res, 200, { ok: true, paths: result.paths });
+      return;
+    }
+
     if (req.method === "GET" && path === "/favicon.ico") {
       res.writeHead(204);
       res.end();
@@ -1207,14 +1259,19 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
         console.error(`skillwiki-mcp extra vault ${entry.vaultId} S3 adapter failed; vault stays fail-closed:`, error);
       }
     }
-    const gate = new ReconcileGate(() =>
-      rcloneCopyUpdate({
+    const gate = new ReconcileGate(async () => {
+      await rcloneCopyUpdate({
         remote: entry.rcloneRemote,
         bucket: entry.rclonePath,
         vaultDir: entry.localRoot,
         timeoutMs: entry.rcloneTimeoutMs ?? cfg.rcloneTimeoutMs,
-      }),
-    );
+      });
+      await emitNewRawAfterCopy({
+        vaultDir: entry.localRoot,
+        vaultId: entry.vaultId,
+        emitChanged: (paths, vaultId) => hub.emitChanged(paths, vaultId),
+      });
+    });
     runtimes.set(entry.vaultId, {
       entry,
       gate,
@@ -1236,6 +1293,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     putObject: defaultRt.putObject,
     getObject: defaultRt.getObject,
     hub,
+    fileIngressTokenSha256: env.SKILLWIKI_FILE_INGRESS_TOKEN_SHA256,
     auditFile: cfg.auditLogPath,
     oauth: cfg.oauth,
     registry,

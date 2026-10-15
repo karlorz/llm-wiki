@@ -374,7 +374,7 @@ export async function runInit(input: InitInput): Promise<{ exitCode: number; res
     skipEnv ? "env: skipped" : `env: ${envWritten}`,
     input.noGitignore ? "gitignore: skipped" : `gitignore: ${gitignoreWritten ? "written" : "unchanged"}`,
     `web clipper template: ${WEB_CLIPPER_TEMPLATE_REL}`,
-    "web clipper import: open Obsidian Web Clipper Settings and import the JSON in each browser profile",
+    "web clipper import: create ~/Obsidian/clip-outbox (not ~/wiki), import the JSON in each browser profile, select that outbox vault, keep Add to Obsidian",
   ].join("\n");
 
   if (created.length > 0) {

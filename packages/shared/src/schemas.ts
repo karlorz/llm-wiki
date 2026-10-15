@@ -355,6 +355,124 @@ export function parseVaultSyncKeyValue(key: string, value: string):
   return { ok: false, message: first?.message ?? "invalid value" };
 }
 
+// ── clip_outbox.* typed configuration ───────────────────────────────────────
+//
+// Host-local non-secret keys. Secrets are referenced by name only. Unknown
+// keys are rejected. Enabling the channel is a separate resolver concern.
+
+const clipBool = z.enum(["true", "false"]);
+const clipIntString = (min: number, max: number) =>
+  z.string().regex(/^[0-9]+$/, "must be a decimal integer").refine((s) => {
+    const n = Number(s);
+    return Number.isInteger(n) && n >= min && n <= max;
+  }, { message: `must be an integer ${min}–${max}` });
+
+const clipHttpsUrl = z.string().min(1).refine((s) => {
+  try {
+    const u = new URL(s);
+    return u.protocol === "https:" && u.username === "" && u.password === "";
+  } catch {
+    return false;
+  }
+}, { message: "must be an https URL without userinfo" });
+
+const clipCredentialRef = z.string().min(1).max(128).regex(
+  /^[a-zA-Z0-9_.-]+$/,
+  "must be a credential reference name, never a secret value",
+);
+
+const CLIP_IMAGE_TYPES = ["png", "jpeg", "gif", "webp"] as const;
+const CLIP_ALLOWED_PREFIXES = "raw/articles,raw/assets";
+
+export const CLIP_OUTBOX_DEFAULTS = {
+  enabled: "false",
+  vault_id: "central",
+  allowed_prefixes: CLIP_ALLOWED_PREFIXES,
+  destination: "seaweed-wiki:cloud/wiki",
+  mode: "event-watch",
+  poll_fallback_enabled: "true",
+  reconcile_seconds: "3600",
+  debounce_ms: "500",
+  stable_hash_ms: "500",
+  max_article_bytes: "2097152",
+  max_images: "64",
+  max_image_bytes: "20971520",
+  max_bundle_bytes: "104857600",
+  max_pixels: "40000000",
+  download_concurrency: "4",
+  image_types: CLIP_IMAGE_TYPES.join(","),
+  max_redirects: "5",
+  request_timeout_ms: "30000",
+  localize_timeout_ms: "120000",
+  watcher_label: "com.karlchow.skillwiki-clip-outbox",
+} as const;
+
+export const ClipOutboxConfigSchema = z.object({
+  "clip_outbox.enabled": clipBool,
+  "clip_outbox.root": absolutePath,
+  "clip_outbox.state_root": absolutePath,
+  "clip_outbox.mirror_root": absolutePath,
+  "clip_outbox.d8_note_root": absolutePath,
+  "clip_outbox.d8_note_absent": clipBool,
+  "clip_outbox.vault_id": z.literal("central"),
+  "clip_outbox.allowed_prefixes": z.string().refine((s) => {
+    const parts = s.split(",").map((p) => p.trim()).filter(Boolean).sort();
+    return parts.join(",") === "raw/articles,raw/assets";
+  }, { message: "must be exactly raw/articles,raw/assets" }),
+  "clip_outbox.destination": z.literal("seaweed-wiki:cloud/wiki"),
+  "clip_outbox.mode": z.literal("event-watch"),
+  "clip_outbox.poll_fallback_enabled": clipBool,
+  "clip_outbox.reconcile_seconds": clipIntString(1, 86400),
+  "clip_outbox.debounce_ms": clipIntString(100, 5000),
+  "clip_outbox.stable_hash_ms": clipIntString(100, 5000),
+  "clip_outbox.max_article_bytes": clipIntString(1, 2097152),
+  "clip_outbox.max_images": clipIntString(0, 64),
+  "clip_outbox.max_image_bytes": clipIntString(1, 20971520),
+  "clip_outbox.max_bundle_bytes": clipIntString(1, 104857600),
+  "clip_outbox.max_pixels": clipIntString(1, 40000000),
+  "clip_outbox.download_concurrency": clipIntString(1, 4),
+  "clip_outbox.image_types": z.string().refine((s) => {
+    const parts = s.split(",").map((p) => p.trim()).filter(Boolean);
+    if (parts.length === 0) return false;
+    const allowed = new Set<string>(CLIP_IMAGE_TYPES);
+    const seen = new Set<string>();
+    for (const p of parts) {
+      if (!allowed.has(p) || seen.has(p)) return false;
+      seen.add(p);
+    }
+    return true;
+  }, { message: "must be a unique subset of png,jpeg,gif,webp" }),
+  "clip_outbox.max_redirects": clipIntString(0, 5),
+  "clip_outbox.request_timeout_ms": clipIntString(1, 30000),
+  "clip_outbox.localize_timeout_ms": clipIntString(1, 120000),
+  "clip_outbox.ready_url": clipHttpsUrl,
+  "clip_outbox.s3_credential_ref": clipCredentialRef,
+  "clip_outbox.ready_credential_ref": clipCredentialRef,
+  "clip_outbox.watcher_label": z.literal("com.karlchow.skillwiki-clip-outbox"),
+}).strict();
+
+export type ClipOutboxConfig = z.infer<typeof ClipOutboxConfigSchema>;
+
+export const CLIP_OUTBOX_KEYS = Object.keys(ClipOutboxConfigSchema.shape) as readonly string[];
+
+export function isClipOutboxKey(key: string): boolean {
+  return CLIP_OUTBOX_KEYS.includes(key);
+}
+
+export function parseClipOutboxKeyValue(key: string, value: string):
+  { ok: true } | { ok: false; message: string } {
+  if (!isClipOutboxKey(key)) {
+    return { ok: false, message: `unknown clip_outbox key: ${key}` };
+  }
+  const fieldSchema = (ClipOutboxConfigSchema.shape as Record<string, z.ZodType>)[key];
+  const parsed = fieldSchema.safeParse(value);
+  if (parsed.success) {
+    return { ok: true };
+  }
+  const first = parsed.error.issues[0];
+  return { ok: false, message: first?.message ?? "invalid value" };
+}
+
 export type SchemaName = "typed-knowledge" | "raw" | "work-item" | "compound" | "meta";
 
 export function detectSchema(fm: Record<string, unknown>): { schema: SchemaName | null } {
