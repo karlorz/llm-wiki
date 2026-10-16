@@ -43,10 +43,11 @@ Run `skillwiki lang` at the start. Generate page-body prose, narrative sections,
    6. Leave the review `open` unless the human resolves it with `skillwiki sources review <raw-path> --status accepted|needs-fix|dismissed --reason "<why>"`
    Goal, satellite, and headless sessions may list pending / compile status / reviews but must not claim or publish compile turns.
 ## Output standard v2
-`skillwiki ingest` stamps `output_standard: v2` on every new typed stub. v2 is an authoring contract. CLI lint WARNs marked pages only. Publish, health, and lint exit stay unchanged by these checks.
+`skillwiki ingest` stamps `output_standard: v2` on every new typed stub. v2 is an authoring contract. CLI lint reports advisory warnings on marked pages only. Publish, health, and lint exit stay unchanged by these checks.
 
 ### Rung 1 — STE-80 (default)
-- Instructions <= 20 words. Descriptions <= 25 words.
+STE is Simplified Technical English.
+- Use at most 20 words for each instruction. Use at most 25 words for each description.
 - One topic per paragraph. Each paragraph <= 6 sentences.
 - One word, one meaning. Prefer simple verbs: use, start, stop, find, check.
 - Keep technical terms (API, cache, Docker). Define each term once at first use.
@@ -77,7 +78,7 @@ Explainer video is out of scope. Use STE text plus a diagram.
 | Comparison / hands-on exploration | HTML interactive page | 3 | opt-in; otherwise STE + table or diagram |
 | Concept from zero | Explainer video | 4 | out of scope; use STE + diagram |
 
-Rules: formats stack; HTML is always opt-in; video is future.
+Rules: formats stack; HTML is always opt-in; video is outside the current scope.
 
 ## Provenance defaults
 - Default `provenance: research`.

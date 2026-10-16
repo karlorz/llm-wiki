@@ -9,7 +9,7 @@ const BLOCKQUOTE_RE = /^\s*>/;
 const LEAST_CERTAIN_RE = /^\s*\*\*Least certain:\*\*\s*$/;
 const UNCERTAINTY_HEADING_RE = /^##\s+Uncertainty\s*$/i;
 const STEPS_HEADING_RE = /^(Steps|Procedure)\b/i;
-const MERMAID_BLOCK_RE = /```mermaid[^\n]*\n[\s\S]*?```/g;
+const LEAST_CERTAIN_FOLLOWING_RE = /^\s*\*\*Least certain:\*\*\s*\n(?:[ \t]*[-*+][ \t]+\S.*\n?)+/;
 const HEDGE_PHRASES = ["appears to", "could be"] as const;
 const HEDGE_WORDS = [
   "might",
@@ -97,19 +97,43 @@ export function hasMarkdownTable(body: string): boolean {
   return false;
 }
 
+function fenceLanguage(line: string): string {
+  const match = line.match(FENCE_OPEN);
+  if (!match) return "";
+  return match[3]!.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+}
+
 export function hasMermaidBlock(body: string): boolean {
-  return /```mermaid\b/.test(body);
+  const fence: FenceState = { open: false, marker: "" };
+  for (const line of body.split(/\r?\n/)) {
+    if (!fence.open && fenceLanguage(line) === "mermaid") return true;
+    toggleFence(line, fence);
+  }
+  return false;
 }
 
 export function mermaidBlocksMissingLeastCertain(body: string): boolean {
-  if (!hasMermaidBlock(body)) return false;
-  const re = new RegExp(MERMAID_BLOCK_RE.source, "g");
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(body)) !== null) {
-    const after = body.slice(match.index + match[0].length);
-    if (!/^\s*\*\*Least certain:\*\*\s*\n(?:[ \t]*[-*+][ \t]+\S.*\n?)+/.test(after)) {
-      return true;
+  const lines = body.split(/\r?\n/);
+  const fence: FenceState = { open: false, marker: "" };
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    const startingMermaid = !fence.open && fenceLanguage(line) === "mermaid";
+    if (toggleFence(line, fence)) {
+      if (startingMermaid) {
+        i++;
+        while (i < lines.length && fence.open) {
+          toggleFence(lines[i]!, fence);
+          i++;
+        }
+        const after = lines.slice(i).join("\n");
+        if (!LEAST_CERTAIN_FOLLOWING_RE.test(after)) return true;
+        continue;
+      }
+      i++;
+      continue;
     }
+    i++;
   }
   return false;
 }
@@ -246,10 +270,14 @@ export function hasSteSentenceLengthViolation(body: string): boolean {
   return findLongUnits(body).length > 0;
 }
 
+function stripInlineCodeSpans(text: string): string {
+  return text.replace(/`[^`]*`/g, " ");
+}
+
 export function findHedgesOutsideAllowedRegions(body: string): string[] {
   const lines = body.split(/\r?\n/);
   const fence: FenceState = { open: false, marker: "" };
-  let inUncertainty = false;
+  let uncertaintyUntilLevel: number | null = null;
   let skippingLeastCertainList = false;
   const found: string[] = [];
 
@@ -263,11 +291,15 @@ export function findHedgesOutsideAllowedRegions(body: string): string[] {
     const heading = headingLevel(line);
     if (heading) {
       skippingLeastCertainList = false;
-      inUncertainty = UNCERTAINTY_HEADING_RE.test(line);
+      if (UNCERTAINTY_HEADING_RE.test(line)) {
+        uncertaintyUntilLevel = heading.level;
+      } else if (uncertaintyUntilLevel !== null && heading.level <= uncertaintyUntilLevel) {
+        uncertaintyUntilLevel = null;
+      }
       continue;
     }
 
-    if (inUncertainty || BLOCKQUOTE_RE.test(line)) {
+    if (uncertaintyUntilLevel !== null || BLOCKQUOTE_RE.test(line)) {
       skippingLeastCertainList = false;
       continue;
     }
@@ -278,13 +310,13 @@ export function findHedgesOutsideAllowedRegions(body: string): string[] {
     }
 
     if (skippingLeastCertainList) {
-      if (!line.trim() || UNORDERED_ITEM_RE.test(line) || ORDERED_ITEM_RE.test(line)) {
+      if (!line.trim() || UNORDERED_ITEM_RE.test(line) || ORDERED_ITEM_RE.test(line) || /^\s+\S/.test(line)) {
         continue;
       }
       skippingLeastCertainList = false;
     }
 
-    found.push(...findHedgeMatches(line));
+    found.push(...findHedgeMatches(stripInlineCodeSpans(line)));
   }
 
   return [...new Set(found)];

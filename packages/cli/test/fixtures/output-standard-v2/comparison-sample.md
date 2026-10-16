@@ -34,7 +34,7 @@ Set html_render to true only for hands-on exploration.
 | Comparison | HTML page | 3 | opt-in |
 | Concept from zero | Video | 4 | out of scope |
 
-Formats stack. HTML is always opt-in. Video is future.
+Formats stack. HTML is always opt-in. Video is outside the current scope.
 
 ## Sources
 

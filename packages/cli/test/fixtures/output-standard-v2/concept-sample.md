@@ -20,7 +20,7 @@ output_standard: v2
 
 v2 pages use short active sentences.
 
-Instructions stay at 20 words. Descriptions stay at 25 words.
+Use at most 20 words for each instruction. Use at most 25 words for each description.
 
 ## Structure
 
@@ -35,9 +35,9 @@ flowchart TD
 ```
 
 **Least certain:**
-- When a short list needs a diagram
-- Which three edges are least certain
-- Whether a table replaces the diagram
+- `stamp --> write` edge: whether a later rewrite of a stub keeps the v2 stamp
+- `Write STE text` label: how strictly agents apply the word caps in practice
+- `write --> diagram` edge: when a short list still needs a diagram
 
 ## Sources
 

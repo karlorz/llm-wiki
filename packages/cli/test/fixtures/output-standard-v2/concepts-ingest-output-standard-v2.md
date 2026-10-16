@@ -16,7 +16,7 @@ output_standard: v2
 
 # Ingest output standard v2
 
-> **TL;DR:** New ingest stubs stamp output_standard v2. Agents write STE-80 text. CLI lint WARNs marked pages only.
+> **TL;DR:** New ingest stubs stamp output_standard v2. Agents write Simplified Technical English (STE) text. CLI lint reports advisory warnings on marked pages only.
 
 ## Overview
 
@@ -45,9 +45,9 @@ flowchart TD
 ```
 
 **Least certain:**
-- HTML opt-in for comparison pages
-- Video remaining out of scope
-- When formats should stack on one page
+- `comparison --> html` edge: whether a comparison table is enough without the HTML rung
+- `concept --> video` edge: how a later video format would attach to this node
+- `relations --> diagram` edge: whether a comparison that uses Mermaid stays on this branch
 
 ## Format table
 
@@ -58,7 +58,7 @@ flowchart TD
 | Comparison / hands-on exploration | HTML interactive page | 3 | opt-in; otherwise STE + table or diagram |
 | Concept from zero | Explainer video | 4 | out of scope; use STE + diagram |
 
-Formats stack. HTML is always opt-in. Video is future.
+Formats stack. HTML is always opt-in. Video is outside the current scope.
 
 ## Uncertainty
 

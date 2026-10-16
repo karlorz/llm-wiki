@@ -73,11 +73,23 @@ describe("STE helpers", () => {
     expect(hasSteHedgeViolation("> This might break.\n")).toBe(false);
   });
 
+  it("skips inline code, nested Uncertainty headings, and wrapped Least certain items", () => {
+    expect(findHedgesOutsideAllowedRegions("Use `may` as a variable.\n")).toEqual([]);
+    expect(findHedgesOutsideAllowedRegions("## Uncertainty\n### Limits\nThis may fail.\n")).toEqual([]);
+    expect(findHedgesOutsideAllowedRegions("**Least certain:**\n- Edge A\n  may fail.\n")).toEqual([]);
+    expect(findHedgesOutsideAllowedRegions("## Uncertainty\n### Limits\nThis may fail.\n## Sources\nThis may fail.\n")).toEqual(["may"]);
+  });
+
   it("requires a Least certain list after each mermaid block", () => {
     expect(hasMermaidBlock("```mermaid\nflowchart TD\n  A --> B\n```\n")).toBe(true);
+    expect(hasMermaidBlock("~~~mermaid\nflowchart TD\n  A --> B\n~~~\n")).toBe(true);
     expect(mermaidBlocksMissingLeastCertain("```mermaid\nflowchart TD\n  A --> B\n```\n")).toBe(true);
     expect(mermaidBlocksMissingLeastCertain(
       "```mermaid\nflowchart TD\n  A --> B\n```\n\n**Least certain:**\n- Edge A to B\n"
+    )).toBe(false);
+    expect(mermaidBlocksMissingLeastCertain("~~~mermaid\nflowchart TD\n  A --> B\n~~~\n")).toBe(true);
+    expect(mermaidBlocksMissingLeastCertain(
+      "~~~mermaid\nflowchart TD\n  A --> B\n~~~\n\n**Least certain:**\n- Edge A to B\n"
     )).toBe(false);
   });
 

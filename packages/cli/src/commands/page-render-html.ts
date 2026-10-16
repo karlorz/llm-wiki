@@ -1,5 +1,5 @@
-import { mkdir, readFile } from "node:fs/promises";
-import { dirname, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { err, ok, ExitCode, type Result } from "@skillwiki/shared";
 import { extractFrontmatter, splitFrontmatter } from "../parsers/frontmatter.js";
 import { atomicWriteText } from "../utils/atomic-write.js";
@@ -302,13 +302,31 @@ ${panels}
 (function () {
   var tabs = document.querySelectorAll('[role="tab"]');
   var panels = document.querySelectorAll('.tab-panel');
+  function activate(id) {
+    if (!id) return;
+    var found = false;
+    panels.forEach(function (panel) { if (panel.id === id) found = true; });
+    if (!found) return;
+    tabs.forEach(function (tab) {
+      tab.setAttribute("aria-selected", tab.getAttribute("data-tab") === id ? "true" : "false");
+    });
+    panels.forEach(function (panel) { panel.hidden = panel.id !== id; });
+  }
   tabs.forEach(function (tab) {
     tab.addEventListener("click", function () {
-      var id = tab.getAttribute("data-tab");
-      tabs.forEach(function (other) { other.setAttribute("aria-selected", other === tab ? "true" : "false"); });
-      panels.forEach(function (panel) { panel.hidden = panel.id !== id; });
+      activate(tab.getAttribute("data-tab"));
     });
   });
+  document.querySelectorAll("nav.toc a[href^='#']").forEach(function (link) {
+    link.addEventListener("click", function () {
+      activate((link.getAttribute("href") || "").replace(/^#/, ""));
+    });
+  });
+  function fromHash() {
+    activate((location.hash || "").replace(/^#/, ""));
+  }
+  window.addEventListener("hashchange", fromHash);
+  fromHash();
 })();
 </script>
 </body>
@@ -316,9 +334,69 @@ ${panels}
 `;
 }
 
-function isInsideVault(vault: string, candidate: string): boolean {
-  const rel = relative(resolve(vault), resolve(candidate)).split(sep).join("/");
+function isInsideCanonical(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate).split(sep).join("/");
   return rel === "" || (rel !== ".." && !rel.startsWith("../"));
+}
+
+function outInsideVaultError(vault: string, out: string, message: string) {
+  return err("HTML_RENDER_OUT_INSIDE_VAULT", { vault, out, message });
+}
+
+async function canonicalizeWithMissingSuffix(abs: string): Promise<string> {
+  try {
+    await lstat(abs);
+    return await realpath(abs);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const missing: string[] = [];
+  let current = abs;
+  while (true) {
+    missing.unshift(basename(current));
+    const parent = dirname(current);
+    try {
+      await lstat(parent);
+      return join(await realpath(parent), ...missing);
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (parent === current) return join(parent, ...missing);
+      current = parent;
+    }
+  }
+}
+
+async function resolveOutOutsideVault(vault: string, out: string): Promise<Result<string>> {
+  let vaultReal: string;
+  try {
+    vaultReal = await realpath(vault);
+  } catch (error) {
+    return err("VAULT_PATH_INVALID", { message: "vault realpath failed", cause: String(error) });
+  }
+
+  const abs = resolve(out);
+  try {
+    const info = await lstat(abs);
+    if (info.isSymbolicLink()) {
+      return outInsideVaultError(vault, out, "--out must be a regular path outside the vault");
+    }
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      return err("WRITE_FAILED", { path: abs, message: String(error) });
+    }
+  }
+
+  let canonical: string;
+  try {
+    canonical = await canonicalizeWithMissingSuffix(abs);
+  } catch (error: unknown) {
+    return err("WRITE_FAILED", { path: abs, message: String(error) });
+  }
+
+  if (isInsideCanonical(vaultReal, canonical)) {
+    return outInsideVaultError(vault, out, "--out must be outside the vault");
+  }
+  return ok(canonical);
 }
 
 export async function runPageRenderHtml(
@@ -339,15 +417,14 @@ export async function runPageRenderHtml(
     };
   }
 
-  if (isInsideVault(input.vault, input.out)) {
-    return {
-      exitCode: ExitCode.SCHEME_REJECTED,
-      result: err("HTML_RENDER_OUT_INSIDE_VAULT", {
-        vault: input.vault,
-        out: input.out,
-        message: "--out must be outside the vault",
-      }),
-    };
+  const outPath = await resolveOutOutsideVault(input.vault, input.out);
+  if (!outPath.ok) {
+    const exitCode = outPath.error === "HTML_RENDER_OUT_INSIDE_VAULT"
+      ? ExitCode.SCHEME_REJECTED
+      : outPath.error === "WRITE_FAILED"
+        ? ExitCode.WRITE_FAILED
+        : ExitCode.VAULT_PATH_INVALID;
+    return { exitCode, result: outPath };
   }
 
   let text: string;
@@ -384,7 +461,7 @@ export async function runPageRenderHtml(
 
   const title = typeof fm.data.title === "string" ? fm.data.title : input.page;
   const html = renderPageHtml(title, split.data.body);
-  const outAbs = resolve(input.out);
+  const outAbs = outPath.data;
 
   try {
     await mkdir(dirname(outAbs), { recursive: true });

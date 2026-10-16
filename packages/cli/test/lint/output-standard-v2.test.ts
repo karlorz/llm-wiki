@@ -144,7 +144,7 @@ describe("output standard v2 lint", () => {
     expect(onlyMarked.exitCode).toBe(ExitCode.OK);
   });
 
-  it("yields zero v2 findings on the three sample fixtures", async () => {
+  it("yields zero v2 findings on the four sample fixtures", async () => {
     const v = vault();
     const samples = [
       ["entities/entity-sample.md", "entity-sample.md"],
