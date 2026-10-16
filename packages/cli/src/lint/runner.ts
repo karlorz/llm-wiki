@@ -30,8 +30,8 @@ import {
   lintVaultOutput,
   outputForOnlyBucket,
   readMirrorHintLines,
-  severityForBucket,
   summarizeLintOutput,
+  lintExitCode,
 } from "./helpers.js";
 import { collectLintErrorFingerprints } from "./fingerprints.js";
 import { extractGitTree } from "../utils/git-archive.js";
@@ -173,9 +173,7 @@ export class LintRunner {
       info: infoOut.reduce((n, b) => n + b.items.length, 0),
     };
 
-    let exitCode: number = ExitCode.OK;
-    if (summary.errors > 0) exitCode = ExitCode.LINT_HAS_ERRORS;
-    else if (summary.warnings > 0 || summary.info > 0) exitCode = ExitCode.LINT_HAS_WARNINGS;
+    const exitCode = lintExitCode(summary, warningOut);
 
     const vault = lintVaultOutput(input, readVault);
     const hintLines: string[] = [];

@@ -36,6 +36,7 @@ export interface IngestInput {
   tags?: string[];
   provenance?: string;
   dryRun?: boolean;
+  html?: boolean;
 }
 
 export interface IngestOutput {
@@ -95,7 +96,8 @@ function buildTypedContent(
   type: string,
   tags: string[],
   rawRelPath: string,
-  provenance: string | undefined
+  provenance: string | undefined,
+  html?: boolean
 ): string {
   const aliases: string[] = [];
   const sourcesYaml = `  - ${rawRelPath}`;
@@ -119,6 +121,10 @@ function buildTypedContent(
   fmLines.push("confidence: medium");
   if (provenance) {
     fmLines.push(`provenance: ${provenance}`);
+  }
+  fmLines.push("output_standard: v2");
+  if (html) {
+    fmLines.push("html_render: true");
   }
   fmLines.push("---");
   fmLines.push("");
@@ -412,7 +418,8 @@ export async function runIngest(
     input.type,
     tags,
     rawRelPath,
-    input.provenance
+    input.provenance,
+    input.html
   );
 
   // The publisher resolves and validates the final target path, so create the
@@ -513,6 +520,7 @@ export async function runIngest(
           tags,
           rawRelPath,
           input.provenance,
+          input.html,
         );
         const refreshedPublication = preparePagePublicationFromContent({
           vault: input.vault,

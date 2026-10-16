@@ -19,6 +19,13 @@ Standard four reads.
 6. If `log_rotate_needed` is present and the user consents, run `skillwiki log-rotate <vault> --apply`. Otherwise leave alone.
 7. **Post-migration verification**: If the user recently migrated **vault content** (e.g., moved entity/concept pages to another vault), re-run `skillwiki lint <vault> --summary` and verify that broken_wikilinks count decreased. Remaining broken links for migrated content indicate pages still referencing the moved files — these should be cleaned up (remove citations or migrate the referencing pages too). This step is content moves only — not HTTP MCP client/plugin upgrades (those use `skillwiki doctor --check-mcp`).
 8. Append a `log.md` entry summarizing lint counts only when the user asked to record the maintenance result. Do not log routine `health` reports by default.
+## Output standard v2 WARN buckets
+These four buckets apply only to typed pages whose frontmatter has `output_standard: v2`. They are advisory WARN findings. They do not change the lint exit code, publish, health exit, or release CI on content.
+- `ste_sentence_length`: prose sentences > 25 words; ordered-list items and list items under Steps/Procedure headings > 20 words.
+- `ste_hedge_words`: whole-word hedges outside `## Uncertainty`, outside the `**Least certain:**` list, and outside code and blockquotes.
+- `ste_diagram_uncertainty`: a Mermaid block with no `**Least certain:**` bullet list after it.
+- `ste_comparison_visual`: a `type: comparison` page with neither a Markdown table nor a Mermaid block.
+Drill with `skillwiki lint <vault> --only <bucket>`.
 ## Stop conditions
 None — lint reports all findings even on per-page errors.
 ## Forbidden

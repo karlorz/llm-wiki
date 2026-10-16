@@ -150,6 +150,28 @@ describe("ingest", () => {
     expect(typedContent).toContain("## Sources");
     expect(typedContent).toContain("^[raw/articles/test-concept.md]");
     expect(typedContent).toContain("- raw/articles/test-concept.md");
+    expect(typedContent).toContain("output_standard: v2");
+    expect(typedContent).not.toContain("html_render:");
+  });
+
+  it("stamps html_render true when html is requested", async () => {
+    const v = vault();
+    const srcDir = mkdtempSync(join(tmpdir(), "sw-src-"));
+    const srcFile = join(srcDir, "source.txt");
+    writeFileSync(srcFile, "HTML opt-in source content for ingest.");
+
+    const r = await runIngest({
+      source: srcFile,
+      vault: v,
+      type: "comparison",
+      title: "Html Opt In",
+      html: true,
+    });
+
+    expect(r.exitCode).toBe(0);
+    const typedContent = readFileSync(join(v, "comparisons/html-opt-in.md"), "utf8");
+    expect(typedContent).toContain("output_standard: v2");
+    expect(typedContent).toContain("html_render: true");
   });
 
   it("ingests with --dry-run and creates no files", async () => {

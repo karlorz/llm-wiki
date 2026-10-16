@@ -42,6 +42,53 @@ Run `skillwiki lang` at the start. Generate page-body prose, narrative sections,
    5. `skillwiki sources compile published <raw-path> [vault] --pages "<typed/a.md,typed/b.md>" --reason "<why>"` then `--write --approve <token>`
    6. Leave the review `open` unless the human resolves it with `skillwiki sources review <raw-path> --status accepted|needs-fix|dismissed --reason "<why>"`
    Goal, satellite, and headless sessions may list pending / compile status / reviews but must not claim or publish compile turns.
+## Output standard v2
+`skillwiki ingest` stamps `output_standard: v2` on every new typed stub. v2 is an authoring contract. CLI lint reports advisory warnings on marked pages only. Publish, health, and lint exit stay unchanged by these checks.
+
+### Rung 1 — STE-80 (default)
+STE is Simplified Technical English.
+- Use at most 20 words for each instruction. Use at most 25 words for each description.
+- One topic per paragraph. Each paragraph <= 6 sentences.
+- One word, one meaning. Prefer simple verbs: use, start, stop, find, check.
+- Keep technical terms (API, cache, Docker). Define each term once at first use.
+- No hedges except in `## Uncertainty`. Never drop facts to shorten.
+- Hedge list: might, may, perhaps, possibly, probably, likely, seems, appears to, arguably, somewhat, could be.
+- Use `## Uncertainty` only for uncertainty the source itself reports. If the source reports none, omit the section or write "The source reports no open uncertainty."
+
+### Rung 2 — diagrams (default when content has structure)
+Add one Mermaid diagram when the page has flow, components, timeline, hierarchy, or comparison. Keep a text summary beside the diagram. Directly after the diagram, add `**Least certain:**` and a bullet list of labels or edges.
+
+The `**Least certain:**` bullets name diagram labels or edges. State why that part of the diagram is the least certain representation. Use one of these reasons: an interpretive grouping, a simplified step, an omitted condition, or a mapping the source does not state directly.
+
+Never add doubt about a fact the source states as settled. Never turn a decision, constraint, or policy into an open question.
+
+If a diagram has fewer than 3 labels and edges in total, list all of them. Otherwise list the 3 least-certain labels or edges.
+
+A diagram must not present a shortened executable procedure. For safety or recovery flows, keep all required steps or point the node to the full text procedure.
+
+### Rung 3 — HTML (opt-in)
+Set `html_render: true` by hand or with `skillwiki ingest --html`. Render outside the vault:
+
+```bash
+skillwiki page render-html <page> [vault] --out <file>
+```
+
+HTML is always opt-in. The renderer writes one self-contained file (TOC, tabs per H2, `<details>`, inline CSS and JS). Mermaid stays as readable source. No network fetch.
+
+### Rung 4 — video
+Explainer video is out of scope. Use STE text plus a diagram.
+
+### Format table
+
+| Content type | Format | Rung | Policy |
+| --- | --- | --- | --- |
+| Exact procedure (re-read later) | STE text | 1 | default |
+| Relationships (structure / flow / hierarchy) | Mermaid diagram + text | 2 | default |
+| Comparison / hands-on exploration | HTML interactive page | 3 | opt-in; otherwise STE + table or diagram |
+| Concept from zero | Explainer video | 4 | out of scope; use STE + diagram |
+
+Rules: formats stack; HTML is always opt-in; video is outside the current scope.
+
 ## Provenance defaults
 - Default `provenance: research`.
 - If cwd is inside `projects/{slug}/`, set `provenance: project` and add `provenance_projects: ["[[slug]]"]`.

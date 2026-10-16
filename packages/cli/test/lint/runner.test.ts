@@ -38,6 +38,10 @@ describe("LintRunner rule enumeration and registration", () => {
     expect(rules.map((r) => r.id)).toContain("cli_refs");
     expect(rules.map((r) => r.id)).toContain("file_source_url");
     expect(rules.map((r) => r.id)).toContain("path_too_long");
+    expect(rules.map((r) => r.id)).toContain("ste_sentence_length");
+    expect(rules.map((r) => r.id)).toContain("ste_hedge_words");
+    expect(rules.map((r) => r.id)).toContain("ste_diagram_uncertainty");
+    expect(rules.map((r) => r.id)).toContain("ste_comparison_visual");
   });
 
   it("finds rule for primary bucket id and produced buckets", () => {

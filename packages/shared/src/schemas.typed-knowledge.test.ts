@@ -61,4 +61,29 @@ describe("TypedKnowledgeSchema", () => {
       expect(TypedKnowledgeSchema.parse(valid).stale_ttl).toBeUndefined();
     });
   });
+
+  describe("output_standard and html_render", () => {
+    it("accepts output_standard v2", () => {
+      expect(TypedKnowledgeSchema.parse({ ...valid, output_standard: "v2" }).output_standard).toBe("v2");
+    });
+
+    it("rejects other output_standard values", () => {
+      expect(() => TypedKnowledgeSchema.parse({ ...valid, output_standard: "v1" })).toThrow();
+    });
+
+    it("accepts html_render boolean", () => {
+      expect(TypedKnowledgeSchema.parse({ ...valid, html_render: true }).html_render).toBe(true);
+      expect(TypedKnowledgeSchema.parse({ ...valid, html_render: false }).html_render).toBe(false);
+    });
+
+    it("rejects html_render string", () => {
+      expect(() => TypedKnowledgeSchema.parse({ ...valid, html_render: "true" as unknown as boolean })).toThrow();
+    });
+
+    it("omits both keys when absent", () => {
+      const parsed = TypedKnowledgeSchema.parse(valid);
+      expect(parsed.output_standard).toBeUndefined();
+      expect(parsed.html_render).toBeUndefined();
+    });
+  });
 });

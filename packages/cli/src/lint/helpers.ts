@@ -48,6 +48,17 @@ export const WARNING_ORDER = [
   "missing_overview",
   "missing_diagram",
   "cycle_traps",
+  "ste_sentence_length",
+  "ste_hedge_words",
+  "ste_diagram_uncertainty",
+  "ste_comparison_visual",
+] as const;
+
+export const ADVISORY_WARNING_ORDER = [
+  "ste_sentence_length",
+  "ste_hedge_words",
+  "ste_diagram_uncertainty",
+  "ste_comparison_visual",
 ] as const;
 
 export const INFO_ORDER = [
@@ -164,6 +175,22 @@ export function severityForBucket(kind: string): LintSeverity {
   return "info";
 }
 
+export function isAdvisoryLintWarning(kind: string): boolean {
+  return (ADVISORY_WARNING_ORDER as readonly string[]).includes(kind);
+}
+
+export function lintExitCode(
+  summary: { errors: number; warnings: number; info: number },
+  warningBuckets: Bucket[]
+): ExitCodeValue {
+  if (summary.errors > 0) return ExitCode.LINT_HAS_ERRORS;
+  const blockingWarnings = warningBuckets
+    .filter((bucket) => !isAdvisoryLintWarning(bucket.kind))
+    .reduce((n, bucket) => n + bucket.items.length, 0);
+  if (blockingWarnings > 0 || summary.info > 0) return ExitCode.LINT_HAS_WARNINGS;
+  return ExitCode.OK;
+}
+
 export function lintReadVault(input: LintInput | LintSummaryInput): LintReadVault {
   if (input.fix) {
     return { readPath: input.vault, readMirror: false };
@@ -257,9 +284,7 @@ export function outputForOnlyBucket(
     warnings: filtered.warning.reduce((n, b) => n + b.items.length, 0),
     info: filtered.info.reduce((n, b) => n + b.items.length, 0),
   };
-  let exitCode: number = ExitCode.OK;
-  if (summary.errors > 0) exitCode = ExitCode.LINT_HAS_ERRORS;
-  else if (summary.warnings > 0 || summary.info > 0) exitCode = ExitCode.LINT_HAS_WARNINGS;
+  const exitCode = lintExitCode(summary, filtered.warning);
   const vault = lintVaultOutput(input, readVault);
   const hintLines = [
     ...readMirrorHintLines(vault),
