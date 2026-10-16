@@ -59,6 +59,7 @@ import { runIngest } from "./commands/ingest.js";
 import { runTagSync } from "./commands/tag-sync.js";
 import { runTagReconcile } from "./commands/tag-reconcile.js";
 import { runPagePublish } from "./commands/page-publish.js";
+import { runPageRenderHtml } from "./commands/page-render-html.js";
 import { runProjectPagePublish } from "./commands/project-page-publish.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers, runSyncLintDelta } from "./commands/sync.js";
 import { runSyncJournalList, runSyncJournalClearStale } from "./commands/sync-journal.js";
@@ -787,6 +788,21 @@ pageCmd
       () => runPagePublish(input),
       { postCommit: false },
     );
+  });
+
+pageCmd
+  .command("render-html <page> [vault]")
+  .description("render an opted-in typed page to a self-contained HTML file")
+  .requiredOption("--out <file>", "output HTML path (must be outside the vault)")
+  .option("--wiki <name>", "wiki profile name")
+  .action(async (page, vault, opts) => {
+    const resolved = await resolveVaultArg(vault, opts.wiki);
+    if (!resolved.ok) return emit({ exitCode: resolved.exitCode, result: resolved.payload });
+    return emit(await runPageRenderHtml({
+      vault: resolved.vault,
+      page,
+      out: opts.out,
+    }), resolved.vault, { postCommit: false });
   });
 
 const projectPageCmd = program.command("project-page").description("publish project-local architecture pages");
@@ -2054,6 +2070,7 @@ program
   .requiredOption("--title <title>", "page title")
   .option("--tags <csv>", "comma-separated tags")
   .option("--provenance <provenance>", "provenance (research|project)")
+  .option("--html", "stamp html_render: true on the typed stub", false)
   .option("--dry-run", "preview without writing files", false)
   .action(async (source, opts) => {
     const tags = typeof opts.tags === "string"
@@ -2067,6 +2084,7 @@ program
         title: opts.title,
         tags,
         provenance: opts.provenance,
+        html: !!opts.html,
         dryRun: true,
       }), opts.vault);
       return;
@@ -2081,6 +2099,7 @@ program
         title: opts.title,
         tags,
         provenance: opts.provenance,
+        html: !!opts.html,
         dryRun: false,
       })
     );

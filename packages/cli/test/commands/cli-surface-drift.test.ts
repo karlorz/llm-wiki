@@ -50,7 +50,7 @@ describe("cli-surface drift detection", () => {
       { parent: "clip-outbox", subs: ["status", "watch", "install-or-migrate"] },
       { parent: "config", subs: ["get", "set", "list", "path"] },
       { parent: "compound", subs: ["promote", "list", "delete"] },
-      { parent: "page", subs: ["publish"] },
+      { parent: "page", subs: ["publish", "render-html"] },
       { parent: "project-page", subs: ["publish"] },
       { parent: "claims", subs: ["audit"] },
       { parent: "tag", subs: ["reconcile"] },

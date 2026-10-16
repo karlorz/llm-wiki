@@ -105,7 +105,7 @@ export function buildCliSurface(): Map<string, Set<string>> {
   program.command("observe").requiredOption("--text <text>").option("--kind <kind>").option("--project <slug>").option("--severity <level>").option("--capture-budget <n>").option("--wiki <name>");
   program.command("session-brief").option("--project <slug>").option("--write").option("--agent-memory-run-state <path>").option("--wiki <name>");
   program.command("memory"); // has subcommands
-  program.command("ingest").requiredOption("--vault <path>").requiredOption("--type <type>").requiredOption("--title <title>").option("--tags <csv>").option("--provenance <provenance>").option("--dry-run");
+  program.command("ingest").requiredOption("--vault <path>").requiredOption("--type <type>").requiredOption("--title <title>").option("--tags <csv>").option("--provenance <provenance>").option("--html").option("--dry-run");
   program.command("fleet"); // has subcommands
   program.command("page"); // has subcommands
   program.command("project-page"); // has subcommands
@@ -225,6 +225,9 @@ export function buildCliSurface(): Map<string, Set<string>> {
     .option("--log-note <text>")
     .option("--write")
     .option("--approve <token>")
+    .option("--wiki <name>");
+  pageCmd.command("render-html")
+    .requiredOption("--out <file>")
     .option("--wiki <name>");
 
   const projectPageCmd = program.commands.find(c => c.name() === "project-page")!;

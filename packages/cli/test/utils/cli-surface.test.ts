@@ -21,6 +21,7 @@ describe("buildCliSurface", () => {
   it("registers nested subcommands with dot keys", () => {
     expect(surface.has("graph.build")).toBe(true);
     expect(surface.has("page.publish")).toBe(true);
+    expect(surface.has("page.render-html")).toBe(true);
     expect(surface.has("tag.reconcile")).toBe(true);
     expect(surface.has("sync.status")).toBe(true);
     expect(surface.has("config.list")).toBe(true);
@@ -55,6 +56,8 @@ describe("buildCliSurface", () => {
     expect(surface.get("page.publish")!.has("--log-note")).toBe(true);
     expect(surface.get("page.publish")!.has("--write")).toBe(true);
     expect(surface.get("page.publish")!.has("--wiki")).toBe(true);
+    expect(surface.get("page.render-html")!.has("--out")).toBe(true);
+    expect(surface.get("ingest")!.has("--html")).toBe(true);
   });
 
   it("subcommand flag sets inherit parent + root flags", () => {
