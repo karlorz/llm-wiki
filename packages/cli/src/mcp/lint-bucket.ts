@@ -10,7 +10,8 @@ const WARNING_KINDS = new Set([
   "index_link_format", "stale_page", "page_too_large", "log_rotate_needed", "orphans",
   "compound_refs", "legacy_citation_style", "orphaned_citations", "duplicate_frontmatter",
   "work_item_health", "orphaned_project_pages", "missing_overview", "missing_diagram",
-  "cycle_traps",
+  "cycle_traps", "ste_sentence_length", "ste_hedge_words", "ste_diagram_uncertainty",
+  "ste_comparison_visual",
 ]);
 
 function bucketSeverity(kind: string): LintSeverity {

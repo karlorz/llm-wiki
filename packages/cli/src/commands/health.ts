@@ -11,6 +11,7 @@ import {
   type DoctorOutput,
 } from "./doctor.js";
 import { runLint, type LintBucketSummary, type LintSummaryOutput, type LintSeverity } from "./lint.js";
+import { isAdvisoryLintWarning } from "../lint/helpers.js";
 import { inventorySources } from "../utils/source-lifecycle.js";
 import { VAULT_SYNC_FILTER_REQUIRED_EXCLUDES } from "../utils/vault-hygiene-ignores.js";
 
@@ -645,7 +646,13 @@ export async function runHealth(input: HealthInput): Promise<{ exitCode: number;
     checks: doctor.result.data.checks.map(check => ({ id: check.id, status: check.status, detail: check.detail })),
   };
   const lintComponent: LintComponent = {
-    status: statusFromCounts({ error: lint.result.data.summary.errors, warnings: lint.result.data.summary.warnings, info: lint.result.data.summary.info }),
+    status: statusFromCounts({
+      error: lint.result.data.summary.errors,
+      warnings: lint.result.data.buckets
+        .filter((bucket) => bucket.severity === "warning" && !isAdvisoryLintWarning(bucket.kind))
+        .reduce((n, bucket) => n + bucket.count, 0),
+      info: lint.result.data.summary.info,
+    }),
     blocking: true,
     summary: lint.result.data.summary,
     buckets: lint.result.data.buckets,

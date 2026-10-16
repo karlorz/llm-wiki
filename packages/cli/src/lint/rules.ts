@@ -64,6 +64,13 @@ import {
   summarizeLintOutput,
   walkMarkdownFiles,
 } from "./helpers.js";
+import {
+  comparisonLacksVisual,
+  hasSteHedgeViolation,
+  hasSteSentenceLengthViolation,
+  isOutputStandardV2,
+  mermaidBlocksMissingLeastCertain,
+} from "./ste.js";
 
 async function collectCliRefsPages(vault: string): Promise<Result<VaultPage[]>> {
   if (!existsSync(join(vault, "SCHEMA.md"))) {
@@ -1648,6 +1655,91 @@ export const cycleTrapsRule: LintRuleModule = {
   },
 };
 
+export const steSentenceLengthRule: LintRuleModule = {
+  id: "ste_sentence_length",
+  severity: "warning",
+  async run(ctx: LintRuleContext): Promise<LintRuleResult> {
+    const items: string[] = [];
+    await mapWithConcurrency(ctx.scan.typedKnowledge, vaultIoConcurrency(), async (page) => {
+      try {
+        const text = await readPageCached(page, ctx.pageTextCache);
+        const fm = extractFrontmatter(text);
+        if (!fm.ok || !isOutputStandardV2(fm.data)) return;
+        const split = splitFrontmatter(text);
+        if (!split.ok) return;
+        if (hasSteSentenceLengthViolation(split.data.body)) items.push(page.relPath);
+      } catch {
+        // Skip unreadable pages
+      }
+    });
+    return { buckets: items.length > 0 ? { ste_sentence_length: items } : {} };
+  },
+};
+
+export const steHedgeWordsRule: LintRuleModule = {
+  id: "ste_hedge_words",
+  severity: "warning",
+  async run(ctx: LintRuleContext): Promise<LintRuleResult> {
+    const items: string[] = [];
+    await mapWithConcurrency(ctx.scan.typedKnowledge, vaultIoConcurrency(), async (page) => {
+      try {
+        const text = await readPageCached(page, ctx.pageTextCache);
+        const fm = extractFrontmatter(text);
+        if (!fm.ok || !isOutputStandardV2(fm.data)) return;
+        const split = splitFrontmatter(text);
+        if (!split.ok) return;
+        if (hasSteHedgeViolation(split.data.body)) items.push(page.relPath);
+      } catch {
+        // Skip unreadable pages
+      }
+    });
+    return { buckets: items.length > 0 ? { ste_hedge_words: items } : {} };
+  },
+};
+
+export const steDiagramUncertaintyRule: LintRuleModule = {
+  id: "ste_diagram_uncertainty",
+  severity: "warning",
+  async run(ctx: LintRuleContext): Promise<LintRuleResult> {
+    const items: string[] = [];
+    await mapWithConcurrency(ctx.scan.typedKnowledge, vaultIoConcurrency(), async (page) => {
+      try {
+        const text = await readPageCached(page, ctx.pageTextCache);
+        const fm = extractFrontmatter(text);
+        if (!fm.ok || !isOutputStandardV2(fm.data)) return;
+        const split = splitFrontmatter(text);
+        if (!split.ok) return;
+        if (mermaidBlocksMissingLeastCertain(split.data.body)) items.push(page.relPath);
+      } catch {
+        // Skip unreadable pages
+      }
+    });
+    return { buckets: items.length > 0 ? { ste_diagram_uncertainty: items } : {} };
+  },
+};
+
+export const steComparisonVisualRule: LintRuleModule = {
+  id: "ste_comparison_visual",
+  severity: "warning",
+  async run(ctx: LintRuleContext): Promise<LintRuleResult> {
+    const items: string[] = [];
+    await mapWithConcurrency(ctx.scan.typedKnowledge, vaultIoConcurrency(), async (page) => {
+      try {
+        const text = await readPageCached(page, ctx.pageTextCache);
+        const fm = extractFrontmatter(text);
+        if (!fm.ok || !isOutputStandardV2(fm.data)) return;
+        if (fm.data.type !== "comparison") return;
+        const split = splitFrontmatter(text);
+        if (!split.ok) return;
+        if (comparisonLacksVisual(split.data.body)) items.push(page.relPath);
+      } catch {
+        // Skip unreadable pages
+      }
+    });
+    return { buckets: items.length > 0 ? { ste_comparison_visual: items } : {} };
+  },
+};
+
 // Registered rule list in default execution order
 export const LINT_RULES: readonly LintRuleModule[] = [
   brokenWikilinksRule,
@@ -1684,4 +1776,8 @@ export const LINT_RULES: readonly LintRuleModule[] = [
   cliRefsRule,
   staleSectionsRule,
   cycleTrapsRule,
+  steSentenceLengthRule,
+  steHedgeWordsRule,
+  steDiagramUncertaintyRule,
+  steComparisonVisualRule,
 ];
