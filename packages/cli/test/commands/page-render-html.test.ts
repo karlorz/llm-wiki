@@ -131,4 +131,17 @@ describe("page render-html", () => {
     expect(html).toContain('id="toc"');
     expect(html).toContain("<details");
   });
+
+  it("drops links with unsafe schemes and keeps their label", () => {
+    const html = renderPageHtml("Demo", [
+      "# Demo",
+      "",
+      "## Overview",
+      "",
+      "Click [here](javascript:alert(1)) or [docs](https://example.com).",
+    ].join("\n"));
+    expect(html).not.toContain("javascript:");
+    expect(html).toContain("here");
+    expect(html).toContain('<a href="https://example.com">docs</a>');
+  });
 });

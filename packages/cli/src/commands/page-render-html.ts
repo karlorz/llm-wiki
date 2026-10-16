@@ -26,6 +26,8 @@ export function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+const SAFE_HREF_RE = /^(https?:\/\/|mailto:|#)/i;
+
 function escapeAttr(text: string): string {
   return escapeHtml(text).replace(/'/g, "&#39;");
 }
@@ -61,8 +63,10 @@ export function renderInlineMarkdown(raw: string): string {
       parts.push(escapeHtml(alt));
     } else if (token.startsWith("[")) {
       const linked = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-      if (linked) {
+      if (linked && SAFE_HREF_RE.test(linked[2]!)) {
         parts.push(`<a href="${escapeAttr(linked[2]!)}">${escapeHtml(linked[1]!)}</a>`);
+      } else if (linked) {
+        parts.push(escapeHtml(linked[1]!));
       } else {
         parts.push(escapeHtml(token));
       }

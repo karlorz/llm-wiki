@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { ok, err, ExitCode, type Result } from "@skillwiki/shared";
 import { runLint, runSyncLintDelta } from "./lint.js";
+import { isAdvisoryLintWarning } from "../lint/helpers.js";
 export { runSyncLintDelta, type SyncLintDeltaInput, type SyncLintDeltaOutput } from "./lint.js";
 import { fixPathTooLong } from "./path-too-long.js";
 import { appendLastOp, readLastOp, clearLastOp } from "../utils/last-op.js";
@@ -641,10 +642,14 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
   // 5. Run lint after pull
   let lintErrors = 0;
   let lintWarnings = 0;
+  let blockingLintWarnings = 0;
   const lintResult = await runLint({ vault, days: 90, lines: 200, logThreshold: 500 });
   if (lintResult.result.ok) {
     lintErrors = lintResult.result.data.summary.errors;
     lintWarnings = lintResult.result.data.summary.warnings;
+    blockingLintWarnings = lintResult.result.data.by_severity.warning
+      .filter((bucket) => !isAdvisoryLintWarning(bucket.kind))
+      .reduce((n, bucket) => n + bucket.items.length, 0);
   }
 
   const hintParts: string[] = [];
@@ -656,7 +661,7 @@ export async function runSyncPull(input: SyncPullInput): Promise<{ exitCode: num
 
   const exitCode = lintErrors > 0
     ? ExitCode.LINT_HAS_ERRORS
-    : lintWarnings > 0
+    : blockingLintWarnings > 0
       ? ExitCode.LINT_HAS_WARNINGS
       : ExitCode.OK;
 
