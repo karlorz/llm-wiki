@@ -45,9 +45,9 @@ flowchart TD
 ```
 
 **Least certain:**
-- `comparison --> html` edge: whether a comparison table is enough without the HTML rung
-- `concept --> video` edge: how a later video format would attach to this node
-- `relations --> diagram` edge: whether a comparison that uses Mermaid stays on this branch
+- `comparison --> html` edge: this arrow is a mapping the source does not state as a required path
+- `concept --> video` edge: this node is an interpretive grouping of the out-of-scope video rung
+- `relations --> diagram` edge: this branch is a simplified split of table and diagram formats
 
 ## Format table
 
@@ -62,9 +62,7 @@ Formats stack. HTML is always opt-in. Video is outside the current scope.
 
 ## Uncertainty
 
-A source hedge belongs in this section.
-
-Example: the Karpathy post appears to treat video as a later format.
+The source reports no open uncertainty.
 
 ## Sources
 

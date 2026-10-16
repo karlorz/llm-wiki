@@ -35,9 +35,9 @@ flowchart TD
 ```
 
 **Least certain:**
-- `stamp --> write` edge: whether a later rewrite of a stub keeps the v2 stamp
-- `Write STE text` label: how strictly agents apply the word caps in practice
-- `write --> diagram` edge: when a short list still needs a diagram
+- `stamp --> write` edge: this arrow is an interpretive grouping of stamp and write as one sequence
+- `Write STE text` label: this node is a simplified step for the whole STE pass
+- `write --> diagram` edge: this arrow omits the case where the page has no structure
 
 ## Sources
 

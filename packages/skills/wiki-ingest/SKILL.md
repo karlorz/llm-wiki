@@ -53,9 +53,18 @@ STE is Simplified Technical English.
 - Keep technical terms (API, cache, Docker). Define each term once at first use.
 - No hedges except in `## Uncertainty`. Never drop facts to shorten.
 - Hedge list: might, may, perhaps, possibly, probably, likely, seems, appears to, arguably, somewhat, could be.
+- Use `## Uncertainty` only for uncertainty the source itself reports. If the source reports none, omit the section or write "The source reports no open uncertainty."
 
 ### Rung 2 — diagrams (default when content has structure)
-Add one Mermaid diagram when the page has flow, components, timeline, hierarchy, or comparison. Keep a text summary beside the diagram. Directly after the diagram, add `**Least certain:**` and a bullet list of the 3 least-certain labels or edges (all of them if fewer than 3).
+Add one Mermaid diagram when the page has flow, components, timeline, hierarchy, or comparison. Keep a text summary beside the diagram. Directly after the diagram, add `**Least certain:**` and a bullet list of labels or edges.
+
+The `**Least certain:**` bullets name diagram labels or edges. State why that part of the diagram is the least certain representation. Use one of these reasons: an interpretive grouping, a simplified step, an omitted condition, or a mapping the source does not state directly.
+
+Never add doubt about a fact the source states as settled. Never turn a decision, constraint, or policy into an open question.
+
+If a diagram has fewer than 3 labels and edges in total, list all of them. Otherwise list the 3 least-certain labels or edges.
+
+A diagram must not present a shortened executable procedure. For safety or recovery flows, keep all required steps or point the node to the full text procedure.
 
 ### Rung 3 — HTML (opt-in)
 Set `html_render: true` by hand or with `skillwiki ingest --html`. Render outside the vault:
