@@ -60,6 +60,7 @@ export const ExitCode = {
   TARGET_DRIFT: 58,
   RECOVERY_EVIDENCE_MISSING: 59,
   SYNC_PARTIAL_DECLINE: 60,
+  HTML_RENDER_NOT_OPTED_IN: 61,
 } as const;
 
 export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
@@ -126,6 +127,7 @@ const NAMES: Record<number, string> = {
   58: "TARGET_DRIFT",
   59: "RECOVERY_EVIDENCE_MISSING",
   60: "SYNC_PARTIAL_DECLINE",
+  61: "HTML_RENDER_NOT_OPTED_IN",
 };
 
 export function exitCodeName(code: number): string {
