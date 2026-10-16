@@ -75,9 +75,15 @@ describe("STE helpers", () => {
 
   it("skips inline code, nested Uncertainty headings, and wrapped Least certain items", () => {
     expect(findHedgesOutsideAllowedRegions("Use `may` as a variable.\n")).toEqual([]);
+    expect(findHedgesOutsideAllowedRegions("Use ``may`` as a variable.")).toEqual([]);
     expect(findHedgesOutsideAllowedRegions("## Uncertainty\n### Limits\nThis may fail.\n")).toEqual([]);
     expect(findHedgesOutsideAllowedRegions("**Least certain:**\n- Edge A\n  may fail.\n")).toEqual([]);
+    expect(findHedgesOutsideAllowedRegions("**Least certain:**\n- Edge A\nmay fail.")).toEqual([]);
     expect(findHedgesOutsideAllowedRegions("## Uncertainty\n### Limits\nThis may fail.\n## Sources\nThis may fail.\n")).toEqual(["may"]);
+    expect(findHedgesOutsideAllowedRegions("This may fail.\n")).toEqual(["may"]);
+    expect(findHedgesOutsideAllowedRegions("This \\`may\\` fail.")).toEqual(["may"]);
+    expect(findHedgesOutsideAllowedRegions("Use `may as a variable.")).toEqual(["may"]);
+    expect(findHedgesOutsideAllowedRegions("**Least certain:**\n- Edge A\n\nThis may fail.\n")).toEqual(["may"]);
   });
 
   it("requires a Least certain list after each mermaid block", () => {

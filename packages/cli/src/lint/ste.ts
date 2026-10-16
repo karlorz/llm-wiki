@@ -270,8 +270,55 @@ export function hasSteSentenceLengthViolation(body: string): boolean {
   return findLongUnits(body).length > 0;
 }
 
+function isEscapedBacktick(text: string, index: number): boolean {
+  let slashes = 0;
+  for (let i = index - 1; i >= 0 && text[i] === "\\"; i--) slashes++;
+  return slashes % 2 === 1;
+}
+
+function backtickRunLength(text: string, index: number): number {
+  let n = 0;
+  while (index + n < text.length && text[index + n] === "`") n++;
+  return n;
+}
+
+/** CommonMark inline code spans: a run of length N closes on the next exact-N run. Escaped backticks and unclosed runs stay literal. */
 function stripInlineCodeSpans(text: string): string {
-  return text.replace(/`[^`]*`/g, " ");
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === "`" && !isEscapedBacktick(text, i)) {
+      const n = backtickRunLength(text, i);
+      let j = i + n;
+      let closed = false;
+      while (j < text.length) {
+        if (text[j] === "`") {
+          const m = backtickRunLength(text, j);
+          if (m === n) {
+            out += " ";
+            i = j + m;
+            closed = true;
+            break;
+          }
+          j += m;
+          continue;
+        }
+        j++;
+      }
+      if (!closed) {
+        out += text.slice(i, i + n);
+        i += n;
+      }
+      continue;
+    }
+    out += text[i];
+    i++;
+  }
+  return out;
+}
+
+function isLeastCertainListItemLine(line: string): boolean {
+  return UNORDERED_ITEM_RE.test(line) || ORDERED_ITEM_RE.test(line) || /^\s+\S/.test(line);
 }
 
 export function findHedgesOutsideAllowedRegions(body: string): string[] {
@@ -279,18 +326,24 @@ export function findHedgesOutsideAllowedRegions(body: string): string[] {
   const fence: FenceState = { open: false, marker: "" };
   let uncertaintyUntilLevel: number | null = null;
   let skippingLeastCertainList = false;
+  let leastCertainSawBlank = false;
   const found: string[] = [];
+
+  const endLeastCertainList = () => {
+    skippingLeastCertainList = false;
+    leastCertainSawBlank = false;
+  };
 
   for (const line of lines) {
     if (toggleFence(line, fence)) {
-      skippingLeastCertainList = false;
+      endLeastCertainList();
       continue;
     }
     if (fence.open) continue;
 
     const heading = headingLevel(line);
     if (heading) {
-      skippingLeastCertainList = false;
+      endLeastCertainList();
       if (UNCERTAINTY_HEADING_RE.test(line)) {
         uncertaintyUntilLevel = heading.level;
       } else if (uncertaintyUntilLevel !== null && heading.level <= uncertaintyUntilLevel) {
@@ -300,20 +353,26 @@ export function findHedgesOutsideAllowedRegions(body: string): string[] {
     }
 
     if (uncertaintyUntilLevel !== null || BLOCKQUOTE_RE.test(line)) {
-      skippingLeastCertainList = false;
+      endLeastCertainList();
       continue;
     }
 
     if (LEAST_CERTAIN_RE.test(line)) {
       skippingLeastCertainList = true;
+      leastCertainSawBlank = false;
       continue;
     }
 
     if (skippingLeastCertainList) {
-      if (!line.trim() || UNORDERED_ITEM_RE.test(line) || ORDERED_ITEM_RE.test(line) || /^\s+\S/.test(line)) {
+      if (!line.trim()) {
+        leastCertainSawBlank = true;
         continue;
       }
-      skippingLeastCertainList = false;
+      if (isLeastCertainListItemLine(line) || !leastCertainSawBlank) {
+        leastCertainSawBlank = false;
+        continue;
+      }
+      endLeastCertainList();
     }
 
     found.push(...findHedgeMatches(stripInlineCodeSpans(line)));
