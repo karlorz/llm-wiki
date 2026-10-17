@@ -1,6 +1,6 @@
 ---
 name: wiki-add-task
-description: Capture ad-hoc ideas, bugs, tasks, or notes into the vault (HTTP MCP wiki_capture on leaf hosts; local raw/transcripts/ on authoring hosts).
+description: "Capture ideas, bugs, tasks, notes (MCP wiki_capture on leaf; authoring-host raw/transcripts). Images: clip-outbox."
 ---
 # wiki-add-task
 Capture ad-hoc ideas, bugs, tasks, and notes into the vault. Destination of captures remains vault `raw/transcripts/`. Entry points depend on host role and environment:
@@ -11,7 +11,7 @@ Capture ad-hoc ideas, bugs, tasks, and notes into the vault. Destination of capt
 | Filesystem drop | Hermes Agent compact mode on an authoring host | Fallback — create `.md` in `raw/transcripts/`, dev-loop discovers it |
 | Filesystem drop | Not in a Claude session (Obsidian, editor, sync) on an authoring host | Fallback — create a new `.md` file in `raw/transcripts/` using vault template; dev-loop discovers it on next cycle |
 | Dev-loop discovery | Automatic, next cycle (authoring-host / leftover-transition only) | Scans `raw/transcripts/` for new files since last cycle, surfaces as claimable work |
-**Path Rule:** Destination of captures is vault `raw/transcripts/` (Layer 1). Frozen-leaf hosts capture via MCP `wiki_capture` (server writes `raw/transcripts/` remotely); local file writes only occur on authoring hosts. Never capture under `projects/{slug}/raw/` — that violates SCHEMA.md Layer 1 immutability. Text captures stay in `raw/transcripts/`. If the capture includes images or other binaries, store those files under `raw/assets/` with a sibling Markdown note that embeds them; never use a .txt sidecar (such as `README.txt`) as the only index; Obsidian opens Markdown notes.
+**Path Rule:** Destination of captures is vault `raw/transcripts/` (Layer 1). Frozen-leaf hosts capture via MCP `wiki_capture` (server writes `raw/transcripts/` remotely); local file writes only occur on authoring hosts. Never capture under `projects/{slug}/raw/` — that violates SCHEMA.md Layer 1 immutability. Text captures stay in `raw/transcripts/`. Generated images and other binaries are not `wiki_capture` content and are not a local write into the frozen wiki. Follow `using-skillwiki/references/save-attachments.md`.
 ### Exception: Explicit project task requests
 When the user explicitly says "raise task to project X", "add a task for X", "create a feature request for X", or uses a directive structure like "raise task to {project} {description}", the intent is a **work item**, not a capture:
 | User wording | Action | Target |
@@ -26,6 +26,7 @@ This is NOT a violation of the rule below — explicit project task requests are
 - User provides a short text description and optionally a type tag.
 - **Precedence:** If SkillWiki MCP tools are available (`wiki_capture`), **skillwiki-mcp / wiki_capture wins**. Do not race to local writes. The local-write path in wiki-add-task is only when MCP is absent AND the host is an authoring host (not a frozen leaf).
 - **Do NOT activate** when the user says "raise task to project X" or "add work item to project X" — escalate to `proj-work` instead.
+- **Do NOT activate as the binary writer** for generated images, screenshots, design mockups, or attachments. Follow `using-skillwiki/references/save-attachments.md`.
 ## Output language
 Run `skillwiki lang` at the start. Entry prose and `--human` summaries use the resolved language. Frontmatter keys, file names, and structural markers stay English.
 ## Steps
@@ -120,6 +121,7 @@ Ad-hoc captures may omit `sha256`; omission does not grant mutation authority. O
 - Writing to any Layer 2 or Layer 3 location. Captures are Layer 1 (raw).
 - Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault.
 - Indexing `raw/assets/` binaries with only a `.txt` sidecar.
+- Saving image bytes except via `using-skillwiki/references/save-attachments.md`.
 ## Filesystem drop (offline capture — authoring hosts only)
 When you're not in a Claude session on an authoring host, drop files directly into `raw/transcripts/`:
 1. Create a `.md` file in `raw/transcripts/` — name it descriptively (e.g., `2026-05-08-idea-fix-template.md`)

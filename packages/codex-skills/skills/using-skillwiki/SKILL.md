@@ -1,11 +1,14 @@
 ---
 name: using-skillwiki
-description: Invoke for vault, wiki, or SkillWiki setup. Maps skills, workflow profiles, and vault routing.
+description: "Invoke for vault or wiki work: skill map, workflow profiles, routing, generated images, screenshots, design mockups, attachments."
 ---
 *Note: If executing as a background subagent, skip this skill section.*
 
 # using-skillwiki
 You have skillwiki — a project-aware Karpathy-style knowledge base for agent harnesses.
+
+## Images and attachments
+Generated images, screenshots, design mockups, attachments, saving pictures, and Markdown image rendering use `using-skillwiki/references/save-attachments.md`. HTTP MCP has no binary-upload tool; that is not an unsupported-image conclusion.
 
 ## Last Hook Gate (SessionStart)
 
@@ -55,6 +58,7 @@ Invoke a skillwiki skill when the user:
 - Mentions crystallizing a session into a note
 - Talks about project workspaces, ADRs, or distillation
 - Wants to quickly capture an idea, bug, task, or note without interrupting their workflow
+- Wants to save a generated image, screenshot, design mockup, attachment, or make a Markdown image portable in the wiki
 - Needs unknown-agent HTTP MCP connect (CLI + dotenv; no plugin/connector)
 - Wants to archive or clean up old vault pages
 - Wants to hard-delete a vault path without snapshot resurrection (`wiki-remove`)
@@ -174,6 +178,7 @@ If the vault has `.WIKI_GIT_FROZEN`:
 | Close or mutate a work item (`projects/*/work/**`, `knowledge.md`) | Conditional | If live MCP tools include `wiki_workitem_write`, mutate/close via MCP CAS; if absent, capture a close note via MCP `wiki_capture` or STOP. Never local-write. |
 | Save project workspace file (`architecture/`, `README.md`, `requirements/`, `compound/` — `.md` only) | Conditional | Via `wiki_workitem_write` CAS. Feature-detect: if the tool is absent or the deployed server predates the workspace-family allowlist (`PATH_DENIED`), STOP. Never rclone/wiki-push as a fallback writer. |
 | Publish typed Layer-2 page (`concepts/`, `queries/`, etc.) | Conditional | If live MCP tools include `wiki_page_publish`, publish via MCP CAS; if absent, STOP. Do not run local `skillwiki page publish`. |
+| Save generated image, screenshot, design mockup, or attachment | Conditional | Existing enabled clip-outbox only. See `using-skillwiki/references/save-attachments.md`. |
 | `wiki-sync` push/commit | **No** | Git fail-closed. GitHub is sg01 `wiki-snapshot`. |
 | Read local `~/wiki` | Yes | Mirror reads only |
 | `/wiki-add-task <text>` | You're in an interactive session on an authoring host | Creates `raw/transcripts/YYYY-MM-DD-{type}-{slug}.md` with ad-hoc capture frontmatter |
@@ -245,7 +250,7 @@ for code changes.
 
 ## CLI Backbone
 All skills are backed by the `skillwiki` CLI — a deterministic tool with no LLM calls. It handles path resolution, config management, validation, health reporting, and linting. Skills invoke it via Bash for the mechanical parts and use the active agent for the creative parts.
-Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `connect`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `query`, `vectors rebuild`, `vectors status`, `sources pending`, `sources compile`, `sources review`, `sources reviews`, `sources disposition`, `sources dispose`, `archive`, `remove`, `drift`, `dedup`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `claim`, `claims audit`, `observe`, `canvas generate`, `mcp`, `mcp-auth`.
+Key CLI subcommands: `init`, `health`, `lint`, `config`, `doctor`, `connect`, `path`, `lang`, `install`, `fleet context`, `fleet validate`, `graph build`, `query`, `vectors rebuild`, `vectors status`, `sources pending`, `sources compile`, `sources review`, `sources reviews`, `sources disposition`, `sources dispose`, `archive`, `remove`, `drift`, `dedup`, `compound`, `tag-sync`, `tag reconcile`, `page publish`, `sync status`, `seed`, `stale`, `claim`, `claims audit`, `observe`, `canvas generate`, `mcp`, `mcp-auth`, `clip-outbox`.
 Optional read-only MCP (`skillwiki mcp`) exposes pending/compile/review list tools. Do not use MCP for compile claim, publish, or review writes.
 `skillwiki claim` binds a transcript to a work item only through an exact `raw/transcripts/...` path in `source:` / `sources:` / `closes:`. A `--project` that contradicts the capture's explicit project is rejected. `skillwiki stale --project` uses exact normalized slugs, not substring matching. `skillwiki claims audit` is the read-only integrity report for duplicate, malformed, dangling, cross-project, and unbacked claims; it never rewrites captures or work items.
 

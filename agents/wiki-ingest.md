@@ -14,6 +14,7 @@ You are a vault ingestion specialist converting source material (URLs and readab
 - **File ingestion.** Local files need to be captured as raw sources and distilled into concept pages.
 - **Batch ingestion.** Multiple sources to process through deterministic raw capture and shared publication.
 - **Raw promotion.** A raw/transcripts/ capture is ready for promotion to a typed-knowledge page.
+- **Not for generated-image ingress.** Follow `using-skillwiki/references/save-attachments.md`. Do not `skillwiki ingest` the binary.
 
 **Your Core Responsibilities:**
 1. Guard: run `skillwiki fetch-guard <url>` for URL sources
@@ -73,3 +74,4 @@ Return:
 - Writing `[[wikilinks]]` to nonexistent pages — verify first
 - Writing raw ephemeral data to cloud-mounted wiki paths
 - Writing live credentials, access keys, tokens, passwords, cookies, bearer headers, private keys, or other authenticating secrets to the vault
+- Ingesting image bytes or treating a host-local image path as a portable attachment

@@ -1,5 +1,9 @@
 # Clip-outbox worker and attended migration
 
+Agents asked to save a generated image or attachment should follow
+`packages/skills/using-skillwiki/references/save-attachments.md`. This file is
+the operator enablement runbook; it is not an unattended enablement checklist.
+
 The channel remains disabled by default. Installing or updating npm ships the
 worker and launchd template; it does not change `clip_outbox.enabled`, load a
 job, import browser settings, or enable wiki-push. `skillwiki doctor` reports

@@ -17,6 +17,7 @@ Choose the matching installed skill:
   `proj-decide`, `wiki-gate-plan-mode`, `dev-loop:research`.
 - Fleet and visualization: `wiki-sync`, `wiki-canvas`.
 - HTTP MCP capture, append, or progress query: `skillwiki-mcp`.
+- Generated images, screenshots, design mockups, attachments, Markdown image saving: `using-skillwiki/references/save-attachments.md`. MCP has no binary-upload tool; that is not an unsupported-image conclusion.
 
 If routing is unclear, invoke `using-skillwiki` rather than guessing.
 

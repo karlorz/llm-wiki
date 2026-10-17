@@ -1,12 +1,13 @@
 ---
 name: wiki-ingest
-description: Convert URLs, files, or pasted text into typed-knowledge pages with raw provenance. Supports single and batch mode.
+description: "Convert URLs, files, or pasted text into typed pages with provenance. Images: clip-outbox, not binary ingest."
 ---
 # wiki-ingest
 ## When This Skill Activates
 - User shares a URL, paste, or local file to capture in the vault.
 - The output target is `entities/`, `concepts/`, `comparisons/`, or `queries/`.
 - A vault is resolvable (see step 0).
+- Generated images and attachments use `using-skillwiki/references/save-attachments.md`, not `skillwiki ingest` of the binary.
 ## Output language
 Run `skillwiki lang` at the start. Generate page-body prose, narrative sections, and `--human` summaries in the resolved language. Frontmatter keys, file names, schema headers, index/log structural lines, citation markers, and wikilink slugs MUST stay English.
 ## Pre-orientation reads (mandatory before any write)
@@ -113,6 +114,7 @@ Raw ephemeral data (market feeds, logs, transient JSON) must be written to the *
 - Writing host-local absolute paths as canonical durable source references (see `using-skillwiki` → Portable Source References).
 - Writing `[[wikilinks]]` to pages that don't exist in the vault. Before linking, verify the target exists: check `index.md` or `ls` the target directory. If the target doesn't exist yet, use plain text instead of a wikilink.
 - Indexing `raw/assets/` binaries with only a `.txt` sidecar. Write a sibling Markdown note that embeds each file with `![[ ]]`.
+- Ingesting image bytes or treating a host-local image path as a portable attachment. Follow `using-skillwiki/references/save-attachments.md`.
 ## Batch Mode
 When the user provides multiple sources (a directory of files, a list of URLs, or a multi-document input):
 1. **Loop per source.** Execute steps 1–8 for each source individually, using one `skillwiki ingest` command per source.
