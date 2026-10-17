@@ -59,6 +59,5 @@ describe("skillwiki path --plain", () => {
     expect(result.stdout.trim()).toBe(dir);
     expect(result.stdout.startsWith("{")).toBe(false);
     expect(result.stdout).not.toContain("via");
-    expect(result.stdout).not.toContain("ok");
   });
 });

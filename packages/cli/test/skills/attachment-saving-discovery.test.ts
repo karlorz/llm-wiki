@@ -21,16 +21,18 @@ function readRepo(relative: string): string {
   return readFileSync(resolve(ROOT, relative), "utf8");
 }
 
-function clipOutboxHelpFromCliSource(): Record<string, string> {
-  const cli = readRepo("packages/cli/src/cli.ts");
+function clipOutboxHelpFromCliSource(cliRaw = readRepo("packages/cli/src/cli.ts")): Record<string, string> {
+  const cli = cliRaw.replace(/\r\n/g, "\n");
   const start = cli.indexOf('const clipOutboxCmd = program.command("clip-outbox")');
   expect(start).toBeGreaterThan(-1);
-  const next = cli.indexOf("\nprogram\n", start);
-  const block = cli.slice(start, next === -1 ? undefined : next);
+  const nextProgram = cli.indexOf("\nprogram\n", start);
+  const nextConst = cli.indexOf("\nconst ", start + 1);
+  const ends = [nextProgram, nextConst].filter((n) => n > start);
+  const block = cli.slice(start, ends.length ? Math.min(...ends) : undefined);
   const help: Record<string, string> = {};
-  const commandRe = /\.command\("([^"]+)"\)[\s\S]*?\.description\("([^"]+)"\)/g;
+  const commandRe =
+    /clipOutboxCmd\s*\n\s*\.command\("([^"]+)"\)\s*\n\s*\.description\("([^"]+)"\)/g;
   for (const match of block.matchAll(commandRe)) {
-    if (match[1] === "clip-outbox") continue;
     help[match[1]!] = match[2]!;
   }
   return help;
@@ -68,15 +70,14 @@ describe("attachment-saving discovery", () => {
   });
 
   it("quotes clip-outbox help from CLI source and does not invent upload commands", () => {
-    const help = clipOutboxHelpFromCliSource();
-    expect(Object.keys(help).sort()).toEqual([
-      "install-or-migrate",
-      "mirror-watch",
-      "status",
-      "watch",
-    ]);
+    const expected = ["install-or-migrate", "mirror-watch", "status", "watch"];
+    const source = readRepo("packages/cli/src/cli.ts");
+    const lf = clipOutboxHelpFromCliSource(source.replace(/\r\n/g, "\n"));
+    const crlf = clipOutboxHelpFromCliSource(source.replace(/\r\n/g, "\n").replace(/\n/g, "\r\n"));
+    expect(Object.keys(lf).sort()).toEqual(expected);
+    expect(Object.keys(crlf).sort()).toEqual(expected);
     const runbook = readRepo(RUNBOOK);
-    for (const [name, description] of Object.entries(help)) {
+    for (const [name, description] of Object.entries(lf)) {
       expect(runbook).toContain(`| \`${name}\` | ${description} |`);
     }
     expect(runbook).toMatch(/Agent may run[\s\S]*status[\s\S]*Yes/i);
