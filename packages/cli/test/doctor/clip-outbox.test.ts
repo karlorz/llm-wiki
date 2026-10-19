@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { validateClipLaunchdPlist, launchdExplicitlyDisabled, validInstalledPlist } from "../../src/doctor/probes/clip-outbox.js";
 import { runDoctor } from "../../src/commands/doctor.js";
 
 function homeWith(envText: string): string {
@@ -130,4 +132,34 @@ describe("doctor clip-outbox probe", () => {
     expect(listener?.status).toBe("error");
     expect(listener?.detail).toMatch(/SSE listener/i);
   });
+});
+
+
+describe("structural launchd evidence", () => {
+  it("accepts a decoded production watcher and refuses wrong roots and commands", () => {
+    const plist = { Label: "watcher", ProgramArguments: ["node", "cli.js", "clip-outbox", "watch"], WatchPaths: ["/outbox & clips"] };
+    expect(validateClipLaunchdPlist(plist, "watcher", "watch", "/outbox & clips")).toBe(true);
+    expect(validateClipLaunchdPlist(plist, "watcher", "watch", "/other")).toBe(false);
+    expect(validateClipLaunchdPlist({ ...plist, ProgramArguments: ["echo", "watch"] }, "watcher", "watch", "/outbox & clips")).toBe(false);
+    expect(validateClipLaunchdPlist({ ...plist, Label: "retired" }, "watcher", "watch", "/outbox & clips")).toBe(false);
+    expect(validateClipLaunchdPlist(null, "watcher", "watch", "/outbox")).toBe(false);
+  });
+  it("recognizes exact launchd disabled labels in boolean and word forms", () => {
+    expect(launchdExplicitlyDisabled('"watcher" => disabled', "watcher")).toBe(true);
+    expect(launchdExplicitlyDisabled('"watcher" => true', "watcher")).toBe(true);
+    expect(launchdExplicitlyDisabled('"watcher" => enabled', "watcher")).toBe(false);
+    expect(launchdExplicitlyDisabled('"watcher-other" => true', "watcher")).toBe(false);
+  });
+});
+
+
+it.skipIf(process.platform !== "darwin")("reads both formatted XML and binary launchd plists structurally", () => {
+  const dir = mkdtempSync(join(tmpdir(), "clip-plist-"));
+  const path = join(dir, "watch.plist");
+  writeFileSync(path, JSON.stringify({ Label: "watcher", ProgramArguments: ["node", "cli.js", "clip-outbox", "watch"], WatchPaths: ["/outbox & clips"] }));
+  execFileSync("/usr/bin/plutil", ["-convert", "xml1", path]);
+  expect(validInstalledPlist(path, "watcher", "watch", "/outbox & clips")).toBe(true);
+  execFileSync("/usr/bin/plutil", ["-convert", "binary1", path]);
+  expect(validInstalledPlist(path, "watcher", "watch", "/outbox & clips")).toBe(true);
+  expect(validInstalledPlist(path, "watcher", "watch", "/other")).toBe(false);
 });

@@ -142,6 +142,15 @@ test_install_flag_exports_for_manifest_helpers() {
   fi
 }
 
+test_deploy_pin_without_git() {
+  local bundle="$TEST_ROOT/exported"
+  mkdir -p "$bundle/packages/vault-sync"
+  printf '%040d\n' 1 > "$bundle/.deploy-pin"
+  assert_eq "exported bundle pin supplies exact commit" \
+    "$(vault_sync_package_commit "$bundle/packages/vault-sync")" "$(cat "$bundle/.deploy-pin")"
+}
+
+test_deploy_pin_without_git
 test_version_override_wins_over_package_json
 test_empty_version_override_falls_through
 test_whitespace_version_override_ignored

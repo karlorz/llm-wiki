@@ -172,6 +172,37 @@ test_inventory_verify_fails_when_tracked_missing() {
   rm -rf "$root"
 }
 
+test_inventory_accepts_independent_upstream_edit() {
+  local root head inv stash_oid rc
+  root="$(mktemp -d)"
+  make_repo "$root"
+  printf 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n' > "$root/f"
+  git -C "$root" add f
+  git -C "$root" commit -qm base
+  head="$(git -C "$root" rev-parse HEAD)"
+  vault_sync_op_begin "$root" op-merge main "$head" "$head" lock:merge 0.0.0 x
+  sed 's/^one$/local-one/' "$root/f" > "$root/new"
+  mv "$root/new" "$root/f"
+  inv="$(mktemp)"
+  vault_sync_op_write_inventory "$root" "$inv"
+  vault_sync_op_record_inventory "$root" op-merge "$inv"
+  stash_oid="$(vault_sync_op_stash_push_owned "$root" op-merge 0)"
+  sed 's/^ten$/upstream-ten/' "$root/f" > "$root/new"
+  mv "$root/new" "$root/f"
+  git -C "$root" add f
+  git -C "$root" commit -qm upstream
+  vault_sync_op_set_field "$root" op-merge restore_head "$(git -C "$root" rev-parse HEAD)"
+  vault_sync_op_stash_apply_owned "$root" "$stash_oid" >/dev/null
+  vault_sync_op_verify_inventory "$root" op-merge "$stash_oid"
+  rc=$?
+  assert_rc "valid three-way stash restore preserves local and upstream edits" "$rc" 0
+  sed 's/local-one/one/' "$root/f" > "$root/new"
+  mv "$root/new" "$root/f"
+  vault_sync_op_verify_inventory "$root" op-merge "$stash_oid"
+  assert_rc "lost local edit is refused after three-way restore" "$?" 1
+  rm -rf "$root" "$inv"
+}
+
 test_find_review_required_is_worktree_aware() {
   local root head git_dir found
   root="$(mktemp -d)"
@@ -196,6 +227,7 @@ test_may_retry_only_once_when_remote_advanced
 test_cas_recovery_target_requires_expected_old
 test_inventory_verify_fails_when_tracked_missing
 test_find_review_required_is_worktree_aware
+test_inventory_accepts_independent_upstream_edit
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

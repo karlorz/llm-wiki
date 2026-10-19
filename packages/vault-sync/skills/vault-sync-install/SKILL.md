@@ -215,3 +215,18 @@ VS_ROLE=snapshotter VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-syn
 VS_MODE=fuse-only VS_VAULT_PATH=/root/wiki VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 VS_PACKAGE_VERSION=0.9.60 VS_PACKAGE_COMMIT=<sha> VS_ROLE=snapshotter VS_SERVICE_SCOPE=system VS_DRY_RUN=1 bash packages/vault-sync/skills/vault-sync-install/install.sh
 ```
+
+
+## Runtime-only upgrades
+
+Use `bash install.sh --runtime-only --dry-run` to preview an upgrade of an
+existing configured installation, then `--runtime-only --execute`. This branch
+preserves configuration, filters, push settings, units and timer state. It does
+not start any job or change fleet authority. Python 3 and a runtime manifest are
+required. Legacy installations refuse while an installed helper is active.
+Helpers exec an immutable payload, so subsequent upgrades keep in-flight
+libraries coherent. The old bin directory/release and previous manifest remain
+available for rollback; do not delete them while processes might reference them.
+The installed manifest hashes entry points, libraries and payload files and records
+the exact package version/commit. An interrupted deploy lock requires operator
+inspection; never clear it merely by age.

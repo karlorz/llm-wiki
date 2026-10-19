@@ -798,6 +798,7 @@ FETCH_SERVICE_MIGRATION_STARTED=0
 FETCH_TIMER_WAS_ACTIVE=0
 FETCH_SERVICE_WAS_ACTIVE=0
 FETCH_SERVICE_WAS_ENABLED=0
+RUNTIME_ONLY=0
 DRY_RUN=0
 if is_true "${VS_DRY_RUN:-0}"; then
   DRY_RUN=1
@@ -828,6 +829,7 @@ Options:
                                   Same as above
   --max-dir-cache <duration>      FUSE freshness threshold (default: 15m)
   --max-dir-cache=<duration>      Same as above
+  --runtime-only                  Upgrade helpers only; preserve config, units and timers
   --dry-run                       Print plan and execute nothing
   --execute                       Force execute mode
   --override-snapshotter          Allow replacing existing snapshotter
@@ -907,6 +909,10 @@ while [ "$#" -gt 0 ]; do
       FUSE_MAX_DIR_CACHE="${1#*=}"
       shift
       ;;
+    --runtime-only)
+      RUNTIME_ONLY=1
+      shift
+      ;;
     --dry-run)
       DRY_RUN=1
       shift
@@ -972,6 +978,22 @@ esac
 
 if [ "$MODE" = "fuse-only" ] && [ "$ROLE" = "snapshotter" ]; then
   fatal "fuse-only mode does not install snapshotter role"
+fi
+
+# This path must precede projection migration, fleet/config writes and scheduler probes.
+if [ "$RUNTIME_ONLY" -eq 1 ]; then
+  command -v python3 >/dev/null 2>&1 || fatal "runtime-only requires python3"
+  [ "$(read_env_key_raw vault_sync.installed)" = "true" ] || fatal "runtime-only requires configured installation"
+  platform_detect_os
+  [ "$VS_OS" != "unsupported" ] || fatal "unsupported runtime host"
+  runtime_role="$(read_env_key_raw vault_sync.role)"
+  case "$runtime_role" in leaf|snapshotter) ;; *) fatal "installed role missing" ;; esac
+  runtime_args=()
+  [ "$DRY_RUN" -eq 0 ] || runtime_args+=(--dry-run)
+  python3 "$VAULT_SYNC_ROOT/scripts/lib/deploy-runtime.py" "$VAULT_SYNC_ROOT" "$(platform_share_dir)" \
+    "$runtime_role" "$(vault_sync_package_version "$VAULT_SYNC_ROOT")" \
+    "$(vault_sync_package_commit "$VAULT_SYNC_ROOT")" "${VS_HOSTNAME:-$(hostname -s)}" "${runtime_args[@]}"
+  exit $?
 fi
 
 validate_fetch_projection_paths

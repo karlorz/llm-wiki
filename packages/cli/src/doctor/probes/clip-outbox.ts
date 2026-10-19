@@ -1,9 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { execSync, execFileSync } from "node:child_process";
 import { platform } from "node:os";
 import { join } from "node:path";
 import { loadClipCredentials, conditionalCreateProven } from "../../clip-outbox/runtime.js";
-import { xml } from "../../clip-outbox/migrate.js";
 import type { CheckResult, DoctorContext, DoctorProbe } from "../types.js";
 import { check, MCP_ONLY_LEAF_SKIP } from "./helpers.js";
 import {
@@ -57,6 +56,32 @@ function launchdLoaded(label: string): boolean {
   }
 }
 
+export function validateClipLaunchdPlist(value: unknown, label: string, command: string, root?: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const plist = value as Record<string, unknown>;
+  const args = plist.ProgramArguments;
+  if (plist.Label !== label || !Array.isArray(args) || args.length < 4 ||
+      !args.every((arg) => typeof arg === "string") || !args[0] ||
+      args[2] !== "clip-outbox" || args[3] !== command) return false;
+  return root === undefined
+    ? plist.WatchPaths === undefined
+    : Array.isArray(plist.WatchPaths) && plist.WatchPaths.length === 1 && plist.WatchPaths[0] === root;
+}
+
+export function launchdExplicitlyDisabled(text: string, label: string): boolean {
+  return text.split("\n").some((line) => {
+    const match = line.trim().match(/^"([^"]+)"\s*=>\s*(true|false|enabled|disabled)\s*;?$/);
+    return match?.[1] === label && (match[2] === "true" || match[2] === "disabled");
+  });
+}
+
+export function validInstalledPlist(path: string, label: string, command: string, root?: string): boolean {
+  const decoded: unknown = JSON.parse(execFileSync("/usr/bin/plutil", ["-convert", "json", "-o", "-", path], {
+    encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"],
+  }));
+  return validateClipLaunchdPlist(decoded, label, command, root);
+}
+
 function watcherStatus(env: NodeJS.ProcessEnv, label: string, home: string, root: string): { loaded: boolean; enabled: boolean; kind: "production" | "retired" | "unknown" } {
   const fixture = env.CLIP_WATCHER_FIXTURE;
   if (fixture === "loaded-enabled") return { loaded: true, enabled: true, kind: "production" };
@@ -72,11 +97,9 @@ function watcherStatus(env: NodeJS.ProcessEnv, label: string, home: string, root
   }
   const plist = join(home, "Library", "LaunchAgents", `${label}.plist`);
   try {
-    const text = readFileSync(plist, "utf8");
-    const xmlRoot = xml(root);
-    const matchesRoot = text.includes(`<key>WatchPaths</key><array><string>${xmlRoot}</string></array>`);
+    const matchesRoot = validInstalledPlist(plist, label, "watch", root);
     const disabled = execSync(`launchctl print-disabled gui/${process.getuid!()}`, { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
-    const explicitlyDisabled = disabled.split("\n").some((line) => line.includes(`"${label}"`) && line.includes("true"));
+    const explicitlyDisabled = launchdExplicitlyDisabled(disabled, label);
     return { loaded: true, enabled: matchesRoot && !explicitlyDisabled, kind: "production" };
   } catch { return { loaded: true, enabled: false, kind: "unknown" }; }
 }
@@ -100,11 +123,9 @@ function listenerOk(env: NodeJS.ProcessEnv, home: string): boolean {
   if (!launchdLoaded(PRODUCTION_MIRROR_LABEL)) return false;
   const plist = join(home, "Library", "LaunchAgents", `${PRODUCTION_MIRROR_LABEL}.plist`);
   try {
-    const text = readFileSync(plist, "utf8");
-    if (text.includes("<key>WatchPaths</key>")) return false;
+    const valid = validInstalledPlist(plist, PRODUCTION_MIRROR_LABEL, "mirror-watch");
     const disabled = execSync(`launchctl print-disabled gui/${process.getuid!()}`, { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
-    const explicitlyDisabled = disabled.split("\n").some((line) => line.includes(`"${PRODUCTION_MIRROR_LABEL}"`) && line.includes("true"));
-    return text.includes("mirror-watch") && text.includes(PRODUCTION_MIRROR_LABEL) && !explicitlyDisabled;
+    return valid && !launchdExplicitlyDisabled(disabled, PRODUCTION_MIRROR_LABEL);
   } catch {
     return false;
   }

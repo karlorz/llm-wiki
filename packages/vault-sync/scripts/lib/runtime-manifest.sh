@@ -99,6 +99,14 @@ vault_sync_package_commit() {
     printf '%s\n' "$_override"
     return 0
   fi
+  # Exported deployment bundles have no .git; the bundle pin is the exact commit.
+  if [ -f "$_root/../../.deploy-pin" ]; then
+    _pin="$(cat "$_root/../../.deploy-pin")"
+    if printf '%s\n' "$_pin" | LC_ALL=C grep -Eq '^[0-9a-f]{40,64}$'; then
+      printf '%s\n' "$_pin"
+      return 0
+    fi
+  fi
   if command -v git >/dev/null 2>&1 && [ -d "$_root/../../.git" -o -f "$_root/../../.git" ] 2>/dev/null; then
     git -C "$_root/../.." rev-parse HEAD 2>/dev/null || echo ""
     return 0

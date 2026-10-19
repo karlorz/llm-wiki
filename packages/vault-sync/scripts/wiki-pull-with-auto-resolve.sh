@@ -220,6 +220,7 @@ try_auto_resolve_derived_conflicts() {
         cmd_rc=$?
         printf '%s\n' "$resolver_out" >>"$LOG_FILE"
         if [ "$cmd_rc" -eq 0 ]; then
+            RESOLVED_PATHS="$(printf '%s\n' "$resolver_out" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["data"]["resolved_paths"]))')" || return 1
             log "AUTO-RESOLVE composite derived artifacts op=$op_id"
             return 0
         elif [ "$cmd_rc" -eq 60 ]; then
@@ -243,6 +244,7 @@ except: pass
         cmd_rc=$?
         printf '%s\n' "$resolver_out" >>"$LOG_FILE"
         if [ "$cmd_rc" -eq 0 ]; then
+            RESOLVED_PATHS="$(printf '%s\n' "$resolver_out" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["data"]["resolved_paths"]))')" || return 1
             log "AUTO-RESOLVE composite derived artifacts op=$op_id (skillwiki)"
             return 0
         elif [ "$cmd_rc" -eq 60 ]; then
@@ -615,12 +617,11 @@ while [ $REBASE_RC -ne 0 ]; do
         continue
     fi
 
-    if try_auto_resolve_derived_conflicts "$OP_ID"; then
-        if ! GIT_EDITOR=true git rebase --continue 2>>"$LOG_FILE"; then
-            REBASE_RC=$?
-        else
-            REBASE_RC=0
-        fi
+    RESOLVER_RC=0
+    try_auto_resolve_derived_conflicts "$OP_ID" || RESOLVER_RC=$?
+    if [ "$RESOLVER_RC" -eq 0 ]; then
+        GIT_EDITOR=true git rebase --continue 2>>"$LOG_FILE"
+        REBASE_RC=$?
         continue
     fi
 
@@ -628,8 +629,7 @@ while [ $REBASE_RC -ne 0 ]; do
     # The unknown paths must go through the manual-conflict path (retry/handoff).
     # The derived paths are already git-added; rebase --continue will fail on
     # the remaining unknowns, so we go straight to handle_manual_conflict.
-    if [ "$?" -eq 60 ]; then
-        local unknown_conflicts
+    if [ "$RESOLVER_RC" -eq 60 ]; then
         unknown_conflicts="$(git diff --name-only --diff-filter=U 2>/dev/null)"
         if [ -n "$unknown_conflicts" ]; then
             STOPPED_SHA=$(cat "$WIKI_DIR/.git/rebase-merge/stopped-sha" 2>/dev/null || echo "")
@@ -659,6 +659,7 @@ while [ $REBASE_RC -ne 0 ]; do
 done
 
 if [ -n "$OWNED_STASH_OID" ]; then
+  vault_sync_op_set_field "$WIKI_DIR" "$OP_ID" restore_head "$(git rev-parse HEAD)" || exit 1
   if vault_sync_op_stash_apply_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE"; then
     if ! vault_sync_op_verify_inventory "$WIKI_DIR" "$OP_ID" "$OWNED_STASH_OID" 2>>"$LOG_FILE"; then
       vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "inventory-verify-failed"
@@ -673,7 +674,12 @@ if [ -n "$OWNED_STASH_OID" ]; then
   else
     CONFLICTS=$(git diff --name-only --diff-filter=U 2>/dev/null)
     vault_sync_op_set_phase "$WIKI_DIR" "$OP_ID" "restoring"
-    if [ -n "$CONFLICTS" ] && try_auto_resolve_derived_conflicts "$OP_ID"; then
+    RESOLVER_RC=1
+    if [ -n "$CONFLICTS" ]; then
+      RESOLVER_RC=0
+      try_auto_resolve_derived_conflicts "$OP_ID" || RESOLVER_RC=$?
+    fi
+    if [ "$RESOLVER_RC" -eq 0 ]; then
       if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
         vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "stash-restore-conflicts"
         log "FAIL stash apply derived auto-resolve left conflicts"
@@ -681,7 +687,7 @@ if [ -n "$OWNED_STASH_OID" ]; then
       fi
       # Derived regeneration rewrites conflicted paths; verify presence for those
       # paths and content for everything else.
-      SKIP_CONTENT="$(printf '%s\n' $CONFLICTS)"
+      SKIP_CONTENT="${RESOLVED_PATHS:-}"
       if ! vault_sync_op_verify_inventory "$WIKI_DIR" "$OP_ID" "$OWNED_STASH_OID" "$SKIP_CONTENT" 2>>"$LOG_FILE"; then
         vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "inventory-verify-failed"
         log "FAIL inventory verification after derived auto-resolve oid=$OWNED_STASH_OID"
@@ -690,7 +696,7 @@ if [ -n "$OWNED_STASH_OID" ]; then
 
       vault_sync_op_stash_drop_owned "$WIKI_DIR" "$OWNED_STASH_OID" 2>>"$LOG_FILE" || true
       log "STASH apply derived conflicts auto-resolved"
-    elif [ -n "$CONFLICTS" ] && [ "$?" -eq 60 ]; then
+    elif [ "$RESOLVER_RC" -eq 60 ]; then
       # M4: Partial-decline during stash-apply. The resolver resolved the
       # derived subset and returned resolved_paths. Unknown paths remain
       # conflicted — surface as review-required.
@@ -704,11 +710,7 @@ if [ -n "$OWNED_STASH_OID" ]; then
       # derived paths. The conflict set alone is insufficient because the
       # resolver regenerates derived files that may not have been in the
       # stash-apply conflict set (derived-conflicts.ts:100-134).
-      SKIP_CONTENT="$(printf '%s\n' $CONFLICTS)"
-      if [ -n "${RESOLVED_PATHS:-}" ]; then
-        SKIP_CONTENT="${SKIP_CONTENT}
-${RESOLVED_PATHS}"
-      fi
+      SKIP_CONTENT="${RESOLVED_PATHS:-}"
       if ! vault_sync_op_verify_inventory "$WIKI_DIR" "$OP_ID" "$OWNED_STASH_OID" "$SKIP_CONTENT" 2>>"$LOG_FILE"; then
         vault_sync_op_mark_review_required "$WIKI_DIR" "$OP_ID" "inventory-verify-failed-partial"
         log "FAIL inventory verification after partial-decline oid=$OWNED_STASH_OID"

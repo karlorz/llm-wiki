@@ -92,3 +92,22 @@ The ChatGPT App directory integration for SkillWiki connects to the HTTP MCP dae
   - Writers mapping uses `writer_id: chatgpt-review` with `allowed_vaults: [skillwiki-demo]`. ChatGPT's DCR `client_id` is not the writer. The review password selects this writer; it must never include `central`.
 - **Live verification:** After directory publication, perform live testing by initiating the ChatGPT directory connect flow and authenticating with the production operator password against the default vault.
 
+
+
+## Separate vault-sync runtime upgrade
+
+The MCP bundle swap does not update executing vault-sync scripts. After the new
+release is healthy, separately preview and execute:
+
+```bash
+bash /opt/llm-wiki/packages/vault-sync/skills/vault-sync-install/install.sh --runtime-only --dry-run
+bash /opt/llm-wiki/packages/vault-sync/skills/vault-sync-install/install.sh --runtime-only --execute
+```
+
+Require an existing configured installation and runtime manifest. The upgrade
+preserves systemd/launchd units, timer state, filters and push settings; an active
+legacy helper blocks migration. It retains the prior runtime for rollback.
+Verify installed manifest hashes and the immutable payload behind the executing
+entry point, not only `/opt/llm-wiki/.deploy-pin`. Observe the next naturally
+scheduled snapshot/research/session-brief results for tasks that exclude content
+writes; do not start a content-producing oneshot solely to verify deployment.

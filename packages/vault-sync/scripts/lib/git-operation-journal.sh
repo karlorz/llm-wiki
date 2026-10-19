@@ -456,67 +456,13 @@ vault_sync_op_write_inventory() {
 # Fail closed on any mismatch.
 vault_sync_op_verify_inventory() {
   local repo="$1" op_id="$2" stash_oid="${3:-}" skip_content_paths="${4:-}"
-  local inv section path expected_hash actual_hash unmerged skip has_u3
-
+  local inv restore_head helper
   inv="$(vault_sync_op_get_field "$repo" "$op_id" inventory_path)" || return 1
-  [ -f "$inv" ] || return 1
-
-  unmerged="$(git -C "$repo" diff --name-only --diff-filter=U 2>/dev/null || true)"
-  has_u3=0
-  if [ -n "$stash_oid" ] && git -C "$repo" rev-parse -q --verify "${stash_oid}^3" >/dev/null 2>&1; then
-    has_u3=1
-  fi
-  section=""
-  while IFS= read -r path || [ -n "$path" ]; do
-    case "$path" in
-      "# staged") section="staged"; continue ;;
-      "# tracked") section="tracked"; continue ;;
-      "# untracked") section="untracked"; continue ;;
-      ""|\#*) continue ;;
-    esac
-    [ -n "$path" ] || continue
-    [ -n "$section" ] || continue
-
-    # Skip content checks for currently-unmerged conflict paths.
-    if printf '%s\n' "$unmerged" | grep -Fxq -- "$path"; then
-      continue
-    fi
-
-    skip=0
-    if [ -n "$skip_content_paths" ] && printf '%s\n' "$skip_content_paths" | grep -Fxq -- "$path"; then
-      skip=1
-    fi
-
-    case "$section" in
-      staged|tracked)
-        if [ -n "$stash_oid" ] && git -C "$repo" cat-file -e "$stash_oid:$path" 2>/dev/null; then
-          if [ ! -f "$repo/$path" ] && [ ! -L "$repo/$path" ]; then
-            return 1
-          fi
-          if [ "$skip" -eq 0 ]; then
-            expected_hash="$(git -C "$repo" rev-parse "$stash_oid:$path" 2>/dev/null || echo missing)"
-            actual_hash="$(git -C "$repo" hash-object -- "$repo/$path" 2>/dev/null || echo missing)"
-            [ "$expected_hash" = "$actual_hash" ] || return 1
-          fi
-        fi
-        ;;
-      untracked)
-        if [ ! -e "$repo/$path" ] && [ ! -L "$repo/$path" ]; then
-          return 1
-        fi
-        if [ "$skip" -eq 0 ] && [ "$has_u3" -eq 1 ]; then
-          if git -C "$repo" cat-file -e "${stash_oid}^3:$path" 2>/dev/null; then
-            expected_hash="$(git -C "$repo" rev-parse "${stash_oid}^3:$path" 2>/dev/null || echo missing)"
-            if [ -f "$repo/$path" ]; then
-              actual_hash="$(git -C "$repo" hash-object -- "$repo/$path" 2>/dev/null || echo missing)"
-              [ "$expected_hash" = "$actual_hash" ] || return 1
-            fi
-          fi
-        fi
-        ;;
-    esac
-  done <"$inv"
-  return 0
+  [ -f "$inv" ] && [ -n "$stash_oid" ] || return 1
+  restore_head="$(vault_sync_op_get_field "$repo" "$op_id" restore_head)"
+  [ -n "$restore_head" ] || restore_head="$(git -C "$repo" rev-parse HEAD)" || return 1
+  helper="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify-stash-inventory.py"
+  python3 "$helper" "$repo" "$inv" "$stash_oid" "$restore_head" "$skip_content_paths"
 }
 
 vault_sync_op_stash_push_owned() {
