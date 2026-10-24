@@ -39,6 +39,8 @@ function runClaudeHook(cwd: string, extraEnv: Record<string, string> = {}): stri
       ...extraEnv,
     },
     encoding: "utf8",
+    timeout: 15_000,
+    killSignal: "SIGKILL",
   });
   return parseAdditionalContext(output);
 }
@@ -53,6 +55,8 @@ function runCodexHook(cwd: string, extraEnv: Record<string, string> = {}): strin
       ...extraEnv,
     },
     encoding: "utf8",
+    timeout: 15_000,
+    killSignal: "SIGKILL",
   });
   return parseAdditionalContext(output);
 }
@@ -66,6 +70,8 @@ function runRootAgyHook(cwd: string, extraEnv: Record<string, string> = {}): str
       ...extraEnv,
     },
     encoding: "utf8",
+    timeout: 15_000,
+    killSignal: "SIGKILL",
   });
   return parseAdditionalContext(output);
 }
