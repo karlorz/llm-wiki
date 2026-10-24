@@ -187,6 +187,20 @@ describe("workspace HTTP integration", () => {
     expect(store.session(ownerCookie)).toBeNull();
     expect(await (await request("/admin", { headers: { Cookie: `__Host-sw_session=${ownerCookie}` } })).text()).toContain("Sign in with GitHub");
   });
+  it("allows only the registered callback origin in consent form redirects", async () => {
+    const { request, ownerCookie, authorization } = await setup();
+    const headers = { Cookie: `__Host-sw_session=${ownerCookie}` };
+    const admin = await request("/admin", { headers });
+    expect(admin.headers.get("content-security-policy")).toContain("form-action 'self';");
+    const consent = await request("/workspace/authorize?" + authorization, { headers });
+    expect(consent.headers.get("content-security-policy")).toContain("form-action 'self' http://127.0.0.1:57891;");
+    expect(consent.headers.get("content-security-policy")).not.toContain("*");
+    authorization.set("redirect_uri", "https://unregistered.example/callback");
+    const denied = await request("/workspace/authorize?" + authorization, { headers });
+    expect(denied.status).toBe(400);
+    expect(denied.headers.get("content-security-policy")).toContain("form-action 'self';");
+    expect(denied.headers.get("content-security-policy")).not.toContain("unregistered.example");
+  });
   it("binds GitHub callback, rotates session and stores neither provider token nor secret", async () => {
     const { request, root, store } = await setup();
     const start = await request("/auth/github/start"); expect(start.status).toBe(303);
