@@ -1,6 +1,6 @@
 import { lstat, mkdir, open, readFile, readdir, realpath } from "node:fs/promises";
 import { mkdirSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { ReconcileGate } from "./reconcile.js";
 import { buildVaultRegistry, type VaultRegistry, type VaultRegistryEntry } from "./vault-registry.js";
 import type { VaultRuntime } from "./vault-runtime.js";
@@ -18,7 +18,7 @@ export interface WorkspaceStorage {
 /** Explicit local-development storage. It never reads production S3/env credentials. */
 export class LocalWorkspaceStorage implements WorkspaceStorage {
   private readonly roots: string;
-  constructor(directory: string) { mkdirSync(directory, { recursive: true, mode: 0o700 }); this.roots = realpathSync(resolve(directory)); }
+  constructor(directory: string) { mkdirSync(directory, { recursive: true, mode: 0o700 }); this.roots = realpathSync.native(resolve(directory)); }
   private root(w: Workspace): string {
     if (!/^v-[a-f0-9]{32}$/.test(w.vaultId)) throw new WorkspaceError("INVALID_VAULT_ID");
     return join(this.roots, w.vaultId);
@@ -28,10 +28,10 @@ export class LocalWorkspaceStorage implements WorkspaceStorage {
   }
   private async safeRoot(w: Workspace): Promise<string> {
     await mkdir(this.roots, { recursive: true, mode: 0o700 });
-    if (await realpath(this.roots) !== this.roots) throw new WorkspaceError("STORAGE_SYMLINK");
+    if (relative(this.roots, await realpath(this.roots)) !== "") throw new WorkspaceError("STORAGE_SYMLINK");
     const root = this.root(w);
     await mkdir(root, { recursive: true, mode: 0o700 });
-    if ((await lstat(root)).isSymbolicLink() || await realpath(root) !== root) throw new WorkspaceError("STORAGE_SYMLINK");
+    if ((await lstat(root)).isSymbolicLink() || relative(root, await realpath(root)) !== "") throw new WorkspaceError("STORAGE_SYMLINK");
     return root;
   }
   async schema() {

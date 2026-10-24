@@ -1,6 +1,6 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { buildVaultRegistry, type VaultRegistry, type VaultRegistryEntry } from "./vault-registry.js";
 import { LocalWorkspaceStorage, type WorkspaceStorage } from "./workspace-storage.js";
 import { WorkspaceError, type Workspace } from "./workspace-store.js";
@@ -34,7 +34,7 @@ export class ProductionWorkspaceStorage implements WorkspaceStorage {
   private readonly reconcile: (entry:VaultRegistryEntry)=>Promise<void> = entry=>rcloneCopyUpdate({remote:entry.rcloneRemote,bucket:entry.rclonePath,vaultDir:entry.localRoot,timeoutMs:entry.rcloneTimeoutMs})) {
   if (!options.prefix || options.prefix.split("/").some(p=>!p || p===".." || p===".") || /[\\\x00]/.test(options.prefix) || !Number.isSafeInteger(options.reconcileIntervalMs) || options.reconcileIntervalMs<0) throw new WorkspaceError("INVALID_WORKSPACE_STORAGE");
   mkdirSync(options.localRoot,{recursive:true,mode:0o700});
-  this.options={...options,localRoot:realpathSync(resolve(options.localRoot))};
+  this.options={...options,localRoot:realpathSync.native(resolve(options.localRoot))};
   // Validate the whole reserved namespace against every existing legacy wiki.
   buildVaultRegistry([...legacy.entries.values(),{vaultId:"workspace-reserved",isDefault:false,localRoot:this.options.localRoot,rcloneRemote:options.remote,rclonePath:`${options.bucket}/${options.prefix}`,s3Endpoint:options.endpoint,s3Bucket:options.bucket,s3Prefix:options.prefix,s3Region:options.region}]);
   this.local=new LocalWorkspaceStorage(this.options.localRoot);
@@ -51,9 +51,9 @@ export class ProductionWorkspaceStorage implements WorkspaceStorage {
  }
  private async checkRoot(w:Workspace):Promise<void> {
   const entry=this.binding(w);
-  if(await realpath(this.options.localRoot)!==this.options.localRoot)throw new WorkspaceError("STORAGE_SYMLINK");
+  if(relative(this.options.localRoot,await realpath(this.options.localRoot))!=="")throw new WorkspaceError("STORAGE_SYMLINK");
   const stat=await lstat(entry.localRoot);
-  if(!stat.isDirectory() || stat.isSymbolicLink() || await realpath(entry.localRoot)!==entry.localRoot)throw new WorkspaceError("STORAGE_SYMLINK");
+  if(!stat.isDirectory() || stat.isSymbolicLink() || relative(entry.localRoot,await realpath(entry.localRoot))!=="")throw new WorkspaceError("STORAGE_SYMLINK");
  }
  async provision(w:Workspace):Promise<void> {
   if(w.origin==="legacy")throw new WorkspaceError("LEGACY_PROVISIONING_DENIED");

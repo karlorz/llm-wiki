@@ -2289,7 +2289,7 @@ describe("lint fingerprints and runSyncLintDelta", () => {
 
     const { exitCode, result } = await runSyncLintDelta({ vault: dir, baseRef: "origin/main" });
     // The Windows failure mode was LINT_DELTA_ARCHIVE_FAILED (result.ok=false).
-    expect(result.ok).toBe(true);
+    expect(result.ok, JSON.stringify(result)).toBe(true);
     if (result.ok) {
       expect(result.data.new_errors).toBe(0);
       expect(result.data.base_errors).toBe(0);
