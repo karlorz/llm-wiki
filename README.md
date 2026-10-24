@@ -238,6 +238,12 @@ separate per-workspace MCP consent. Existing trusted-host credentials remain
 supported. Deployment-time CLI migration binds existing wikis in place;
 wiki content browsing stays in Obsidian.
 
+To connect an agent, choose either the [Connector request or Skill + CLI
+request](docs/workspace-onboarding.md). Both use one versioned non-secret
+connection profile, preserve saved service/workspace bindings and require
+separate workspace consent. Installation commands above install skills; they
+do not authorize wiki access.
+
 `docker-compose.coolify.yml` is an optional later deployment path for the MCP
 daemon only, parked for cloud01 pending a short deployment grill. It does not
 include the snapshotter, FUSE, research, or session-brief units, and it is not a
