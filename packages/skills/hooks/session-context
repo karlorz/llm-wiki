@@ -420,13 +420,27 @@ EOF
 }
 
 escape_for_json() {
-    local s="$1"
-    s="${s//\\/\\\\}"
-    s="${s//\"/\\\"}"
-    s="${s//$'\n'/\\n}"
-    s="${s//$'\r'/\\r}"
-    s="${s//$'\t'/\\t}"
-    printf '%s' "$s"
+    # Bash 3.2 global substitutions become prohibitively slow on full skill
+    # context. Escape in one byte-wise pass; UTF-8 bytes pass through intact.
+    # The added record delimiter preserves original trailing newlines.
+    # BINMODE prevents Windows awk from translating CRLF input; other awk
+    # implementations treat it as an ordinary unused variable.
+    printf '%s\n' "$1" | LC_ALL=C awk -v BINMODE=3 '
+        BEGIN {
+            escapes["\\"] = "\\\\"
+            escapes["\""] = "\\\""
+            for (i = 1; i < 32; i++) {
+                escapes[sprintf("%c", i)] = sprintf("\\u%04x", i)
+            }
+        }
+        {
+            if (NR > 1) printf "\\n"
+            for (i = 1; i <= length($0); i++) {
+                ch = substr($0, i, 1)
+                printf "%s", (ch in escapes ? escapes[ch] : ch)
+            }
+        }
+    '
 }
 
 read_skill_content() {

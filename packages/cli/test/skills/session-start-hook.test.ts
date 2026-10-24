@@ -39,6 +39,8 @@ function runClaudeHook(cwd: string, extraEnv: Record<string, string> = {}): stri
       ...extraEnv,
     },
     encoding: "utf8",
+    timeout: 15_000,
+    killSignal: "SIGKILL",
   });
   return parseAdditionalContext(output);
 }
@@ -53,6 +55,8 @@ function runCodexHook(cwd: string, extraEnv: Record<string, string> = {}): strin
       ...extraEnv,
     },
     encoding: "utf8",
+    timeout: 15_000,
+    killSignal: "SIGKILL",
   });
   return parseAdditionalContext(output);
 }
@@ -66,6 +70,8 @@ function runRootAgyHook(cwd: string, extraEnv: Record<string, string> = {}): str
       ...extraEnv,
     },
     encoding: "utf8",
+    timeout: 15_000,
+    killSignal: "SIGKILL",
   });
   return parseAdditionalContext(output);
 }
@@ -121,6 +127,19 @@ exit 64
 }
 
 describe("SessionStart hook", () => {
+  it.each(process.platform === "darwin" ? ["bash", "/bin/bash"] : ["bash"])(
+    "escapes a full-sized Unicode context promptly with %s",
+    (shell) => {
+      const context = 'Wiki "quoted" \\ path\t中文\r\n\b\f\u0001\n'.repeat(800);
+      const escaped = execFileSync(shell, [
+        "-c", 'source "$1"; IFS= read -r -d "" context || true; escape_for_json "$context"', "skillwiki-escape-test",
+        join(SKILLS_DIR, "hooks", "session-context"),
+      ], { input: context, encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL" });
+
+      expect(JSON.parse(`"${escaped}"`)).toBe(context);
+    },
+  );
+
   it("defaults to the built-in adaptive native workflow without project config", () => {
     const project = tempProject();
 

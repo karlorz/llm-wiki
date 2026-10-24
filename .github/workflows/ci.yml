@@ -68,7 +68,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run -w skillwiki build
+      - name: Bound session-start hook regression
+        timeout-minutes: 3
+        run: npm run -w skillwiki test -- test/skills/session-start-hook.test.ts --reporter verbose
       - run: npm test
+        timeout-minutes: 15
       - run: npm run -w @skillwiki/mcp-server test
       - run: npm run typecheck
       - name: install --dry-run smoke

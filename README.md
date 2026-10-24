@@ -232,6 +232,12 @@ memory research, and session-brief publication, grouped under the
 `skillwiki-backend.target` systemd family target; those responsibilities stay
 outside the MCP daemon.
 
+The opt-in [workspace administration console](packages/mcp-server/WORKSPACES.md)
+adds GitHub sign-in, explicit membership, one isolated wiki per workspace and
+separate per-workspace MCP consent. Existing trusted-host credentials remain
+supported. Deployment-time CLI migration binds existing wikis in place;
+wiki content browsing stays in Obsidian.
+
 `docker-compose.coolify.yml` is an optional later deployment path for the MCP
 daemon only, parked for cloud01 pending a short deployment grill. It does not
 include the snapshotter, FUSE, research, or session-brief units, and it is not a
