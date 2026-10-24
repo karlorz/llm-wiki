@@ -1,0 +1,26 @@
+{
+  "profile_version": 1,
+  "service": "skillwiki-workspace",
+  "default_mcp_url": "https://wiki.karldigi.dev/mcp",
+  "endpoint_selection_order": [
+    "explicit_user_selection",
+    "saved_connection",
+    "default_mcp_url"
+  ],
+  "transport": "streamable-http",
+  "authentication": {
+    "grant_types": ["authorization_code", "refresh_token"],
+    "client_registration": "dynamic-public-client",
+    "pkce_method": "S256",
+    "protected_resource_metadata_path": "/.well-known/oauth-protected-resource",
+    "authorization_server_metadata_path": "/.well-known/oauth-authorization-server",
+    "scopes": {
+      "read": ["wiki:read"],
+      "read_write": ["wiki:read", "wiki:write"],
+      "offline_refresh": "offline_access"
+    }
+  },
+  "authorization_boundary": "one-workspace-per-grant",
+  "credentials": "private-host-storage-bound-to-service-and-workspace",
+  "revocation": "workspace-console"
+}

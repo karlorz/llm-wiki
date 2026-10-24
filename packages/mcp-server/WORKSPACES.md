@@ -118,10 +118,14 @@ never falls back to a default service. Different services/workspaces use distinc
 profile files. Ambiguous refresh/network failure may require fresh consent; the
 helper does not replay a refresh automatically.
 
-This helper is currently a local development entry point, not a published plugin
-or an automatic installer. The existing `skillwiki connect` host-id contract is
-unchanged. Generic one-sentence installation prompts should be finalized only
-after actual host integration is verified.
+This helper is a source-built entry point, not a published plugin or an automatic
+installer. The existing `skillwiki connect` host-id contract is unchanged.
+[Two reusable setup requests](../../docs/workspace-onboarding.md) share a
+[versioned non-secret connection profile](../../docs/workspace-connection.v1.json)
+and distinguish native OAuth MCP, a supported vaulted helper and terminal
+capabilities. Actual Muse helper and terminal acceptance results and their
+refresh-test limits are recorded in that guide; installing skills alone grants
+no wiki access.
 
 ## Production configuration
 
