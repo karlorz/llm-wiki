@@ -423,7 +423,9 @@ escape_for_json() {
     # Bash 3.2 global substitutions become prohibitively slow on full skill
     # context. Escape in one byte-wise pass; UTF-8 bytes pass through intact.
     # The added record delimiter preserves original trailing newlines.
-    printf '%s\n' "$1" | LC_ALL=C awk '
+    # BINMODE prevents Windows awk from translating CRLF input; other awk
+    # implementations treat it as an ordinary unused variable.
+    printf '%s\n' "$1" | LC_ALL=C awk -v BINMODE=3 '
         BEGIN {
             escapes["\\"] = "\\\\"
             escapes["\""] = "\\\""

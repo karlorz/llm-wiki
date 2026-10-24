@@ -132,9 +132,9 @@ describe("SessionStart hook", () => {
     (shell) => {
       const context = 'Wiki "quoted" \\ path\t中文\r\n\b\f\u0001\n'.repeat(800);
       const escaped = execFileSync(shell, [
-        "-c", 'source "$1"; escape_for_json "$2"', "skillwiki-escape-test",
-        join(SKILLS_DIR, "hooks", "session-context"), context,
-      ], { encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL" });
+        "-c", 'source "$1"; IFS= read -r -d "" context || true; escape_for_json "$context"', "skillwiki-escape-test",
+        join(SKILLS_DIR, "hooks", "session-context"),
+      ], { input: context, encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL" });
 
       expect(JSON.parse(`"${escaped}"`)).toBe(context);
     },
