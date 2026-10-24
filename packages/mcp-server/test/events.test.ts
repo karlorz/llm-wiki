@@ -73,6 +73,15 @@ describe("SSE /events", () => {
     }
   });
 
+  it("closes revoked subscribers before delivering further events", () => {
+    const hub = new ChangedEventHub({ pingMs: 0 }); let allowed = true, ended = 0; const writes: string[] = [];
+    const response = { writeHead() {}, write(value: string) { writes.push(value); }, end() { ended++; }, on() {} } as unknown as ServerResponse;
+    hub.subscribe(response, { allowedVaults: ["private"], authorized: () => allowed });
+    hub.emitChanged(["before.md"], "private"); allowed = false; hub.emitChanged(["after.md"], "private");
+    expect(ended).toBe(1); expect(writes.join("")).toContain("before.md"); expect(writes.join("")).not.toContain("after.md");
+    hub.stop(); expect(ended).toBe(1);
+  });
+
   it("emitChanged after stop writes nothing, ends clients, and clears the set", () => {
     const hub = new ChangedEventHub({ pingMs: 0 });
     const writes: string[] = [];

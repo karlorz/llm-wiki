@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client, S3ServiceException } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client, S3ServiceException } from "@aws-sdk/client-s3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -20,6 +20,13 @@ import { rcloneCopyUpdate, ReconcileGate } from "./reconcile.js";
 import { DEFAULT_VAULT_ID } from "./vault-id.js";
 import { singletonVaultInput, buildVaultRegistry, resolveVaultS3AdapterTarget, type VaultRegistry } from "./vault-registry.js";
 import { resolveVaultContext, type VaultRuntime } from "./vault-runtime.js";
+import { WorkspaceWeb } from "./workspace-web.js";
+import { WorkspaceStore } from "./workspace-store.js";
+import { WorkspaceGitHub } from "./workspace-github.js";
+import { WorkspaceProvisioner } from "./workspace-storage.js";
+import { ProductionWorkspaceStorage, type WorkspaceObjectStore } from "./workspace-production.js";
+import { workspaceDeploymentConfig } from "./workspace-config.js";
+import type { WorkspaceAction } from "./workspace-store.js";
 import {
   mcpCompletionCompleteAfterShutdownError,
   mcpCompletionCompleteBeforeInitializeError,
@@ -99,6 +106,10 @@ export interface HttpServerOptions extends S3WriteHealth {
   registry?: VaultRegistry;
   runtimes?: Map<string, VaultRuntime>;
   fileIngressTokenSha256?: string;
+  /** Opt-in user control plane; never enables or exposes /console. */
+  workspaceWeb?: WorkspaceWeb;
+  authorizeWorkspaceAction?: (action: WorkspaceAction) => boolean;
+  workspaceIdentity?: { id: string; grant: string };
 }
 
 const MAX_MCP_BODY_BYTES = 1048576; // 1 MiB
@@ -220,7 +231,10 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
     { instructions: MCP_INSTRUCTIONS + mcpInstructionsHandshakeTrailer(handshake) },
   );
 
-  const bind = (requested: string | undefined) => {
+  const bind = (requested: string | undefined, action: WorkspaceAction = "read") => {
+    if (opts.authorizeWorkspaceAction && !opts.authorizeWorkspaceAction(action)) {
+      return { ok: false as const, error: "VAULT_UNAUTHORIZED" as const, message: "workspace action is no longer authorized" };
+    }
     const resolved = resolveVaultContext({
       requested,
       principal: opts.principal,
@@ -387,6 +401,15 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
     async (args) => {
       const selected = bind(args.vault);
       if (!selected.ok) return toolResult(selected, true);
+      if (opts.workspaceIdentity) {
+        if (args.host_id !== undefined && args.host_id !== opts.hostId) return toolResult({ ok: false, error: "USAGE", message: "unknown host-id" }, true);
+        // User grants have no fleet-host identity. Do not inspect daemon-home
+        // projections, Git remotes or global credentials on their behalf.
+        return toolResult({ ok: true, vault_id: selected.reads.vaultId, workspace_id: opts.workspaceIdentity.id,
+          connection_id: opts.workspaceIdentity.grant, writer_id: opts.hostId,
+          reconcile_ready: selected.reads.gate.ready, storage_ready: selected.reads.s3Writable === true,
+          vaults: selected.reads.vaultReadiness, identity_kind: "workspace" });
+      }
       const out = await handleWikiStatus(selected.reads, args);
       return toolResult(out, !out.ok);
     },
@@ -628,7 +651,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       },
     },
     async (args) => {
-      const selected = bind(args.vault);
+      const selected = bind(args.vault, "write");
       if (!selected.ok) return toolResult(selected, true);
       const out = await wikiCapture(selected.writes, args);
       return writeToolResult(out, selected.writes.vaultId);
@@ -664,7 +687,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       },
     },
     async (args) => {
-      const selected = bind(args.vault);
+      const selected = bind(args.vault, "write");
       if (!selected.ok) return toolResult(selected, true);
       const out = await wikiLogAppend(selected.writes, args);
       return writeToolResult(out, selected.writes.vaultId);
@@ -696,7 +719,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       },
     },
     async (args) => {
-      const selected = bind(args.vault);
+      const selected = bind(args.vault, "write");
       if (!selected.ok) return toolResult(selected, true);
       const out = await wikiWorkitemWrite(selected.writes, args);
       return writeToolResult(out, selected.writes.vaultId);
@@ -726,7 +749,7 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       },
     },
     async (args) => {
-      const selected = bind(args.vault);
+      const selected = bind(args.vault, "write");
       if (!selected.ok) return toolResult(selected, true);
       const out = await wikiPagePublish(selected.writes, args);
       return writeToolResult(out, selected.writes.vaultId);
@@ -757,7 +780,7 @@ async function streamToBuffer(stream: unknown): Promise<Buffer> {
   throw new Error("unsupported S3 stream body");
 }
 
-export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: string; prefix?: string; endpoint?: string }, requestTimeoutMs?: number): S3Adapter & { deleteObject: (path: string) => Promise<void> } {
+export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: string; prefix?: string; endpoint?: string }, requestTimeoutMs?: number): WorkspaceObjectStore {
   const endpoint = namespace?.endpoint ?? cfg.s3Endpoint;
   const bucket = namespace?.bucket ?? cfg.s3Bucket;
   const prefix = namespace?.prefix ?? cfg.s3Prefix;
@@ -820,7 +843,17 @@ export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: str
   const deleteObject = async (relPath: string) => {
     await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: resolveKey(relPath) }), requestOptions());
   };
-  return { putObject, getObject, deleteObject };
+  const createObject = async (relPath: string, body: Buffer): Promise<boolean> => {
+    try { await client.send(new PutObjectCommand({ Bucket: bucket, Key: resolveKey(relPath), Body: body, IfNoneMatch: "*" }), requestOptions()); return true; }
+    catch (error) { if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 412) return false; throw error; }
+  };
+  const listKeys = async (): Promise<string[]> => {
+    const base = prefix ? `${prefix}/` : "";
+    const listed = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: base, MaxKeys: 1000 }), requestOptions());
+    if (listed.IsTruncated) throw new Error("workspace namespace inventory exceeds initialization limit");
+    return (listed.Contents ?? []).map(x => x.Key!).filter(Boolean).map(key => key.slice(base.length));
+  };
+  return { putObject, getObject, deleteObject, createObject, listKeys };
 }
 
 export function createPutObject(cfg: McpDaemonConfig): PutObject {
@@ -837,6 +870,11 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
     ? opts.oauth?.store ?? (opts.oauth?.stateDir ? new FileOAuthStore(opts.oauth.stateDir) : undefined)
     : undefined;
   const vaultState = ensureVaultState(opts);
+  if (opts.workspaceWeb && (!oauthStore || opts.oauth?.issuer?.replace(/\/+$/, "") !== opts.workspaceWeb.issuer)) {
+    throw new Error("workspace administration requires OAuth with the same fixed issuer");
+  }
+  // Resume only native provisioning operations. Legacy migration has no startup hook.
+  await opts.workspaceWeb?.options.provisioner.resumePending();
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const host = req.headers.host ?? "127.0.0.1";
@@ -909,6 +947,24 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
       return;
     }
 
+    if (opts.workspaceWeb && (opts.workspaceWeb.isPath(path) || path === "/token")) {
+      let raw = "";
+      if (req.method === "POST") {
+        try { raw = await readBody(req, 65536); }
+        catch { json(res, 413, { error: "payload_too_large" }); return; }
+      }
+      if (await opts.workspaceWeb.handle(req, res, raw, oauthStore)) return;
+      // Legacy /token must receive the same body; IncomingMessage is already drained.
+      if (path === "/token" && oauthStore && opts.oauth) {
+        if (await handleOAuthRequest(req, res, raw, opts.oauth, oauthStore)) return;
+      }
+    }
+
+    if (opts.workspaceWeb && req.method === "GET" && path === "/.well-known/oauth-authorization-server") {
+      json(res, 200, { issuer, authorization_endpoint: `${issuer}/workspace/authorize`, token_endpoint: `${issuer}/token`, registration_endpoint: `${issuer}/register`,
+        code_challenge_methods_supported: ["S256"], grant_types_supported: ["authorization_code", "refresh_token"], response_types_supported: ["code"], scopes_supported: ["wiki:read", "wiki:write", "offline_access"], token_endpoint_auth_methods_supported: ["none"] }); return;
+    }
+
     if (oauthEnabled && oauthStore && opts.oauth) {
       const isOauthPath =
         path === "/.well-known/oauth-protected-resource" ||
@@ -963,26 +1019,39 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
     }
 
     const authHeader = typeof req.headers.authorization === "string" ? req.headers.authorization : undefined;
-    const resolved = await resolveWriter(authHeader, {
+    const suppliedToken = bearerToken(authHeader);
+    const scoped = suppliedToken?.startsWith("sw_") ? opts.workspaceWeb?.options.store.resolveAccess(suppliedToken) : undefined;
+    const resolved = suppliedToken?.startsWith("sw_") ? null : await resolveWriter(authHeader, {
       tokenMap: opts.tokenMap,
       oauthStore,
     });
 
-    if (!resolved) {
+    if (!resolved && !scoped) {
       const prmUrl = oauthEnabled ? `${issuer}/.well-known/oauth-protected-resource` : undefined;
       json(res, 401, { error: "unauthorized" }, unauthorizedHeaders(prmUrl));
       return;
     }
 
-    const hostId = resolved.writerId;
+    const hostId = scoped ? `workspace-${scoped.grant.id}` : resolved!.writerId;
     const granted =
-      resolved.source === "host"
+      resolved?.source === "host"
         ? resolved.principal?.allowedVaults
         : resolveWriterVaults(hostId, opts.oauth?.writers);
-    const principal = normalizeGrants(hostId, granted, vaultState.registry);
+    // Workspace credentials never enter legacy normalizeGrants/default-vault fallback.
+    const principal: Principal = scoped ? { writerId: hostId, defaultVault: scoped.workspace.vaultId, allowedVaults: [scoped.workspace.vaultId] } : normalizeGrants(hostId, granted, vaultState.registry);
+    const authorizeWorkspaceAction = scoped ? (action: WorkspaceAction): boolean => {
+      const live = opts.workspaceWeb!.options.store.resolveAccess(suppliedToken!);
+      return Boolean(live && live.grant.id === scoped.grant.id && live.grant.actions.includes(action));
+    } : undefined;
+    let requestVaultState = vaultState;
+    if (scoped) {
+      try { requestVaultState = await opts.workspaceWeb!.options.provisioner.context(scoped.workspace, vaultState.registry); }
+      catch { json(res, 503, { error: "workspace_storage_unavailable" }); return; }
+    }
 
     if (req.method === "GET" && (path === "/events" || path === "/mcp/events")) {
-      hub.subscribe(res, { allowedVaults: principal.allowedVaults });
+      if (authorizeWorkspaceAction && !authorizeWorkspaceAction("read")) { json(res, 403, { error: "access_denied" }); return; }
+      hub.subscribe(res, { allowedVaults: principal.allowedVaults, authorized: authorizeWorkspaceAction ? () => authorizeWorkspaceAction("read") : undefined });
       return;
     }
 
@@ -1221,8 +1290,10 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
         hostId,
         principal,
         hub,
-        registry: vaultState.registry,
-        runtimes: vaultState.runtimes,
+        registry: requestVaultState.registry,
+        runtimes: requestVaultState.runtimes,
+        authorizeWorkspaceAction,
+        workspaceIdentity: scoped ? { id: scoped.workspace.id, grant: scoped.grant.id } : undefined,
       });
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
@@ -1311,6 +1382,19 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
   const defaultRt = runtimes.get(registry.defaultVaultId);
   if (!defaultRt) throw new Error("default vault runtime missing");
 
+  const deployment = workspaceDeploymentConfig(env, cfg);
+  let workspaceStore: WorkspaceStore | undefined;
+  let workspaceStorage: ProductionWorkspaceStorage | undefined;
+  let workspaceWeb: WorkspaceWeb | undefined;
+  if (deployment) {
+    workspaceStore = new WorkspaceStore(deployment.stateDir);
+    try {
+      workspaceStorage = new ProductionWorkspaceStorage(deployment.storage, registry, runtimes, entry => createS3Adapter(cfg, { endpoint:entry.s3Endpoint, bucket:entry.s3Bucket, prefix:entry.s3Prefix }, 30_000));
+      const provisioner = new WorkspaceProvisioner(workspaceStore, workspaceStorage, registry);
+      workspaceWeb = new WorkspaceWeb({issuer:deployment.issuer,store:workspaceStore,provisioner,github:new WorkspaceGitHub(deployment.issuer,deployment.github),creationAllowlist:deployment.creatorIds,grantLifetimeMs:deployment.grantLifetimeMs,invitationLifetimeMs:deployment.invitationLifetimeMs});
+    } catch(error) { workspaceStorage?.close(); workspaceStore.close(); throw error; }
+  }
+
   const server = await startMcpHttpServer({
     bind: cfg.bind,
     port: cfg.port,
@@ -1326,10 +1410,12 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     oauth: cfg.oauth,
     registry,
     runtimes,
-  });
+    workspaceWeb,
+  }).catch(error => { workspaceStorage?.close(); workspaceStore?.close(); throw error; });
 
   const stopPulses: Array<() => void> = [];
-  server.once("close", () => { for (const stop of stopPulses) stop(); });
+  server.once("close", () => { for (const stop of stopPulses) stop(); workspaceStorage?.close(); workspaceStore?.close(); });
+  for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => { server.closeAllConnections(); server.close(); });
   for (const rt of runtimes.values()) {
     stopPulses.push(startS3WritePulse({
       hostId: env.SKILLWIKI_HOST_ID ?? hostname(),
@@ -1347,6 +1433,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
         });
       }, interval);
       timer.unref?.();
+      stopPulses.push(() => clearInterval(timer));
     }
   }
 
