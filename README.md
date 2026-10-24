@@ -4,15 +4,29 @@ Project-aware Karpathy-style knowledge base for Claude Code skills.
 
 ## Agent setup
 
-Choose one setup request below and give it to your agent. For a new connection,
-the default MCP URL is `https://wiki.karldigi.dev/mcp`. Preserve a saved service
-address and workspace unless you explicitly request a change. Both routes use
-the same [versioned connection profile](docs/workspace-connection.v1.json) and
+First choose **which workspace/wiki to use**, then choose **how the agent
+connects**. These are separate choices:
+
+| Workspace choice | Before connecting the agent |
+| --- | --- |
+| Use an existing workspace wiki | Sign in with GitHub and select a workspace you belong to. A new user needs an invitation from an Owner before accessing it. Reuse a matching working connection or approve a separate agent connection. |
+| Create a new workspace and wiki | Sign in, then create a workspace only if your account has creation permission. Wait for its isolated wiki to become ready; you become its Owner. Authorize the agent separately afterward. If creation is unavailable, ask the operator for permission or an invitation. |
+
+A new user does not necessarily need a new wiki: they can join an existing
+workspace. Sign-in alone creates neither a wiki nor an agent grant. An existing
+local/Obsidian vault needs a separate operator migration before it can be used
+as a workspace wiki; connecting an agent does not import or upload it.
+
+Then give your agent one of the two requests below. Both work with an existing
+or a newly created workspace. For a new connection, the default MCP URL is
+`https://wiki.karldigi.dev/mcp`. Preserve a saved service address and workspace
+unless you explicitly request a change. Both routes use the same
+[versioned connection profile](docs/workspace-connection.v1.json) and
 [setup guide](docs/workspace-onboarding.md).
 
 ### Connector
 
-> Connect this agent to my SkillWiki workspace using https://github.com/karlorz/llm-wiki/blob/main/docs/workspace-onboarding.md and its linked connection profile. Preserve a saved MCP address and workspace unless I explicitly request a change; for a new connection use https://wiki.karldigi.dev/mcp by default. Follow this host's supported native OAuth MCP or secure vaulted-helper setup. Reuse a matching working connection, or let me complete GitHub sign-in and separate workspace consent for only the actions I need. Keep credentials private, verify workspace identity and one S3-verified SCHEMA.md read, and report unsupported steps. Do not paste secrets into chat or change other connections.
+> Connect this agent to my SkillWiki workspace using https://github.com/karlorz/llm-wiki/blob/main/docs/workspace-onboarding.md and its linked connection profile. Use my selected existing or newly created workspace; ask if the target is unclear, and do not create or import a wiki automatically. Preserve a saved MCP address and workspace unless I explicitly request a change; for a new connection use https://wiki.karldigi.dev/mcp by default. Follow this host's supported native OAuth MCP or secure vaulted-helper setup. Reuse a matching working connection, or let me complete GitHub sign-in and separate workspace consent for only the actions I need. Keep credentials private, verify workspace identity and one S3-verified SCHEMA.md read, and report unsupported steps. Do not paste secrets into chat or change other connections.
 
 Use this route when the host supports a remote OAuth MCP connector or a
 documented secure connector framework. GitHub sign-in and workspace consent may
@@ -21,7 +35,7 @@ when a suitable terminal is available.
 
 ### Skill + CLI
 
-> Set up SkillWiki Skill + CLI from https://github.com/karlorz/llm-wiki following docs/workspace-onboarding.md and its linked connection profile. Install the relevant skills through this host's supported route and use an OAuth-capable terminal client or the documented source-built workspace helper. Preserve an existing installation, saved MCP address and workspace unless I explicitly request a change; for a new connection use https://wiki.karldigi.dev/mcp by default. Reuse a matching working connection or guide me through GitHub sign-in and one-workspace consent. Save credentials privately and verify workspace identity and one S3-verified SCHEMA.md read. Do not run skillwiki init, share tokens, print secrets or change sync/Obsidian storage. Stop if the terminal callback is unreachable.
+> Set up SkillWiki Skill + CLI from https://github.com/karlorz/llm-wiki following docs/workspace-onboarding.md and its linked connection profile. Use my selected existing or newly created workspace; ask if the target is unclear, and do not create or import a wiki automatically. Install the relevant skills through this host's supported route and use an OAuth-capable terminal client or the documented source-built workspace helper. Preserve an existing installation, saved MCP address and workspace unless I explicitly request a change; for a new connection use https://wiki.karldigi.dev/mcp by default. Reuse a matching working connection or guide me through GitHub sign-in and one-workspace consent. Save credentials privately and verify workspace identity and one S3-verified SCHEMA.md read. Do not run skillwiki init, share tokens, print secrets or change sync/Obsidian storage. Stop if the terminal callback is unreachable.
 
 Use this route on a terminal host with the required runtime. The repository
 helper needs Node 20 or newer and a browser on the same machine for its loopback

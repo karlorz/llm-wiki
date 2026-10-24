@@ -5,6 +5,28 @@ Use one of the two requests below. Both use the same versioned, non-secret
 service contract; it is not a credential file or an input accepted by
 `skillwiki connect`.
 
+## Choose a workspace first
+
+Workspace onboarding and agent connection are separate steps. An existing user
+or a new user can use either connection route below once they belong to the
+intended active workspace:
+
+- **Existing workspace wiki:** sign in, accept an Owner's exact-identity
+  invitation if needed, and select the intended workspace. Reuse a matching
+  working agent connection or grant a separate one. Do not create another wiki
+  to access the existing one.
+- **New workspace wiki:** sign in and create a workspace only when your account
+  has explicit creation permission. Wait for provisioning to finish; this
+  creates an isolated wiki and makes you its Owner. Agent consent is a separate
+  step afterward. When creation is unavailable, request operator permission or
+  an invitation rather than bypassing the restriction.
+
+Sign-in alone creates neither membership nor a wiki nor an MCP grant. A local
+Obsidian vault is not automatically a registered workspace: importing/binding
+existing storage is a separate operator migration. Neither setup request below
+authorizes creating a workspace, migrating content or uploading a local vault.
+If the intended workspace is unclear, ask before proceeding.
+
 An explicit service URL takes precedence. Otherwise retain the saved connection
 and its workspace; a new setup defaults to `https://wiki.karldigi.dev/mcp`.
 Changing a service or workspace requires separate consent and separate private
@@ -19,6 +41,8 @@ https://github.com/karlorz/llm-wiki/blob/main/docs/workspace-onboarding.md
 and its linked version-1 connection profile. Retain an existing matching
 service/workspace connection unless I explicitly ask to replace it; otherwise
 use the profile's default MCP URL unless I provide another compatible URL.
+Use my selected existing or newly created workspace; ask if the target is
+unclear. Do not create a workspace or import an existing vault automatically.
 Use this host's native OAuth MCP connector, or its documented secure connector
 framework if native MCP is unavailable. Verify live discovery, use public-client
 registration and S256 PKCE, and let me complete GitHub sign-in and explicit
@@ -48,7 +72,9 @@ Connect this terminal agent to my SkillWiki workspace using the Skill + CLI
 route in https://github.com/karlorz/llm-wiki/blob/main/docs/workspace-onboarding.md
 and its linked version-1 connection profile. Retain a matching saved connection;
 for a new connection use the default MCP URL unless I explicitly provide a
-compatible alternate. Use an OAuth-capable terminal client or the repository's
+compatible alternate. Use my selected existing or newly created workspace; ask
+if the target is unclear. Do not create a workspace or import a vault
+automatically. Use an OAuth-capable terminal client or the repository's
 workspace helper, not a shared legacy host token. Check the required runtime and
 live discovery, let me complete GitHub sign-in and one-workspace consent, and
 save a separate private profile for this service and workspace without printing
