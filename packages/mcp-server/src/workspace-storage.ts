@@ -127,7 +127,7 @@ export class WorkspaceProvisioner {
       return;
     }
     const siblings = this.store.snapshot().workspaces.filter(other => other.id !== w.id && other.origin !== "legacy").map(other => this.storage.binding(other));
-    buildVaultRegistry([...legacy.entries.values()].map(e => ({ ...e, localRoot: realpathSync(e.localRoot) })).concat([...siblings, entry].map(e => ({ ...e, isDefault: false,
+    buildVaultRegistry([...legacy.entries.values()].map(e => ({ ...e, localRoot: realpathSync.native(e.localRoot) })).concat([...siblings, entry].map(e => ({ ...e, isDefault: false,
       s3Bucket: e.s3Bucket ?? "local-development", s3Prefix: e.s3Prefix || e.vaultId,
       rclonePath: e.s3Bucket ? e.rclonePath : `local-development/${e.vaultId}` }))));
   }

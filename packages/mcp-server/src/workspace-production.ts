@@ -36,7 +36,7 @@ export class ProductionWorkspaceStorage implements WorkspaceStorage {
   mkdirSync(options.localRoot,{recursive:true,mode:0o700});
   this.options={...options,localRoot:realpathSync.native(resolve(options.localRoot))};
   // Validate the whole reserved namespace against every existing legacy wiki.
-  buildVaultRegistry([...legacy.entries.values(),{vaultId:"workspace-reserved",isDefault:false,localRoot:this.options.localRoot,rcloneRemote:options.remote,rclonePath:`${options.bucket}/${options.prefix}`,s3Endpoint:options.endpoint,s3Bucket:options.bucket,s3Prefix:options.prefix,s3Region:options.region}]);
+  buildVaultRegistry([...legacy.entries.values()].map(e=>({...e,localRoot:e.enabled?realpathSync.native(e.localRoot):e.localRoot})).concat([{vaultId:"workspace-reserved",isDefault:false,enabled:true,label:"Reserved workspace storage",localRoot:this.options.localRoot,rcloneRemote:options.remote,rclonePath:`${options.bucket}/${options.prefix}`,s3Endpoint:options.endpoint,s3Bucket:options.bucket,s3Prefix:options.prefix,s3Region:options.region}]));
   this.local=new LocalWorkspaceStorage(this.options.localRoot);
  }
  binding(w:Workspace):VaultRegistryEntry {

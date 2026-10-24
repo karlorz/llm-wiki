@@ -67,7 +67,7 @@ describe("workspace HTTP integration", () => {
   it("provisions isolated minimum schema and leaves legacy bytes untouched", async () => {
     const { store, root, legacy, w, beta } = await setup();
     expect(store.operation("11", w.operation).state).toBe("active");
-    expect(await readdir(join(root, "native", w.vaultId))).toEqual(["SCHEMA.md", "index.md", "log.md"]);
+    expect((await readdir(join(root, "native", w.vaultId))).sort()).toEqual(["SCHEMA.md", "index.md", "log.md"]);
     expect(w.vaultId).not.toBe(beta.vaultId); expect(await readFile(join(legacy, "SCHEMA.md"), "utf8")).toBe("LEGACY PRIVATE CONTENT");
   });
   it("advertises workspace OAuth and completes explicit consent, PKCE, token and MCP read", async () => {
