@@ -68,8 +68,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run -w skillwiki build
-      - name: Bound macOS session-start hook regression
-        if: runner.os == 'macOS'
+      - name: Bound session-start hook regression
         timeout-minutes: 3
         run: npm run -w skillwiki test -- test/skills/session-start-hook.test.ts --reporter verbose
       - run: npm test
