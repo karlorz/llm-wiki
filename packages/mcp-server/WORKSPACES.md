@@ -167,10 +167,13 @@ override this with `no-referrer`, which makes Chromium submit `Origin: null`.
 Cross-origin destinations still receive no referrer. For an existing 0.10.117
 deployment awaiting the source fix, the workspace-only reverse proxy can apply
 `header_down Referrer-Policy same-origin`; keep all origin/CSRF checks enabled.
-Consent HTML additionally allows the exact validated registered callback origin
-in CSP `form-action`, because Chromium checks the redirect after the consent
-POST. Other console pages remain self-only. Do not use wildcard or blanket
-HTTPS/loopback CSP allowances to work around blocked callbacks.
+All workspace forms retain self-only CSP `form-action`. Successful consent ends
+the POST with a no-store confirmation page, then navigates to the exact validated
+registered callback using an immediate meta refresh and a Continue link fallback.
+This separates client navigation from the form submission: Chromium otherwise
+applies `form-action` to every redirect hop, including a provider callback that
+forwards to a second client origin. Do not add client-specific downstream domains,
+wildcards or blanket HTTPS/loopback CSP allowances to work around that chain.
 
 ## Deployment-time command-line migration
 

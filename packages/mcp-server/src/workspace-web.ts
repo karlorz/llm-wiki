@@ -28,10 +28,10 @@ function redirect(res: ServerResponse, path: string): void { res.writeHead(303, 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" }); res.end(JSON.stringify(body));
 }
-function page(res: ServerResponse, title: string, content: string, navigation = "", status = 200, formRedirectOrigin?: string): void {
+function page(res: ServerResponse, title: string, content: string, navigation = "", status = 200, clientRedirect?: URL): void {
   res.writeHead(status, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "Referrer-Policy": "same-origin", "X-Content-Type-Options": "nosniff",
-    "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'${formRedirectOrigin ? ` ${formRedirectOrigin}` : ""}; base-uri 'none'; frame-ancestors 'none'` });
-  res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${h(title)} · SkillWiki</title><style>
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" });
+  res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${clientRedirect ? `<meta http-equiv="refresh" content="0;url=${h(clientRedirect.href)}">` : ""}<title>${h(title)} · SkillWiki</title><style>
   *{box-sizing:border-box}body{margin:0;background:#f6f7f9;color:#202936;font:16px/1.55 system-ui,sans-serif}header{background:white;border-bottom:1px solid #dde3e9;padding:20px 5vw}header strong{font-size:22px}main{max-width:1100px;margin:36px auto;padding:0 24px}nav{display:flex;gap:22px;flex-wrap:wrap;margin:18px 0 30px}a{color:#2459ba}h1{font-size:28px;line-height:1.25}h2{font-size:20px}section,article{padding:24px;background:white;border:1px solid #dde3e9;border-radius:12px;margin:20px 0}label{display:block;margin:14px 0}input,select,button{font:inherit;padding:9px 12px;border:1px solid #aab5c4;border-radius:6px;max-width:100%}input:not([type=checkbox]){display:block;width:360px;margin-top:5px}button{cursor:pointer;background:#2459ba;color:white;border:0;margin:8px 0}button.danger{background:#9e2935}small,.muted{color:#586779}.notice{padding:16px;background:#edf3ff;border-left:4px solid #4475ca}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:14px 8px;border-bottom:1px solid #e0e5eb;vertical-align:top}code{overflow-wrap:anywhere}.table{overflow:auto}.inline{display:inline-block;margin-right:12px}footer{margin:32px 0;color:#586779}@media(max-width:640px){main{padding:0 16px}section{padding:18px}th,td{min-width:130px}}
   </style><header><strong>SkillWiki</strong> <span class="muted">Administration</span></header><main>${navigation}<h1>${h(title)}</h1>${content}<footer>Wiki content stays in Obsidian. Each workspace has one isolated wiki.</footer></main></html>`);
 }
@@ -110,15 +110,17 @@ export class WorkspaceWeb {
         if (!actions.length) actions.push("read");
         if (req.method === "POST") {
           const code = store.consent(user, { workspace: get("workspace"), client: client.clientId, name: client.clientName ?? "MCP client", actions, offline: scopes.includes("offline_access"), expires: Date.now() + this.options.grantLifetimeMs, redirect: redirectUri, challenge: get("code_challenge") });
-          redirectTarget.searchParams.set("code", code); if (get("state")) redirectTarget.searchParams.set("state", get("state")); redirect(res, redirectTarget.toString()); return true;
+          redirectTarget.searchParams.set("code", code); if (get("state")) redirectTarget.searchParams.set("state", get("state"));
+          // End the form submission before navigating to the validated callback.
+          // Its provider may redirect again to another origin; Chromium applies
+          // form-action to every hop of an HTTP form redirect chain.
+          page(res, "Connection authorized", `<section><p>Your connection was authorized. Returning to ${h(client.clientName ?? "your MCP client")}.</p><p>If you are not redirected, <a id="oauth-client-continue" href="${h(redirectTarget.href)}" rel="noreferrer">Continue to client</a>.</p></section>`, "", 200, redirectTarget); return true;
         }
         const fields = ["client_id", "redirect_uri", "response_type", "code_challenge_method", "code_challenge", "resource", "scope", "state"].map(k => hidden(k, get(k))).join("");
         const eligible = store.visible(user).map(w => ({ w, role: store.view(user, w.id).role }))
           .filter(({ role }) => actions.every(a => roleActions(role).includes(a)));
         const account = store.snapshot().users.find(u => u.id === user)!;
-        // Chromium applies form-action to the POST's redirect chain as well.
-        // The target is the exact registered, validated callback origin above.
-        page(res, "Authorize MCP connection", `<section><p>Authorizing for yourself: <strong>${h(account.login)}</strong> · GitHub ID ${h(user)}.</p><p><strong>${h(client.clientName ?? "MCP client")}</strong> requests: ${h(actions.join(", "))}.</p><p>Access is limited to the workspace you choose. Changing the web workspace never changes this connection. Expires ${h(new Date(Date.now() + this.options.grantLifetimeMs).toISOString())}.</p>${eligible.length ? form("/workspace/authorize", csrf, `${fields}<label>Workspace<select name="workspace">${eligible.map(({ w, role }) => `<option value="${h(w.id)}">${h(w.name)} · ${h(role)} — ${h(roleActions(role).join(", "))}</option>`).join("")}</select></label><button>Authorize this connection</button>`) : '<p>No active membership permits these requested actions. Request read-only access if your role is Viewer.</p>'}</section>`, nav, 200, redirectTarget.origin); return true;
+        page(res, "Authorize MCP connection", `<section><p>Authorizing for yourself: <strong>${h(account.login)}</strong> · GitHub ID ${h(user)}.</p><p><strong>${h(client.clientName ?? "MCP client")}</strong> requests: ${h(actions.join(", "))}.</p><p>Access is limited to the workspace you choose. Changing the web workspace never changes this connection. Expires ${h(new Date(Date.now() + this.options.grantLifetimeMs).toISOString())}.</p>${eligible.length ? form("/workspace/authorize", csrf, `${fields}<label>Workspace<select name="workspace">${eligible.map(({ w, role }) => `<option value="${h(w.id)}">${h(w.name)} · ${h(role)} — ${h(roleActions(role).join(", "))}</option>`).join("")}</select></label><button>Authorize this connection</button>`) : '<p>No active membership permits these requested actions. Request read-only access if your role is Viewer.</p>'}</section>`, nav); return true;
       }
       if (url.pathname === "/admin" && req.method === "GET") {
         const s = store.snapshot(), workspaces = store.visible(user);

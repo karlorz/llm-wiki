@@ -17,6 +17,17 @@ import { buildVaultRegistry } from "../src/vault-registry.js";
 const issuer = "https://wiki.example.test";
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0)) await close(); });
+async function approvedCallback(response: Response): Promise<URL> {
+  expect(response.status).toBe(200);
+  expect(response.headers.get("location")).toBeNull();
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(response.headers.get("content-security-policy")).toContain("form-action 'self';");
+  const html = await response.text();
+  const target = /<meta http-equiv="refresh" content="0;url=([^"]+)">/.exec(html)?.[1];
+  expect(target).toBeDefined();
+  expect(html).toContain(`<a id="oauth-client-continue" href="${target}" rel="noreferrer">`);
+  return new URL(target!.replaceAll("&amp;", "&"));
+}
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), "workspace-http-")), legacy = join(root, "legacy"); await mkdir(legacy);
   await writeFile(join(legacy, "SCHEMA.md"), "LEGACY PRIVATE CONTENT");
@@ -52,8 +63,7 @@ async function setup() {
   const authorization = new URLSearchParams({ client_id: "client", redirect_uri: "http://127.0.0.1:57891/callback", response_type: "code", code_challenge_method: "S256", code_challenge: createHash("sha256").update(verifier).digest("base64url"), scope: "wiki:read wiki:write offline_access", resource: issuer + "/mcp", state: "client-state" });
   const consent = async (actions = "wiki:read wiki:write offline_access") => {
     const approved = await post("/workspace/authorize", ownerCookie, { ...Object.fromEntries(authorization), scope: actions, workspace: w.id });
-    expect(approved.status).toBe(303);
-    const location = new URL(approved.headers.get("location")!); expect(location.searchParams.get("state")).toBe("client-state");
+    const location = await approvedCallback(approved); expect(location.searchParams.get("state")).toBe("client-state");
     const response = await request("/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code: location.searchParams.get("code")!, code_verifier: verifier, client_id: "client", redirect_uri: authorization.get("redirect_uri")!, resource: issuer + "/mcp" }).toString() });
     expect(response.status).toBe(200); return await response.json() as { access_token: string; refresh_token: string };
   };
@@ -61,7 +71,7 @@ async function setup() {
     const response = await request("/mcp", { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) });
     return { status: response.status, body: await response.json() as any };
   };
-  return { root, legacy, registry, store, storage, provisioner, web, request, post, call, consent, w, beta, ownerCookie, strangerCookie, authorization };
+  return { root, legacy, registry, store, storage, provisioner, web, request, post, call, consent, w, beta, ownerCookie, strangerCookie, authorization, oauth };
 }
 describe("workspace HTTP integration", () => {
   it("provisions isolated minimum schema and leaves legacy bytes untouched", async () => {
@@ -89,7 +99,7 @@ describe("workspace HTTP integration", () => {
       browserFlow = (async () => {
         const authorization = new URL(raw);
         const approval = await post("/workspace/authorize", ownerCookie, { ...Object.fromEntries(authorization.searchParams), workspace: w.id });
-        expect(approval.status).toBe(303); expect((await fetch(approval.headers.get("location")!)).status).toBe(200);
+        expect((await fetch(await approvedCallback(approval))).status).toBe(200);
       })();
     }, { write: true, request: adapter, timeoutMs: 5000 });
     await browserFlow;
@@ -118,14 +128,14 @@ describe("workspace HTTP integration", () => {
     expect((await requestConsent("wiki:write")).status).toBe(400);
     const readPage = await (await request("/workspace/authorize?" + new URLSearchParams({ ...Object.fromEntries(authorization), scope: "wiki:read" }), { headers: { Cookie: `__Host-sw_session=${strangerCookie}` } })).text();
     expect(readPage).toContain("Authorizing for yourself"); expect(readPage).toContain("viewer");
-    expect((await requestConsent("wiki:read")).status).toBe(303);
+    await approvedCallback(await requestConsent("wiki:read"));
     const memberGrant = store.view("22", w.id).grants[0]; expect(memberGrant.user).toBe("22");
     const listing = await (await request(`/admin/workspaces/${w.id}/connections`, { headers: { Cookie: `__Host-sw_session=${strangerCookie}` } })).text();
     expect(listing).toContain("Your connections"); expect(listing).not.toContain(ownerGrant.id); expect(listing).toContain(memberGrant.id);
     expect((await post(`/admin/workspaces/${w.id}/revoke`, strangerCookie, { grant: ownerGrant.id, confirm: "1" })).status).toBe(403);
     expect((await post(`/admin/workspaces/${w.id}/revoke`, strangerCookie, { grant: memberGrant.id, confirm: "1" })).status).toBe(303);
     expect(store.view("22", w.id).grants[0].revoked).toBe(true);
-    store.changeRole("11", w.id, "22", "editor"); expect((await requestConsent("wiki:read wiki:write")).status).toBe(303);
+    store.changeRole("11", w.id, "22", "editor"); await approvedCallback(await requestConsent("wiki:read wiki:write"));
     const editorGrant = store.view("22", w.id).grants.find(g => !g.revoked)!;
     expect((await post(`/admin/workspaces/${w.id}/revoke`, ownerCookie, { grant: editorGrant.id, confirm: "1" })).status).toBe(303);
   });
@@ -154,7 +164,7 @@ describe("workspace HTTP integration", () => {
     const { store, request, post, ownerCookie, authorization, w } = await setup();
     const verifier = workspaceSecret(); authorization.set("code_challenge", createHash("sha256").update(verifier).digest("base64url"));
     const approval = await post("/workspace/authorize", ownerCookie, { ...Object.fromEntries(authorization), workspace: w.id });
-    const code = new URL(approval.headers.get("location")!).searchParams.get("code")!;
+    const code = (await approvedCallback(approval)).searchParams.get("code")!;
     const values = { grant_type: "authorization_code", code, client_id: "client", code_verifier: verifier, redirect_uri: authorization.get("redirect_uri")!, resource: issuer + "/mcp" };
     const token = async (input: Record<string, string>) => request("/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(input).toString() });
     for (const altered of [{ resource: "https://other.example/mcp" }, { client_id: "wrong" }, { code_verifier: workspaceSecret() }, { redirect_uri: "http://127.0.0.1/other" }]) expect((await token({ ...values, ...altered })).status).toBe(400);
@@ -187,19 +197,34 @@ describe("workspace HTTP integration", () => {
     expect(store.session(ownerCookie)).toBeNull();
     expect(await (await request("/admin", { headers: { Cookie: `__Host-sw_session=${ownerCookie}` } })).text()).toContain("Sign in with GitHub");
   });
-  it("allows only the registered callback origin in consent form redirects", async () => {
-    const { request, ownerCookie, authorization } = await setup();
+  it("ends consent POST before navigating to the exact callback, keeping forms self-only", async () => {
+    const { request, post, ownerCookie, authorization, w, store, oauth } = await setup();
     const headers = { Cookie: `__Host-sw_session=${ownerCookie}` };
     const admin = await request("/admin", { headers });
     expect(admin.headers.get("content-security-policy")).toContain("form-action 'self';");
     const consent = await request("/workspace/authorize?" + authorization, { headers });
-    expect(consent.headers.get("content-security-policy")).toContain("form-action 'self' http://127.0.0.1:57891;");
+    expect(consent.headers.get("content-security-policy")).toContain("form-action 'self';");
     expect(consent.headers.get("content-security-policy")).not.toContain("*");
+    expect(await consent.text()).not.toContain('http-equiv="refresh"');
+    const callback = 'https://callback.example/client?existing=one&other=two';
+    await oauth.saveClient({ clientId: "client", clientName: '<unsafe client>', redirectUris: [callback] });
+    authorization.set("redirect_uri", callback);
+    authorization.set("state", '<unsafe state> & "quoted"');
+    const approved = await post("/workspace/authorize", ownerCookie, { ...Object.fromEntries(authorization), workspace: w.id });
+    const target = await approvedCallback(approved);
+    expect(target.origin + target.pathname).toBe("https://callback.example/client");
+    expect(target.searchParams.get("existing")).toBe("one");
+    expect(target.searchParams.get("other")).toBe("two");
+    expect(target.searchParams.get("state")).toBe('<unsafe state> & "quoted"');
+    expect(target.searchParams.get("code")).toMatch(/^swc_/);
+    const grantsBeforeDenial = store.snapshot().grants.length;
     authorization.set("redirect_uri", "https://unregistered.example/callback");
     const denied = await request("/workspace/authorize?" + authorization, { headers });
     expect(denied.status).toBe(400);
     expect(denied.headers.get("content-security-policy")).toContain("form-action 'self';");
     expect(denied.headers.get("content-security-policy")).not.toContain("unregistered.example");
+    expect((await post("/workspace/authorize", ownerCookie, { ...Object.fromEntries(authorization), workspace: w.id })).status).toBe(400);
+    expect(store.snapshot().grants).toHaveLength(grantsBeforeDenial);
   });
   it("binds GitHub callback, rotates session and stores neither provider token nor secret", async () => {
     const { request, root, store } = await setup();
