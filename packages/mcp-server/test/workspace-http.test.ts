@@ -171,6 +171,22 @@ describe("workspace HTTP integration", () => {
     expect((await request(`/admin/workspaces/${w.id}`, { headers: { Cookie: `__Host-sw_session=${strangerCookie}` } })).status).toBe(403);
     authorization.set("redirect_uri", "https://evil.example/callback"); expect((await request("/workspace/authorize?" + authorization, { headers: { Cookie: `__Host-sw_session=${ownerCookie}` } })).status).toBe(400);
   });
+  it("preserves native form origins without accepting opaque or cross-site logout requests", async () => {
+    const { request, post, ownerCookie, store, authorization } = await setup();
+    for (const path of ["/admin", "/workspace/authorize?" + authorization]) {
+      const response = await request(path, { headers: { Cookie: `__Host-sw_session=${ownerCookie}` } });
+      // Chromium sends Origin:null for native POST forms under no-referrer.
+      // Same-origin retains form origins without leaking referrers off-site.
+      expect(response.headers.get("referrer-policy")).toBe("same-origin");
+    }
+    expect((await post("/admin/logout", ownerCookie, {}, "null")).status).toBe(400);
+    const crossSite = await request("/admin/logout", { method: "POST", headers: { Cookie: `__Host-sw_session=${ownerCookie}`, Origin: issuer, "Sec-Fetch-Site": "cross-site", "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ csrf: store.session(ownerCookie)!.csrf }).toString() });
+    expect(crossSite.status).toBe(400);
+    expect(store.session(ownerCookie)).not.toBeNull();
+    expect((await post("/admin/logout", ownerCookie, {})).status).toBe(303);
+    expect(store.session(ownerCookie)).toBeNull();
+    expect(await (await request("/admin", { headers: { Cookie: `__Host-sw_session=${ownerCookie}` } })).text()).toContain("Sign in with GitHub");
+  });
   it("binds GitHub callback, rotates session and stores neither provider token nor secret", async () => {
     const { request, root, store } = await setup();
     const start = await request("/auth/github/start"); expect(start.status).toBe(303);

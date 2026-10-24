@@ -161,6 +161,13 @@ reviewer-vault routes and private `/console` boundary. GitHub sign-in grants no
 MCP access by itself. The consent page retains an explicit trusted-host password
 route for existing operator/reviewer clients; that route never grants membership.
 
+Workspace HTML uses `Referrer-Policy: same-origin`: native browser POST forms
+must retain their exact issuer Origin for the origin and CSRF checks. Do not
+override this with `no-referrer`, which makes Chromium submit `Origin: null`.
+Cross-origin destinations still receive no referrer. For an existing 0.10.117
+deployment awaiting the source fix, the workspace-only reverse proxy can apply
+`header_down Referrer-Policy same-origin`; keep all origin/CSRF checks enabled.
+
 ## Deployment-time command-line migration
 
 Inventory every legacy wiki independently, including Central and Finance. The
