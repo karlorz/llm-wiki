@@ -127,6 +127,19 @@ exit 64
 }
 
 describe("SessionStart hook", () => {
+  it.each(process.platform === "darwin" ? ["bash", "/bin/bash"] : ["bash"])(
+    "escapes a full-sized Unicode context promptly with %s",
+    (shell) => {
+      const context = 'Wiki "quoted" \\ path\t中文\r\n\b\f\u0001\n'.repeat(800);
+      const escaped = execFileSync(shell, [
+        "-c", 'source "$1"; escape_for_json "$2"', "skillwiki-escape-test",
+        join(SKILLS_DIR, "hooks", "session-context"), context,
+      ], { encoding: "utf8", timeout: 5_000, killSignal: "SIGKILL" });
+
+      expect(JSON.parse(`"${escaped}"`)).toBe(context);
+    },
+  );
+
   it("defaults to the built-in adaptive native workflow without project config", () => {
     const project = tempProject();
 
