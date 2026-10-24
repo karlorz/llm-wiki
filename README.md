@@ -2,7 +2,37 @@
 
 Project-aware Karpathy-style knowledge base for Claude Code skills.
 
+## Agent setup
+
+Choose one setup request below and give it to your agent. For a new connection,
+the default MCP URL is `https://wiki.karldigi.dev/mcp`. Preserve a saved service
+address and workspace unless you explicitly request a change. Both routes use
+the same [versioned connection profile](docs/workspace-connection.v1.json) and
+[setup guide](docs/workspace-onboarding.md).
+
+### Connector
+
+> Connect this agent to my SkillWiki workspace using https://github.com/karlorz/llm-wiki/blob/main/docs/workspace-onboarding.md and its linked connection profile. Preserve a saved MCP address and workspace unless I explicitly request a change; for a new connection use https://wiki.karldigi.dev/mcp by default. Follow this host's supported native OAuth MCP or secure vaulted-helper setup. Reuse a matching working connection, or let me complete GitHub sign-in and separate workspace consent for only the actions I need. Keep credentials private, verify workspace identity and one S3-verified SCHEMA.md read, and report unsupported steps. Do not paste secrets into chat or change other connections.
+
+Use this route when the host supports a remote OAuth MCP connector or a
+documented secure connector framework. GitHub sign-in and workspace consent may
+need your interaction. If neither is supported, use the terminal route below
+when a suitable terminal is available.
+
+### Skill + CLI
+
+> Set up SkillWiki Skill + CLI from https://github.com/karlorz/llm-wiki following docs/workspace-onboarding.md and its linked connection profile. Install the relevant skills through this host's supported route and use an OAuth-capable terminal client or the documented source-built workspace helper. Preserve an existing installation, saved MCP address and workspace unless I explicitly request a change; for a new connection use https://wiki.karldigi.dev/mcp by default. Reuse a matching working connection or guide me through GitHub sign-in and one-workspace consent. Save credentials privately and verify workspace identity and one S3-verified SCHEMA.md read. Do not run skillwiki init, share tokens, print secrets or change sync/Obsidian storage. Stop if the terminal callback is unreachable.
+
+Use this route on a terminal host with the required runtime. The repository
+helper needs Node 20 or newer and a browser on the same machine for its loopback
+callback; the [guide](docs/workspace-onboarding.md#skill--cli-request) provides
+the actual build and authorization steps. Installing skills alone grants no
+wiki access. Wiki content browsing stays in Obsidian.
+
 ## Install
+
+<details>
+<summary>Optional plugin and skill installation commands</summary>
 
 ### Option A — Claude Code plugin (recommended)
 
@@ -76,6 +106,8 @@ To update a **Team** marketplace admin row (`scope` is not `user`):
 
 If the SHA is unchanged, re-import `https://github.com/karlorz/llm-wiki`
 in Team marketplace and Refresh again.
+
+</details>
 
 ## Skills
 
@@ -238,11 +270,9 @@ separate per-workspace MCP consent. Existing trusted-host credentials remain
 supported. Deployment-time CLI migration binds existing wikis in place;
 wiki content browsing stays in Obsidian.
 
-To connect an agent, choose either the [Connector request or Skill + CLI
-request](docs/workspace-onboarding.md). Both use one versioned non-secret
-connection profile, preserve saved service/workspace bindings and require
-separate workspace consent. Installation commands above install skills; they
-do not authorize wiki access.
+Use the two [agent setup requests](#agent-setup) above to connect a client;
+the [setup guide](docs/workspace-onboarding.md) covers host capabilities,
+authorization and verification.
 
 `docker-compose.coolify.yml` is an optional later deployment path for the MCP
 daemon only, parked for cloud01 pending a short deployment grill. It does not
