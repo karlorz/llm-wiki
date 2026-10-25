@@ -30,12 +30,12 @@ Note:
 
 ## ChatGPT web install for live tools
 
-ChatGPT **web** gets live `wiki_*` tools from an Admin Console custom MCP server, not from this ZIP:
+ChatGPT **web** gets live `wiki_*` tools from a custom MCP plugin, not from this ZIP:
 
-1. OpenAI Admin Console → **Plugins** → plus / **Add** → custom MCP server. The xaicom UI may label it **Create MCP plugin**; choose **Create as a plugin**.
-2. URL `https://wiki.karldigi.dev/mcp`, OAuth, no custom headers.
-3. Identity is GitHub at `/workspace/authorize`, then one wiki grant: **Central Wiki** unless the operator names another wiki.
-4. If the plugin shows Disabled or Unavailable: Review app (tools and role access), acknowledge both risk prompts, **Publish**, then Enable. Installation policy does not connect member accounts.
+1. **Personal / Plus:** Settings → **Plugins** (`https://chatgpt.com/settings/plugins-settings`) → Browse directory → plus / **Add** → **Add custom MCP server** → **Create as a plugin**.
+2. **Workspace:** OpenAI Admin Console → **Plugins** → plus / **Add** → custom MCP server. The xaicom UI may label it **Create MCP plugin**; choose **Create as a plugin**. If Disabled or Unavailable: Review app (tools and role access), acknowledge both risk prompts, **Publish**, then Enable. Installation policy does not connect member accounts.
+3. URL `https://wiki.karldigi.dev/mcp`, OAuth, no custom headers.
+4. Identity is GitHub at `/workspace/authorize`, then one wiki grant: **Central Wiki** unless the operator names another wiki.
 
 A plugin archive or GitHub import that includes `mcp.json` is marked **Desktop only** on ChatGPT web, even when the server is HTTPS MCP. The ZIP stays the App-directory listing package; it is not the web marketplace MCP path. A chat that has no `wiki_*` tools is not connected — a person finishes the connector and OAuth outside the chat.
 

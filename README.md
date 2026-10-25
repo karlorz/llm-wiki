@@ -30,7 +30,9 @@ unless you explicitly request a change. Both routes use the same
 
 Use this route when the host supports a remote OAuth MCP connector or a
 documented secure connector framework. GitHub sign-in and workspace consent may
-need your interaction. If neither is supported, use the terminal route below
+need your interaction. On ChatGPT web, a person finishes **Add custom MCP
+server** outside chat (Personal / Plus: Settings → Plugins; workspace: Admin
+Console **Plugins**). If neither is supported, use the terminal route below
 when a suitable terminal is available.
 
 ### Skill + CLI
