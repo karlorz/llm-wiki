@@ -49,6 +49,14 @@ The compact `~/.grok/skillwiki.md` is the session-start context. This full skill
 
 The template lives at `packages/skills/using-skillwiki/activation.md`. Run `npm run install:activation:check` to verify the Grok install matches the template and that Claude/Codex are not still carrying the activation block. `skillwiki doctor` reports a warn on a missing file, a stale `@skillwiki.md` marker, or compact-file drift.
 
+## ChatGPT web and live MCP tools
+
+Apply this order before the CLI-specific publication, mutation, and diagnostic instructions below:
+
+1. **Live `wiki_*` tools present** (`wiki_context`, `wiki_query`, `wiki_read_page`, `wiki_capture`, …): those tools win for every wiki read and write. Skip the CLI probe, `SKILLWIKI_MCP_TOKEN`, and readiness scripts.
+2. **ChatGPT web / chat-only host without those tools:** stop and have a person finish the connector and OAuth outside the chat, following `skillwiki-mcp` First-run readiness. Do not ask the chat to create the plugin, click Authorize, or type the operator password.
+3. Otherwise continue with the CLI probe and failsafe below.
+
 ## When to Use These Skills
 Invoke a skillwiki skill when the user:
 - Wants to create, build, or start a vault/wiki/knowledge base
@@ -99,9 +107,11 @@ Vault content must not contain live credentials, access keys, tokens, passwords,
 
 ## Typed-Page Publication Contract
 
-All new or updated typed-knowledge and meta pages MUST be published through
-`skillwiki page publish`. Compose the complete page at an unpublished temporary
-path, run publisher dry-run, then run the same command with `--write`.
+With live MCP tools, use `wiki_page_publish` and the CAS contract in `skillwiki-mcp`.
+On the CLI path, all new or updated typed-knowledge and meta pages MUST be
+published through `skillwiki page publish`. Compose the complete page at an
+unpublished temporary path, run publisher dry-run, then run the same command
+with `--write`.
 
 - Do not directly create or edit the final typed-page path.
 - Do not directly update `index.md` or append the page's structural log entry.

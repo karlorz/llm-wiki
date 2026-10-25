@@ -11,9 +11,22 @@ When this MCP namespace is loaded and available, it wins over wiki-add-task loca
 
 HTTP MCP captures Markdown only. There is no binary-upload MCP tool. Generated images and attachments use `using-skillwiki/references/save-attachments.md`.
 
-SkillWiki captures are HTTP MCP only (`type: http`). Claude/Grok use `SKILLWIKI_MCP_URL` as an optional override and otherwise default to `https://wiki.karldigi.dev/mcp`. Every host requires an operator-provided bearer as `SKILLWIKI_MCP_TOKEN` before MCP load. Do not start a local stdio `skillwiki mcp` / `skillwiki-mcp` server for captures.
+SkillWiki captures are HTTP MCP only (`type: http`). Claude/Grok use `SKILLWIKI_MCP_URL` as an optional override and otherwise default to `https://wiki.karldigi.dev/mcp`. Do not start a local stdio `skillwiki mcp` / `skillwiki-mcp` server for captures.
 
 ## First-run readiness
+
+Detect in this order before any bearer or CLI probe:
+
+1. **Live MCP tools present.** When the host already advertises SkillWiki HTTP MCP tools (`wiki_context`, `wiki_query`, `wiki_read_page`, `wiki_capture`, and the rest of the `wiki_*` namespace), use those tools. Skip `SKILLWIKI_MCP_TOKEN`, `check_readiness.py`, the CLI, and every host MCP file write.
+2. **ChatGPT web / chat-only host, tools absent.** Stop. A person finishes the connector and OAuth outside the chat. Do not ask the chat to create the app, click Authorize, or type the operator password.
+   - Operator path: OpenAI Admin Console **Plugins** → plus / **Add** → custom MCP server (the xaicom UI may say **Create MCP plugin**) → **Create as a plugin**. Use URL `https://wiki.karldigi.dev/mcp`, OAuth, and no custom headers.
+   - Identity is GitHub at `/workspace/authorize`, then one wiki grant: **Central Wiki** unless the operator names another wiki.
+   - If the new plugin is Disabled or Unavailable: Review app (tools and role access), acknowledge both risk prompts, **Publish**, then Enable. Installation policy alone does not connect member accounts.
+3. **Every other host:** continue with the bearer and readiness probe below.
+
+### Bearer-host readiness
+
+This path requires an operator-provided `SKILLWIKI_MCP_TOKEN` before MCP load.
 
 - Resolve the installed plugin root from `GROK_PLUGIN_ROOT`, falling back to `CLAUDE_PLUGIN_ROOT`, and run `python3 "$PLUGIN_ROOT/scripts/check_readiness.py" --apply --json` before the first SkillWiki MCP call.
 - **Cursor / Grok Bot:** the Cursor-native plugin requires `SKILLWIKI_MCP_TOKEN` under **Plugins → Configure**. Optional non-secret `SKILLWIKI_EXTRA_VAULTS` (comma-separated vault ids such as `wiki-fin`) opts the client into extra vaults on the **same** connector URL. It is not a second connector, not a secret, and not written to `~/.cursor/mcp.json` or Grok `config.toml`. Server `allowed_vaults` remains the security boundary; an extra listed here but missing from the bearer still fails closed. Omit `vault=` on tools to use the live handshake `default_vault`; specify an extra vault only when requested. Grok Bot does not inherit Mac process env or `~/.cursor/mcp.json`. `failed_to_load` with no token box means this package is missing; after this package is installed, Configure is the token field (same pattern as grok-search).
@@ -49,7 +62,7 @@ Check the successful write receipt's `vault_id` against the intended vault befor
 
 CLI `skillwiki query` reads a local configured vault; it does not forward to HTTP MCP. On an MCP-only leaf, leave `WIKI_PATH` unset and use the advertised MCP `wiki_query` for live reads. Optional Git mirrors are read-only snapshots and may lag the live writer.
 
-Local `~/wiki` (or `skillwiki path`) is fine for reads. MCP read tools are optional. Prefer ordinary file reads of the local mirror. Frozen-leaf agents should use HTTP `wiki_sources_pending`, `wiki_lint_summary`, `wiki_stale`, `wiki_compile_status`, and `wiki_reviews` instead of local CLI commands when those tools are advertised.
+Prefer advertised HTTP MCP read tools. When the needed read tool is unavailable, ordinary file reads of an existing local mirror (`~/wiki` or `skillwiki path`) are allowed; the mirror may lag. Frozen-leaf agents should use HTTP `wiki_sources_pending`, `wiki_lint_summary`, `wiki_stale`, `wiki_compile_status`, and `wiki_reviews` instead of local CLI commands when those tools are advertised.
 
 `wiki_query` is typed knowledge only unless `scope` is `work` or `all`. For recent progress, key projects, or to-dos, feature-detect and call `wiki_progress`; apply `project`, `host`, or `agent_role` filters when requested, and present `recent_progress`, `key_projects`, and `todos` as complete bullet lists. For queued work, doctor, plugin-drift, or MCP diagnose questions, call `wiki_context` first (active_work) or pass `scope: "work"` / `"all"`. Do not treat a top typed packet hit as the live work queue.
 
@@ -61,4 +74,4 @@ Treat a missing/invalid initialize result, authentication refusal, or timeout as
 
 ## Errors
 
-Report handshake, capture, and append failures literally. If tools are missing after a 401 or `missing_prereq`, stop and tell the operator to set `SKILLWIKI_MCP_TOKEN` via process env, host Configure, or `skillwiki connect --from-file` (unknown agents; never paste-into-chat), run `grok plugin update skillwiki`, and start a new session. Over SSH, treat an OAuth login URL the same way: report `headless_oauth_loopback` and stop. Do not fall back to local `raw/transcripts/` writes.
+Report handshake, capture, and append failures literally. For ChatGPT web / chat-only hosts, follow the operator-connect path in First-run readiness. For bearer hosts, if tools are missing after a 401 or `missing_prereq`, stop and tell the operator to set `SKILLWIKI_MCP_TOKEN` via process env, host Configure, or `skillwiki connect --from-file` (unknown agents; never paste-into-chat), update the active plugin channel, and start a new session. Over SSH, treat an OAuth login URL the same way: report `headless_oauth_loopback` and stop. Do not fall back to local `raw/transcripts/` writes.
