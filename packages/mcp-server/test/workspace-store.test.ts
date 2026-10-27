@@ -1,7 +1,8 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceStore, workspaceSecret } from "../src/workspace-store.js";
 const stores: WorkspaceStore[] = [];
@@ -74,7 +75,9 @@ describe("workspace control plane", () => {
     advance(86400_000); expect(() => s.exchange({ kind: "refresh", secret: tokens.refresh_token!, client: "client" })).toThrow();
   });
   it("fails closed on corrupt storage and a second writer", () => {
-    const { s, dir } = fixture(); expect(() => new WorkspaceStore(dir)).toThrow("CONTROL_PLANE_LOCKED");
+    const { s, dir } = fixture(); const held = readFileSync(join(dir, "workspaces.lock"), "utf8");
+    expect(() => new WorkspaceStore(dir)).toThrow("CONTROL_PLANE_LOCKED");
+    expect(readFileSync(join(dir, "workspaces.lock"), "utf8")).toBe(held);
     writeFileSync(join(dir, "workspaces.json"), "{corrupt"); expect(() => s.snapshot()).toThrow();
     expect(readFileSync(join(dir, "workspaces.json"), "utf8")).toBe("{corrupt");
   });
@@ -106,4 +109,97 @@ describe("workspace control plane", () => {
     reopened.suspendAccount("11", false); expect(reopened.resolveAccess(tokens.access_token)).toBeNull();
   });
   it("binds login state to browser and consumes it once", () => { const { s } = fixture(); const f = s.beginLogin(); expect(() => s.finishLogin(f.state, "wrong")).toThrow(); expect(s.finishLogin(f.state, f.binding).verifier).toBe(f.verifier); expect(() => s.finishLogin(f.state, f.binding)).toThrow(); });
+});
+
+const lockPath = (dir: string) => join(dir, "workspaces.lock");
+const recoveryFiles = (dir: string) => {
+  const recovery = join(dir, "recovery");
+  return existsSync(recovery) ? readdirSync(recovery).filter(n => n.startsWith("workspaces.lock.stale-")) : [];
+};
+/** One exited child pid for the whole file. Liveness tests need a real dead pid; shape tests reuse it. */
+const DEAD_PID = (() => {
+  const child = spawnSync(process.execPath, ["-e", ""]);
+  if (child.status !== 0 || typeof child.pid !== "number") throw new Error("failed to sample an exited pid");
+  return child.pid;
+})();
+function writeLock(dir: string, raw: string): void {
+  writeFileSync(lockPath(dir), raw, { mode: 0o600 });
+}
+function staleRecord(pid = DEAD_PID) {
+  return { pid, host: hostname(), id: randomUUID() };
+}
+function expectFailClosed(raw: string, label?: string): void {
+  const dir = mkdtempSync(join(tmpdir(), "workspace-lock-"));
+  writeLock(dir, raw);
+  expect(() => new WorkspaceStore(dir), label).toThrow("CONTROL_PLANE_LOCKED");
+  expect(readFileSync(lockPath(dir), "utf8"), label).toBe(raw);
+  expect(recoveryFiles(dir), label).toHaveLength(0);
+}
+
+describe("workspace control-plane stale lock reclaim", () => {
+  it("reclaims a dead same-host owner and preserves the stale bytes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "workspace-lock-"));
+    writeFileSync(join(dir, "workspaces.json"), JSON.stringify({ version: 1, users: [], workspaces: [], members: [], invitations: [], grants: [], credentials: [], sessions: [], logins: [], audit: [] }));
+    const before = readFileSync(join(dir, "workspaces.json"));
+    const stale = staleRecord(), raw = JSON.stringify(stale);
+    writeLock(dir, raw);
+
+    const s = new WorkspaceStore(dir); stores.push(s);
+    const recovery = recoveryFiles(dir);
+    expect(recovery).toHaveLength(1);
+    expect(readFileSync(join(dir, "recovery", recovery[0]), "utf8")).toBe(raw);
+    const lock = JSON.parse(readFileSync(lockPath(dir), "utf8"));
+    expect(lock.pid).toBe(process.pid); expect(lock.host).toBe(hostname()); expect(lock.id).not.toBe(stale.id);
+    expect(readFileSync(join(dir, "workspaces.json"))).toEqual(before);
+  });
+
+  it("fails closed for a live same-host owner without touching the lock", () => {
+    expectFailClosed(JSON.stringify({ pid: process.pid, host: hostname(), id: randomUUID() }));
+  });
+
+  it("fails closed for a dead owner on a foreign host", () => {
+    expectFailClosed(JSON.stringify({ pid: DEAD_PID, host: "other-host", id: randomUUID() }));
+  });
+
+  it("fails closed for malformed, incomplete and unsafe lock records", () => {
+    const records = [
+      "{corrupt",
+      JSON.stringify({ host: hostname(), id: randomUUID() }),
+      JSON.stringify({ pid: DEAD_PID, host: hostname() }),
+      JSON.stringify({ pid: DEAD_PID, host: hostname(), id: "not-a-uuid" }),
+      JSON.stringify({ pid: DEAD_PID, host: hostname(), id: "../evil" }),
+      JSON.stringify({ pid: DEAD_PID, host: "", id: randomUUID() }),
+    ];
+    for (const raw of records) expectFailClosed(raw, raw);
+  });
+
+  it("fails closed for invalid pid fields instead of treating them as dead", () => {
+    for (const pid of [0, -1, 1.5, "123", null]) {
+      expectFailClosed(JSON.stringify({ pid, host: hostname(), id: randomUUID() }), String(pid));
+    }
+  });
+
+  it("restores a lock that a racing reclaimer swapped in and never steals it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "workspace-lock-"));
+    const stale = staleRecord(), raw = JSON.stringify(stale);
+    writeLock(dir, raw);
+    let b: WorkspaceStore | undefined, bLock = "";
+    expect(() => new WorkspaceStore(dir, Date.now, { afterStaleInspect: () => {
+      b = new WorkspaceStore(dir);
+      bLock = readFileSync(lockPath(dir), "utf8");
+    } })).toThrow("CONTROL_PLANE_LOCKED");
+    stores.push(b!);
+    const bId = JSON.parse(bLock).id;
+    expect(bId).not.toBe(stale.id);
+    expect(b!.snapshot()).toBeDefined();
+    // A restored B's lock instead of leaving it quarantined or overwritten.
+    expect(readFileSync(lockPath(dir), "utf8")).toBe(bLock);
+    expect(JSON.parse(bLock).pid).toBe(process.pid);
+    expect(readdirSync(dir).filter(n => n.startsWith("workspaces.lock"))).toEqual(["workspaces.lock"]);
+    const recovery = recoveryFiles(dir);
+    expect(recovery).toHaveLength(1);
+    const recovered = readFileSync(join(dir, "recovery", recovery[0]), "utf8");
+    expect(recovered).toBe(raw);
+    expect(recovered).not.toContain(bId);
+  });
 });

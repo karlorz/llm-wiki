@@ -59,26 +59,97 @@ function canCreate(s: WorkspaceState, user: string): boolean {
     && !s.members.some(m => m.user === user && m.role === "owner" && s.workspaces.some(w => w.id === m.workspace && w.state === "active"));
 }
 
+/** Only the exact shape `randomUUID()` emits is a safe lock owner id. */
+const LOCK_OWNER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+interface WorkspaceLockRecord { pid: number; host: string; id: string; }
+
+/** A record is reclaimable evidence only when every field is well formed. */
+function parseLockRecord(raw: string): WorkspaceLockRecord | null {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    if (typeof record.pid !== "number" || !Number.isSafeInteger(record.pid) || record.pid <= 0) return null;
+    if (typeof record.host !== "string" || !record.host) return null;
+    if (typeof record.id !== "string" || !LOCK_OWNER_ID.test(record.id)) return null;
+    return { pid: record.pid, host: record.host, id: record.id };
+  } catch { return null; }
+}
+
+/** EPERM means the owner exists; every error other than ESRCH stays fail-closed. */
+function lockOwnerIsDead(pid: number): boolean {
+  try { process.kill(pid, 0); return false; }
+  catch (error: unknown) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+}
+
 /** One daemon owns this control plane. Never reset unreadable/corrupt state to empty. */
 export class WorkspaceStore {
   private readonly file: string;
   private readonly lock: string;
+  private readonly recovery: string;
   private readonly lockId = randomUUID();
   private closed = false;
-  constructor(directory: string, private readonly now: () => number = Date.now) {
+  constructor(directory: string, private readonly now: () => number = Date.now, options: { afterStaleInspect?: () => void } = {}) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.file = join(directory, "workspaces.json");
     this.lock = join(directory, "workspaces.lock");
-    // Do not reclaim automatically: two simultaneous crash-recovery attempts
-    // could otherwise unlink the new owner's lock. Offline recovery is attended.
-    if (existsSync(this.lock)) {
-      throw new WorkspaceError("CONTROL_PLANE_LOCKED");
-    }
-    const fd = openSync(this.lock, "wx", 0o600);
-    try { writeFileSync(fd, JSON.stringify({ pid: process.pid, host: hostname(), id: this.lockId })); fsyncSync(fd); }
-    finally { closeSync(fd); }
+    this.recovery = join(directory, "recovery");
+    this.acquireLock(options.afterStaleInspect);
     try { if (!existsSync(this.file)) this.save({ version: 1, users: [], workspaces: [], members: [], invitations: [], grants: [], credentials: [], sessions: [], logins: [], audit: [] }); this.snapshot(); }
     catch (error) { this.close(); throw error; }
+  }
+  /** True only when this process created the lock file; EEXIST is reported, not thrown. */
+  private createLock(): boolean {
+    let fd: number;
+    try { fd = openSync(this.lock, "wx", 0o600); }
+    catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+    try { writeFileSync(fd, JSON.stringify({ pid: process.pid, host: hostname(), id: this.lockId })); fsyncSync(fd); }
+    finally { closeSync(fd); }
+    return true;
+  }
+  /**
+   * A lock left by a crashed daemon otherwise crash-loops the only writer. Reclaim is
+   * limited to a dead same-host PID, and the quarantine rename is verified before use.
+   */
+  private acquireLock(afterStaleInspect?: () => void): void {
+    if (this.createLock()) return;
+    const stale = this.inspectLock();
+    afterStaleInspect?.();
+    mkdirSync(this.recovery, { recursive: true, mode: 0o700 });
+    this.quarantine(stale.id);
+    if (!this.createLock()) throw new WorkspaceError("CONTROL_PLANE_LOCKED");
+  }
+  private readLockRecord(path: string): WorkspaceLockRecord | null {
+    try { return parseLockRecord(readFileSync(path, "utf8")); } catch { return null; }
+  }
+  private inspectLock(): WorkspaceLockRecord {
+    const record = this.readLockRecord(this.lock);
+    if (!record || record.host !== hostname() || !lockOwnerIsDead(record.pid)) throw new WorkspaceError("CONTROL_PLANE_LOCKED");
+    return record;
+  }
+  /**
+   * Move the inspected lock into recovery/ under a fresh name, then prove the moved bytes
+   * are that same record. A racing reclaimer can only win by replacing the live path, so
+   * a mismatch means we moved its lock and must restore it before failing closed.
+   */
+  private quarantine(staleId: string): void {
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+    const recoveryPath = join(this.recovery, `workspaces.lock.stale-${stamp}-${randomUUID()}.json`);
+    if (existsSync(recoveryPath)) throw new WorkspaceError("CONTROL_PLANE_LOCKED");
+    try { renameSync(this.lock, recoveryPath); }
+    catch (error: unknown) {
+      // Another reclaimer already moved the live path; the following createLock decides.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw new WorkspaceError("CONTROL_PLANE_LOCKED");
+    }
+    const moved = this.readLockRecord(recoveryPath);
+    if (!moved || moved.id !== staleId) {
+      try { renameSync(recoveryPath, this.lock); } catch { /* restore failed: still fail closed */ }
+      throw new WorkspaceError("CONTROL_PLANE_LOCKED");
+    }
   }
   close(): void {
     if (this.closed) return;

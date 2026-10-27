@@ -203,6 +203,14 @@ A read-only evidence packet that classifies active project work without changing
 **Lifecycle reconciliation**:
 An attended decision process that reviews ranked-audit evidence, resolves ambiguous verdicts, and applies approved lifecycle corrections only after final batch approval.
 
+**Workspace control-plane lock**:
+`workspaces.lock` in the workspace state directory. It asserts that one daemon process owns the workspace control plane (`workspaces.json`) and records that process's pid, host and owner id. A dead same-host owner is reclaimed by moving the stale bytes into `recovery/` and verifying them before a replacement lock is created; a live, foreign or malformed owner fails closed. Distinct from a **Managed-write lock**.
+_Avoid_: vault lock, managed-write lock, reclaim by age
+
+**Managed-write lock**:
+`managed-write.lock` in a vault's Git state (`vault-sync/managed-write.lock`, falling back to `.skillwiki/managed-write.lock`). It guards a vault mutation by one command, keyed by owner token and git-state safety rather than by daemon process. Distinct from the **Workspace control-plane lock**.
+_Avoid_: control-plane lock, daemon lock, treating a vault path as workspace state
+
 ## Relationships
 
 - Delivery lifecycle owns active-work ranking eligibility.

@@ -77,10 +77,15 @@ credential distribution is an operator task and is not performed by sign-in.
 
 The JSON control plane uses a single-writer process lock, strict schema loading,
 private files, fsync and atomic rename. Corrupt state is never reset to empty.
-After an unclean process exit, the lock deliberately fails closed: an operator
-must stop competing processes, verify the recorded PID is dead on the recorded
-host and recover the stale lock offline. Automatic stale-lock reclamation is
-excluded because racing reclaimers could remove a new owner's lock. Existing
+A lock left by an unclean exit is reclaimed automatically only when all of the
+following hold: the record parses strictly, the recorded host is this host, and
+`process.kill(pid, 0)` reports `ESRCH` (a dead PID). The stale lock is renamed
+into `recovery/` under a fresh random name, the moved bytes are re-read and
+verified to still carry the inspected owner id, and only then is a replacement
+lock created. If the moved record belongs to another owner, it is renamed back
+and the constructor fails closed. A live PID, `EPERM`, a foreign host, a
+malformed record, or a non-UUID owner id all fail closed and leave the lock
+bytes untouched. Reclaim is never based on lock age. Existing
 operation state is preserved for resumption. The control plane is single-process, not a distributed database. Production wiki
 content uses the configured S3/rclone namespace; control state must be backed up
 separately and must not be placed inside any wiki root.
