@@ -171,6 +171,29 @@ function readBody(req: IncomingMessage, limit = MAX_MCP_BODY_BYTES): Promise<str
   });
 }
 
+function isConnectionReset(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === "ECONNRESET" || code === "EPIPE" || code === "ECONNABORTED";
+}
+
+function logUnlessReset(error: unknown, label: string): void {
+  if (!isConnectionReset(error)) console.error(label, error);
+}
+
+function ignoreResetOrFail(error: unknown, res?: ServerResponse): void {
+  if (isConnectionReset(error)) {
+    if (res && !res.destroyed) res.destroy();
+    return;
+  }
+  logUnlessReset(error, "skillwiki-mcp request failed:");
+  if (res && !res.headersSent) {
+    try { json(res, 500, { error: "internal_error" }); }
+    catch { res.destroy(); }
+    return;
+  }
+  res?.destroy();
+}
+
 export function toolResult(data: unknown, isError = false) {
   return {
     structuredContent: data as Record<string, unknown>,
@@ -876,7 +899,17 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
   // Resume only native provisioning operations. Legacy migration has no startup hook.
   await opts.workspaceWeb?.options.provisioner.resumePending();
 
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    void handleRequest(req, res).catch((error: unknown) => ignoreResetOrFail(error, res));
+  });
+  server.on("connection", (socket) => {
+    socket.on("error", (error: Error) => logUnlessReset(error, "skillwiki-mcp connection error:"));
+  });
+  server.on("clientError", (_error, socket) => {
+    if (!socket.destroyed) socket.destroy();
+  });
+
+  async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const host = req.headers.host ?? "127.0.0.1";
     const issuer = getIssuer(req, opts.oauth?.issuer);
     const url = new URL(req.url ?? "/", `http://${host}`);
@@ -1309,12 +1342,13 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
     }
 
     json(res, 404, { error: "not_found" });
-  });
+  }
 
   await new Promise<void>((resolveListen, reject) => {
     server.once("error", reject);
     server.listen(opts.port, opts.bind, () => {
       server.off("error", reject);
+      server.on("error", (error: Error) => logUnlessReset(error, "skillwiki-mcp server error:"));
       resolveListen();
     });
   });
