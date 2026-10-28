@@ -50,7 +50,22 @@ The spool has `pending/`, `running/`, and `receipts/`, keyed by random request U
 Each run claims up to 128 eligible requests, after 5 seconds of quiet or a 60 second
 maximum delay. Requests arriving during execution remain pending. A single flock
 serializes workers; interrupted running claims become failed receipts and retry
-with backoff. There are at most three attempts, with 60/120/240 second backoff.
+with backoff. There are at most three genuine execution attempts, with
+60/120/240 second backoff. An actual snapshot-lock conflict instead emits
+`SNAPSHOT_LOCK_BUSY schema=v1 result=busy exit=75` and exits 75. The worker
+requires both that exit code and the exact final marker, without completion proof,
+before deferring for 60 seconds. It records `state=queued`,
+`error=SNAPSHOT_LOCK_BUSY` and preserves the previous attempt count, including
+previous genuine failures. Repeated lock conflicts cannot exhaust the retry budget.
+Other flock errors, missing/malformed busy markers, timeouts and unproven snapshot
+completion remain genuine failures. Already terminal requests are not revived.
+
+Deferrals are journaled durably in every running claim before queue receipts are
+updated. Recovery finishes those queued deferrals without another refund; a
+partial batch journal also identifies its siblings by the shared start timestamp.
+Recovery journals all such siblings before deleting any witness, preserving the
+known-busy result across another crash. A crash before any busy journal is durable
+still counts as an interrupted execution because its outcome is unknown.
 The runner has a 900 second timeout; a timeout kills its entire isolated process
 group and reaps the runner before recording failure. Completion timestamps and
 retry deadlines use the clock after execution. Queue timestamps must be finite

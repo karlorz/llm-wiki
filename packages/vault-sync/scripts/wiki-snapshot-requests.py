@@ -14,8 +14,13 @@ import time
 
 ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
 PROOF = re.compile(r"SNAPSHOT_COMPLETE schema=v1 outcome=(?:pushed|no-change) result=success ts=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z head=([0-9a-f]{40}|[0-9a-f]{64}) origin=([0-9a-f]{40}|[0-9a-f]{64})(?:\s|$)")
+BUSY = re.compile(r"SNAPSHOT_LOCK_BUSY schema=v1 result=busy exit=75")
 MAX_ATTEMPTS = 3
 BATCH = 128
+BUSY_EXIT = 75
+BUSY_DELAY_MS = 60000
+LOCK_BUSY_ERROR = "SNAPSHOT_LOCK_BUSY"
+LOCK_BUSY = object()
 
 
 def safe_state(value, vault):
@@ -50,6 +55,9 @@ def read_record(path, vault_id):
         raise ValueError("INVALID_RECORD")
     if type(record.get("attempt")) is not int or not 0 <= record["attempt"] <= MAX_ATTEMPTS:
         raise ValueError("INVALID_RECORD")
+    for key in ("error", "last_failure"):
+        if key in record and type(record[key]) is not str:
+            raise ValueError("INVALID_RECORD")
     for key in ("created_at", "next_attempt", "started_at", "finished_at"):
         if key in record or key in ("created_at", "next_attempt"):
             value = record.get(key)
@@ -107,6 +115,12 @@ def execute_snapshot(timeout=900):
         output.seek(max(0, output.tell() - 262144))
         text = output.read().decode("utf-8", errors="replace")
     matches = list(PROOF.finditer(text))
+    if result.returncode == BUSY_EXIT:
+        # Contention needs both the exit code and the marker as the final line.
+        lines = text.rstrip().splitlines()
+        if not matches and lines and BUSY.fullmatch(lines[-1]):
+            return LOCK_BUSY
+        return None
     if result.returncode != 0 or not matches:
         return None
     match = matches[-1]
@@ -128,12 +142,41 @@ def process(root, vault_id, run=execute_snapshot, now=None, quiet_ms=5000, max_d
             # Retain failure receipt while next timer invocation retries pending work.
             write_record(root / "pending" / path.name, record)
         path.unlink(missing_ok=True)
-    # The exclusive worker lock proves every pre-existing running claim was interrupted.
-    for path in sorted((root / "running").glob("*.json")):
-        rec = read_record(path, vault_id)
+    def terminal(path):
         receipt = root / "receipts" / path.name
-        if receipt.exists() and read_record(receipt, vault_id).get("state") == "completed":
+        if not receipt.exists():
+            return False
+        prior = read_record(receipt, vault_id)
+        return prior.get("state") == "completed" or (prior.get("state") == "failed" and prior["attempt"] >= MAX_ATTEMPTS)
+    def journal_deferral(path, record, next_attempt):
+        # Durable running journal first; recovery completes the receipt/pending writes.
+        prior = record.get("error")
+        if prior and prior != LOCK_BUSY_ERROR:
+            record["last_failure"] = prior
+        record["attempt"] -= 1
+        record.update(state="queued", error=LOCK_BUSY_ERROR, next_attempt=next_attempt)
+        record.pop("finished_at", None)
+        write_record(path, record)
+    def finish_deferral(path, record):
+        write_record(root / "receipts" / path.name, record)
+        write_record(root / "pending" / path.name, record)
+        path.unlink(missing_ok=True)
+    def deferred(record):
+        return record.get("state") == "queued" and record.get("error") == LOCK_BUSY_ERROR
+    # The exclusive worker lock proves every pre-existing running claim was interrupted.
+    running = [(path, read_record(path, vault_id), terminal(path)) for path in sorted((root / "running").glob("*.json"))]
+    # A crash between per-record journals leaves same-run siblings still marked running.
+    batches = {rec["started_at"]: rec for _, rec, is_terminal in running if not is_terminal and deferred(rec) and "started_at" in rec}
+    # Journal every sibling before removing any witness, including during recovery.
+    # Otherwise a second crash could lose the known-busy outcome for that batch.
+    for path, rec, is_terminal in running:
+        if not is_terminal and rec.get("state") == "running" and rec.get("started_at") in batches:
+            journal_deferral(path, rec, batches[rec["started_at"]]["next_attempt"])
+    for path, rec, is_terminal in running:
+        if is_terminal:
             path.unlink()
+        elif deferred(rec):
+            finish_deferral(path, rec)
         else:
             fail(path, rec, "SNAPSHOT_INTERRUPTED")
     pending = []
@@ -169,10 +212,18 @@ def process(root, vault_id, run=execute_snapshot, now=None, quiet_ms=5000, max_d
         finally:
             os.close(directory_fd)
     proof = run()
+    if proof is LOCK_BUSY:
+        next_attempt = clock() + BUSY_DELAY_MS
+        for path, rec in claims:
+            journal_deferral(path, rec, next_attempt)
+        for path, rec in claims:
+            finish_deferral(path, rec)
+        return 0
     for path, rec in claims:
         if proof:
             rec.update(state="completed", finished_at=clock(), **proof)
             rec.pop("error", None)
+            rec.pop("last_failure", None)
             write_record(root / "receipts" / path.name, rec)
             path.unlink()
         else:

@@ -399,8 +399,15 @@ mkdir -p "$(dirname "$LOG_FILE")"
 
 # ── Lock file to prevent concurrent execution ──────────────
 exec 200>"$LOCK_FILE"
-if ! flock -n 200; then
+# Exit 75 is reserved for actual lock contention; other flock errors stay failures.
+flock -n -E 75 200
+lock_rc=$?
+if [ "$lock_rc" -eq 75 ]; then
     echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: Another instance of wiki-snapshot is running. Exiting."
+    echo "SNAPSHOT_LOCK_BUSY schema=v1 result=busy exit=75"
+    exit 75
+elif [ "$lock_rc" -ne 0 ]; then
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: Could not acquire wiki-snapshot lock (flock exit $lock_rc). Exiting."
     exit 1
 fi
 

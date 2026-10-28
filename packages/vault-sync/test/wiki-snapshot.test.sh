@@ -2467,6 +2467,80 @@ test_snapshot_inhibit_resets_on_different_opid
 test_snapshot_inhibit_recheck_runs_materialize
 test_snapshot_complete_clears_inhibit_state
 
+test_snapshot_lock_contention_vs_flock_error() {
+  local root bin_dir mode rc out
+  root="$(mktemp -d)"
+  make_live_vault_fixture "$root"
+  bin_dir="$root/bin"
+  mkdir -p "$bin_dir" "$root/wiki-git"
+  cat > "$bin_dir/uname" <<'STUB'
+#!/bin/bash
+printf 'Linux\n'
+STUB
+  # Mimics util-linux `flock -n -E 75 200`: 75 only for contention, 1 for operational errors.
+  cat > "$bin_dir/flock" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/flock.calls"
+[ "$*" = "-n -E 75 200" ] || exit 64
+case "$SNAPSHOT_TEST_FLOCK_MODE" in
+  busy) exit 75 ;;
+  error) echo "flock: 200: Bad file descriptor" >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+STUB
+  cat > "$bin_dir/skillwiki" <<'STUB'
+#!/bin/bash
+exit 0
+STUB
+  cat > "$bin_dir/rclone" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >> "$SNAPSHOT_TEST_ROOT/rclone.calls"
+exit 1
+STUB
+  chmod +x "$bin_dir/uname" "$bin_dir/flock" "$bin_dir/skillwiki" "$bin_dir/rclone"
+
+  for mode in busy error; do
+    : > "$root/flock.calls"; : > "$root/rclone.calls"
+    out="$(SNAPSHOT_TEST_ROOT="$root" SNAPSHOT_TEST_FLOCK_MODE="$mode" \
+      WIKI_GIT_WORKTREE="$root/wiki-git" WIKI_DIR="$root/wiki" \
+      WIKI_SNAPSHOT_LOG="$root/wiki-snapshot.log" WIKI_SNAPSHOT_LOCK="$root/wiki-snapshot.lock" \
+      CLOUD_REMOTE="stub:cloud/wiki" PATH="$bin_dir:$PATH" \
+      "$SCRIPT_UNDER_TEST" 2>&1)"
+    rc=$?
+    assert_file_contains "lock $mode: uses flock -n -E 75" "$root/flock.calls" "^-n -E 75 200$"
+    if [ -s "$root/rclone.calls" ]; then
+      printf "FAIL: lock %s: snapshot work ran without the lock\n" "$mode"
+      FAIL=$((FAIL + 1))
+    else
+      printf "PASS: lock %s: no snapshot work without the lock\n" "$mode"
+      PASS=$((PASS + 1))
+    fi
+    if [ "$mode" = "busy" ]; then
+      assert_eq "lock contention exits 75" "$rc" "75"
+      if printf '%s\n' "$out" | grep -qx 'SNAPSHOT_LOCK_BUSY schema=v1 result=busy exit=75'; then
+        printf "PASS: lock contention emits busy marker\n"
+        PASS=$((PASS + 1))
+      else
+        printf "FAIL: lock contention missing busy marker: %s\n" "$out"
+        FAIL=$((FAIL + 1))
+      fi
+    else
+      assert_eq "flock operational error exits 1" "$rc" "1"
+      if printf '%s\n' "$out" | grep -q 'SNAPSHOT_LOCK_BUSY'; then
+        printf "FAIL: flock operational error emitted busy marker\n"
+        FAIL=$((FAIL + 1))
+      else
+        printf "PASS: flock operational error emits no busy marker\n"
+        PASS=$((PASS + 1))
+      fi
+    fi
+  done
+
+  rm -rf "$root"
+}
+
+test_snapshot_lock_contention_vs_flock_error
+
 if [ "$(uname -s)" != "Linux" ]; then
   printf "SKIP: Linux-only runtime snapshot guard test\n"
   printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
@@ -2762,7 +2836,6 @@ STUB
 }
 
 test_conflict_marker_guard_allows_standalone_equals
-
 
 printf "\n=== Results: %d passed, %d failed ===\n" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] && exit 0 || exit 1

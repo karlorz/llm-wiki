@@ -57,14 +57,9 @@ class Requests(unittest.TestCase):
         w.process(self.root,"central",lambda: self.fail("retry cap"),now=1000000)
         self.assertFalse(list((self.root/"pending").glob("*.json")))
     def test_exit_zero_requires_this_invocation_matching_proof(self):
-        def fake(text, code):
-            def run(*args, **kwargs):
-                kwargs["stdout"].write(text.encode())
-                return type("Result",(),{"returncode":code, "wait":lambda self, **kw: code})()
-            return run
         prefix="SNAPSHOT_COMPLETE schema=v1 outcome=pushed result=success ts=2026-10-28T00:00:00Z head="
         for text, code, valid in [("skip",0,False),(prefix+"a"*40+" origin="+"b"*40,0,False),(prefix+"a"*40+" origin="+"a"*40,1,False),(prefix+"a"*40+" origin="+"a"*40,0,True)]:
-            with patch.object(w.subprocess,"Popen",fake(text,code)):
+            with patch.object(w.subprocess,"Popen",self.popen_fake(text,code)):
                 self.assertEqual(w.execute_snapshot() is not None,valid)
     def test_completion_and_retry_use_post_run_clock(self):
         key = self.add()
@@ -118,6 +113,138 @@ class Requests(unittest.TestCase):
         time.sleep(1.1)
         self.assertTrue(pidfile.exists())
         self.assertFalse(marker.exists(), "grandchild survived timeout")
+    def pending(self, key):
+        return json.loads((self.root / "pending" / (key + ".json")).read_text())
+    def popen_fake(self, text, code):
+        def run(*args, **kwargs):
+            kwargs["stdout"].write(text.encode())
+            return type("Result",(),{"returncode":code, "wait":lambda self, **kw: code})()
+        return run
+    def test_repeated_busy_defers_without_spending_attempts(self):
+        key = self.add()
+        now = 100000
+        for _ in range(6):
+            self.assertEqual(w.process(self.root, "central", lambda: w.LOCK_BUSY, now=now), 0)
+            receipt, pending = self.receipt(key), self.pending(key)
+            self.assertEqual((receipt["state"], receipt["error"], receipt["attempt"]), ("queued", "SNAPSHOT_LOCK_BUSY", 0))
+            self.assertEqual((pending["state"], pending["error"], pending["attempt"]), ("queued", "SNAPSHOT_LOCK_BUSY", 0))
+            self.assertEqual((receipt["next_attempt"], pending["next_attempt"]), (now + 60000, now + 60000))
+            self.assertFalse(list((self.root / "running").glob("*.json")))
+            w.process(self.root, "central", lambda: self.fail("not due before +60s"), now=now + 59999)
+            now += 60000
+        self.assertEqual(w.process(self.root, "central", lambda: dict(head="a"*40, origin="a"*40), now=now), 0)
+        self.assertEqual((self.receipt(key)["state"], self.receipt(key)["attempt"]), ("completed", 1))
+        self.assertNotIn("error", self.receipt(key))
+    def test_busy_preserves_real_prior_failures_and_cap(self):
+        key = self.add()
+        w.process(self.root, "central", lambda: None, now=100000)
+        self.assertEqual(self.receipt(key)["state"], "failed")
+        for now in (200000, 300000, 400000, 500000):
+            w.process(self.root, "central", lambda: w.LOCK_BUSY, now=now)
+            receipt = self.receipt(key)
+            self.assertEqual((receipt["state"], receipt["error"], receipt["attempt"]), ("queued", "SNAPSHOT_LOCK_BUSY", 1))
+            self.assertEqual(receipt["last_failure"], "SNAPSHOT_COMPLETION_UNPROVEN")
+        w.process(self.root, "central", lambda: None, now=600000)
+        self.assertEqual((self.receipt(key)["state"], self.receipt(key)["attempt"]), ("failed", 2))
+        w.process(self.root, "central", lambda: w.LOCK_BUSY, now=800000)
+        self.assertEqual(self.receipt(key)["attempt"], 2)
+        w.process(self.root, "central", lambda: None, now=900000)
+        self.assertEqual((self.receipt(key)["state"], self.receipt(key)["attempt"]), ("failed", 3))
+        self.assertFalse(list((self.root / "pending").glob("*.json")))
+        w.process(self.root, "central", lambda: self.fail("terminal request revived"), now=10**7)
+    def test_crash_during_deferral_neither_counts_failure_nor_double_refunds(self):
+        for crash_after in (2, 3, 4):
+            with self.subTest(crash_after=crash_after):
+                key = self.add(attempt=1)
+                real_write, calls = w.write_record, []
+                def crash(path, record):
+                    real_write(path, record)
+                    calls.append(path)
+                    if len(calls) == crash_after:
+                        raise KeyboardInterrupt()
+                with patch.object(w, "write_record", crash), self.assertRaises(KeyboardInterrupt):
+                    w.process(self.root, "central", lambda: w.LOCK_BUSY, now=100000)
+                self.assertEqual(self.pending_or_running_attempt(key), 1)
+                w.process(self.root, "central", lambda: self.fail("deferred request not due"), now=130000)
+                receipt, pending = self.receipt(key), self.pending(key)
+                self.assertEqual((receipt["state"], receipt["error"], receipt["attempt"]), ("queued", "SNAPSHOT_LOCK_BUSY", 1))
+                self.assertEqual((pending["state"], pending["error"], pending["attempt"]), ("queued", "SNAPSHOT_LOCK_BUSY", 1))
+                self.assertFalse(list((self.root / "running").glob("*.json")))
+                w.process(self.root, "central", lambda: dict(head="a"*40, origin="a"*40), now=200000)
+                self.assertEqual((self.receipt(key)["state"], self.receipt(key)["attempt"]), ("completed", 2))
+    def pending_or_running_attempt(self, key):
+        for area in ("running", "pending"):
+            path = self.root / area / (key + ".json")
+            if path.exists():
+                return json.loads(path.read_text())["attempt"]
+    def test_recovery_journals_batch_before_removing_its_busy_witness(self):
+        keys = sorted([self.add("running", 2) for _ in range(3)])
+        for i, key in enumerate(keys):
+            path = self.root / "running" / (key + ".json")
+            rec = json.loads(path.read_text())
+            rec.update(state="running", started_at=100000)
+            if i == 0:
+                rec.update(state="queued", error="SNAPSHOT_LOCK_BUSY", attempt=1, next_attempt=160000)
+            w.write_record(path, rec)
+        real_unlink = Path.unlink
+        def crash_after_first_removal(path, *args, **kwargs):
+            real_unlink(path, *args, **kwargs)
+            if path == self.root / "running" / (keys[0] + ".json"):
+                raise KeyboardInterrupt()
+        with patch.object(Path, "unlink", crash_after_first_removal), self.assertRaises(KeyboardInterrupt):
+            w.process(self.root, "central", lambda: self.fail("not due"), now=130000)
+        w.process(self.root, "central", lambda: self.fail("not due"), now=130000)
+        for key in keys:
+            rec = self.receipt(key)
+            self.assertEqual((rec["state"], rec["attempt"], rec["error"]), ("queued", 1, "SNAPSHOT_LOCK_BUSY"))
+        self.assertFalse(list((self.root / "running").glob("*.json")))
+    def test_real_interruption_stays_bounded_and_counted(self):
+        key = self.add("running", 1)
+        w.process(self.root, "central", lambda: self.fail("backoff"), now=100000)
+        receipt = self.receipt(key)
+        self.assertEqual((receipt["state"], receipt["error"], receipt["attempt"]), ("failed", "SNAPSHOT_INTERRUPTED", 1))
+    def test_deferred_journal_never_revives_terminal_or_completed_requests(self):
+        for receipt in (dict(state="failed", error="SNAPSHOT_INTERRUPTED", attempt=3), dict(state="completed", attempt=1)):
+            with self.subTest(receipt=receipt["state"]):
+                key = str(uuid.uuid4())
+                base = dict(request_id=key, vault_id="central", created_at=0, next_attempt=0)
+                w.write_record(self.root / "receipts" / (key + ".json"), dict(base, **receipt))
+                w.write_record(self.root / "running" / (key + ".json"), dict(base, state="queued", error="SNAPSHOT_LOCK_BUSY", attempt=2))
+                w.process(self.root, "central", lambda: self.fail("revived"), now=100000)
+                self.assertFalse(list((self.root / "pending").glob("*.json")))
+                self.assertFalse(list((self.root / "running").glob("*.json")))
+                self.assertEqual(self.receipt(key)["state"], receipt["state"])
+    def test_busy_requires_both_marker_and_exit_75(self):
+        marker = "SNAPSHOT_LOCK_BUSY schema=v1 result=busy exit=75\n"
+        proof = "SNAPSHOT_COMPLETE schema=v1 outcome=pushed result=success ts=2026-10-28T00:00:00Z head=" + "a"*40 + " origin=" + "a"*40 + "\n"
+        cases = [
+            ("log\n" + marker, 75, w.LOCK_BUSY),
+            (marker, 1, None), (marker, 0, None), (marker, 76, None),
+            ("lock held\n", 75, None), ("", 75, None),
+            ("SNAPSHOT_LOCK_BUSY schema=v1 result=busy exit=76\n", 75, None),
+            ("SNAPSHOT_LOCK_BUSY schema=v2 result=busy exit=75\n", 75, None),
+            (marker + "later output\n", 75, None),
+            (proof + marker, 75, None),
+            ("x" + marker, 75, None),
+        ]
+        for text, code, expected in cases:
+            with self.subTest(text=text, code=code), patch.object(w.subprocess, "Popen", self.popen_fake(text, code)):
+                self.assertEqual(w.execute_snapshot(), expected)
+    def test_invalid_busy_pair_counts_as_genuine_failure(self):
+        key = self.add()
+        with patch.object(w.subprocess, "Popen", self.popen_fake("SNAPSHOT_LOCK_BUSY schema=v1 result=busy exit=75\n", 1)):
+            w.process(self.root, "central", w.execute_snapshot, now=100000)
+        receipt = self.receipt(key)
+        self.assertEqual((receipt["state"], receipt["error"], receipt["attempt"]), ("failed", "SNAPSHOT_COMPLETION_UNPROVEN", 1))
+    def test_installed_sibling_lock_busy_exit_is_recognized(self):
+        runner = Path(self.tmp.name) / "wiki-snapshot.sh"
+        runner.write_text('#!/bin/sh\necho "ERROR: Another instance"\necho "SNAPSHOT_LOCK_BUSY schema=v1 result=busy exit=75"\nexit 75\n')
+        runner.chmod(0o700)
+        with patch.object(w, "__file__", str(Path(self.tmp.name) / "worker.py")):
+            self.assertEqual(w.execute_snapshot(), w.LOCK_BUSY)
+        runner.write_text('#!/bin/sh\necho "flock: bad file descriptor"\nexit 71\n')
+        with patch.object(w, "__file__", str(Path(self.tmp.name) / "worker.py")):
+            self.assertIsNone(w.execute_snapshot())
     def test_interruption_before_last_claim_becomes_terminal(self):
         key=self.add(attempt=3)
         w.process(self.root,"central",lambda:self.fail("cap"),now=100000)
