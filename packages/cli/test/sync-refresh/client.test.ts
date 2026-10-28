@@ -11,6 +11,17 @@ import { acquireWikiFetchPullLock } from "../../src/utils/wiki-fetch-lock.js";
 import { parseMirrorSseBlock } from "../../src/sync-refresh/sse.js";
 import { startMarkdownMirrorWatcher } from "../../src/sync-refresh/watcher.js";
 
+it.runIf(process.platform === "win32")("refuses unsupported publication before creating local files", async () => {
+  const vault = await mkdtemp(join(tmpdir(), "unsupported-mirror-"));
+  try {
+    const result = await materializeAdmittedPage({ vault, rel: "concepts/a.md", body: Buffer.from("incoming") });
+    expect(result).toEqual({ decision: "denied", reason: "UNSUPPORTED_PLATFORM" });
+    await expect(readFile(join(vault, "concepts/a.md"))).rejects.toThrow();
+  } finally { await rm(vault, { recursive: true, force: true }); }
+});
+
+// These integration cases exercise POSIX no-follow publication and directory fsync.
+describe.skipIf(process.platform === "win32")("POSIX mirror delivery", () => {
 let base: string, root: string, home: string;
 beforeEach(async () => {
   base = await realpath(await mkdtemp(join(tmpdir(), "mirror-client-")));
@@ -210,4 +221,6 @@ it("does not immediately retry terminal missing or oversized pages", async () =>
       return { ok: true, vault_id: "central", entries: scans === 1 ? ["missing", "large"].map(name => ({ path: `concepts/${name}.md`, sha256: "hint" })) : [] };
     }, readPage, reconcileMs: 20, fetchImpl: (async () => new Response(new ReadableStream())) as typeof fetch });
   expect(readPage.mock.calls.map(call => call[0])).toEqual(["concepts/missing.md", "concepts/large.md"]);
+});
+
 });

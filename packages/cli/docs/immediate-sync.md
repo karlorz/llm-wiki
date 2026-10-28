@@ -1,5 +1,15 @@
 # Immediate Markdown mirror delivery
 
+Direct materialization requires macOS or Linux; Windows refuses before writing
+because the publication contract requires POSIX directory fsync. Windows clients
+can still request and inspect the remote Linux snapshot pipeline.
+
+For a Git-snapshot-only checkout such as Karl's `/Users/karlchow/wiki`, keep direct
+mirror listeners disabled and read fresh content through central MCP. Let the
+designated snapshotter promote to GitHub and the managed local Git updater apply
+the result. The frozen marker prevents agent authoring; it is not an OS read-only
+mount and does not itself prevent an explicitly invoked mirror from writing.
+
 `skillwiki sync refresh` retrieves complete page bytes through the authenticated MCP SDK and `wiki_read_page`, then verifies the returned path, SHA-256 and `s3_verified` before delivery. It uses `SKILLWIKI_MCP_URL` and `SKILLWIKI_MCP_TOKEN` (environment or `~/.skillwiki/.env`). Clip-outbox storage credentials are not involved.
 
 ```sh

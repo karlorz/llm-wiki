@@ -77,6 +77,9 @@ export function localMirrorMatches(vault: string, rel: string, hash: string): bo
  * Rename is atomic publication, not an OS compare-and-swap against hostile writers.
  */
 export async function materializeAdmittedPage(input: { vault: string; rel: string; body: Buffer; priorHash?: string }): Promise<MaterializeResult> {
+  // Directory fsync and no-follow publication are required, not optional.
+  // Refuse before creating parents or staging bytes on unsupported Windows.
+  if (process.platform === "win32") return { decision: "denied", reason: "UNSUPPORTED_PLATFORM" };
   const admitted = admitWikiMirrorPath(input.rel);
   if (!admitted.ok) return { decision: "denied", reason: admitted.reason };
   let fd: number | undefined, tempFd: number | undefined, temp: string | undefined;
