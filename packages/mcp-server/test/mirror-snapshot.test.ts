@@ -52,7 +52,9 @@ describe("inventory and snapshot boundaries", () => {
     expect((await wikiInventory({vaultDir:vault,vaultId:"central",gate},{after:"../escape.md"})).ok).toBe(false);
     expect((await wikiInventory({vaultDir:vault,vaultId:"central",gate},{limit:1001})).ok).toBe(false);
   });
-  it("queues unique requests, refuses wrong vault and unsafe state, and keeps saved writes successful", async () => {
+  // The durable queue belongs to the Linux snapshotter. Windows cannot fsync
+  // a directory handle; Windows clients still request the remote Linux queue.
+  it.skipIf(process.platform === "win32")("queues unique requests, refuses wrong vault and unsafe state, and keeps saved writes successful", async () => {
     const vault = await makeTempVault(); const state = await realpath(await mkdtemp(join(tmpdir(), "queue-")));
     const queue = new SnapshotQueue({ stateDir: state, vaultId: "central" }, [vault]);
     const a = queue.request("central"), b = queue.request("central");
