@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, writeFile, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ vi.mock("node:fs", async importOriginal => {
   };
 });
 import { materializeAdmittedPage, sha256Buffer } from "../../src/sync-refresh/materialize.js";
+describe.skipIf(process.platform === "win32")("POSIX atomic publication failures", () => {
 let base: string;
 afterEach(async () => { faults.rename = faults.link = faults.sync = false; if (base) await rm(base, { recursive: true, force: true }); });
 it.each(["rename", "sync"] as const)("retains old complete bytes and cleans staging after %s failure", async fault => {
@@ -30,4 +31,5 @@ it("failed exclusive publication exposes no partial create and cleans staging", 
   faults.link = true;
   expect((await materializeAdmittedPage({ vault: base, rel: "raw/a.md", body: Buffer.from("complete") })).decision).toBe("denied");
   expect(await readdir(join(base, "raw"))).toEqual([]);
+});
 });
