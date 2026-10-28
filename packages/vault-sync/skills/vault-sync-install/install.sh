@@ -1253,6 +1253,7 @@ fi
 
 run_cmd mkdir -p "$BIN_DIR" "$LOG_DIR" "$RCLONE_DIR"
 run_cmd cp "$VAULT_SYNC_ROOT/scripts/"*.sh "$BIN_DIR/"
+run_cmd cp "$VAULT_SYNC_ROOT/scripts/wiki-snapshot-requests.py" "$BIN_DIR/"
 copy_script_lib
 run_cmd chmod +x "$BIN_DIR/"*.sh
 install_presync_helper
@@ -1305,6 +1306,9 @@ else
 
     replace_template "$SYSTEMD_SRC_DIR/wiki-snapshot.service" "$SYSTEMD_DIR/wiki-snapshot.service"
     replace_template "$SYSTEMD_SRC_DIR/wiki-snapshot.timer" "$SYSTEMD_DIR/wiki-snapshot.timer"
+    # Install inert request worker templates. Operator opt-in is separate from upgrades.
+    replace_template "$SYSTEMD_SRC_DIR/wiki-snapshot-requests.service" "$SYSTEMD_DIR/wiki-snapshot-requests.service"
+    replace_template "$SYSTEMD_SRC_DIR/wiki-snapshot-requests.timer" "$SYSTEMD_DIR/wiki-snapshot-requests.timer"
     replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.service" "$SYSTEMD_DIR/wiki-fuse-refresh.service"
     replace_template "$SYSTEMD_SRC_DIR/wiki-fuse-refresh.timer" "$SYSTEMD_DIR/wiki-fuse-refresh.timer"
 

@@ -27,6 +27,18 @@ function listen(hub: ChangedEventHub): Promise<{ url: string; close: () => Promi
 }
 
 describe("SSE /events", () => {
+  it("drops disconnected clients without throwing or blocking healthy subscribers", () => {
+    const hub = new ChangedEventHub({ pingMs: 0 });
+    let broken = false;
+    const writes: string[] = [];
+    hub.subscribe({ writeHead() {}, write() { if (broken) throw Error("EPIPE"); return true; }, on() {}, end() { throw Error("closed"); } } as unknown as ServerResponse);
+    hub.subscribe({ writeHead() {}, write(value: string) { writes.push(value); return true; }, on() {}, end() {} } as unknown as ServerResponse);
+    broken = true;
+    expect(() => hub.emitChanged(["concepts/saved.md"])).not.toThrow();
+    expect(writes.join("")).toContain("concepts/saved.md");
+    hub.stop();
+  });
+
   it("sets streaming headers and emits changed events", async () => {
     const hub = new ChangedEventHub({ pingMs: 0 });
     const { url, close } = await listen(hub);

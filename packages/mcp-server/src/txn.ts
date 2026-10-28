@@ -154,7 +154,7 @@ async function commitUnlocked(deps: TxnDeps, files: TxnFile[]): Promise<{ paths:
       temps.pop();
     }
     const paths = files.map((f) => f.relPath);
-    deps.onCommit?.(paths);
+    try { deps.onCommit?.(paths); } catch { console.error("skillwiki-mcp post-commit notification failed"); }
     return { paths };
   } catch (error: unknown) {
     await Promise.all(

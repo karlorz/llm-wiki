@@ -1,3 +1,5 @@
+import { SnapshotQueue } from "./snapshot-queue.js";
+import { wikiInventory } from "./tools/inventory.js";
 import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client, S3ServiceException } from "@aws-sdk/client-s3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -106,6 +108,7 @@ export interface HttpServerOptions extends S3WriteHealth {
   registry?: VaultRegistry;
   runtimes?: Map<string, VaultRuntime>;
   fileIngressTokenSha256?: string;
+  snapshotQueue?: SnapshotQueue;
   /** Opt-in user control plane; never enables or exposes /console. */
   workspaceWeb?: WorkspaceWeb;
   authorizeWorkspaceAction?: (action: WorkspaceAction) => boolean;
@@ -115,6 +118,9 @@ export interface HttpServerOptions extends S3WriteHealth {
 const MAX_MCP_BODY_BYTES = 1048576; // 1 MiB
 
 const MCP_TOOL_NAMES = [
+  "wiki_inventory",
+  "wiki_snapshot_request",
+  "wiki_snapshot_status",
   "wiki_query",
   "wiki_read_page",
   "wiki_memory_recall",
@@ -246,6 +252,16 @@ function ensureVaultState(opts: HttpServerOptions): {
   return { registry, runtimes };
 }
 
+function snapshotEnabled(opts: HttpServerOptions, registry: VaultRegistry, vaultId: string): boolean {
+  return !opts.workspaceIdentity && registry.defaultVaultId === "central" && vaultId === "central" && opts.snapshotQueue?.config.vaultId === "central";
+}
+
+function requestSnapshotAfterSave(opts: HttpServerOptions, registry: VaultRegistry, vaultId: string): void {
+  if (!snapshotEnabled(opts, registry, vaultId)) return;
+  try { opts.snapshotQueue!.request(vaultId); }
+  catch { console.error("skillwiki-mcp snapshot enqueue failed"); }
+}
+
 export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; principal: Principal }): McpServer {
   const { registry, runtimes } = ensureVaultState(opts);
   const handshake = handshakeFor(opts.principal, registry);
@@ -297,7 +313,10 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
       putObject: resolved.ctx.putObject,
       getObject: resolved.ctx.getObject,
       auditFile: opts.auditFile,
-      onCommit: (paths: string[]) => opts.hub?.emitChanged(paths, resolved.ctx.vaultId),
+      onCommit: (paths: string[]) => {
+        opts.hub?.emitChanged(paths, resolved.ctx.vaultId);
+        requestSnapshotAfterSave(opts, registry, resolved.ctx.vaultId);
+      },
     };
     return { ok: true as const, reads, writes };
   };
@@ -310,6 +329,32 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
     currentVersion: z.string().optional(),
   };
   const genericReadOutputSchema = z.object({ ...failureShape }).passthrough();
+
+  server.registerTool("wiki_inventory", {
+    description: "Paginated discovery of mirror-admitted Markdown hashes. Pages over 262144 bytes and files changed during hashing are omitted. Read pages separately to verify S3; repeat full inventory on reconnect and periodically.",
+    inputSchema: z.object({ ...vaultField, after: z.string().optional(), limit: z.number().int().min(1).max(1000).optional() }),
+    outputSchema: genericReadOutputSchema, annotations: { readOnlyHint: true },
+  }, async args => {
+    const selected = bind(args.vault);
+    if (!selected.ok) return toolResult(selected, true);
+    const out = await wikiInventory({ ...selected.reads, vaultId: selected.reads.vaultId }, args);
+    return toolResult(out, !out.ok);
+  });
+  for (const name of ["wiki_snapshot_request", "wiki_snapshot_status"] as const) {
+    server.registerTool(name, {
+      description: name === "wiki_snapshot_request" ? "Request an opt-in central snapshot. Queued does not prove backup completion." : "Inspect snapshot pipeline state. Completed proves a guarded run, not exact page hashes.",
+      inputSchema: z.object({ ...vaultField, ...(name === "wiki_snapshot_status" ? { request_id: z.string().optional() } : {}) }),
+      outputSchema: genericReadOutputSchema, annotations: { readOnlyHint: name === "wiki_snapshot_status" },
+    }, async args => {
+      const selected = bind(args.vault, name === "wiki_snapshot_request" ? "write" : "read");
+      if (!selected.ok) return toolResult(selected, true);
+      const vaultId = selected.reads.vaultId;
+      if (!selected.reads.gate.ready) return toolResult({ ok: false, vault_id: vaultId, error: "TOOLS_NOT_READY" }, true);
+      if (!snapshotEnabled(opts, registry, vaultId)) return toolResult({ ok: false, vault_id: vaultId, state: "disabled" });
+      const out = name === "wiki_snapshot_request" ? opts.snapshotQueue!.request(vaultId) : opts.snapshotQueue!.status(vaultId, (args as { request_id?: string }).request_id);
+      return toolResult(out, !out.ok);
+    });
+  }
 
   server.registerTool(
     "wiki_query",
@@ -964,7 +1009,10 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
       const result = await adoptReadyHint(hint.data, {
         vaultDir: opts.vaultDir,
         getObject: opts.getObject,
-        emitChanged: (paths, vaultId) => opts.hub?.emitChanged(paths, vaultId),
+        emitChanged: (paths, vaultId) => {
+          opts.hub?.emitChanged(paths, vaultId);
+          requestSnapshotAfterSave(opts, vaultState.registry, vaultId ?? DEFAULT_VAULT_ID);
+        },
       });
       if (!result.ok) {
         json(res, result.status, { error: result.error });
@@ -1075,7 +1123,7 @@ export async function startMcpHttpServer(opts: HttpServerOptions): Promise<Retur
     const authorizeWorkspaceAction = scoped ? (action: WorkspaceAction): boolean => {
       const live = opts.workspaceWeb!.options.store.resolveAccess(suppliedToken!);
       return Boolean(live && live.grant.id === scoped.grant.id && live.grant.actions.includes(action));
-    } : undefined;
+    } : opts.authorizeWorkspaceAction;
     let requestVaultState = vaultState;
     if (scoped) {
       try { requestVaultState = await opts.workspaceWeb!.options.provisioner.context(scoped.workspace, vaultState.registry); }
@@ -1440,6 +1488,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     getObject: defaultRt.getObject,
     hub,
     fileIngressTokenSha256: env.SKILLWIKI_FILE_INGRESS_TOKEN_SHA256,
+    snapshotQueue: cfg.snapshot ? new SnapshotQueue(cfg.snapshot, [...registry.entries.values()].map(entry => entry.localRoot)) : undefined,
     auditFile: cfg.auditLogPath,
     oauth: cfg.oauth,
     registry,

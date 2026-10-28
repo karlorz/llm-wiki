@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AddressInfo } from "node:net";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { adoptReadyHint, orderIngressPaths, ReadyHintSchema } from "../src/file-ingress.js";
 import { startMcpHttpServer } from "../src/server.js";
 import { ReconcileGate } from "../src/reconcile.js";
@@ -51,6 +51,18 @@ describe("file-ingress ready hint", () => {
     expect(result.ok).toBe(true);
     expect(emitted[0]?.[0]).toMatch(/^raw\/assets\//);
     expect(emitted[0]?.at(-1)).toMatch(/^raw\/articles\//);
+  });
+
+  it("keeps adopted content successful when its post-save hook throws", async () => {
+    const vault = await makeTempVault();
+    const store = makeS3Store({ "raw/articles/saved.md": "saved" });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await adoptReadyHint({ vault_id: "central", files: [{ path: "raw/articles/saved.md", sha256: createHash("sha256").update("saved").digest("hex") }] }, { vaultDir: vault, getObject: store.getObject, emitChanged: () => { throw Error("private path and credential"); } });
+      expect(result.ok).toBe(true);
+      expect(await readFile(join(vault, "raw/articles/saved.md"), "utf8")).toBe("saved");
+      expect(log).toHaveBeenCalledWith("skillwiki-mcp post-save notification failed");
+    } finally { log.mockRestore(); }
   });
 
   it("rejects a tombstoned path before materialization", async () => {

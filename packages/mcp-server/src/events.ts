@@ -24,6 +24,7 @@ export class ChangedEventHub {
     res.write(":\n\n");
     const client: EventClient = { res, allowedVaults: filter?.allowedVaults, authorized: filter?.authorized };
     this.clients.add(client);
+    res.on("error", () => this.drop(client));
     res.on("close", () => {
       this.clients.delete(client);
       if (this.clients.size === 0) this.stopTimer();
@@ -36,7 +37,7 @@ export class ChangedEventHub {
     for (const client of this.clients) {
       if (!this.authorized(client)) continue;
       if (client.allowedVaults && !client.allowedVaults.includes(vaultId)) continue;
-      client.res.write(payload);
+      this.send(client, payload);
     }
   }
 
@@ -58,9 +59,21 @@ export class ChangedEventHub {
     this.timer = undefined;
   }
 
+  private send(client: EventClient, payload: string): void {
+    try {
+      if (client.res.destroyed || client.res.writableEnded || client.res.write(payload) === false) this.drop(client);
+    } catch { this.drop(client); }
+  }
+
+  private drop(client: EventClient): void {
+    this.clients.delete(client);
+    try { client.res.end(); } catch { /* disconnected */ }
+    if (this.clients.size === 0) this.stopTimer();
+  }
+
   private authorized(client: EventClient): boolean {
     try { if (!client.authorized || client.authorized()) return true; } catch { /* fail closed */ }
-    this.clients.delete(client); client.res.end();
+    this.drop(client);
     if (this.clients.size === 0) this.stopTimer();
     return false;
   }
@@ -70,7 +83,7 @@ export class ChangedEventHub {
     this.timer = setInterval(() => {
       for (const client of this.clients) {
         if (!this.authorized(client)) continue;
-        client.res.write(": ping\n\n");
+        this.send(client, ": ping\n\n");
       }
     }, this.pingMs);
     this.timer.unref?.();

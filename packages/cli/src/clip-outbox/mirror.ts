@@ -1,9 +1,10 @@
-import { mkdir, rmdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
 import { GetObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import type { ResolvedClipOutboxConfig } from "../utils/clip-outbox-config.js";
+import { acquireWikiFetchPullLock, wikiFetchPullLockDir } from "../utils/wiki-fetch-lock.js";
 import { writeRegularExclusive } from "./files.js";
 import { parseDestination } from "./upload.js";
+
+export { acquireWikiFetchPullLock, wikiFetchPullLockDir };
 
 const ADMIT = /^raw\/(articles|assets)\/[A-Za-z0-9._/-]+$/;
 
@@ -16,29 +17,7 @@ export function orderMirrorPaths(paths: readonly string[]): string[] {
   return [...unique.filter((path) => path.startsWith("raw/assets/")), ...unique.filter((path) => path.startsWith("raw/articles/"))];
 }
 
-export function eventsUrlFromMcp(mcpUrl: string): string {
-  const url = new URL(mcpUrl);
-  url.pathname = "/events";
-  url.search = "";
-  url.hash = "";
-  return url.toString();
-}
-
-export function wikiFetchPullLockDir(home: string): string {
-  return join(home, "Library", "Caches", "vault-sync", "wiki-fetch", "pull.lock.d");
-}
-
-export async function acquireWikiFetchPullLock(home: string): Promise<(() => Promise<void>) | null> {
-  const lockDir = wikiFetchPullLockDir(home);
-  await mkdir(dirname(lockDir), { recursive: true });
-  try {
-    await mkdir(lockDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return null;
-    throw error;
-  }
-  return async () => { await rmdir(lockDir).catch(() => undefined); };
-}
+export { eventsUrlFromMcp } from "../utils/mcp-events-url.js";
 
 export function parseChangedSseBlock(block: string): { vault_id: string; paths: string[] } | null {
   let event = "message";

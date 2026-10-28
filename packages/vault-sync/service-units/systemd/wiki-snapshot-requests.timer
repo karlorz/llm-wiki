@@ -1,0 +1,10 @@
+[Unit]
+Description=Retry opt-in SkillWiki snapshot requests
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=15s
+Unit=wiki-snapshot-requests.service
+
+[Install]
+WantedBy=timers.target

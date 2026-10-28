@@ -1,3 +1,4 @@
+import type { SnapshotConfig } from "./snapshot-queue.js";
 import yaml from "js-yaml";
 import { DEFAULT_RCLONE_COPY_TIMEOUT_MS } from "./reconcile.js";
 import type { OAuthConfig, OAuthWriterMapping } from "./oauth.js";
@@ -11,6 +12,7 @@ import {
 } from "./vault-registry.js";
 
 export interface McpDaemonConfig {
+  snapshot?: SnapshotConfig;
   vaultDir: string;
   bind: string;
   port: number;
@@ -34,6 +36,7 @@ export interface McpDaemonConfig {
 }
 
 interface FileConfig {
+  snapshot?: { enabled?: boolean; state_dir?: string; vault_id?: string };
   vault_dir?: string;
   bind?: string;
   port?: number;
@@ -110,6 +113,8 @@ export function loadConfig(env: NodeJS.Dict<string>, fileText?: string): McpDaem
   if (!rcloneBucket) throw new Error("SKILLWIKI_MCP_RCLONE_BUCKET / rclone.bucket is required");
 
   return {
+    snapshot: (env.SKILLWIKI_MCP_SNAPSHOT_ENABLED === "true" || (env.SKILLWIKI_MCP_SNAPSHOT_ENABLED === undefined && file.snapshot?.enabled === true)) && (env.SKILLWIKI_MCP_SNAPSHOT_STATE_DIR ?? file.snapshot?.state_dir)
+      ? { stateDir: (env.SKILLWIKI_MCP_SNAPSHOT_STATE_DIR ?? file.snapshot!.state_dir)!, vaultId: env.SKILLWIKI_MCP_SNAPSHOT_VAULT_ID ?? file.snapshot?.vault_id ?? env.SKILLWIKI_MCP_DEFAULT_VAULT ?? file.default_vault ?? DEFAULT_VAULT_ID } : undefined,
     vaultDir,
     bind: env.SKILLWIKI_MCP_BIND ?? file.bind ?? "127.0.0.1",
     port: asPort(env.SKILLWIKI_MCP_PORT, asPort(file.port, 8801)),

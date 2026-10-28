@@ -5,12 +5,13 @@ import { redactMcpSecret } from "./mcp-auth-env.js";
 export const MCP_PROBE_TIMEOUT_MS = 10_000;
 
 export async function withMcpClient<T>(
-  input: { url: string; token: string; clientName: string; version: string; fetchFn?: typeof fetch },
+  input: { url: string; token: string; clientName: string; version: string; fetchFn?: typeof fetch; timeoutMs?: number },
   probe: (client: Client, signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
   const client = new Client({ name: input.clientName, version: input.version });
   const fetchFn = input.fetchFn ?? globalThis.fetch;
+  const timeoutMs = input.timeoutMs ?? MCP_PROBE_TIMEOUT_MS;
   const transport = new StreamableHTTPClientTransport(new URL(input.url), {
     requestInit: { headers: { Authorization: `Bearer ${input.token}` } },
     fetch: (url, init) => fetchFn(url, {
@@ -21,14 +22,14 @@ export async function withMcpClient<T>(
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
-      const error = new Error(`MCP probe timed out after ${MCP_PROBE_TIMEOUT_MS}ms`);
+      const error = new Error(`MCP probe timed out after ${timeoutMs}ms`);
       reject(error);
       controller.abort(error);
-    }, MCP_PROBE_TIMEOUT_MS);
+    }, timeoutMs);
   });
   try {
     const work = async () => {
-      await client.connect(transport, { signal: controller.signal, timeout: MCP_PROBE_TIMEOUT_MS });
+      await client.connect(transport, { signal: controller.signal, timeout: timeoutMs });
       return probe(client, controller.signal);
     };
     return await Promise.race([work(), deadline]);

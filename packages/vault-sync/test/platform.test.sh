@@ -80,30 +80,25 @@ assert "lockfile_acquire first call" "$RC1" "0"
 # Second acquire should fail (contended)
 lockfile_acquire "$LOCK_TEST" 600
 RC2=$?
-# RC2 should be 1 (contended) — but mkdir mutex uses .d suffix,
-# so we need a different path to avoid .d collision
-# Test with a separate lock path instead
+assert "lockfile_acquire second call contended" "$RC2" "1"
+lockfile_release "$LOCK_TEST"
+rm -f "$LOCK_TEST"
+# Separate acquisition after release
 LOCK_TEST2=$(mktemp)
 lockfile_acquire "$LOCK_TEST2" 600
 RC2A=$?
 assert "lockfile_acquire separate path" "$RC2A" "0"
 lockfile_release "$LOCK_TEST2"
 
-# 7. lockfile_acquire reclaims after max_age exceeded
-# Strategy: force the mkdir fallback, create a stale lock dir, wait 2s, then
-# acquire with max_age=1. Linux normally uses flock first, so without this
-# fixture-owned fallback the stale directory is never consulted.
-flock() { return 1; }
+# 7. Unknown-owner directories cannot be reclaimed based on age.
 LOCK_STALE=$(mktemp).stale
-LOCK_STALE_DIR="${LOCK_STALE}.d"
-mkdir -p "$LOCK_STALE_DIR"
-sleep 2
+mkdir "${LOCK_STALE}.d"
+platform_stat_ctime() { echo 0; }
 lockfile_acquire "$LOCK_STALE" 1
 RC3=$?
-assert "lockfile_acquire stale reclaim" "$RC3" "2"
-lockfile_release "$LOCK_STALE"
-rm -rf "$LOCK_STALE_DIR" "$LOCK_STALE" 2>/dev/null
-unset -f flock
+assert "lockfile_acquire unknown owner fails closed regardless of age" "$RC3" "1"
+rmdir "${LOCK_STALE}.d"
+rm -f "$LOCK_STALE"
 
 # 8. lockfile_release allows re-acquire
 LOCK_REL=$(mktemp).release

@@ -2,7 +2,7 @@ import { resolveSkillwikiHome } from "./utils/home.js";
 import { join } from "node:path";
 import { Command } from "commander";
 import type { Result, ErrResult } from "@skillwiki/shared";
-import { ExitCode, err, resolveSessionKind } from "@skillwiki/shared";
+import { ExitCode, err, ok, resolveSessionKind } from "@skillwiki/shared";
 import { printJson, printHuman } from "./utils/output.js";
 import { healthLintDetailHints, lintDetailHints } from "./utils/lint-detail-hints.js";
 import { getDeprecatedWarnings } from "./utils/deprecation.js";
@@ -62,6 +62,10 @@ import { runPagePublish } from "./commands/page-publish.js";
 import { runPageRenderHtml } from "./commands/page-render-html.js";
 import { runProjectPagePublish } from "./commands/project-page-publish.js";
 import { runSyncStatus, runSyncPush, runSyncPull, runSyncLock, runSyncUnlock, runSyncPeers, runSyncLintDelta } from "./commands/sync.js";
+import { runSyncRefresh, defaultReadPage, requestSnapshotViaMcp, snapshotStatusViaMcp } from "./sync-refresh/refresh.js";
+import { defaultInventory, eventsUrlFromMcp, startMarkdownMirrorWatcher } from "./sync-refresh/watcher.js";
+import { resolveMcpAuthEnv } from "./utils/mcp-auth-env.js";
+import { assertFrozenMirror } from "./sync-refresh/materialize.js";
 import { runSyncJournalList, runSyncJournalClearStale } from "./commands/sync-journal.js";
 import { runSnapshotMaintenanceDryRun, runSnapshotMaintenanceExecute, runProjectionConflictRepairDryRun, runProjectionConflictRepairExecute } from "./commands/snapshot-maintenance.js";
 import { getCliSessionId } from "./utils/sync-lock.js";
@@ -1597,6 +1601,58 @@ program
 
 // sync — grouped under a parent command
 const syncCmd = program.command("sync").description("manage vault sync");
+
+syncCmd.command("refresh <paths...>")
+  .description("deliver verified central page bytes into the frozen mirror")
+  .option("--root <path>", "local frozen mirror root")
+  .option("--wiki <name>", "local wiki profile")
+  .option("--vault-id <id>", "explicit MCP vault selector", "central")
+  .option("--request-snapshot", "also request the independent snapshot pipeline", false)
+  .action(async (paths, opts) => {
+    const v = await resolveVaultArg(opts.root, opts.wiki);
+    if (!v.ok) return emit({ exitCode: v.exitCode, result: v.payload });
+    return emit(await runSyncRefresh({ vault: v.vault, home: resolveSkillwikiHome(), paths, expectedVaultId: opts.vaultId, requestSnapshot: opts.requestSnapshot }));
+  });
+
+for (const name of ["snapshot-request", "snapshot-status"] as const) {
+  syncCmd.command(name === "snapshot-status" ? "snapshot-status [requestId]" : "snapshot-request")
+    .description(name === "snapshot-status" ? "observe snapshot pipeline status (no exact-file backup proof)" : "request the independent snapshot pipeline")
+    .option("--vault-id <id>", "explicit MCP vault selector", "central")
+    .action(async (...args) => {
+      const opts = args[name === "snapshot-status" ? 1 : 0];
+      const auth = await resolveMcpAuthEnv({ home: resolveSkillwikiHome() });
+      if (!auth.url || !auth.token) return emit({ exitCode: ExitCode.INVALID_CONFIG_VALUE, result: err("INVALID_CONFIG_VALUE", { message: "MCP URL and token required" }) });
+      try {
+        const input = { url: auth.url, token: auth.token, vaultId: opts.vaultId, requestId: name === "snapshot-status" ? args[0] : undefined };
+        const result = name === "snapshot-status" ? await snapshotStatusViaMcp(input) : await requestSnapshotViaMcp(input);
+        return emit({ exitCode: result.ok === true && !["failed", "disabled", "unknown"].includes(String(result.state)) ? ExitCode.OK : ExitCode.PREFLIGHT_FAILED, result: ok(result) });
+      } catch (error) {
+        return emit({ exitCode: ExitCode.PREFLIGHT_FAILED, result: err("PREFLIGHT_FAILED", { message: String(error) }) });
+      }
+    });
+}
+
+syncCmd.command("mirror-watch")
+  .description("opt-in foreground Markdown mirror watcher (MCP credentials only)")
+  .option("--root <path>", "local frozen mirror root")
+  .option("--wiki <name>", "local wiki profile")
+  .option("--vault-id <id>", "explicit MCP vault selector", "central")
+  .action(async opts => {
+    const v = await resolveVaultArg(opts.root, opts.wiki);
+    if (!v.ok) return emit({ exitCode: v.exitCode, result: v.payload });
+    const auth = await resolveMcpAuthEnv({ home: resolveSkillwikiHome() });
+    if (!auth.url || !auth.token) return emit({ exitCode: ExitCode.INVALID_CONFIG_VALUE, result: err("INVALID_CONFIG_VALUE", { message: "MCP URL and token required" }) });
+    assertFrozenMirror(v.vault);
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.once("SIGINT", stop); process.once("SIGTERM", stop);
+    try {
+      await startMarkdownMirrorWatcher({ home: resolveSkillwikiHome(), vault: v.vault, eventsUrl: eventsUrlFromMcp(auth.url), mcpToken: auth.token,
+        expectedVaultId: opts.vaultId, readPage: await defaultReadPage({ url: auth.url, token: auth.token, vaultId: opts.vaultId }),
+        inventory: defaultInventory({ url: auth.url, token: auth.token, vaultId: opts.vaultId }), signal: controller.signal,
+        onReports: reports => console.log(JSON.stringify({ pages: reports })), onError: error => console.error(JSON.stringify({ error })) });
+    } finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
+  });
 
 syncCmd
   .command("status [vault]")

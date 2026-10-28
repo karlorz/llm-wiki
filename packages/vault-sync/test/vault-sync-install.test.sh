@@ -885,6 +885,20 @@ assert_contains "snapshot service exports HOME" "$SCRIPT_DIR/../service-units/sy
 assert_contains "snapshot service reads conventional profile path" "$SCRIPT_DIR/../service-units/systemd/wiki-snapshot.service" "EnvironmentFile=-/etc/vault-sync/profiles/%H-snapshotter.env"
 assert_contains "snapshot timer runs every 30 minutes" "$SCRIPT_DIR/../service-units/systemd/wiki-snapshot.timer" "OnCalendar=*-*-* *:02,32:00"
 
+# Execute against fake systemd in user scope: assert actual rendered units and
+# actual enable/start calls, including an upgrade over an existing installation.
+for request_install in first upgrade; do
+  REQUEST_LOG="$TEST_ROOT/requests-$request_install.systemctl.log"
+  REQUEST_OUT="$TEST_ROOT/requests-$request_install.out"
+  TEST_SYSTEMCTL_LOG="$REQUEST_LOG" run_install "$REQUEST_OUT" --role snapshotter --service-scope user --execute
+  assert_exit "snapshot requests $request_install install succeeds" "$?" 0
+  assert_file_exists "snapshot requests $request_install service installed" "$TEST_ROOT/home/.config/systemd/user/wiki-snapshot-requests.service"
+  assert_file_exists "snapshot requests $request_install timer installed" "$TEST_ROOT/home/.config/systemd/user/wiki-snapshot-requests.timer"
+  assert_file_exists "snapshot requests $request_install worker installed" "$TEST_ROOT/home/.local/share/vault-sync/bin/wiki-snapshot-requests.py"
+  assert_contains "snapshot requests $request_install enables existing timers" "$REQUEST_LOG" "enable --now wiki-snapshot.timer wiki-fuse-refresh.timer"
+  assert_not_contains "snapshot requests $request_install units remain inert" "$REQUEST_LOG" "wiki-snapshot-requests"
+done
+
 NODE_DIR="$TEST_ROOT/node24/bin"
 mkdir -p "$NODE_DIR"
 cat > "$NODE_DIR/node" <<'EOF'

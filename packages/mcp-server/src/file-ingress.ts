@@ -88,7 +88,8 @@ async function adoptReadyHintLocked(hint: ReadyHint, deps: AdoptDeps, vaultId: s
   if (article.length > 0 && assets.length === 0 && hint.files.some((f) => f.path.startsWith("raw/assets/"))) {
     return { ok: false, error: "article without adopted assets", status: 409 };
   }
-  deps.emitChanged(orderedAdopted, vaultId);
+  try { deps.emitChanged(orderedAdopted, vaultId); }
+  catch { console.error("skillwiki-mcp post-save notification failed"); }
   return { ok: true, paths: orderedAdopted };
 }
 

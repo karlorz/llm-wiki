@@ -1,0 +1,14 @@
+[Unit]
+Description=Opt-in SkillWiki snapshot request worker
+After=network-online.target
+ConditionPathExists=@SCRIPT_DIR@/wiki-snapshot-requests.py
+
+[Service]
+Type=oneshot
+Environment=HOME=@HOME@
+EnvironmentFile=-/etc/vault-sync/profiles/%H-snapshotter.env
+EnvironmentFile=-/etc/vault-sync/snapshot-requests.env
+WorkingDirectory=@HOME@/wiki-git
+ExecStart=/usr/bin/python3 @SCRIPT_DIR@/wiki-snapshot-requests.py
+TimeoutStartSec=960
+Nice=10

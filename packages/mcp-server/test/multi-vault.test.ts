@@ -15,6 +15,9 @@ import type { VaultRuntime } from "../src/vault-runtime.js";
 import { makeS3Store, makeTempVault } from "./helpers.js";
 
 const TOOLS = [
+  "wiki_inventory",
+  "wiki_snapshot_request",
+  "wiki_snapshot_status",
   "wiki_query",
   "wiki_read_page",
   "wiki_memory_recall",
@@ -214,6 +217,7 @@ describe("multi-vault HTTP MCP slices 1-5", () => {
     const ctx = await setupDualVault();
     try {
       const argsByTool: Record<string, Record<string, unknown>> = {
+        wiki_inventory: {}, wiki_snapshot_request: {}, wiki_snapshot_status: {},
         wiki_query: { query: "alpha" },
         wiki_read_page: { path: "concepts/shared.md" },
         wiki_memory_recall: { project: "llm-wiki", topic: "agent-memory" },
@@ -235,7 +239,7 @@ describe("multi-vault HTTP MCP slices 1-5", () => {
           content: "---\ntitle: omit\ncreated: 2026-09-18\nupdated: 2026-09-18\ntype: concept\ntags: []\nsources: []\n---\nbody\n",
         },
       };
-      expect(TOOLS).toHaveLength(15);
+      expect(TOOLS).toHaveLength(18);
       for (const name of TOOLS) {
         const { status, body } = await callTool(ctx.port, ctx.token, name, argsByTool[name]!);
         expect(status, name).toBe(200);
