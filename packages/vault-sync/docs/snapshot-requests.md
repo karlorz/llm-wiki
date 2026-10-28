@@ -8,6 +8,10 @@ Enable only on the designated central snapshotter, with the same canonical,
 absolute state directory outside every vault and outside the snapshot Git worktree.
 Use an owner-controlled local directory, without symlink ancestors; both processes
 need access. Do not use an S3/FUSE mount for this queue. Python 3 is required.
+When MCP and the root snapshot worker use different accounts, provision the spool
+and its three subdirectories with the MCP account as owner. The root worker
+preserves that directory ownership on its private atomic record replacements,
+so request status remains readable by MCP. The worker lock may remain root-owned.
 
 MCP configuration (disabled by default):
 
@@ -39,6 +43,8 @@ After review, enable `wiki-snapshot-requests.timer` in the installation's system
 user systemd scope. No path unit is used: failures cannot cause a hot trigger loop.
 The worker invokes only its installed sibling `wiki-snapshot.sh`, preserving all
 fleet, lock, deletion, and projection guards. Do not configure dry-run mode.
+Runtime-only upgrades include an immutable Python launcher for the worker while
+preserving existing units; provision these new units separately on such hosts.
 
 The spool has `pending/`, `running/`, and `receipts/`, keyed by random request UUIDs.
 Each run claims up to 128 eligible requests, after 5 seconds of quiet or a 60 second

@@ -27,6 +27,9 @@ with tempfile.TemporaryDirectory() as tmp:
     first = (share/'bin').resolve()
     launcher = (share/'bin/wiki-pull-with-auto-resolve.sh').read_text()
     assert str(first/'payload/wiki-pull-with-auto-resolve.sh') in launcher
+    python_launcher = share/'bin/wiki-snapshot-requests.py'
+    assert str(first/'payload/wiki-snapshot-requests.py') in python_launcher.read_text()
+    subprocess.run([sys.executable, str(python_launcher)], env={**os.environ, 'SKILLWIKI_SNAPSHOT_REQUESTS_ENABLED':'false'}, check=True)
     m.deploy(*args)
     assert first.exists() and first != (share/'bin').resolve()
     manifest = json.loads((share/'runtime-manifest.json').read_text())

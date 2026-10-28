@@ -64,6 +64,12 @@ def deploy(root, share, role, version, commit, host, dry_run=False):
             launcher = release / file.name
             launcher.write_text("#!/bin/sh\nexec /bin/bash " + quoted + ' "$@"\n')
             launcher.chmod(0o755)
+        for file in payload.glob("*.py"):
+            # Python entry points must retain __file__ in the immutable payload
+            # so fixed sibling helpers cannot drift during another upgrade.
+            launcher = release / file.name
+            launcher.write_text("#!/usr/bin/env python3\nimport runpy\nrunpy.run_path(" + repr(str(file)) + ", run_name='__main__')\n")
+            launcher.chmod(0o755)
         files = {"bin/" + str(p.relative_to(release)): hashlib.sha256(p.read_bytes()).hexdigest()
                  for p in sorted(release.rglob("*")) if p.is_file()}
         agents = Path.home() / "Library/LaunchAgents"

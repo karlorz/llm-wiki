@@ -66,6 +66,11 @@ def write_record(path, record):
     fd, temp = tempfile.mkstemp(prefix=".record-", dir=path.parent)
     try:
         with os.fdopen(fd, "w") as stream:
+            # The worker may run as root while MCP owns the private spool.
+            # Keep every replacement readable by that owner, including retries.
+            owner = path.parent.stat()
+            if os.geteuid() == 0:
+                os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
             json.dump(record, stream)
             stream.flush()
             os.fsync(stream.fileno())

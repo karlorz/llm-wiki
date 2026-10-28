@@ -25,6 +25,16 @@ class Requests(unittest.TestCase):
         return key
     def receipt(self, key):
         return json.loads((self.root / "receipts" / (key + ".json")).read_text())
+    def test_root_replacements_keep_spool_owner(self):
+        real_chown = os.fchown
+        with patch.object(w.os, "geteuid", return_value=0), patch.object(w.os, "fchown", wraps=real_chown) as chown:
+            key = self.add()
+            w.process(self.root, "central", lambda: dict(head="a"*40, origin="a"*40), now=100000)
+        self.assertGreaterEqual(chown.call_count, 3)
+        expected = (self.root / "receipts").stat()
+        actual = (self.root / "receipts" / (key + ".json")).stat()
+        self.assertEqual((actual.st_uid, actual.st_gid), (expected.st_uid, expected.st_gid))
+        self.assertEqual(actual.st_mode & 0o777, 0o600)
     def test_coalesces_and_keeps_concurrent_arrivals(self):
         a, b = self.add(), self.add()
         late = []
