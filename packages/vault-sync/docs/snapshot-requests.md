@@ -59,6 +59,19 @@ before deferring for 60 seconds. It records `state=queued`,
 previous genuine failures. Repeated lock conflicts cannot exhaust the retry budget.
 Other flock errors, missing/malformed busy markers, timeouts and unproven snapshot
 completion remain genuine failures. Already terminal requests are not revived.
+A completed receipt keeps `last_failure` as the most recent genuine worker class
+(`SNAPSHOT_COMPLETION_UNPROVEN` or `SNAPSHOT_INTERRUPTED`). Lock contention is
+excluded. `last_failure` does not make a completed receipt unhealthy: `state=completed`,
+matching head/origin, and no current `error` still mean success. The field is a
+worker category; it does not name the underlying projection refusal.
+Unproven runner outcomes print one stdout line
+`snapshot request unproven reason=... exit=... marker=...` (systemd journal).
+`reason` is `spawn_failed`, `timeout`, `proof_missing`, or `proof_mismatch`.
+`marker` is the last `ERROR:` / `FAIL ` / `SNAPSHOT_*` line after stripping the
+runner's `YYYY-MM-DD HH:MM:SS ` prefix, with control characters replaced by spaces
+and truncated to 240 characters. Truncation is a size limit, not a privacy
+guarantee. Valid lock-busy and proven completion stay quiet. Do not copy raw CLI
+JSON into the summary.
 
 Deferrals are journaled durably in every running claim before queue receipts are
 updated. Recovery finishes those queued deferrals without another refund; a

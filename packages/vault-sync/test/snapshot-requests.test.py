@@ -1,8 +1,10 @@
 import importlib.util
+import io
 import json
 import os
 import subprocess
 import time
+from contextlib import redirect_stdout
 from pathlib import Path
 import tempfile
 import unittest
@@ -135,6 +137,7 @@ class Requests(unittest.TestCase):
         self.assertEqual(w.process(self.root, "central", lambda: dict(head="a"*40, origin="a"*40), now=now), 0)
         self.assertEqual((self.receipt(key)["state"], self.receipt(key)["attempt"]), ("completed", 1))
         self.assertNotIn("error", self.receipt(key))
+        self.assertNotIn("last_failure", self.receipt(key))
     def test_busy_preserves_real_prior_failures_and_cap(self):
         key = self.add()
         w.process(self.root, "central", lambda: None, now=100000)
@@ -230,6 +233,64 @@ class Requests(unittest.TestCase):
         for text, code, expected in cases:
             with self.subTest(text=text, code=code), patch.object(w.subprocess, "Popen", self.popen_fake(text, code)):
                 self.assertEqual(w.execute_snapshot(), expected)
+    def test_recovered_unproven_keeps_last_failure(self):
+        key = self.add()
+        w.process(self.root, "central", lambda: None, now=100000)
+        self.assertEqual((self.receipt(key)["state"], self.receipt(key)["error"], self.receipt(key)["attempt"]), ("failed", "SNAPSHOT_COMPLETION_UNPROVEN", 1))
+        self.assertEqual(self.receipt(key)["last_failure"], "SNAPSHOT_COMPLETION_UNPROVEN")
+        w.process(self.root, "central", lambda: dict(head="a"*40, origin="a"*40), now=200000)
+        receipt = self.receipt(key)
+        self.assertEqual((receipt["state"], receipt["attempt"]), ("completed", 2))
+        self.assertNotIn("error", receipt)
+        self.assertEqual(receipt["last_failure"], "SNAPSHOT_COMPLETION_UNPROVEN")
+    def test_completed_last_failure_uses_latest_genuine_class(self):
+        key = self.add("running", 1)
+        w.process(self.root, "central", lambda: None, now=100000)
+        self.assertEqual((self.receipt(key)["error"], self.receipt(key)["last_failure"]), ("SNAPSHOT_INTERRUPTED", "SNAPSHOT_INTERRUPTED"))
+        w.process(self.root, "central", lambda: w.LOCK_BUSY, now=200000)
+        self.assertEqual((self.receipt(key)["error"], self.receipt(key)["last_failure"], self.receipt(key)["attempt"]), ("SNAPSHOT_LOCK_BUSY", "SNAPSHOT_INTERRUPTED", 1))
+        w.process(self.root, "central", lambda: None, now=300000)
+        self.assertEqual((self.receipt(key)["error"], self.receipt(key)["last_failure"], self.receipt(key)["attempt"]), ("SNAPSHOT_COMPLETION_UNPROVEN", "SNAPSHOT_COMPLETION_UNPROVEN", 2))
+        w.process(self.root, "central", lambda: dict(head="a"*40, origin="a"*40), now=500000)
+        receipt = self.receipt(key)
+        self.assertEqual((receipt["state"], receipt["attempt"]), ("completed", 3))
+        self.assertNotIn("error", receipt)
+        self.assertEqual(receipt["last_failure"], "SNAPSHOT_COMPLETION_UNPROVEN")
+    def capture_execute(self, text, code):
+        buf = io.StringIO()
+        with patch.object(w.subprocess, "Popen", self.popen_fake(text, code)), redirect_stdout(buf):
+            result = w.execute_snapshot()
+        return result, buf.getvalue()
+    def test_unproven_runner_journals_timestamped_fail_marker(self):
+        text = (
+            "2026-10-28 21:50:23 delete-intent: no-resurrect pass complete\n"
+            "2026-10-28 21:50:26 ERROR: projection worktree parity mismatch expected_index_sha256=abc\n"
+            "2026-10-28 21:50:26 FAIL projection candidate verification; snapshot promotion refused\n"
+        )
+        result, out = self.capture_execute(text, 1)
+        self.assertIsNone(result)
+        line = out.strip()
+        self.assertTrue(line.startswith("snapshot request unproven reason=proof_missing exit=1 marker="))
+        self.assertIn("FAIL projection candidate verification; snapshot promotion refused", line)
+        self.assertNotIn("2026-10-28 21:50:26 FAIL", line)
+        self.assertNotIn("delete-intent", line)
+    def test_proven_busy_and_success_stay_quiet(self):
+        marker = "SNAPSHOT_LOCK_BUSY schema=v1 result=busy exit=75\n"
+        proof = "SNAPSHOT_COMPLETE schema=v1 outcome=pushed result=success ts=2026-10-28T00:00:00Z head=" + "a"*40 + " origin=" + "a"*40 + "\n"
+        result, out = self.capture_execute("2026-10-28 21:50:00 ERROR: Another instance\n" + marker, 75)
+        self.assertIs(result, w.LOCK_BUSY)
+        self.assertEqual(out, "")
+        result, out = self.capture_execute(proof, 0)
+        self.assertEqual(result, {"head": "a"*40, "origin": "a"*40})
+        self.assertEqual(out, "")
+    def test_marker_sanitizes_controls_and_bounds_length(self):
+        payload = "FAIL " + ("x" * 300) + "\x1b[31msecret\x07"
+        result, out = self.capture_execute("2026-10-28 21:50:26 " + payload + "\n", 1)
+        self.assertIsNone(result)
+        marker = out.strip().split("marker=", 1)[1]
+        self.assertLessEqual(len(marker), 240)
+        self.assertFalse(any(ord(ch) < 32 or ord(ch) == 127 for ch in marker))
+        self.assertTrue(marker.startswith("FAIL "))
     def test_invalid_busy_pair_counts_as_genuine_failure(self):
         key = self.add()
         with patch.object(w.subprocess, "Popen", self.popen_fake("SNAPSHOT_LOCK_BUSY schema=v1 result=busy exit=75\n", 1)):

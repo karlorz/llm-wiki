@@ -21,6 +21,71 @@ BUSY_EXIT = 75
 BUSY_DELAY_MS = 60000
 LOCK_BUSY_ERROR = "SNAPSHOT_LOCK_BUSY"
 LOCK_BUSY = object()
+MARKER_PREFIXES = ("ERROR:", "FAIL ", "SNAPSHOT_")
+MARKER_LIMIT = 240
+LOG_TS = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} ")
+
+
+def diagnostic_body(line):
+    return LOG_TS.sub("", line.strip(), count=1)
+
+
+def sanitize_marker(text):
+    cleaned = "".join(ch if ch == " " or 31 < ord(ch) < 127 else " " for ch in text)
+    return cleaned.strip()[:MARKER_LIMIT]
+
+
+def last_snapshot_marker(text):
+    for line in reversed(text.splitlines()):
+        body = diagnostic_body(line)
+        if body.startswith(MARKER_PREFIXES):
+            return sanitize_marker(body)
+    return ""
+
+
+def unproven_reason(code, text=""):
+    if code == "spawn":
+        return "spawn_failed"
+    if isinstance(code, int) and code < 0:
+        return "timeout"
+    matches = list(PROOF.finditer(text))
+    if code == 0 and matches:
+        match = matches[-1]
+        if match[1] != match[2]:
+            return "proof_mismatch"
+    return "proof_missing"
+
+
+def report_unproven(code, text=""):
+    print(
+        f"snapshot request unproven reason={unproven_reason(code, text)} exit={code} marker={last_snapshot_marker(text)}",
+        flush=True,
+    )
+
+
+def remembered_failure(record):
+    err = record.get("error")
+    if err and err != LOCK_BUSY_ERROR:
+        return err
+    return record.get("last_failure")
+
+
+def read_runner_output(output):
+    output.seek(max(0, output.tell() - 262144))
+    return output.read().decode("utf-8", errors="replace")
+
+
+def snapshot_outcome(code, text):
+    matches = list(PROOF.finditer(text))
+    lines = text.rstrip().splitlines()
+    if code == BUSY_EXIT and not matches and lines and BUSY.fullmatch(lines[-1]):
+        return LOCK_BUSY
+    if code == 0 and matches:
+        match = matches[-1]
+        if match[1] == match[2]:
+            return {"head": match[1], "origin": match[2]}
+    report_unproven(code, text)
+    return None
 
 
 def safe_state(value, vault):
@@ -100,6 +165,7 @@ def execute_snapshot(timeout=900):
         try:
             result = subprocess.Popen([str(script)], stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
         except OSError:
+            report_unproven("spawn")
             return None
         try:
             result.wait(timeout=timeout)
@@ -111,22 +177,8 @@ def execute_snapshot(timeout=900):
             except ProcessLookupError:
                 pass
             result.wait()
-            return None
-        output.seek(max(0, output.tell() - 262144))
-        text = output.read().decode("utf-8", errors="replace")
-    matches = list(PROOF.finditer(text))
-    if result.returncode == BUSY_EXIT:
-        # Contention needs both the exit code and the marker as the final line.
-        lines = text.rstrip().splitlines()
-        if not matches and lines and BUSY.fullmatch(lines[-1]):
-            return LOCK_BUSY
-        return None
-    if result.returncode != 0 or not matches:
-        return None
-    match = matches[-1]
-    if match[1] != match[2]:
-        return None
-    return {"head": match[1], "origin": match[2]}
+            return snapshot_outcome(result.returncode, read_runner_output(output))
+        return snapshot_outcome(result.returncode, read_runner_output(output))
 
 
 def process(root, vault_id, run=execute_snapshot, now=None, quiet_ms=5000, max_delay_ms=60000):
@@ -135,7 +187,7 @@ def process(root, vault_id, run=execute_snapshot, now=None, quiet_ms=5000, max_d
     now = clock()
     def fail(path, record, error):
         finished = clock()
-        record.update(state="failed", error=error, finished_at=finished)
+        record.update(state="failed", error=error, last_failure=error, finished_at=finished)
         record["next_attempt"] = finished + 60000 * (2 ** max(0, record["attempt"] - 1))
         write_record(root / "receipts" / path.name, record)
         if record["attempt"] < MAX_ATTEMPTS:
@@ -183,7 +235,7 @@ def process(root, vault_id, run=execute_snapshot, now=None, quiet_ms=5000, max_d
     for path in sorted((root / "pending").glob("*.json")):
         rec = read_record(path, vault_id)
         if rec["attempt"] >= MAX_ATTEMPTS:
-            rec.update(state="failed", error="SNAPSHOT_INTERRUPTED", finished_at=now)
+            rec.update(state="failed", error="SNAPSHOT_INTERRUPTED", last_failure="SNAPSHOT_INTERRUPTED", finished_at=now)
             write_record(root / "receipts" / path.name, rec)
             path.unlink()
             continue
@@ -221,9 +273,13 @@ def process(root, vault_id, run=execute_snapshot, now=None, quiet_ms=5000, max_d
         return 0
     for path, rec in claims:
         if proof:
+            prior = remembered_failure(rec)
             rec.update(state="completed", finished_at=clock(), **proof)
             rec.pop("error", None)
-            rec.pop("last_failure", None)
+            if prior:
+                rec["last_failure"] = prior
+            else:
+                rec.pop("last_failure", None)
             write_record(root / "receipts" / path.name, rec)
             path.unlink()
         else:
