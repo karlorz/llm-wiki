@@ -190,6 +190,17 @@ snapshot_refresh_origin_main() {
     )
 }
 
+# Keep the dependency check at every invocation (including pull recovery).
+# Pass the resolved worktree explicitly; the configured variable is not
+# necessarily exported, and the helper must never fall back to another checkout.
+snapshot_run_git_repair() {
+    if [ ! -f "$REPAIR_SCRIPT" ] || [ ! -r "$REPAIR_SCRIPT" ]; then
+        log "ERROR: Git repair helper missing or unreadable: $REPAIR_SCRIPT"
+        return 1
+    fi
+    WIKI_GIT_WORKTREE="$SNAPSHOT_WORKTREE" bash "$REPAIR_SCRIPT" 2>&1 | tee -a "$LOG_FILE"
+}
+
 snapshot_load_active_delete_intent_paths() {
     local output_file="${1:-}"
     [ -n "$output_file" ] || return 1
@@ -744,6 +755,16 @@ snapshot_verify_worktree_projection_parity() {
     return 0
 }
 
+# Temporary preview state is removed on exit. Preserve its JSON in the journal
+# and durable log on each failed attempt, before the retry overwrites it.
+snapshot_log_semantic_preview_evidence() {
+    local preview="$1" line
+    log "projection semantic preview inputs worktree=$SNAPSHOT_WORKTREE events_from=${SNAPSHOT_S3_LOG_EVENTS:-worktree} expected_index_sha256=$PROJECTION_EXPECTED_INDEX_SHA256 expected_log_sha256=$PROJECTION_EXPECTED_LOG_SHA256"
+    while IFS= read -r line || [ -n "$line" ]; do
+        log "projection semantic preview JSON: $line"
+    done < "$preview"
+}
+
 snapshot_verify_semantic_projection_preview() {
     if [ -z "$PROJECTION_STATE_DIR" ]; then
         return 0
@@ -755,11 +776,13 @@ snapshot_verify_semantic_projection_preview() {
     fi
     if ! "$SKILLWIKI_BIN" "${preview_args[@]}" >"$preview" 2>>"$LOG_FILE"; then
         log "ERROR: projection semantic preview failed"
+        snapshot_log_semantic_preview_evidence "$preview"
         return 1
     fi
     if ! grep -Eq '"index_drift"[[:space:]]*:[[:space:]]*false' "$preview" \
         || ! grep -Eq '"log_drift"[[:space:]]*:[[:space:]]*false' "$preview"; then
         log "ERROR: projection semantic preview mismatch index_or_log_drift=true"
+        snapshot_log_semantic_preview_evidence "$preview"
         return 1
     fi
     log "projection semantic preview confirmed index_drift=false log_drift=false"
@@ -889,6 +912,9 @@ refresh_git_baseline() {
             exit 0
         fi
 
+        if git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
+            exit 6
+        fi
         exit 5
     )
     local rc=$?
@@ -897,7 +923,8 @@ refresh_git_baseline() {
         4) log "Git baseline fast-forwarded to origin/main before S3 sync"; return 0 ;;
         2) log "WARNING: Could not fetch origin/main before S3 sync; continuing with existing refs"; return 0 ;;
         3) log "WARNING: Snapshot worktree dirty before S3 sync; skipping baseline fast-forward"; return 0 ;;
-        5) log "WARNING: Snapshot worktree is not an ancestor of origin/main; repair step will handle it after S3 sync"; return 0 ;;
+        5) log "WARNING: Snapshot worktree truly diverges from origin/main; repair step will handle it after S3 sync"; return 0 ;;
+        6) log "Snapshot worktree ahead of origin/main; preserving unpushed commits for promotion"; return 0 ;;
         *) log "WARNING: Git baseline refresh failed rc=$rc; continuing"; return 0 ;;
     esac
 }
@@ -1086,7 +1113,7 @@ snapshot_retry_sync_after_projection_race() {
         return 1
     fi
     rm -f "$RCLONE_LOG"
-    log "post-sync $reason race detected; performed one additional rclone sync context=$context"
+    log "post-sync $reason race retry; performed one additional rclone sync context=$context"
     if ! snapshot_reconcile_delete_intents; then
         log "ERROR: $context $reason race retry delete-intent reconciliation failed"
         return 1
@@ -1098,9 +1125,9 @@ snapshot_retry_sync_after_projection_race() {
 
 # Post-sync projection gate with at most one recoverable-race re-sync.
 # Recoverable shapes are a store-ahead log append, or exact worktree==store
-# byte parity whose semantic preview still reports index/log drift (a late
-# typed page whose matching index.md has not landed yet). Any other mismatch,
-# or a retry that does not converge, is the terminal refusal.
+# byte parity whose semantic preview still reports index/log drift (possibly
+# source-page/event versus projection lag; hashes alone cannot prove a race).
+# Any other mismatch, or a retry that does not converge, is terminal refusal.
 snapshot_gate_projection_candidate_with_race_retry() {
     local context="${1:-post-sync}"
     local refresh_fail="$2"
@@ -1115,8 +1142,9 @@ snapshot_gate_projection_candidate_with_race_retry() {
         if snapshot_verify_projection_candidate; then
             return 0
         fi
-        # Exact byte parity with a drifting preview is the page-vs-index race:
-        # retry once. A later append must not get a second retry after this.
+        # Exact projection byte parity does not prove source-page/event
+        # consistency. Retry once for possible lag, retaining both preview
+        # JSON results as evidence. A later append gets no second retry.
         if snapshot_retry_sync_after_projection_race "$context" "semantic-preview"; then
             return 0
         fi
@@ -1313,11 +1341,20 @@ else
     exit 1
 fi
 
+# An existing index lock is an ownership signal, including on a no-change
+# candidate. Do not report success or attempt to reclaim another writer's lock.
+if [ -e "$(git rev-parse --git-path index.lock)" ]; then
+    log "ERROR: Git index.lock present; snapshot promotion refused"
+    exit 1
+fi
+
 # Check if git is in broken state (rebase in progress, merge conflicts, diverged)
 needs_repair=false
 
 # Check for rebase/merge in progress
-if [ -d ".git/rebase-merge" ] || [ -d ".git/rebase-apply" ] || [ -f ".git/MERGE_HEAD" ]; then
+if [ -d "$(git rev-parse --git-path rebase-merge)" ] \
+    || [ -d "$(git rev-parse --git-path rebase-apply)" ] \
+    || [ -f "$(git rev-parse --git-path MERGE_HEAD)" ]; then
     log "WARNING: Git rebase/merge in progress - needs repair"
     needs_repair=true
 fi
@@ -1334,20 +1371,27 @@ if ! git symbolic-ref -q HEAD >/dev/null 2>&1; then
     needs_repair=true
 fi
 
-# Check if we can fast-forward to origin
-DEFAULT_BRANCH=$(git remote show origin 2>/dev/null | grep 'HEAD branch' | awk '{print $3}')
-DEFAULT_BRANCH=${DEFAULT_BRANCH:-main}
-
-if ! git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH" 2>/dev/null; then
-    # Local HEAD is not an ancestor of origin - diverged
-    log "WARNING: Diverged from origin/$DEFAULT_BRANCH - needs repair"
-    needs_repair=true
+# All snapshot guards and the repair helper use the explicit origin/main ref.
+# An unpushed local snapshot is ahead, not divergent. Only classify divergence
+# against a successfully fetched ref; a transport failure is not Git damage.
+DEFAULT_BRANCH=main
+if snapshot_refresh_origin_main; then
+    if git merge-base --is-ancestor HEAD "origin/$DEFAULT_BRANCH" 2>/dev/null; then
+        : # Equal or behind; neither is divergence.
+    elif git merge-base --is-ancestor "origin/$DEFAULT_BRANCH" HEAD 2>/dev/null; then
+        log "Local HEAD ahead of origin/$DEFAULT_BRANCH; preserving unpushed commits for promotion"
+    else
+        log "WARNING: Diverged from origin/$DEFAULT_BRANCH - needs repair"
+        needs_repair=true
+    fi
+else
+    log "WARNING: Could not fetch origin/$DEFAULT_BRANCH; skipping divergence classification"
 fi
 
 # Repair if needed
 if [ "$needs_repair" = true ]; then
     log "Running git repair..."
-    if ! bash "$REPAIR_SCRIPT" 2>&1 | tee -a "$LOG_FILE"; then
+    if ! snapshot_run_git_repair; then
         log "ERROR: Git repair failed"
         exit 1
     fi
@@ -1397,10 +1441,17 @@ if [ -z "$(git status --porcelain)" ]; then
         log "ERROR: snapshot transaction changed before no-change proof"
         exit 1
     fi
-    if ! emit_snapshot_complete "no-change"; then
+    if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]; then
+        if ! emit_snapshot_complete "no-change"; then
+            exit 1
+        fi
+        exit 0
+    fi
+    if ! git merge-base --is-ancestor origin/main HEAD 2>/dev/null; then
+        log "ERROR: No-change candidate is not ahead of origin/main; retry after baseline refresh"
         exit 1
     fi
-    exit 0
+    log "No new S3 changes; resuming promotion of existing local commits"
 fi
 
 # Re-check immediately before staging because rclone/repair may have changed the
@@ -1420,20 +1471,23 @@ if ! snapshot_verify_git_receipt; then
     exit 1
 fi
 
-# Commit
-echo "Committing changes..."
-if ! snapshot_git_add_promotable; then
-    log "ERROR: git add failed"
-    exit 1
-fi
-ledger_leftover="$(git ls-files -o --exclude-standard -- meta/log-events | wc -l | tr -d ' ')"
-if [ "${ledger_leftover:-0}" -gt 0 ]; then
-    log "WARN: classified inventory left $ledger_leftover untracked event-ledger path(s) unstaged"
-fi
+# Commit only when S3 supplied new changes; an earlier unpushed snapshot may
+# need only the pull/push path below.
+if [ -n "$(git status --porcelain)" ]; then
+    echo "Committing changes..."
+    if ! snapshot_git_add_promotable; then
+        log "ERROR: git add failed"
+        exit 1
+    fi
+    ledger_leftover="$(git ls-files -o --exclude-standard -- meta/log-events | wc -l | tr -d ' ')"
+    if [ "${ledger_leftover:-0}" -gt 0 ]; then
+        log "WARN: classified inventory left $ledger_leftover untracked event-ledger path(s) unstaged"
+    fi
 
-if ! git commit -m "Snapshot $DATE"; then
-    log "ERROR: git commit failed"
-    exit 1
+    if ! git commit -m "Snapshot $DATE"; then
+        log "ERROR: git commit failed"
+        exit 1
+    fi
 fi
 
 # Pull with rebase to get any remote changes (with retry)
@@ -1452,7 +1506,7 @@ done
 
 if [ "$PULL_SUCCESS" = false ]; then
     log "ERROR: Pull failed after $PULL_RETRIES attempts - attempting repair"
-    if bash "$REPAIR_SCRIPT" 2>&1 | tee -a "$LOG_FILE"; then
+    if snapshot_run_git_repair; then
         # After repair, commit timestamp will be slightly different
         DATE=$(date +%Y%m%d_%H%M%S)
         cd "$SNAPSHOT_WORKTREE" || { log "ERROR: Failed to cd after repair"; exit 1; }
@@ -1500,7 +1554,7 @@ if [ "$PUSH_SUCCESS" = true ]; then
     exit 0
 else
     log "ERROR: Push failed after $PUSH_RETRIES attempts"
-    # Run repair for next attempt
-    bash "$REPAIR_SCRIPT" 2>&1 | tee -a "$LOG_FILE" || true
+    # A push transport failure leaves a valid unpushed snapshot. Preserve it
+    # for the next run's promotion path; it is not a reason to invoke repair.
     exit 1
 fi

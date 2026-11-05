@@ -921,6 +921,7 @@ MANIFEST="$TEST_ROOT/home/Library/Application Support/vault-sync/runtime-manifes
 assert_file_exists "manifest exists after macOS install" "$MANIFEST"
 assert_contains "manifest has package_version" "$MANIFEST" "package_version"
 assert_contains "manifest has schema_version" "$MANIFEST" "schema_version"
+assert_contains "manifest inventories packaged repair helper" "$MANIFEST" "bin/wiki-git-repair-v3.sh"
 assert_contains "manifest has files map" "$MANIFEST" "bin/wiki-pull-with-auto-resolve.sh"
 assert_contains "manifest has push plist hash entry" "$MANIFEST" "LaunchAgents/com.karlchow.wiki-push.plist"
 # sha256 hex is 64 chars; require at least one 64-hex token in files values
