@@ -130,3 +130,65 @@ Do not implement automatic failover in this phase. Manual failover is safer unti
 7. Run read-only `vault-sync-status`.
 8. Promote `fleet.yaml` so exactly one host has role `snapshotter`.
 9. Enable the snapshot timer only after the old sg01 snapshotter is confirmed stopped or unreachable with no risk of split-brain.
+
+## Snapshot promotion after a failed GitHub push
+
+The 2026-11-04/05 outage left local snapshot `d6c5244d7` unpushed after
+`1f0b55ae2`. A one-sided ancestor check classified that healthy ahead history
+as divergence, then attempted to invoke an absent `wiki-git-repair-v3.sh`.
+The emergency copy into the live runtime payload restored the helper only for
+that immutable release; it is not durable across runtime upgrades. The helper
+is now a package-owned sibling of `wiki-snapshot.sh`, copied by both the full
+installer and `scripts/lib/deploy-runtime.py`, with payload/manifest tests.
+
+Snapshot promotion distinguishes equal, behind, ahead, and truly divergent
+histories against a successfully fetched `origin/main`. An ahead checkout keeps
+its commits and resumes commit/push, including when S3 supplied no new changes.
+A failed push leaves the candidate intact for the next run. Failure to fetch
+is logged as transport failure, rather than classified as divergence.
+
+The packaged repair helper refuses unmerged paths, `MERGE_HEAD`, `index.lock`,
+detached HEAD, missing rebase todo, and non-empty rebase todo. An empty rebase
+todo permits only creation of a recovery ref followed by `git rebase --quit`.
+Equal and ahead histories succeed without moving HEAD; behind histories use
+`git merge --ff-only`, which can itself refuse conflicting dirty files. True
+divergence requires attended review. Recovery never resets, cleans, stashes,
+or aborts a rebase. A missing/unreadable helper produces the stable diagnostic
+`ERROR: Git repair helper missing or unreadable:` before any Bash invocation.
+
+### Byte parity followed by semantic-preview refusal
+
+A separate refusal was observed on sg01 on 2026-11-05 at 16:42–16:43 CST:
+`index.md` (`63f3b7b5…`) and `log.md` (`cd436bdb…`) matched the current store
+hashes, but semantic preview still reported drift after one retry. This evidence
+establishes equality of those two projection objects, not consistency of the
+source page tree or log-event inventory. It does not establish a false positive
+or identify a particular racing page.
+
+Preview regenerates the index from typed-page frontmatter and project READMEs
+in the synced worktree. It regenerates the log from the direct-S3 event inventory
+captured before materialization (`--events-from`), not from the projection
+object itself. A page arriving before its index update, an event/projection
+mismatch, or deterministic differences in the source universe can therefore
+produce semantic drift even when both projection objects match S3. The existing
+single retry may resolve transient lag; repeated drift remains a refusal.
+Hash parity alone must not bypass the semantic gate.
+
+On each failed preview attempt, the snapshot journal and durable log now retain:
+
+- `projection semantic preview inputs`: worktree, event-inventory source, and
+  expected index/log hashes for that attempt.
+- `projection semantic preview JSON`: the complete CLI response, including
+  separate `index_drift` and `log_drift` flags or command error details.
+
+Read both attempts and the surrounding worktree-parity records. `index_drift`
+points to source pages/project manifests versus the stored index; `log_drift`
+points to event inputs versus the stored log. The current CLI response does
+not name individual differing pages, so page-level attribution still requires
+read-only inspection of that source universe; do not infer a page from the
+projection hash. Temporary preview/event directories are removed on exit, so
+use the retained log evidence rather than their printed paths after completion.
+
+The diagnostic change does not rewrite worktree projections, extend the retry
+budget, loosen delete-intent reconciliation, or change `--max-delete 10`.
+Do not author in the snapshot checkout or use `git reset --hard` as recovery.

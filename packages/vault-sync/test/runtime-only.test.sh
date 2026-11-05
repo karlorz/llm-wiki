@@ -27,6 +27,9 @@ with tempfile.TemporaryDirectory() as tmp:
     first = (share/'bin').resolve()
     launcher = (share/'bin/wiki-pull-with-auto-resolve.sh').read_text()
     assert str(first/'payload/wiki-pull-with-auto-resolve.sh') in launcher
+    repair = first/'payload/wiki-git-repair-v3.sh'
+    assert repair.read_bytes() == (root/'scripts/wiki-git-repair-v3.sh').read_bytes()
+    assert str(repair) in (share/'bin/wiki-git-repair-v3.sh').read_text()
     python_launcher = share/'bin/wiki-snapshot-requests.py'
     assert str(first/'payload/wiki-snapshot-requests.py') in python_launcher.read_text()
     subprocess.run([sys.executable, str(python_launcher)], env={**os.environ, 'SKILLWIKI_SNAPSHOT_REQUESTS_ENABLED':'false'}, check=True)

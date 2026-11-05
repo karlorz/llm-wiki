@@ -1556,7 +1556,9 @@ test_snapshot_semantic_projection_drift_fails_before_commit() {
       && [ "$before_head" = "$after_head" ] \
       && [ "$syncs" = "2" ] \
       && grep -q 'projection semantic preview mismatch' "$root/wiki-snapshot.log" \
-      && grep -q 'post-sync semantic-preview race detected; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
+      && [ "$(grep -c 'projection semantic preview JSON:.*index_drift.*true' "$root/wiki-snapshot.log")" = 2 ] \
+      && grep -q 'projection semantic preview inputs.*events_from=' "$root/wiki-snapshot.log" \
+      && grep -q 'post-sync semantic-preview race retry; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
       && grep -q 'FAIL post-sync semantic-preview race retry projection candidate verification; snapshot promotion refused' "$root/wiki-snapshot.log" \
       && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
     printf 'PASS: semantic projection drift fails before commit after one retry\n'
@@ -1596,7 +1598,7 @@ test_snapshot_recovers_semantic_preview_index_lag_with_one_retry() {
   syncs="$(cat "$root/sync-count")"
 
   if [ "$rc" -eq 0 ] \
-      && grep -q 'post-sync semantic-preview race detected; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
+      && grep -q 'post-sync semantic-preview race retry; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
       && grep -q 'projection worktree parity confirmed' "$root/wiki-snapshot.log" \
       && grep -q 'projection semantic preview confirmed' "$root/wiki-snapshot.log" \
       && grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log" \
@@ -1645,7 +1647,7 @@ test_snapshot_recovers_post_sync_log_append_with_one_retry() {
   syncs="$(cat "$root/sync-count")"
 
   if [ "$rc" -eq 0 ] \
-      && grep -q 'post-sync log-append race detected; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
+      && grep -q 'post-sync log-append race retry; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
       && grep -q 'projection worktree parity confirmed' "$root/wiki-snapshot.log" \
       && grep -q 'projection semantic preview confirmed' "$root/wiki-snapshot.log" \
       && grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log" \
@@ -1686,7 +1688,7 @@ test_snapshot_post_sync_log_append_second_race_fails_closed() {
   if [ "$rc" -ne 0 ] \
       && [ "$before_head" = "$after_head" ] \
       && [ "$syncs" = "2" ] \
-      && grep -q 'post-sync log-append race detected; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
+      && grep -q 'post-sync log-append race retry; performed one additional rclone sync context=post-sync' "$root/wiki-snapshot.log" \
       && grep -q 'FAIL post-sync log-append race retry projection candidate verification; snapshot promotion refused' "$root/wiki-snapshot.log" \
       && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
     printf 'PASS: second post-sync log append refuses before commit after one retry\n'
@@ -1753,7 +1755,7 @@ test_snapshot_divergent_store_log_does_not_retry_sync() {
       && [ "$before_head" = "$after_head" ] \
       && [ "$syncs" = "1" ] \
       && grep -q 'current store log.md is not a strict prefix extension of worktree log.md' "$root/wiki-snapshot.log" \
-      && ! grep -q 'post-sync log-append race detected; performed one additional rclone sync' "$root/wiki-snapshot.log" \
+      && ! grep -q 'post-sync log-append race retry; performed one additional rclone sync' "$root/wiki-snapshot.log" \
       && grep -q 'FAIL projection candidate verification; snapshot promotion refused' "$root/wiki-snapshot.log" \
       && ! grep -q 'SNAPSHOT_COMPLETE schema=v1' "$root/wiki-snapshot.log"; then
     printf 'PASS: divergent store log refuses before commit without a retry sync\n'
@@ -1938,6 +1940,126 @@ STUB
 
   printf '%s\n' "$git_dir" "$bin_dir" "$log_file" "$lock_file"
 }
+
+# An interrupted promotion must preserve its unpushed commit and either commit
+# fresh S3 changes or push the already-clean candidate. A helper that must never
+# run and a Git command trace catch the original misclassification/reset path.
+test_snapshot_retries_unpushed_head_without_repair() {
+  local outcome="$1" root git_dir bin_dir local_head rc failed_head
+  root="$(mktemp -d)"
+  setup_completion_record_fixture "$root" "$outcome" >/dev/null
+  git_dir="$root/wiki-git"; bin_dir="$root/bin"
+  printf 'previous unpushed snapshot\n' > "$git_dir/unpushed.md"
+  git -C "$git_dir" add unpushed.md
+  git -C "$git_dir" -c user.name=test -c user.email=test@test commit -m unpushed >/dev/null
+  local_head="$(git -C "$git_dir" rev-parse HEAD)"
+  cat > "$root/repair.sh" <<'STUB'
+#!/bin/bash
+printf 'unexpected repair\n' >> "$SNAPSHOT_TEST_ROOT/repair.calls"
+exit 99
+STUB
+  cat > "$bin_dir/git" <<STUB
+#!/bin/bash
+printf '%s\n' "\$*" >> "\$SNAPSHOT_TEST_ROOT/git.calls"
+if [ "\$1" = push ] && [ "\${SNAPSHOT_REJECT_PUSH:-0}" = 1 ]; then exit 1; fi
+exec "$(command -v git)" "\$@"
+STUB
+  printf '#!/bin/bash\nexit 0\n' > "$bin_dir/sleep"
+  chmod +x "$bin_dir/git" "$bin_dir/sleep"
+
+  # Simulate the incident's failed push, then run the next timer attempt.
+  env SNAPSHOT_TEST_ROOT="$root" WIKI_GIT_WORKTREE="$git_dir" WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$root/wiki-snapshot.log" WIKI_SNAPSHOT_LOCK="$root/lock" \
+    WIKI_GIT_REPAIR_SCRIPT="$root/repair.sh" CLOUD_REMOTE=stub:cloud/wiki \
+    PATH="$bin_dir:$PATH" SNAPSHOT_REJECT_PUSH=1 \
+    "$SCRIPT_UNDER_TEST" >"$root/first.out" 2>&1
+  rc=$?
+  failed_head="$(git -C "$git_dir" rev-parse HEAD)"
+  if [ "$rc" -eq 0 ] || [ -e "$root/repair.calls" ]; then
+    printf 'FAIL: push failure must preserve candidate without repair (outcome=%s)\n' "$outcome"
+    FAIL=$((FAIL + 1))
+  fi
+  env SNAPSHOT_TEST_ROOT="$root" WIKI_GIT_WORKTREE="$git_dir" WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$root/wiki-snapshot.log" WIKI_SNAPSHOT_LOCK="$root/lock" \
+    WIKI_GIT_REPAIR_SCRIPT="$root/repair.sh" CLOUD_REMOTE=stub:cloud/wiki \
+    PATH="$bin_dir:$PATH" \
+    "$SCRIPT_UNDER_TEST" >"$root/out.txt" 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ] && [ ! -e "$root/repair.calls" ] \
+      && git -C "$git_dir" merge-base --is-ancestor "$local_head" HEAD \
+      && [ "$(git -C "$git_dir" rev-parse HEAD)" = "$failed_head" ] \
+      && [ "$failed_head" = "$(git -C "$root/origin.git" rev-parse main)" ] \
+      && ! grep -q '^reset ' "$root/git.calls" \
+      && ! grep -q 'Diverged from origin/main' "$root/wiki-snapshot.log" \
+      && grep -q 'outcome=pushed result=success' "$root/wiki-snapshot.log"; then
+    printf 'PASS: ahead snapshot retries failed push without repair/reset (%s)\n' "$outcome"
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: ahead retry (%s rc=%s log=%s output=%s)\n' "$outcome" "$rc" \
+      "$(cat "$root/wiki-snapshot.log")" "$(cat "$root/out.txt")"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_missing_repair_helper_is_hard_error() {
+  local root git_dir rc before
+  root="$(mktemp -d)"
+  setup_completion_record_fixture "$root" no-change >/dev/null
+  git_dir="$root/wiki-git"
+  git -C "$git_dir" checkout --detach >/dev/null 2>&1
+  before="$(git -C "$git_dir" rev-parse HEAD)"
+  env SNAPSHOT_TEST_ROOT="$root" WIKI_GIT_WORKTREE="$git_dir" WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$root/wiki-snapshot.log" WIKI_SNAPSHOT_LOCK="$root/lock" \
+    WIKI_GIT_REPAIR_SCRIPT="$root/missing-helper.sh" CLOUD_REMOTE=stub:cloud/wiki \
+    PATH="$root/bin:$PATH" \
+    "$SCRIPT_UNDER_TEST" >"$root/out.txt" 2>&1
+  rc=$?
+  if [ "$rc" -ne 0 ] \
+      && grep -q 'ERROR: Git repair helper missing or unreadable:' "$root/wiki-snapshot.log" \
+      && [ "$before" = "$(git -C "$git_dir" rev-parse HEAD)" ] \
+      && ! grep -q 'SNAPSHOT_COMPLETE' "$root/wiki-snapshot.log" \
+      && ! grep -q 'missing-helper.sh: No such file' "$root/out.txt"; then
+    printf 'PASS: missing repair helper fails closed with stable diagnostic\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: missing repair helper (rc=%s output=%s)\n' "$rc" "$(cat "$root/out.txt")"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_index_lock_refuses_no_change_completion() {
+  local root git_dir rc before
+  root="$(mktemp -d)"
+  setup_completion_record_fixture "$root" no-change >/dev/null
+  git_dir="$root/wiki-git"
+  before="$(git -C "$git_dir" rev-parse HEAD)"
+  printf 'owned lock\n' > "$git_dir/.git/index.lock"
+  env SNAPSHOT_TEST_ROOT="$root" WIKI_GIT_WORKTREE="$git_dir" WIKI_DIR="$root/wiki" \
+    WIKI_SNAPSHOT_LOG="$root/wiki-snapshot.log" WIKI_SNAPSHOT_LOCK="$root/lock" \
+    CLOUD_REMOTE=stub:cloud/wiki PATH="$root/bin:$PATH" \
+    "$SCRIPT_UNDER_TEST" >"$root/out.txt" 2>&1
+  rc=$?
+  if [ "$rc" -ne 0 ] \
+      && grep -q 'ERROR: Git index.lock present; snapshot promotion refused' "$root/wiki-snapshot.log" \
+      && [ "$before" = "$(git -C "$git_dir" rev-parse HEAD)" ] \
+      && [ "$(cat "$git_dir/.git/index.lock")" = 'owned lock' ] \
+      && ! grep -q 'SNAPSHOT_COMPLETE' "$root/wiki-snapshot.log"; then
+    printf 'PASS: index lock blocks even clean no-change completion and is preserved\n'
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL: snapshot index lock (rc=%s output=%s)\n' "$rc" "$(cat "$root/out.txt")"
+    FAIL=$((FAIL + 1))
+  fi
+  rm -rf "$root"
+}
+
+test_snapshot_index_lock_refuses_no_change_completion
+
+test_snapshot_retries_unpushed_head_without_repair no-change
+test_snapshot_retries_unpushed_head_without_repair pushed
+test_snapshot_missing_repair_helper_is_hard_error
 
 test_snapshot_emits_canonical_completion_record_on_pushed_success() {
   local root
