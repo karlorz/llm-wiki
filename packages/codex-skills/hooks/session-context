@@ -465,15 +465,46 @@ resolve_skill_path() {
     printf '%s' "${plugin_root}/${skill_name}/SKILL.md"
 }
 
+resolve_activation_path() {
+    local plugin_root="$1"
+    local skill_name="$2"
+    local candidate
+
+    for candidate in \
+        "${plugin_root}/${skill_name}/activation.md" \
+        "${plugin_root}/skills/${skill_name}/activation.md"; do
+        if [[ -f "$candidate" ]]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+
+    printf '%s' "${plugin_root}/${skill_name}/activation.md"
+}
+
+skip_session_brief() {
+    if [[ "${SKILLWIKI_SKIP_SESSION_BRIEF:-}" == "1" ]]; then
+        return 0
+    fi
+    local base
+    base=$(basename -- "$PWD")
+    case "$base" in
+        amh-iso-*|agent-memory-collect.*) return 0 ;;
+    esac
+    return 1
+}
+
 build_skillwiki_session_context() {
     local skill_content="$1"
     local project_workflow_context
-    local dynamic_session_memory
+    local dynamic_session_memory=""
     local runtime_host_context
     local session_context
 
     project_workflow_context=$(build_project_workflow_context)
-    dynamic_session_memory=$(build_dynamic_session_memory)
+    if ! skip_session_brief; then
+        dynamic_session_memory=$(build_dynamic_session_memory)
+    fi
     runtime_host_context=$(build_runtime_host_context)
 
     session_context=$'### Skillwiki Activation\n\nSkillwiki is active for this workspace. Below are the capability guidelines for local reference:'

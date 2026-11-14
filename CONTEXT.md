@@ -194,8 +194,8 @@ _Avoid_: treating spaces as a ranked query, inventing a Doubao writer_id
 
 
 **Memory recall scope**:
-HTTP `wiki_memory_recall` `scope` enum is `project` | `global` | `all`. CLI `skillwiki memory recall` also has `cross-agent`. An unknown HTTP scope (including `cross-agent`), empty scope, and whitespace scope fail-close; they do not default. Missing cache is ok with empty `sources` and an advisory `humanHint`.
-_Avoid_: treating CLI cross-agent as an HTTP MCP scope, silently defaulting bad or empty scope to project
+HTTP `wiki_memory_recall` `scope` enum is `project` | `global` | `all`. CLI `skillwiki memory recall` also has `cross-agent`. An unknown HTTP scope (including `cross-agent`), empty scope, and whitespace scope fail-close; they do not default. Recall reads live vault pages and hashes the body after frontmatter; a missing or stale `.skillwiki/memory` cache does not empty MCP or CLI recall. Optional HTTP `limit` is an integer 1..50 (default 10, same as the CLI default).
+_Avoid_: treating CLI cross-agent as an HTTP MCP scope, silently defaulting bad or empty scope to project, serving stale cache hashes as recall truth
 
 **Ranked audit report**:
 A read-only evidence packet that classifies active project work without changing lifecycle state.

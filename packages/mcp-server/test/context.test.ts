@@ -8,6 +8,7 @@ import { MCP_INSTRUCTIONS } from "../src/mcp-instructions.js";
 import { ReconcileGate } from "../src/reconcile.js";
 import { startMcpHttpServer } from "../src/server.js";
 import { makeTempVault } from "./helpers.js";
+import { splitFrontmatter } from "../../cli/src/parsers/frontmatter.js";
 
 async function setupTestServer(options?: { gateReady?: boolean }) {
   const vault = await makeTempVault();
@@ -551,6 +552,119 @@ describe("C5 compact activation over MCP and wiki_context", () => {
       await assertNoWrite("missing topic", await callRecall({ project: "llm-wiki" }, 91));
       await assertNoWrite("empty topic", await callRecall({ project: "llm-wiki", topic: "" }, 92));
       await assertNoWrite("empty query", await callRecall({ project: "llm-wiki", query: "" }, 93));
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("wiki_memory_recall reads live vault pages without a memory cache and honors limit", async () => {
+    const ctx = await setupTestServer();
+    const bodyA = "Live MCP recall source A.";
+    const bodyB = "Live MCP recall source B.";
+    await writeFile(
+      join(ctx.vault, "concepts", "memory-a.md"),
+      `---
+title: memory-a
+created: 2026-06-19
+updated: 2026-06-21
+type: concept
+tags: [memory]
+sources: [raw/transcripts/seed.md]
+confidence: high
+provenance: project
+provenance_projects: ["[[llm-wiki]]"]
+memory_kind: workflow
+memory_topics: [agent-memory]
+memory_scope: project
+memory_policy: operational
+memory_privacy: local
+memory_status: active
+last_seen: 2026-06-21
+---
+
+${bodyA}
+`,
+      "utf8",
+    );
+    await writeFile(
+      join(ctx.vault, "concepts", "memory-b.md"),
+      `---
+title: memory-b
+created: 2026-06-19
+updated: 2026-06-19
+type: concept
+tags: [memory]
+sources: [raw/transcripts/seed.md]
+confidence: high
+provenance: project
+provenance_projects: ["[[llm-wiki]]"]
+memory_kind: convention
+memory_topics: [agent-memory]
+memory_scope: project
+memory_policy: advisory
+memory_privacy: public
+memory_status: active
+last_seen: 2026-06-19
+---
+
+${bodyB}
+`,
+      "utf8",
+    );
+
+    async function callRecall(args: Record<string, unknown>, id: number) {
+      const res = await fetch(`http://127.0.0.1:${ctx.port}/mcp`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ctx.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "tools/call",
+          params: { name: "wiki_memory_recall", arguments: args },
+        }),
+      });
+      const body = (await res.json()) as {
+        result?: {
+          isError?: boolean;
+          structuredContent?: {
+            ok?: boolean;
+            error?: string;
+            sources?: Array<{ path: string; hash: string }>;
+            humanHint?: string;
+          };
+        };
+      };
+      return { status: res.status, structured: body.result?.structuredContent, isError: body.result?.isError };
+    }
+
+    try {
+      const all = await callRecall({ project: "llm-wiki", topic: "agent-memory" }, 101);
+      expect(all.status).toBe(200);
+      expect(all.isError).not.toBe(true);
+      expect(all.structured?.ok).toBe(true);
+      expect(all.structured?.sources?.map((source) => source.path)).toEqual([
+        "concepts/memory-a.md",
+        "concepts/memory-b.md",
+      ]);
+      const liveA = await readFile(join(ctx.vault, "concepts", "memory-a.md"), "utf8");
+      const split = splitFrontmatter(liveA);
+      expect(split.ok).toBe(true);
+      if (!split.ok) throw new Error("expected frontmatter");
+      expect(all.structured?.sources?.[0]?.hash).toBe(
+        createHash("sha256").update(Buffer.from(split.data.body, "utf8")).digest("hex"),
+      );
+
+      const limited = await callRecall({ project: "llm-wiki", topic: "agent-memory", limit: 1 }, 102);
+      expect(limited.structured?.ok).toBe(true);
+      expect(limited.structured?.sources).toHaveLength(1);
+      expect(limited.structured?.sources?.[0]?.path).toBe("concepts/memory-a.md");
+
+      const badLimit = await callRecall({ project: "llm-wiki", topic: "agent-memory", limit: 51 }, 103);
+      expect(badLimit.isError).toBe(true);
     } finally {
       await ctx.close();
     }

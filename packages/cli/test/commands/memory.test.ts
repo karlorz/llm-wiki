@@ -1,9 +1,18 @@
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runMemoryImport, runMemoryIndex, runMemoryRecall, runMemoryReview, runMemoryTopics } from "../../src/commands/memory.js";
+import { splitFrontmatter } from "../../src/parsers/frontmatter.js";
+
+function bodyHash(vault: string, relPath: string): string {
+  const text = readFileSync(join(vault, relPath), "utf8");
+  const split = splitFrontmatter(text);
+  if (!split.ok) throw new Error(`expected frontmatter in ${relPath}`);
+  return createHash("sha256").update(Buffer.from(split.data.body, "utf8")).digest("hex");
+}
 
 async function makeVault(): Promise<string> {
   const vault = await mkdtemp(join(tmpdir(), "memory-topics-vault-"));
@@ -212,6 +221,54 @@ memory_status: active`, "This source must not be returned.");
     if (!recall.result.ok) throw new Error("expected ok");
     expect(recall.result.data.sources).toEqual([]);
     expect(recall.result.data.humanHint).toBe("no memory sources found for topic secret-topic");
+  });
+
+  it("recalls live vault sources without a project memory cache", async () => {
+    const vault = await makeVault();
+    const body = "Live recall should hash the body after frontmatter even before index.";
+    writeMemoryConcept(vault, "live-session-brief-memory.md", `memory_kind: workflow
+memory_topics: [session-brief]
+memory_scope: project
+memory_policy: operational
+memory_privacy: local
+memory_status: active`, body);
+
+    const result = await runMemoryRecall({ vault, project: "llm-wiki", topic: "session-brief" });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(existsSync(join(vault, ".skillwiki", "memory", "llm-wiki", "topics.json"))).toBe(false);
+    expect(result.result.data.sources).toHaveLength(1);
+    expect(result.result.data.sources[0].path).toBe("concepts/live-session-brief-memory.md");
+    expect(result.result.data.sources[0].hash).toBe(bodyHash(vault, "concepts/live-session-brief-memory.md"));
+  });
+
+  it("recalls current vault body hashes when the project cache is stale", async () => {
+    const vault = await makeVault();
+    writeMemoryConcept(vault, "stale-cache-memory.md", `memory_kind: workflow
+memory_topics: [session-brief]
+memory_scope: project
+memory_policy: operational
+memory_privacy: local
+memory_status: active`, "Original body for the cache.");
+    await runMemoryIndex({ vault, project: "llm-wiki" });
+    const updated = "Updated body after the cache was written.";
+    writeMemoryConcept(vault, "stale-cache-memory.md", `memory_kind: workflow
+memory_topics: [session-brief]
+memory_scope: project
+memory_policy: operational
+memory_privacy: local
+memory_status: active`, updated);
+
+    const result = await runMemoryRecall({ vault, project: "llm-wiki", topic: "session-brief" });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    if (!result.result.ok) throw new Error("expected ok");
+    expect(result.result.data.sources).toHaveLength(1);
+    expect(result.result.data.sources[0].hash).toBe(bodyHash(vault, "concepts/stale-cache-memory.md"));
+    expect(result.result.data.sources[0].summary).toContain("Updated body");
   });
 
   it("recalls bounded topic sources from the project cache", async () => {

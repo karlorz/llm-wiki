@@ -315,35 +315,9 @@ export async function runMemoryRecall(
     };
   }
 
-  const cacheText = await readMemoryCache(input.vault, input.project);
-  if (!cacheText) {
-    return {
-      exitCode: ExitCode.OK,
-      result: ok({
-        project: input.project,
-        topic: input.topic,
-        ...(scope ? { scope } : {}),
-        sources: [],
-        humanHint: `no memory topics cache found for project ${input.project}`,
-      }),
-    };
-  }
-
-  let parsed: MemoryTopicsCache;
-  try {
-    parsed = JSON.parse(cacheText) as MemoryTopicsCache;
-  } catch (e: unknown) {
-    return {
-      exitCode: ExitCode.WRITE_FAILED,
-      result: err("WRITE_FAILED", {
-        path: memoryCacheRelPath(input.project),
-        message: `invalid memory topics cache: ${String(e)}`,
-      }),
-    };
-  }
-
+  const state = await buildMemoryIndexState(scan.data.allMarkdown, input.project);
   const limit = normalizeLimit(input.limit);
-  const sources = normalizeSources(parsed.sources)
+  const sources = state.sources
     .filter((source) => source.topics.includes(input.topic))
     .filter((source) => source.memory_privacy !== "secret-blocked")
     .filter((source) => source.memory_status !== "archived" && source.memory_status !== "rejected")

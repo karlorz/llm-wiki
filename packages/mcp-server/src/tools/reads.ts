@@ -214,7 +214,7 @@ export async function handleWikiReadPage(
 
 export async function handleWikiMemoryRecall(
   ctx: ReadContext,
-  input: { project: string; topic: string; scope?: string },
+  input: { project: string; topic: string; scope?: string; limit?: number },
 ) {
   const blocked = ensureReady(ctx.gate);
   if (blocked) return blocked;
@@ -231,11 +231,17 @@ export async function handleWikiMemoryRecall(
       return { ok: false as const, error: "USAGE", message: "scope must be project, global, or all" };
     }
   }
+  if (input.limit !== undefined) {
+    if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 50) {
+      return { ok: false as const, error: "USAGE", message: "limit must be an integer from 1 to 50" };
+    }
+  }
   const result = await runMemoryRecall({
     vault: ctx.vaultDir,
     project,
     topic: input.topic,
     scope: input.scope?.trim() as "project" | "global" | "all" | undefined,
+    limit: input.limit,
   });
   if (!result.result.ok) {
     return { ok: false as const, error: result.result.error, detail: result.result };

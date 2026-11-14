@@ -414,11 +414,12 @@ export function createWikiMcpServer(opts: HttpServerOptions & { hostId: string; 
   server.registerTool(
     "wiki_memory_recall",
     {
-      description: "Recall distilled memory items for a project topic.",
+      description: "Recall distilled memory items for a project topic. Reads live vault pages; optional limit defaults to 10 (max 50).",
       inputSchema: z.object({
         project: z.string().min(1),
         topic: z.string().min(1),
         scope: z.enum(["project", "global", "all"]).optional(),
+        limit: z.number().int().min(1).max(50).optional(),
         ...vaultField,
       }),
       outputSchema: z.object({

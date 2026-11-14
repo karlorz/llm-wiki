@@ -14,6 +14,10 @@ Generated images, screenshots, design mockups, attachments, saving pictures, and
 
 This skill is activated by the plugin during startup and clear lifecycle
 events, plus the harness-specific resume/compact event where supported.
+Claude Code and Codex SessionStart `additionalContext` inject compact
+`using-skillwiki/activation.md`, not this full SKILL.md. Isolate collect
+working directories named `amh-iso-*` or `agent-memory-collect.*` omit
+Dynamic Session Memory so AMH extracts are not session-brief dumps.
 Use this section as procedural planning guidelines:
 
 1. Read the injected Project Workflow Profile before choosing orchestration or

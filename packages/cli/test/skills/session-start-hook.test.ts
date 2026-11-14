@@ -263,7 +263,10 @@ describe("SessionStart hook", () => {
       expect(codexContext).toContain(expected);
     }
     expect(codexContext).toContain("Skillwiki is active for this workspace.");
-    expect(codexContext).toContain("name: using-skillwiki");
+    expect(codexContext).toContain("# SkillWiki Activation");
+    expect(codexContext).toContain("invoke `using-skillwiki`");
+    expect(codexContext).not.toContain("name: using-skillwiki");
+    expect(codexContext).not.toContain("When to Use These Skills");
   });
 
   it("root Antigravity hook reads using-skillwiki from the root skills mirror", () => {
@@ -272,8 +275,9 @@ describe("SessionStart hook", () => {
     const context = runRootAgyHook(project);
 
     expect(context).toContain("Skillwiki is active for this workspace.");
-    expect(context).toContain("name: using-skillwiki");
+    expect(context).toContain("# SkillWiki Activation");
     expect(context).not.toContain("Error reading using-skillwiki skill");
+    expect(context).not.toContain("name: using-skillwiki");
   });
 
   it("injects a fresh cached session brief before the skill guidance", () => {
@@ -285,7 +289,7 @@ describe("SessionStart hook", () => {
 
     expect(context).toContain("## Dynamic Session Memory");
     expect(context).toContain("Fresh cached memory capsule.");
-    expect(context.indexOf("## Dynamic Session Memory")).toBeLessThan(context.indexOf("name: using-skillwiki"));
+    expect(context.indexOf("## Dynamic Session Memory")).toBeLessThan(context.indexOf("# SkillWiki Activation"));
   });
 
   it("uses committed latest-session-brief when the local cache is missing", () => {
@@ -394,7 +398,7 @@ exit 42
     expect(context).toContain("## Runtime Host Context");
     expect(context).toContain("Current machine: `sg01`");
     expect(context).toContain("Self SSH aliases known in fleet: `sg01`, `cloudsg01`");
-    expect(context.indexOf("## Runtime Host Context")).toBeLessThan(context.indexOf("name: using-skillwiki"));
+    expect(context.indexOf("## Runtime Host Context")).toBeLessThan(context.indexOf("# SkillWiki Activation"));
   });
 
   it("falls back to read-only session-brief computation when no file exists", () => {
@@ -427,7 +431,48 @@ exit 42
     });
 
     expect(context).toContain("Skillwiki is active for this workspace.");
-    expect(context).toContain("name: using-skillwiki");
+    expect(context).toContain("# SkillWiki Activation");
     expect(context).not.toContain("## Dynamic Session Memory");
+  });
+
+  it("injects compact activation.md instead of the full using-skillwiki SKILL.md", () => {
+    const project = tempProject();
+    const skill = readFileSync(join(SKILLS_DIR, "using-skillwiki", "SKILL.md"), "utf8");
+
+    const context = runClaudeHook(project);
+
+    expect(context).toContain("# SkillWiki Activation");
+    expect(context).toContain("invoke `using-skillwiki`");
+    expect(context).not.toContain("When to Use These Skills");
+    expect(context).not.toContain("name: using-skillwiki");
+    expect(context.length).toBeLessThan(skill.length);
+  });
+
+  it("omits Dynamic Session Memory in AMH isolate collect directories", () => {
+    const isolate = mkdtempSync(join(tmpdir(), "amh-iso-"));
+    mkdirSync(join(isolate, ".claude"), { recursive: true });
+    const vault = tempVault();
+    writeCacheBrief(vault, "# Session Brief\n\nWeekly work plan must not leak into isolate extracts.\n");
+
+    const context = runClaudeHook(isolate, { WIKI_PATH: vault });
+
+    expect(context).toContain("# SkillWiki Activation");
+    expect(context).not.toContain("## Dynamic Session Memory");
+    expect(context).not.toContain("Weekly work plan must not leak into isolate extracts.");
+  });
+
+  it("omits Dynamic Session Memory when SKILLWIKI_SKIP_SESSION_BRIEF=1", () => {
+    const project = tempProject();
+    const vault = tempVault();
+    writeCacheBrief(vault, "# Session Brief\n\nSkipped by env.\n");
+
+    const context = runClaudeHook(project, {
+      WIKI_PATH: vault,
+      SKILLWIKI_SKIP_SESSION_BRIEF: "1",
+    });
+
+    expect(context).not.toContain("## Dynamic Session Memory");
+    expect(context).not.toContain("Skipped by env.");
+    expect(context).toContain("# SkillWiki Activation");
   });
 });
