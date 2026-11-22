@@ -849,7 +849,12 @@ async function streamToBuffer(stream: unknown): Promise<Buffer> {
   throw new Error("unsupported S3 stream body");
 }
 
-export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: string; prefix?: string; endpoint?: string }, requestTimeoutMs?: number): WorkspaceObjectStore {
+// A stalled content request holds the vault write mutex. Bound the entire S3
+// operation so later writes can proceed and callers receive a structured error
+// before the HTTP gateway times out. Health probes use a separate client.
+export const S3_REQUEST_TIMEOUT_MS = 30_000;
+
+export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: string; prefix?: string; endpoint?: string }, requestTimeoutMs = S3_REQUEST_TIMEOUT_MS): WorkspaceObjectStore {
   const endpoint = namespace?.endpoint ?? cfg.s3Endpoint;
   const bucket = namespace?.bucket ?? cfg.s3Bucket;
   const prefix = namespace?.prefix ?? cfg.s3Prefix;
@@ -866,7 +871,7 @@ export function createS3Adapter(cfg: McpDaemonConfig, namespace?: { bucket?: str
     forcePathStyle: true,
   });
 
-  const requestOptions = () => requestTimeoutMs ? { abortSignal: AbortSignal.timeout(requestTimeoutMs) } : {};
+  const requestOptions = () => ({ abortSignal: AbortSignal.timeout(requestTimeoutMs) });
   const resolveKey = (relPath: string) => [prefix, relPath].filter((p) => p && p.length > 0).join("/");
 
   const putObject: PutObject = async (relPath, body) => {
@@ -1434,7 +1439,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
     } else {
       try {
         adapter = createS3Adapter(cfg, s3Target);
-        probeDeps.set(entry.vaultId, createS3Adapter(cfg, s3Target, 30_000));
+        probeDeps.set(entry.vaultId, createS3Adapter(cfg, s3Target));
       } catch (error: unknown) {
         if (entry.isDefault) throw error;
         console.error(`skillwiki-mcp extra vault ${entry.vaultId} S3 adapter failed; vault stays fail-closed:`, error);
@@ -1472,7 +1477,7 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
   if (deployment) {
     workspaceStore = new WorkspaceStore(deployment.stateDir);
     try {
-      workspaceStorage = new ProductionWorkspaceStorage(deployment.storage, registry, runtimes, entry => createS3Adapter(cfg, { endpoint:entry.s3Endpoint, bucket:entry.s3Bucket, prefix:entry.s3Prefix }, 30_000));
+      workspaceStorage = new ProductionWorkspaceStorage(deployment.storage, registry, runtimes, entry => createS3Adapter(cfg, { endpoint:entry.s3Endpoint, bucket:entry.s3Bucket, prefix:entry.s3Prefix }));
       const provisioner = new WorkspaceProvisioner(workspaceStore, workspaceStorage, registry);
       workspaceWeb = new WorkspaceWeb({issuer:deployment.issuer,store:workspaceStore,provisioner,github:new WorkspaceGitHub(deployment.issuer,deployment.github),creationAllowlist:deployment.creatorIds,grantLifetimeMs:deployment.grantLifetimeMs,invitationLifetimeMs:deployment.invitationLifetimeMs});
     } catch(error) { workspaceStorage?.close(); workspaceStore.close(); throw error; }

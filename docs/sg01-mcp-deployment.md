@@ -64,6 +64,18 @@ For an attended post-deploy proof, the operator separately verifies the sibling 
 
 Do not copy `.skillwiki/**` into the MCP vault, expand the MCP allowlist, install Codex/Claude on sg01, or modify `scripts/deploy-sg01-mcp.sh` to restart sibling jobs.
 
+## Content-write timeouts
+
+The S3 content adapter bounds each operation to 30 seconds, including streamed
+response bodies. A failed content PUT/read returns `S3_PUT_FAILED` and releases
+the vault's serial write queue; it must not leave later writes waiting indefinitely.
+The storage health pulse uses a separate client, so green `/health` or
+`wiki_status` alone does not verify the content-write path. Verify a managed
+write receipt and read back its exact path with its SHA-256 and S3 verification.
+After an ambiguous timeout, look for the intended saved result before retrying;
+capture calls are not idempotent. Preserve failed-run reports and record any
+later recovery as separate evidence.
+
 ## Multi-vault (Identity A)
 
 One HTTP MCP process may serve a default central vault plus explicit extra `vault_id`s (S3 prefixes and unique local roots). Handshake advertises `default_vault` and `allowed_vaults`. Clients keep **one** connector URL and pass optional `vault=` on tools; omit means the authorized default.
