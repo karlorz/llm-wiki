@@ -15,6 +15,7 @@ it.skipIf(process.platform !== "win32")("extracts a Unicode Git tree with Window
     writeFileSync(join(source, name), content);
     const git = (...args: string[]) => execFileSync("git", args, { cwd: source, stdio: "pipe" });
     git("init");
+    git("config", "core.autocrlf", "false");
     git("add", "--", name);
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "fixture");
     extractGitTree(source, "HEAD", destination);
