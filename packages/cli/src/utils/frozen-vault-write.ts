@@ -1,4 +1,4 @@
-import { lstatSync, realpathSync } from "node:fs";
+import { lstatSync, realpathSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { err, ExitCode, type ErrResult } from "@skillwiki/shared";
 
@@ -24,6 +24,13 @@ export function frozenVaultWriteRefusal(
     while (true) {
       const marker = join(current, ".WIKI_GIT_FROZEN");
       try {
+        try {
+          if (!statSync(current).isDirectory()) {
+            throw Object.assign(new Error("Vault ancestor is not a directory"), { code: "ENOTDIR" });
+          }
+        } catch (error: unknown) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
         lstatSync(marker);
       } catch (error: unknown) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
