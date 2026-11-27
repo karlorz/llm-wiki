@@ -18,6 +18,7 @@ import {
 import { extractFrontmatter } from "../parsers/frontmatter.js";
 import { atomicWriteText } from "../utils/atomic-write.js";
 import { runManagedWriteTransaction } from "../utils/managed-write-preflight.js";
+import { frozenVaultWriteRefusal } from "../utils/frozen-vault-write.js";
 
 const ALLOWED_TYPES = new Set(["entity", "concept", "comparison", "query"]);
 const TYPE_DIR: Record<string, string> = {
@@ -298,6 +299,11 @@ export async function runIngest(
         message: `Invalid provenance "${input.provenance}". Allowed: ${[...ALLOWED_PROVENANCE].join(", ")}`,
       }),
     };
+  }
+
+  if (!input.dryRun) {
+    const frozen = frozenVaultWriteRefusal(input.vault, "ingest");
+    if (frozen) return frozen;
   }
 
   // Determine source type and fetch content

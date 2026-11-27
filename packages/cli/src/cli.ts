@@ -1,3 +1,4 @@
+import { frozenVaultWriteRefusal } from "./utils/frozen-vault-write.js";
 import { resolveSkillwikiHome } from "./utils/home.js";
 import { join } from "node:path";
 import { Command } from "commander";
@@ -168,6 +169,8 @@ async function emitGuardedVaultWrite<T>(
   run: () => Promise<{ exitCode: number; result: Result<T> }> | { exitCode: number; result: Result<T> },
   opts?: EmitOptions<T>
 ): Promise<never> {
+  const frozen = frozenVaultWriteRefusal(vault, command);
+  if (frozen) return emit(frozen, undefined, { postCommit: false });
   const guard = await guardProtectedVaultWrite({
     vault,
     command,
@@ -199,6 +202,8 @@ async function emitManagedVaultWrite<T>(
     Promise<{ exitCode: number; result: Result<T> }> | { exitCode: number; result: Result<T> },
   opts?: { postCommit?: boolean; allowImmutableRecord?: boolean; convergenceVault?: string },
 ): Promise<never> {
+  const frozen = frozenVaultWriteRefusal(vault, command);
+  if (frozen) return emit(frozen, undefined, { postCommit: false });
   const guard = await guardProtectedVaultWrite({
     vault,
     command,
@@ -2142,7 +2147,7 @@ program
         provenance: opts.provenance,
         html: !!opts.html,
         dryRun: true,
-      }), opts.vault);
+      }), opts.vault, { postCommit: false });
       return;
     }
     return emitGuardedVaultWrite(

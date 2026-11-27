@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { frozenVaultWriteRefusal } from "../utils/frozen-vault-write.js";
 import { dirname, join, resolve } from "node:path";
 import { err, ok, ExitCode, type ErrResult, type Result } from "@skillwiki/shared";
 import { runLogAppend } from "../commands/log-append.js";
@@ -594,6 +595,8 @@ export async function publishPreparedWithReceipt<TPrepared extends PreparedPubli
   deps: PublicationPipelineDeps,
   journalHome?: string,
 ): Promise<{ exitCode: number; result: Result<TOutput> }> {
+  const frozen = frozenVaultWriteRefusal(vault, `${strategy.publisherKind} publish ${prepared.target}`);
+  if (frozen) return frozen;
   const canonicalVault = resolve(vault);
   if (writeReceipt.mutation_vault !== canonicalVault) {
     return {

@@ -1,3 +1,4 @@
+import { frozenVaultWriteRefusal } from "../utils/frozen-vault-write.js";
 /**
  * skillwiki write-preflight — agent-facing vault write gates (M1–M3).
  *
@@ -45,6 +46,9 @@ export async function runWritePreflightCommand(
       result: err(GateError.VAULT_PATH_INVALID, { path: input.vault }),
     };
   }
+
+  const frozen = frozenVaultWriteRefusal(input.vault, input.command ?? "write-preflight");
+  if (frozen) return frozen;
 
   let priorText = input.priorArtifactText;
   if (input.priorArtifactFile) {

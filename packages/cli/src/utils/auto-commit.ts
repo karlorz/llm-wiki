@@ -1,3 +1,4 @@
+import { frozenVaultWriteRefusal } from "./frozen-vault-write.js";
 import { resolveSkillwikiHome } from "./home.js";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, normalize } from "node:path";
@@ -30,6 +31,7 @@ function isValidLastOpPath(file: string): boolean {
 export async function postCommit(vault: string, exitCode: number): Promise<void> {
   // Guard: only auto-commit on success
   if (exitCode !== 0) return;
+  if (frozenVaultWriteRefusal(vault, "auto-commit")) return;
 
   // Guard: check config (default: enabled)
   const home = resolveSkillwikiHome();

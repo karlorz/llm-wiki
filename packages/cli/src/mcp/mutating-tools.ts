@@ -1,3 +1,4 @@
+import { frozenVaultWriteRefusal } from "../utils/frozen-vault-write.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { runObserve } from "../commands/observe.js";
@@ -39,6 +40,8 @@ export function registerMcpMutatingTools(server: McpServer): void {
         }
         const v = await resolveMcpVault({ vault: args.vault, wiki: args.wiki });
         if (!v.ok) return formatToolResult({ exitCode: 25, result: v });
+        const frozen = frozenVaultWriteRefusal(v.data.vault, "mcp observe");
+        if (frozen) return formatToolResult(frozen);
         const r = await runObserve({
           vault: v.data.vault,
           text: args.text,

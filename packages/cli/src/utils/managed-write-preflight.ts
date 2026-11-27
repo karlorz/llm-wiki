@@ -1,4 +1,5 @@
 import { resolveSkillwikiHome } from "./home.js";
+import { frozenVaultWriteRefusal } from "./frozen-vault-write.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ExitCode, err, ok, type Result } from "@skillwiki/shared";
@@ -415,6 +416,8 @@ export async function runManagedWritePreflight(
   input: ManagedWritePreflightInput,
   deps: ManagedWritePreflightDeps = DEFAULT_DEPS,
 ): Promise<{ exitCode: number; result: Result<ManagedWriteReceipt> }> {
+  const frozen = frozenVaultWriteRefusal(input.vault, input.command);
+  if (frozen) return frozen;
   const mutationVault = resolve(input.vault);
   let convergenceVault =
     input.convergenceVault && resolve(input.convergenceVault) !== mutationVault
@@ -657,6 +660,8 @@ export async function runManagedWriteTransaction<T>(
   input: ManagedWriteTransactionInput<T>,
   deps: ManagedWritePreflightDeps = DEFAULT_DEPS,
 ): Promise<{ exitCode: number; result: Result<T> }> {
+  const frozen = frozenVaultWriteRefusal(input.vault, input.command);
+  if (frozen) return frozen;
   const mutationVault = resolve(input.vault);
   const lock = acquireManagedWriteLock(mutationVault, input.command, {
     gitStateVault: input.convergenceVault
@@ -710,6 +715,8 @@ export async function runManagedWriteTransaction<T>(
     }
     const peerGate = await runManagedWritePeerGate<T>(mutationVault, receipt.mode, deps, input.env);
     if (peerGate) return peerGate;
+    const frozenBeforeMutation = frozenVaultWriteRefusal(mutationVault, input.command);
+    if (frozenBeforeMutation) return frozenBeforeMutation;
     return await input.mutate(receipt);
   } finally {
     releaseManagedWriteLock(handle);
