@@ -300,6 +300,15 @@ satellite is recorded in
 `projects/llm-wiki/work/2026-09-17-sg02-satellite-retire/fleet-satellite-off.md`
 in the SkillWiki vault; the YAML itself is outside the HTTP MCP write allowlist.
 
+The bundled template configures its `seaweed` rclone remote from the same S3
+endpoint and credentials as the daemon. A one-shot `storage-init` service
+creates `${SKILLWIKI_MCP_S3_BUCKET:-wiki}` before the daemon starts. Use
+`SKILLWIKI_MCP_S3_BUCKET` to select the bucket for both transports. CI runs
+`bash scripts/smoke-bundled-compose.sh` on main, pull requests, and release
+tags; the script requires reconciled, writable storage and retains health
+responses and container logs on failure. It removes its Compose volumes at
+exit and is intended for disposable CI fixtures.
+
 Clients use `type: http` with `Authorization: Bearer ${SKILLWIKI_MCP_TOKEN}`.
 The server stores `sha256(token) → host_id` in a token map (hashes only). Token
 mint is a host operation at first deploy, not this repo — see
