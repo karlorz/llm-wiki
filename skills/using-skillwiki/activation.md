@@ -16,7 +16,7 @@ Choose the matching installed skill:
 - Projects and planning: `proj-init`, `proj-work`, `proj-distill`,
   `proj-decide`, `wiki-gate-plan-mode`, `dev-loop:research`.
 - Fleet and visualization: `wiki-sync`, `wiki-canvas`.
-- HTTP MCP capture, append, or progress query: `skillwiki-mcp`.
+- Before the first wiki MCP call, read `skillwiki-mcp` for connection selection, authentication boundaries, captures, append, and progress queries. Native Codex prefers its configured direct MCP; hosted `codex_apps` tools use separate OAuth. Stop on authentication failure before switching identities.
 - Generated images, screenshots, design mockups, attachments, Markdown image saving: `using-skillwiki/references/save-attachments.md`. MCP has no binary-upload tool; that is not an unsupported-image conclusion.
 
 If routing is unclear, invoke `using-skillwiki` rather than guessing.

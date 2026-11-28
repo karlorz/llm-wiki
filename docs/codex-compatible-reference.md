@@ -31,6 +31,69 @@ using the transactional publisher and fail closed if it is unavailable; update
 the active SkillWiki CLI/plugin channel instead of restoring direct typed-page,
 index, or log writes.
 
+## MCP connection and authentication
+
+Read the installed `skillwiki-mcp` skill before the first wiki MCP call. The
+local skills package, a direct HTTP MCP server, and the hosted **SkillWiki MCP**
+app have separate activation and authentication state.
+
+| Component | Connection | Authentication |
+| --- | --- | --- |
+| Local SkillWiki skills and hooks | Packaged workflows | Plugin installation and hook trust |
+| Bundled `skillwiki_native` MCP | Direct `https://wiki.karldigi.dev/mcp` | Operator-provided `SKILLWIKI_MCP_TOKEN` in the Codex process environment |
+| Hosted `codex_apps` SkillWiki MCP | Account-managed app connector | Private OAuth sign-in and workspace consent |
+
+The canonical Codex MCP asset is `packages/skills/codex-mcp.json`. The
+materializer copies it to `packages/codex-skills/codex-mcp.json`, referenced by the
+Codex manifest's `mcpServers` field. The server uses the native
+`bearer_token_env_var` field. The endpoint is fixed; `SKILLWIKI_MCP_URL` overrides
+in other clients do not apply to this asset. The separate `skillwiki_native`
+name keeps it distinct from registered app mappings.
+
+Verified against Codex CLI **0.164.0** and its versioned
+[plugin parser](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/codex-mcp/src/plugin_config.rs)
+and [HTTP MCP schema](https://github.com/openai/codex/blob/rust-v0.164.0/codex-rs/config/src/mcp_types.rs).
+That parser preserves `${VAR}` and `${VAR:-default}` literally and does not map
+Claude-style `headers` to native `http_headers`. Keep the existing Claude/Grok
+asset separate. Credentials belong in the process environment; the package
+contains only the variable name. Installation does not issue credentials.
+
+### Select and verify one route
+
+- Native Codex prefers the configured direct connection. Discover actual tool
+  names and schemas; the usual direct prefix is `mcp__skillwiki_native__`.
+- ChatGPT web uses its hosted connector. When only
+  `mcp__codex_apps__skillwiki_mcp_*` tools exist in Codex, explicitly identify
+  that hosted route. A skills-only installation through v0.10.130 supplied no
+  direct MCP declaration.
+- If both routes exist, follow the user's selection; the native default is
+  direct MCP. Before writing, use one read-only `wiki_context` or `wiki_status`
+  call to verify the selected connection's default vault. The same endpoint can
+  authenticate different identities with different allowed vaults and tools.
+- Authentication or permission failure stops that route. Obtain explicit
+  approval before switching connections or identities. Hosted OAuth reconnect
+  and direct bearer provisioning are separate recovery actions.
+
+### Upgrade and private provisioning
+
+After this source change is released, refresh the marketplace and installed
+plugin through the normal Codex channel, then start a new session. Existing
+cached versions keep their old files until refreshed. Verify the installed
+manifest's `mcpServers` path and installed `codex-mcp.json`; inspect advertised tools
+and, where supported, safe fields from `codex mcp list --json`.
+
+An operator supplies an issued host bearer privately in the environment that
+launches Codex. Desktop apps and remote workers may have different launch
+environments. Never paste the token into chat, commit it, copy another agent's
+credential, or auto-write user configuration. If the variable is absent, stop
+for provisioning. A parser listing confirms configuration only; a live read-only
+MCP call is required to verify authentication. Codex 0.164.0 can report
+`auth_status: bearer_token` even when the referenced variable is absent; that
+label describes the configured method. Credential presence and validity require
+separate verification.
+Keep the hosted connection until
+an explicitly approved replacement has passed that check.
+
 ## What is supported
 
 - Local marketplace source install

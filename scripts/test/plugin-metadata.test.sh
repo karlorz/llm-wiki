@@ -191,5 +191,26 @@ ln -s "$broken_root/packages/codex-skills/skills/does-not-exist" \
   "$broken_root/packages/codex-skills/skills/.broken-skill"
 assert_fail "broken mirror links are reported" "extra skill mirror: .broken-skill" materializer "$broken_root"
 
+mcp_root="$(copy_fixture codex-mcp)"
+rm -f "$mcp_root/packages/codex-skills/codex-mcp.json"
+assert_fail "missing Codex MCP mirror is reported" "packages/codex-skills/codex-mcp.json missing" materializer "$mcp_root"
+
+mcp_format_root="$(copy_fixture codex-mcp-format)"
+python3 - "$mcp_format_root" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+source = root / "packages/skills/codex-mcp.json"
+source.write_text(json.dumps({"mcpServers": {"skillwiki": {
+    "type": "http",
+    "url": "${SKILLWIKI_MCP_URL:-https://wiki.karldigi.dev/mcp}",
+    "headers": {"Authorization": "Bearer ${SKILLWIKI_MCP_TOKEN}"},
+}}}) + "\n")
+(root / "packages/codex-skills/codex-mcp.json").write_bytes(source.read_bytes())
+PY
+assert_fail "Claude-style Codex MCP settings are rejected" "Codex MCP contract" verify "$mcp_format_root"
+
 printf '\n=== Results: %d passed, %d failed ===\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

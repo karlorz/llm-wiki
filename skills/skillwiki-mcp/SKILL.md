@@ -13,16 +13,27 @@ HTTP MCP captures Markdown only. There is no binary-upload MCP tool. Generated i
 
 SkillWiki captures are HTTP MCP only (`type: http`). Claude/Grok use `SKILLWIKI_MCP_URL` as an optional override and otherwise default to `https://wiki.karldigi.dev/mcp`. Do not start a local stdio `skillwiki mcp` / `skillwiki-mcp` server for captures.
 
+## Codex connection selection
+
+Read this skill before the first wiki MCP call. The local SkillWiki skills and the hosted **SkillWiki MCP** app have separate connection settings and credentials.
+
+- Native Codex installs bundle a direct HTTP MCP declaration from `codex-mcp.json`, materialized with the same filename in the Codex plugin root. It uses the fixed `https://wiki.karldigi.dev/mcp` endpoint and Codex's `bearer_token_env_var: "SKILLWIKI_MCP_TOKEN"`. An operator supplies that variable privately before Codex starts. Installation does not issue a bearer or renew hosted OAuth. Earlier skills-only installs require a plugin refresh and a new session.
+- Native Codex prefers its configured direct SkillWiki connection when advertised. Discover its actual namespaced tool names and schema; plugin server names can be qualified by the host. When only `mcp__codex_apps__skillwiki_mcp_*` tools are advertised, they belong to the hosted OAuth connector. State that route explicitly and use it when it is the configured connection.
+- When both routes exist, honor the user's explicit selection. Otherwise native Codex uses direct MCP and ChatGPT web uses its hosted connector. Verify the selected connection's default vault with a read-only `wiki_context` or `wiki_status` before writing. A matching URL alone does not establish matching identity, vault access, or write permissions.
+- An authentication or permission failure stops the selected route. Report the exact tool and error; obtain explicit approval before switching connections or identities. A hosted reconnect renews that app's OAuth account only. Local plugin refresh and direct bearer provisioning are separate operator actions.
+- If direct MCP is unavailable, report that state before proposing setup. Native Codex uses the bundled `skillwiki_native` server and an operator-provided process environment; skip the Claude/Grok readiness script and Cursor Configure guidance below. Keep credentials private and use the supported host configuration flow. Never copy another agent's bearer, auto-write Codex configuration, or replace a failing connection with local vault writes.
+
 ## First-run readiness
 
-Detect in this order before any bearer or CLI probe:
+Apply connection selection above, then detect in this order before any bearer or CLI probe:
 
 1. **Live MCP tools present.** When the host already advertises SkillWiki HTTP MCP tools (`wiki_context`, `wiki_query`, `wiki_read_page`, `wiki_capture`, and the rest of the `wiki_*` namespace), use those tools. Skip `SKILLWIKI_MCP_TOKEN`, `check_readiness.py`, the CLI, and every host MCP file write.
 2. **ChatGPT web / chat-only host, tools absent.** Stop. A person finishes the connector and OAuth outside the chat. Do not ask the chat to create the app, click Authorize, or type the operator password.
    - Operator path: OpenAI Admin Console **Plugins** → plus / **Add** → custom MCP server (the xaicom UI may say **Create MCP plugin**) → **Create as a plugin**. Use URL `https://wiki.karldigi.dev/mcp`, OAuth, and no custom headers.
    - Identity is GitHub at `/workspace/authorize`, then one wiki grant: **Central Wiki** unless the operator names another wiki.
    - If the new plugin is Disabled or Unavailable: Review app (tools and role access), acknowledge both risk prompts, **Publish**, then Enable. Installation policy alone does not connect member accounts.
-3. **Every other host:** continue with the bearer and readiness probe below.
+3. **Native Codex without live tools:** stop for the operator to refresh the plugin, supply its bearer privately in the launch environment, and start a new session. Follow the Codex connection selection section above.
+4. **Every other host:** continue with the bearer and readiness probe below.
 
 ### Bearer-host readiness
 

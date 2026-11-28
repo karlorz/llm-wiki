@@ -55,7 +55,9 @@ The template lives at `packages/skills/using-skillwiki/activation.md`. Run `npm 
 
 ## ChatGPT web and live MCP tools
 
-Apply this order before the CLI-specific publication, mutation, and diagnostic instructions below:
+Read `skillwiki-mcp` before the first wiki MCP call and apply its connection selection rules. Native Codex prefers its configured direct MCP; hosted `codex_apps` tools use separate OAuth. Stop on authentication failure before switching connections or identities.
+
+Apply this order to the selected connection before the CLI-specific publication, mutation, and diagnostic instructions below:
 
 1. **Live `wiki_*` tools present** (`wiki_context`, `wiki_query`, `wiki_read_page`, `wiki_capture`, …): those tools win for every wiki read and write. Skip the CLI probe, `SKILLWIKI_MCP_TOKEN`, and readiness scripts.
 2. **ChatGPT web / chat-only host without those tools:** stop and have a person finish the connector and OAuth outside the chat, following `skillwiki-mcp` First-run readiness. Do not ask the chat to create the plugin, click Authorize, or type the operator password.

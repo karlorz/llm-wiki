@@ -747,6 +747,33 @@ check_codex_marketplace_entry "vault-sync" "./packages/vault-sync"
 
 # ---- 6. Codex plugin skill layout ----
 
+if ! python3 - "$REPO_ROOT" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+expected = {"mcpServers": {"skillwiki_native": {
+    "type": "http",
+    "url": "https://wiki.karldigi.dev/mcp",
+    "bearer_token_env_var": "SKILLWIKI_MCP_TOKEN",
+}}}
+try:
+    canonical = json.loads((root / "packages/skills/codex-mcp.json").read_text())
+    installed = json.loads((root / "packages/codex-skills/codex-mcp.json").read_text())
+    assert canonical == expected and installed == expected, "native HTTP bearer settings differ"
+    for relative in ("packages/skills", "packages/codex-skills"):
+        manifest = json.loads((root / relative / ".codex-plugin/plugin.json").read_text())
+        assert manifest.get("mcpServers") == "./codex-mcp.json", "MCP declaration path differs"
+except (OSError, ValueError, AssertionError) as error:
+    print(f"Codex MCP contract: {error}", file=sys.stderr)
+    sys.exit(1)
+print("✓ Codex MCP contract uses native HTTP bearer environment configuration")
+PY
+then
+  ERRORS=$((ERRORS + 1))
+fi
+
 if [ ! -d "$CODEX_PLUGIN_ROOT" ]; then
   echo "✗ Codex plugin root missing: packages/codex-skills" >&2
   ERRORS=$((ERRORS + 1))

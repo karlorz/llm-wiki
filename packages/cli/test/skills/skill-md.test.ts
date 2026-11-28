@@ -89,11 +89,28 @@ describe("SKILL.md structure", () => {
     expectNotSymlink(join(CODEX_PLUGIN_ROOT, "hooks", "session-start-codex"));
   });
 
+  it("Codex plugin ships native HTTP MCP without embedded credentials or interpolation", () => {
+    const canonical = join(SKILLS_DIR, "codex-mcp.json");
+    const installed = join(CODEX_PLUGIN_ROOT, "codex-mcp.json");
+    expectNotSymlink(installed);
+    expect(readFileSync(installed, "utf8")).toBe(readFileSync(canonical, "utf8"));
+    expect(JSON.parse(readFileSync(installed, "utf8"))).toEqual({
+      mcpServers: {
+        skillwiki_native: {
+          type: "http",
+          url: "https://wiki.karldigi.dev/mcp",
+          bearer_token_env_var: "SKILLWIKI_MCP_TOKEN",
+        },
+      },
+    });
+  });
+
   it("Codex plugin manifest points at skills and native hooks", () => {
     const manifest = JSON.parse(readFileSync(CODEX_PLUGIN_MANIFEST, "utf8"));
 
     expect(manifest.skills).toBe("./skills/");
     expect(manifest.hooks).toBe("./hooks/hooks-codex.json");
+    expect(manifest.mcpServers).toBe("./codex-mcp.json");
     expect(readFileSync(CODEX_PLUGIN_MANIFEST, "utf8")).toBe(readFileSync(CANONICAL_CODEX_PLUGIN_MANIFEST, "utf8"));
   });
 

@@ -35,6 +35,13 @@ assert_file_has "$MCP" "wiki_workitem_write" "skillwiki-mcp names wiki_workitem_
 assert_file_has "$MCP" "wiki_page_publish" "skillwiki-mcp names wiki_page_publish tool"
 assert_file_has "$MCP" "wiki_capture" "skillwiki-mcp retains fallback wiki_capture"
 
+assert_file_has "$MCP" "Read this skill before the first wiki MCP call" "MCP skill requires skill-first routing"
+assert_file_has "$MCP" "bearer_token_env_var" "Codex uses native bearer environment field"
+assert_file_has "$MCP" 'mcp__codex_apps__skillwiki_mcp_*' "Codex distinguishes hosted OAuth tools"
+assert_file_has "$MCP" "An authentication or permission failure stops the selected route" "MCP fails closed before identity switch"
+assert_file_has "$USING" 'Read `skillwiki-mcp` before the first wiki MCP call' "activation routes to specialized skill first"
+assert_file_has "$SKILLS/using-skillwiki/activation.md" "Stop on authentication failure before switching identities" "compact activation retains identity boundary"
+
 echo "passed=$PASS failed=$FAIL"
 if [ "$FAIL" -ne 0 ]; then
   exit 1

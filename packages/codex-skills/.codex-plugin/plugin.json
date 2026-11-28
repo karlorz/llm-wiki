@@ -1,7 +1,7 @@
 {
   "name": "skillwiki",
-  "version": "0.10.130",
-  "description": "Project-aware Karpathy-style knowledge base for Codex with 22 prompt-only skills backed by the deterministic skillwiki CLI.",
+  "version": "0.10.131",
+  "description": "Project-aware knowledge base for Codex with 22 prompt-only skills and direct HTTP MCP using an operator-provided bearer.",
   "author": {
     "name": "karlorz",
     "url": "https://github.com/karlorz"
@@ -19,10 +19,11 @@
   ],
   "skills": "./skills/",
   "hooks": "./hooks/hooks-codex.json",
+  "mcpServers": "./codex-mcp.json",
   "interface": {
     "displayName": "SkillWiki",
     "shortDescription": "Project-aware wiki skills for Codex agents",
-    "longDescription": "22 prompt-only skills (wiki-*, proj-*, using-skillwiki, skillwiki-mcp, skillwiki-connect) for deterministic, project-aware knowledge workflows.",
+    "longDescription": "22 prompt-only skills (wiki-*, proj-*, using-skillwiki, skillwiki-mcp, skillwiki-connect), native hooks, and direct SkillWiki HTTP MCP. Supply SKILLWIKI_MCP_TOKEN privately in the Codex launch environment; hosted app OAuth is a separate connection.",
     "developerName": "karlorz",
     "category": "Productivity",
     "capabilities": [

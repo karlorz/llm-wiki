@@ -1,6 +1,6 @@
 {
   "name": "@skillwiki/skills",
-  "version": "0.10.130",
+  "version": "0.10.131",
   "private": true,
   "files": [
     "wiki-*",
